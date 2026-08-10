@@ -56,8 +56,13 @@ function parseAddress(address: string): { column: number; row: number } {
   return { column: columnToIndex(match[1]), row: Number(match[2]) };
 }
 
-/** True when `cell` falls inside `spec`, which may itself be a single cell or an A1 range. */
-function addressMatches(spec: string, cell: string): boolean {
+/**
+ * True when `cell` falls inside `spec`, which may itself be a single cell or an A1 range.
+ * Exported for `eval/metrics/locator-overlap.ts`, which reuses this exact address math to test a
+ * dataset `xlsx-cell` locator against a retrieved chunk's `xlsx-region` range — a chunk's
+ * spreadsheet locator is a range, not a cell, so containment (not equality) is the right test.
+ */
+export function addressMatches(spec: string, cell: string): boolean {
   const [startText, endText] = spec.split(':');
   const target = parseAddress(cell);
   const start = parseAddress(startText);

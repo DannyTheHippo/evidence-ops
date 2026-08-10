@@ -121,3 +121,5 @@ export const EvalDatasetSchema = z.array(EvalCaseSchema);
 
 export type Locator = z.infer<typeof LocatorSchema>;
 export type EvalCase = z.infer<typeof EvalCaseSchema>;
+export type EvalCategory = z.infer<typeof EvalCategorySchema>;
+export type EvalOutcome = z.infer<typeof EvalOutcomeSchema>;

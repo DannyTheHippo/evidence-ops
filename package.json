@@ -32,6 +32,8 @@
     "smoke:providers": "npx ts-node -P scripts/tsconfig.smoke.json scripts/smoke-providers.ts",
     "--- FIXTURES ---": "--------------------------------",
     "fixtures:generate": "npx tsx scripts/fixtures/cli.ts",
+    "--- EVAL ---": "--------------------------------",
+    "eval": "npx ts-node -P eval/tsconfig.eval.json eval/run.ts",
     "--- TEMPORAL ---": "--------------------------------",
     "temporal:dev": "temporal server start-dev --db-filename .temporal/dev.db",
     "worker:dev": "npx tsx src/worker/main.ts",

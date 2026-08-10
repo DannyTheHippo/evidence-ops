@@ -1,0 +1,13 @@
+{
+  // Mirrors `scripts/tsconfig.smoke.json` for the same reason: the eval harness builds a real Nest
+  // DI graph, and Nest resolves constructor dependencies from `emitDecoratorMetadata`. `tsx`
+  // compiles via esbuild, which does not emit that metadata, so every injected dependency arrives
+  // as `undefined` and Nest reports "The dependency at index [0] appears to be undefined at
+  // runtime" — a message that points at an import style rather than at the runner. `ts-node` with
+  // this config emits the metadata, which is why `smoke:providers` runs under it too.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node"
+  }
+}
