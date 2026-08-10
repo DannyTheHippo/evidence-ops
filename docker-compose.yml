@@ -4,7 +4,10 @@ services:
     container_name: evidence-ops-mongo
     restart: always
     ports:
-      - "27017:27017"
+      # Host port is overridable because 27017 is the default for every Mongo project on a
+      # machine — a second one simply fails to start with "port is already allocated". Set
+      # MONGO_HOST_PORT (and match it in MONGO_DB_URI) to run this alongside another stack.
+      - "${MONGO_HOST_PORT:-27017}:27017"
     volumes:
       - evidence_ops_data:/data/db
       - evidence_ops_config:/data/configdb

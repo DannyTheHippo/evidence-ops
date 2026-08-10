@@ -9,6 +9,7 @@ import { AuthModule } from './features/common/auth/auth.module';
 import { HealthModule } from './features/common/health/health.module';
 import { InfoModule } from './features/common/info/info.module';
 import { DocumentsModule } from './features/evidence/documents/documents.module';
+import { IngestionModule } from './features/evidence/ingestion/ingestion.module';
 import { GlobalExceptionFilter } from './shared/filters/global-exception.filter';
 import { SelectInterceptor } from './shared/interceptors/select.interceptor';
 import { AsyncLocalStorageMiddleware } from './shared/middlewares/async-local-storage.middleware';
@@ -39,6 +40,7 @@ import { SharedModule } from './shared/shared.module';
     HealthModule,
     InfoModule,
     DocumentsModule,
+    IngestionModule,
   ],
 })
 export class AppModule {

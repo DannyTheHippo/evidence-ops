@@ -25,6 +25,7 @@
     "lint:check": "eslint \"{src,test,migrations,scripts,eval}/**/*.ts\"",
     "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --coverage",
     "test:e2e": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --config ./jest.e2e.config.ts",
+    "test:integration": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --config ./jest.integration.config.ts",
     "--- DB MIGRATIONS ---": "--------------------------------",
     "migrate:up": "npx tsx ./node_modules/migrate-mongo/bin/migrate-mongo.js up",
     "migrate:down": "npx tsx ./node_modules/migrate-mongo/bin/migrate-mongo.js down",
