@@ -1,0 +1,336 @@
+import { getConnectionToken } from '@nestjs/mongoose';
+import type { TestingModule } from '@nestjs/testing';
+import { Test } from '@nestjs/testing';
+import { Types } from 'mongoose';
+import { TypedConfigService } from '../../../src/config/environment/typed-config.service';
+import type { EvidenceLocator } from '../../../src/database/schemas/evidence/evidence-chunk/evidence-locator.type';
+import { EMBEDDING_PROVIDER } from '../../../src/providers/embedding/embedding-provider.interface';
+import { FakeEmbeddingProvider } from '../../../src/providers/embedding/fake-embedding.provider';
+import { MongoHybridRetrievalStore } from '../../../src/providers/retrieval/mongo-hybrid.store';
+import type { RetrievalHit } from '../../../src/providers/retrieval/retrieval-store.interface';
+import { getMockTypedConfig } from '../../utils/get-mock-typed-config';
+
+interface RawDocFixture {
+  readonly _id: Types.ObjectId;
+  readonly documentId: Types.ObjectId;
+  readonly documentVersionId: Types.ObjectId;
+  readonly text: string;
+  readonly locator: EvidenceLocator;
+  readonly tenantId: string;
+}
+
+interface SearchStageDoc {
+  readonly $search: {
+    readonly index: string;
+    readonly compound: {
+      readonly must: readonly {
+        readonly text: { readonly query: string; readonly path: string };
+      }[];
+      readonly filter: readonly {
+        readonly equals: { readonly path: string; readonly value: string };
+      }[];
+    };
+  };
+}
+
+interface VectorSearchStageDoc {
+  readonly $vectorSearch: {
+    readonly index: string;
+    readonly path: string;
+    readonly queryVector: readonly number[];
+    readonly numCandidates: number;
+    readonly limit: number;
+    readonly filter: { readonly tenantId: { readonly $eq: string } };
+  };
+}
+
+interface LimitStageDoc {
+  readonly $limit: number;
+}
+
+interface RankFusionStageDoc {
+  readonly $rankFusion: {
+    readonly input: {
+      readonly pipelines: {
+        readonly search: readonly [SearchStageDoc, LimitStageDoc];
+        readonly vector: readonly [VectorSearchStageDoc];
+      };
+    };
+    readonly combination: { readonly weights: Record<string, number> };
+    readonly scoreDetails: boolean;
+  };
+}
+
+/**
+ * `jest.fn()` itself is untyped (`Mock<any, any, any>` — its zero-argument overload has no
+ * generic to infer from). Left untyped here too, deliberately: giving this a declared return
+ * type would only push the same "any assigned into a specific type" conflict onto every
+ * `.mockReturnValue(...)`/`.mockReturnValueOnce(...)` call site below instead of resolving it.
+ * `pipelineArg` is where a type gets attached — once, on the whole mock, immediately before
+ * indexing `.mock.calls` — mirroring `ingestion.service.spec.ts`'s "recast the mock, not the
+ * indexed result" pattern (casting the indexed result directly is what trips
+ * `@typescript-eslint/no-unsafe-member-access`).
+ */
+function createAggregateMock() {
+  return jest.fn();
+}
+
+/** Reads the pipeline argument passed to the `callIndex`-th `.aggregate(...)` call. */
+function pipelineArg<T>(aggregate: ReturnType<typeof createAggregateMock>, callIndex: number): T {
+  const typed = aggregate as jest.Mock<{ toArray: jest.Mock<Promise<unknown[]>> }, [unknown[]]>;
+  return typed.mock.calls[callIndex][0] as T;
+}
+
+function buildRawDoc(overrides: Partial<RawDocFixture> = {}): RawDocFixture {
+  return {
+    _id: new Types.ObjectId(),
+    documentId: new Types.ObjectId(),
+    documentVersionId: new Types.ObjectId(),
+    text: 'a chunk of evidence text',
+    locator: { kind: 'pdf-page', page: 1, extractorVersion: 'test-1' },
+    tenantId: 'tenant-a',
+    ...overrides,
+  };
+}
+
+async function buildStore(
+  connection: unknown,
+  embeddingProvider: FakeEmbeddingProvider,
+  fusion: 'server' | 'app' = 'server',
+): Promise<MongoHybridRetrievalStore> {
+  const module: TestingModule = await Test.createTestingModule({
+    providers: [
+      MongoHybridRetrievalStore,
+      { provide: getConnectionToken(), useValue: connection },
+      { provide: EMBEDDING_PROVIDER, useValue: embeddingProvider },
+      { provide: TypedConfigService, useValue: getMockTypedConfig({ retrieval: { fusion } }) },
+    ],
+  }).compile();
+
+  return module.get<MongoHybridRetrievalStore>(MongoHybridRetrievalStore);
+}
+
+describe('MongoHybridRetrievalStore', () => {
+  let fakeEmbeddingProvider: FakeEmbeddingProvider;
+
+  beforeEach(() => {
+    fakeEmbeddingProvider = new FakeEmbeddingProvider();
+  });
+
+  it('should throw when the connection has no db handle', async () => {
+    await expect(buildStore({ db: undefined }, fakeEmbeddingProvider)).rejects.toThrow(
+      'Mongo connection has no active database handle',
+    );
+  });
+
+  it('should throw when filter.tenantId is missing', async () => {
+    const collection = jest.fn().mockReturnValue({ aggregate: createAggregateMock() });
+    const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider);
+
+    await expect(store.search({ text: 'cap rate', limit: 5 })).rejects.toThrow(
+      'MongoHybridRetrievalStore requires a non-empty filter.tenantId',
+    );
+  });
+
+  it('should throw when filter.tenantId is an empty string', async () => {
+    const collection = jest.fn().mockReturnValue({ aggregate: createAggregateMock() });
+    const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider);
+
+    await expect(
+      store.search({ text: 'cap rate', limit: 5, filter: { tenantId: '' } }),
+    ).rejects.toThrow('MongoHybridRetrievalStore requires a non-empty filter.tenantId');
+  });
+
+  it('should embed the query text with input_type "query" when no vector is supplied', async () => {
+    const aggregate = createAggregateMock();
+    aggregate.mockReturnValue({ toArray: jest.fn().mockResolvedValue([]) });
+    const collection = jest.fn().mockReturnValue({ aggregate });
+    const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider);
+
+    await store.search({ text: 'cap rate', limit: 5, filter: { tenantId: 'tenant-a' } });
+
+    expect(fakeEmbeddingProvider.calls).toEqual([{ inputs: ['cap rate'], inputType: 'query' }]);
+  });
+
+  it('should skip embedding and use the supplied vector when the query already carries one', async () => {
+    const aggregate = createAggregateMock();
+    aggregate.mockReturnValue({ toArray: jest.fn().mockResolvedValue([]) });
+    const collection = jest.fn().mockReturnValue({ aggregate });
+    const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider);
+    const suppliedVector = [0.1, 0.2, 0.3];
+
+    await store.search({
+      text: 'cap rate',
+      vector: suppliedVector,
+      limit: 5,
+      filter: { tenantId: 'tenant-a' },
+    });
+
+    expect(fakeEmbeddingProvider.calls).toHaveLength(0);
+    const pipeline = pipelineArg<[RankFusionStageDoc, LimitStageDoc, unknown]>(aggregate, 0);
+    expect(pipeline[0].$rankFusion.input.pipelines.vector[0].$vectorSearch.queryVector).toEqual(
+      suppliedVector,
+    );
+  });
+
+  it('should build a tenant-scoped $rankFusion pipeline and normalize scoreDetails in server mode', async () => {
+    const doc = buildRawDoc({ tenantId: 'tenant-a' });
+    const aggregate = createAggregateMock();
+    aggregate.mockReturnValue({
+      toArray: jest.fn().mockResolvedValue([
+        {
+          ...doc,
+          fusionScore: 0.031,
+          fusionScoreDetails: {
+            value: 0.031,
+            details: [
+              { inputPipelineName: 'search', rank: 1, weight: 1, value: 0.0163934 },
+              { inputPipelineName: 'vector', rank: 'NA', weight: 1, value: 'NA' },
+            ],
+          },
+        },
+      ]),
+    });
+    const collection = jest.fn().mockReturnValue({ aggregate });
+    const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider, 'server');
+
+    const hits = await store.search({
+      text: 'cap rate',
+      limit: 10,
+      filter: { tenantId: 'tenant-a' },
+    });
+
+    expect(collection).toHaveBeenCalledWith('evidence_chunks');
+    const pipeline = pipelineArg<[RankFusionStageDoc, LimitStageDoc, unknown]>(aggregate, 0);
+    const [rankFusionStage, limitStage] = pipeline;
+    expect(rankFusionStage.$rankFusion.input.pipelines.search[0].$search.compound.filter).toEqual([
+      { equals: { path: 'tenantId', value: 'tenant-a' } },
+    ]);
+    expect(rankFusionStage.$rankFusion.input.pipelines.search[1]).toEqual({ $limit: 40 });
+    expect(rankFusionStage.$rankFusion.input.pipelines.vector[0].$vectorSearch.filter).toEqual({
+      tenantId: { $eq: 'tenant-a' },
+    });
+    expect(rankFusionStage.$rankFusion.input.pipelines.vector[0].$vectorSearch.numCandidates).toBe(
+      400,
+    );
+    expect(rankFusionStage.$rankFusion.combination.weights).toEqual({ search: 1, vector: 1 });
+    expect(rankFusionStage.$rankFusion.scoreDetails).toBe(true);
+    expect(limitStage).toEqual({ $limit: 10 });
+
+    expect(hits).toHaveLength(1);
+    const hit = hits[0] as RetrievalHit<{
+      readonly text: string;
+      readonly documentId: string;
+      readonly documentVersionId: string;
+      readonly tenantId: string;
+      readonly scoreBreakdown: readonly {
+        readonly pipeline: string;
+        readonly rank: number | null;
+        readonly weight: number;
+        readonly value: number | null;
+      }[];
+    }>;
+    expect(hit.id).toBe(doc._id.toString());
+    expect(hit.score).toBe(0.031);
+    expect(hit.metadata.text).toBe(doc.text);
+    expect(hit.metadata.documentId).toBe(doc.documentId.toString());
+    expect(hit.metadata.documentVersionId).toBe(doc.documentVersionId.toString());
+    expect(hit.metadata.tenantId).toBe('tenant-a');
+    expect(hit.metadata.scoreBreakdown).toEqual([
+      { pipeline: 'search', rank: 1, weight: 1, value: 0.0163934 },
+      { pipeline: 'vector', rank: null, weight: 1, value: null },
+    ]);
+  });
+
+  it('should return an empty scoreBreakdown when the server omits fusionScoreDetails', async () => {
+    const doc = buildRawDoc();
+    const aggregate = createAggregateMock();
+    aggregate.mockReturnValue({
+      toArray: jest.fn().mockResolvedValue([{ ...doc, fusionScore: 0.02 }]),
+    });
+    const collection = jest.fn().mockReturnValue({ aggregate });
+    const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider, 'server');
+
+    const hits = await store.search({ text: 'q', limit: 5, filter: { tenantId: 'tenant-a' } });
+
+    expect(hits[0].metadata).toMatchObject({ scoreBreakdown: [] });
+  });
+
+  it('should fuse two standalone pipelines with RRF (k=60) and rank a both-pipeline hit above single-pipeline hits in app mode', async () => {
+    const searchOnlyDoc = buildRawDoc({ text: 'search-only hit' });
+    const bothDoc = buildRawDoc({ text: 'hit in both pipelines' });
+    const vectorOnlyDoc = buildRawDoc({ text: 'vector-only hit' });
+
+    const aggregate = createAggregateMock();
+    // Search pipeline: bothDoc rank 1, searchOnlyDoc rank 2.
+    aggregate.mockReturnValueOnce({
+      toArray: jest.fn().mockResolvedValue([bothDoc, searchOnlyDoc]),
+    });
+    // Vector pipeline: vectorOnlyDoc rank 1, bothDoc rank 2.
+    aggregate.mockReturnValueOnce({
+      toArray: jest.fn().mockResolvedValue([vectorOnlyDoc, bothDoc]),
+    });
+    const collection = jest.fn().mockReturnValue({ aggregate });
+    const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider, 'app');
+
+    const hits = await store.search({
+      text: 'cap rate',
+      vector: [0.1, 0.2],
+      limit: 10,
+      filter: { tenantId: 'tenant-a' },
+    });
+
+    expect(aggregate).toHaveBeenCalledTimes(2);
+    const searchPipeline = pipelineArg<[SearchStageDoc, LimitStageDoc]>(aggregate, 0);
+    const vectorPipeline = pipelineArg<[VectorSearchStageDoc]>(aggregate, 1);
+    expect(searchPipeline[0].$search.compound.filter).toEqual([
+      { equals: { path: 'tenantId', value: 'tenant-a' } },
+    ]);
+    expect(vectorPipeline[0].$vectorSearch.filter).toEqual({ tenantId: { $eq: 'tenant-a' } });
+
+    // both: 1/(60+1) + 1/(60+2) ≈ 0.03252 > vector-only: 1/(60+1) ≈ 0.01639
+    //      > search-only: 1/(60+2) ≈ 0.01613
+    expect(hits.map((hit) => hit.id)).toEqual([
+      bothDoc._id.toString(),
+      vectorOnlyDoc._id.toString(),
+      searchOnlyDoc._id.toString(),
+    ]);
+
+    const bothHit = hits[0] as RetrievalHit<{
+      readonly scoreBreakdown: readonly {
+        readonly pipeline: string;
+        readonly rank: number | null;
+        readonly weight: number;
+        readonly value: number | null;
+      }[];
+    }>;
+    expect(bothHit.score).toBeCloseTo(1 / 61 + 1 / 62, 10);
+    expect(bothHit.metadata.scoreBreakdown).toEqual([
+      { pipeline: 'search', rank: 1, weight: 1, value: 1 / 61 },
+      { pipeline: 'vector', rank: 2, weight: 1, value: 1 / 62 },
+    ]);
+
+    const vectorOnlyHit = hits[1];
+    expect(vectorOnlyHit.score).toBeCloseTo(1 / 61, 10);
+    const searchOnlyHit = hits[2];
+    expect(searchOnlyHit.score).toBeCloseTo(1 / 62, 10);
+  });
+
+  it('should cap app-mode results at the requested limit after fusing', async () => {
+    const docs = Array.from({ length: 3 }, () => buildRawDoc());
+    const aggregate = createAggregateMock();
+    aggregate.mockReturnValueOnce({ toArray: jest.fn().mockResolvedValue(docs) });
+    aggregate.mockReturnValueOnce({ toArray: jest.fn().mockResolvedValue([]) });
+    const collection = jest.fn().mockReturnValue({ aggregate });
+    const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider, 'app');
+
+    const hits = await store.search({
+      text: 'q',
+      vector: [0.1],
+      limit: 2,
+      filter: { tenantId: 'tenant-a' },
+    });
+
+    expect(hits).toHaveLength(2);
+  });
+});

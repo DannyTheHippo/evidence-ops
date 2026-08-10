@@ -4,6 +4,8 @@ import type request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { createApplicationConfig } from '../../src/config/app.config';
 import { stopInMemoryMongo } from '../../src/config/mongo.config';
+import { FakeWorkflowEngine } from '../../src/providers/workflow-engine/fake-workflow.engine';
+import { WORKFLOW_ENGINE } from '../../src/providers/workflow-engine/workflow-engine.interface';
 
 type TestServer = Parameters<typeof request>[0];
 
@@ -15,9 +17,15 @@ type TestServer = Parameters<typeof request>[0];
  * `MONGO_MEMORY_SERVER=true` before this module — or any spec file — is loaded:
  * `AppConfigModule`'s `ConfigModule.forRoot()` reads and validates `process.env`
  * synchronously the moment it's first evaluated, at `AppModule`'s import above.
+ *
+ * `WORKFLOW_ENGINE` is overridden back to `FakeWorkflowEngine`: `ProvidersModule` binds the real
+ * `TemporalWorkflowEngine` there (ADR-0003), and e2e must not require a live Temporal server.
  */
 export const createTestApp = async (): Promise<INestApplication> => {
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(WORKFLOW_ENGINE)
+    .useClass(FakeWorkflowEngine)
+    .compile();
 
   const app = moduleRef.createNestApplication();
   await createApplicationConfig(app);

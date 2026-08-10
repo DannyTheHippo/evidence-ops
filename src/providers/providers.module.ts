@@ -11,14 +11,14 @@ import {
 } from './model/caching-model.provider';
 import { MODEL_PROVIDER, type ModelProvider } from './model/model-provider.interface';
 import { TracingModelProvider } from './model/tracing-model.provider';
+import { MongoHybridRetrievalStore } from './retrieval/mongo-hybrid.store';
 import { RETRIEVAL_STORE } from './retrieval/retrieval-store.interface';
-import { FakeRetrievalStore } from './retrieval/fake-retrieval.store';
 import { DOCUMENT_STORE } from './storage/document-store.interface';
 import { GridFsDocumentStore } from './storage/gridfs-document.store';
 import { LoggerTelemetry } from './telemetry/logger-telemetry';
 import { TELEMETRY, type Telemetry } from './telemetry/telemetry.interface';
 import { WORKFLOW_ENGINE } from './workflow-engine/workflow-engine.interface';
-import { FakeWorkflowEngine } from './workflow-engine/fake-workflow.engine';
+import { TemporalWorkflowEngine } from './workflow-engine/temporal-workflow.engine';
 
 /**
  * Off by default: turning on record/replay is an eval-harness/script decision made at the
@@ -54,14 +54,22 @@ const MODEL_CACHE_DEFAULT_OPTIONS: CachingModelProviderOptions = {
     },
     { provide: EMBEDDING_PROVIDER, useClass: VoyageEmbeddingProvider },
 
-    // Placeholder bindings: only a fake exists for each of these (see the interface file in
-    // the same directory for why). A later milestone swaps each in for a real store without
-    // touching any consumer of the token. DOCUMENT_STORE has already made that swap — the fake
-    // stays in the tree because unit tests still bind it directly, not through this module.
-    { provide: RETRIEVAL_STORE, useClass: FakeRetrievalStore },
-    { provide: DOCUMENT_STORE, useClass: GridFsDocumentStore },
-    { provide: WORKFLOW_ENGINE, useClass: FakeWorkflowEngine },
+    // Placeholder binding: only a fake exists (see the interface file in the same directory for
+    // why). A later milestone swaps it in for a real channel without touching any consumer of
+    // the token.
     { provide: APPROVAL_CHANNEL, useClass: FakeApprovalChannel },
+
+    // RETRIEVAL_STORE, DOCUMENT_STORE, and now WORKFLOW_ENGINE bind their real implementations
+    // here — their fakes stay in the tree because unit tests still bind them directly, not
+    // through this module. WORKFLOW_ENGINE is the one exception that needs an e2e-level override
+    // rather than just a unit-level one: TemporalWorkflowEngine only dials a server when
+    // start()/status() is actually called (nothing does yet — the real answer workflow is wired
+    // in a later step), but `test/utils/create-test-app.ts` still overrides the token back to
+    // FakeWorkflowEngine defensively, so no future e2e spec can accidentally reach a live
+    // Temporal server just by booting AppModule.
+    { provide: RETRIEVAL_STORE, useClass: MongoHybridRetrievalStore },
+    { provide: DOCUMENT_STORE, useClass: GridFsDocumentStore },
+    { provide: WORKFLOW_ENGINE, useClass: TemporalWorkflowEngine },
   ],
   exports: [
     MODEL_PROVIDER,

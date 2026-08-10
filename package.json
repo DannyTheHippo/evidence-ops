@@ -34,7 +34,7 @@
     "fixtures:generate": "npx tsx scripts/fixtures/cli.ts",
     "--- TEMPORAL ---": "--------------------------------",
     "temporal:dev": "temporal server start-dev --db-filename .temporal/dev.db",
-    "worker:dev": "echo 'worker entrypoint not built yet — implement src/worker/main.ts, then point this script at it' && exit 1",
+    "worker:dev": "npx tsx src/worker/main.ts",
     "--- HOOKS ---": "--------------------------------",
     "prepare": "husky"
   },

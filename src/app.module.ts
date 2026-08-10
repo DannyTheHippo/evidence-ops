@@ -8,7 +8,9 @@ import { mongooseModuleOptions } from './config/mongo.config';
 import { AuthModule } from './features/common/auth/auth.module';
 import { HealthModule } from './features/common/health/health.module';
 import { InfoModule } from './features/common/info/info.module';
+import { ConflictsModule } from './features/evidence/conflicts/conflicts.module';
 import { DocumentsModule } from './features/evidence/documents/documents.module';
+import { FactsModule } from './features/evidence/facts/facts.module';
 import { IngestionModule } from './features/evidence/ingestion/ingestion.module';
 import { GlobalExceptionFilter } from './shared/filters/global-exception.filter';
 import { SelectInterceptor } from './shared/interceptors/select.interceptor';
@@ -41,6 +43,8 @@ import { SharedModule } from './shared/shared.module';
     InfoModule,
     DocumentsModule,
     IngestionModule,
+    FactsModule,
+    ConflictsModule,
   ],
 })
 export class AppModule {

@@ -117,6 +117,18 @@ Two holes let it through, both now closed: the generator's page guard counted `a
 it's a confident assertion. My fixture generator and my eval dataset agreed with each other
 perfectly and were both wrong about the document."
 
+**Follow-through.** Closing it needed a structural change, not just a fix: the dataset had no
+ground-truth *answer*, only locators and an expected outcome — so even a correct locator check
+could not have caught a wrong answer, and the eval harness would have been able to score retrieval
+and abstention but never correctness. Cases now carry `expectedAnswerContains`, and a resolver
+parses the real fixtures with the same parsers ingestion uses.
+
+I then checked that the new assertion can fail, rather than trusting a first-time pass: cell `F2`
+resolves to exactly `"5.25%"` (not the whole sheet), a fabricated needle is not found, and `6.10%`
+is found on page 2 but not page 1 — so resolution is genuinely page-scoped rather than a
+document-wide search. A verification that has never been observed failing is not yet a
+verification.
+
 ---
 
 ## 003 — Evidence changes the design: three plan revisions
