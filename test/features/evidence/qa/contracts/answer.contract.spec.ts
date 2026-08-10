@@ -173,4 +173,32 @@ describe('answerContractSchema', () => {
 
     expect(answerContractSchema.safeParse(outcome).success).toBe(false);
   });
+
+  it('strips server-computed fields from a model-authored payload rather than accepting them', () => {
+    // `claimCoverage` and `verificationReport` belong to `AnswerEnvelope`, computed by
+    // `GroundingGateService` after the model call — they must never round-trip through the
+    // schema the model's own structured output is validated against, or a model could author
+    // its own (unverified) coverage number and have it accepted as the server's.
+    const outcomeWithServerFields = {
+      kind: 'answered',
+      claims: [
+        {
+          statement: 'Revenue grew 12% year over year.',
+          citations: [buildCitation(pdfPageLocator)],
+        },
+      ],
+      claimCoverage: 1,
+      verificationReport: { verifiedClaimCount: 1, totalClaimCount: 1, droppedClaims: [] },
+    };
+
+    const result = answerContractSchema.safeParse(outcomeWithServerFields);
+
+    expect(result.success).toBe(true);
+    expect(
+      result.success && (result.data as Record<string, unknown>).claimCoverage,
+    ).toBeUndefined();
+    expect(
+      result.success && (result.data as Record<string, unknown>).verificationReport,
+    ).toBeUndefined();
+  });
 });

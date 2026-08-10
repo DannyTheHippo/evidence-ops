@@ -12,6 +12,7 @@ import { ConflictsModule } from './features/evidence/conflicts/conflicts.module'
 import { DocumentsModule } from './features/evidence/documents/documents.module';
 import { FactsModule } from './features/evidence/facts/facts.module';
 import { IngestionModule } from './features/evidence/ingestion/ingestion.module';
+import { QaModule } from './features/evidence/qa/qa.module';
 import { GlobalExceptionFilter } from './shared/filters/global-exception.filter';
 import { SelectInterceptor } from './shared/interceptors/select.interceptor';
 import { AsyncLocalStorageMiddleware } from './shared/middlewares/async-local-storage.middleware';
@@ -45,6 +46,7 @@ import { SharedModule } from './shared/shared.module';
     IngestionModule,
     FactsModule,
     ConflictsModule,
+    QaModule,
   ],
 })
 export class AppModule {
