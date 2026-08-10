@@ -1,0 +1,67 @@
+services:
+  mongo:
+    image: mongodb/mongodb-atlas-local:8.3.4
+    container_name: evidence-ops-mongo
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      - evidence_ops_data:/data/db
+      - evidence_ops_config:/data/configdb
+    networks:
+      - evidence_ops_net
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 15s
+
+  migrate:
+    build:
+      context: .
+      target: tasks
+    command: npm run migrate:up
+    environment:
+      MONGO_DB_URI: mongodb://mongo:27017/evidence-ops?directConnection=true
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - evidence_ops_net
+    restart: "no"
+
+  app:
+    build:
+      context: .
+      target: runtime
+    environment:
+      MONGO_DB_URI: mongodb://mongo:27017/evidence-ops?directConnection=true
+    depends_on:
+      mongo:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    networks:
+      - evidence_ops_net
+    profiles:
+      - full
+
+  web:
+    build:
+      context: ./web
+    ports:
+      - "80:80"
+    depends_on:
+      - app
+    networks:
+      - evidence_ops_net
+    profiles:
+      - full
+
+networks:
+  evidence_ops_net:
+
+volumes:
+  evidence_ops_data:
+  evidence_ops_config:

@@ -1,0 +1,58 @@
+# Build & dependencies
+/node_modules
+/dist
+/build
+*.tsbuildinfo
+web/node_modules
+web/dist
+
+# Generated
+/migrations/data/temp/
+
+# Logs
+logs
+*.log
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Test output
+/coverage
+/.nyc_output
+
+# Temp & runtime
+.temp
+.tmp
+.temporal/
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Diagnostics
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Editors & IDEs
+/.idea
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# OS
+.DS_Store
+
+# AI assistants
+.serena/*
+# .claude/ is committed on purpose — the rules, contexts, skills and project-discovery.json
+# are shared project configuration, useless if they only exist on one machine. Machine-local
+# and regenerable scratch files are excluded by .claude/.gitignore instead of a blanket ignore.

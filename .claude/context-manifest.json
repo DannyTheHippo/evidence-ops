@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "mappings": [
+    {
+      "pattern": "controller|service|module|nestjs|api|endpoint|route|dto|guard|interceptor|swagger|versioning",
+      "file": "api-conventions.md"
+    },
+    {
+      "pattern": "schema|mongoose|mongo|collection|index|aggregate|populate|migration|migrate-mongo|vectorsearch|rankfusion",
+      "file": "database-conventions.md"
+    },
+    {
+      "pattern": "react|component|hook|jsx|tsx|props|router|spa|vite|vitest|frontend",
+      "file": "react-patterns.md"
+    },
+    {
+      "pattern": "env var|environment variable|\\.env|config|zod|typed ?config|secret|api key",
+      "file": "configuration.md"
+    }
+  ],
+  "businessContextKeywords": {}
+}

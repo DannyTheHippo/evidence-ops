@@ -1,0 +1,8 @@
+echo "Running formatter"
+npm run format
+
+echo "Running linter"
+npm run lint
+
+echo "Running typecheck"
+npm run tsc

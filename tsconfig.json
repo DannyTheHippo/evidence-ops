@@ -1,0 +1,55 @@
+{
+  "compilerOptions": {
+    "outDir": "./dist",
+
+    "lib": ["ESNext"],
+    "target": "ESNext",
+
+    "types": ["node", "jest"],
+
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+
+    "strict": true,
+    "allowJs": false,
+    "incremental": true,
+    "removeComments": true,
+    "strictBindCallApply": true,
+
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    // DTOs/Mongoose schema classes are hydrated by class-transformer/Mongoose, never a constructor;
+    // strictPropertyInitialization would force `!:` on every field for no real safety gain.
+    "strictPropertyInitialization": false,
+    "noUnusedLocals": true,
+    "noImplicitThis": true,
+    "noImplicitReturns": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+
+    "skipLibCheck": true,
+    "importHelpers": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": [
+    "src/**/*",
+    "test/**/*",
+    "migrations/**/*",
+    "scripts/**/*",
+    "eval/**/*",
+    "jest.config.ts",
+    "jest.e2e.config.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

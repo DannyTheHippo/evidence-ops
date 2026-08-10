@@ -1,0 +1,160 @@
+{
+  "discoveredAt": "2026-08-10T08:57:15Z",
+  "stack": "mean",
+  "primaryLanguage": "typescript",
+  "languages": ["typescript"],
+  "packageManager": "npm",
+  "monorepoTool": null,
+  "runtime": {
+    "node": ">=26 <27",
+    "nvmrc": "26",
+    "dockerBase": "node:26-slim"
+  },
+  "typescript": {
+    "config": "tsconfig.json",
+    "strict": true,
+    "module": "NodeNext",
+    "decorators": true,
+    "pathAliases": {},
+    "webConfig": "web/tsconfig.json"
+  },
+  "testRunner": {
+    "name": "jest",
+    "configPath": "jest.config.ts",
+    "e2eConfigPath": "jest.e2e.config.ts",
+    "coverageThresholds": {
+      "statements": 100,
+      "branches": 100,
+      "functions": 100,
+      "lines": 100
+    },
+    "coverageScope": "src/**/*.service.ts"
+  },
+  "formatter": {
+    "name": "prettier",
+    "configPath": ".prettierrc"
+  },
+  "linter": {
+    "name": "eslint",
+    "configPath": "eslint.config.mjs",
+    "webConfigPath": "web/eslint.config.mjs"
+  },
+  "devServer": "npm run start:dev",
+  "database": {
+    "engine": "mongodb",
+    "odm": "mongoose",
+    "localImage": "mongodb/mongodb-atlas-local:8.3.4",
+    "migrationTool": "migrate-mongo",
+    "migrationsDir": "migrations"
+  },
+  "scripts": {
+    "checks": "npm run format && npm run lint && npm run tsc && npm run test && npm run test:e2e",
+    "checks:ci": "npm run format:check && npm run lint:check && npm run tsc && npm run test && npm run test:e2e",
+    "checks:web": "npm --prefix web run lint && npm --prefix web run typecheck && npm --prefix web run test",
+    "format": "prettier --write \"{src,test,migrations}/**/*.ts\"",
+    "format:check": "prettier --check \"{src,test,migrations}/**/*.ts\"",
+    "lint": "eslint \"{src,test,migrations}/**/*.ts\" --fix",
+    "lint:check": "eslint \"{src,test,migrations}/**/*.ts\"",
+    "tsc": "tsc --noEmit",
+    "test": "jest --coverage",
+    "test:e2e": "jest --config ./jest.e2e.config.ts",
+    "build": "NODE_ENV=production nest build",
+    "start": "nest start",
+    "start:dev": "nest start --watch",
+    "start:prod": "NODE_ENV=production node dist/main",
+    "migrate:up": "npx tsx ./node_modules/migrate-mongo/bin/migrate-mongo.js up",
+    "migrate:down": "npx tsx ./node_modules/migrate-mongo/bin/migrate-mongo.js down",
+    "temporal:dev": "temporal server start-dev --db-filename .temporal/dev.db"
+  },
+  "validation": {
+    "local": "checks",
+    "ci": "checks:ci",
+    "web": "checks:web",
+    "typecheck": "tsc",
+    "notes": "`format` and `lint` are mutating (prettier --write / eslint --fix) and can never fail as a gate. Use `checks:ci` (format:check + lint:check) wherever failure must be possible. `checks:web` also uses the mutating `lint`; CI's frontend job runs `lint:check`, `typecheck`, `test`, `build`."
+  },
+  "packages": [
+    {
+      "path": ".",
+      "stack": "mean",
+      "primaryLanguage": "typescript",
+      "role": "NestJS 11 + Mongoose 9 REST API"
+    },
+    {
+      "path": "web",
+      "stack": "mern",
+      "primaryLanguage": "typescript",
+      "role": "Vite 6 + React 18 SPA",
+      "scripts": {
+        "build": "tsc -b && vite build",
+        "start:dev": "vite",
+        "start:preview": "vite preview",
+        "typecheck": "tsc --noEmit",
+        "lint": "eslint \"src/**/*.{ts,tsx}\" --fix",
+        "lint:check": "eslint \"src/**/*.{ts,tsx}\"",
+        "format": "prettier --write \"src/**/*.{ts,tsx}\"",
+        "format:check": "prettier --check \"src/**/*.{ts,tsx}\"",
+        "test": "vitest run"
+      },
+      "testRunner": {
+        "name": "vitest",
+        "configPath": "web/vite.config.ts",
+        "note": "configured inline under the `test` key; there is no vitest.config.ts"
+      }
+    }
+  ],
+  "protect": {
+    "patterns": ["*/package-lock.json", "*/dist/*", "*/coverage/*"],
+    "note": ".env is already blocked by the hook's hardcoded security baseline; migrations are deliberately not listed so new ones can be created — never edit an applied migration."
+  },
+  "agentDefaults": {
+    "model": "sonnet",
+    "effort": "medium"
+  },
+  "meta": {
+    "projectSize": 3300,
+    "projectSizeUnit": "lines of .ts/.tsx/.css across src, test, migrations, web/src (generated output excluded)",
+    "agentDefaultsBasis": "loc-heuristic",
+    "generatedBy": "project-init",
+    "detectionCacheComposed": true,
+    "businessContext": "none — source enumeration returned an empty list; no business-context files generated"
+  },
+  "discovery": {
+    "sampleSize": 5,
+    "samples": [
+      { "category": "bootstrap", "file": "src/main.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "bootstrap", "file": "src/app.module.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "bootstrap", "file": "src/config/app.config.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "controller", "file": "src/features/common/auth/auth.controller.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "service", "file": "src/features/common/auth/auth.service.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "module", "file": "src/features/common/auth/auth.module.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "guard", "file": "src/features/common/auth/guards/jwt-auth.guard.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "decorator", "file": "src/shared/decorators/public-route.decorator.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "dto-request", "file": "src/features/common/auth/dtos/request/register.request.dto.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "dto-response", "file": "src/features/common/auth/dtos/response/me.response.dto.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "dto-response", "file": "src/shared/dtos/response/with-count.response.dto.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "exception", "file": "src/shared/exceptions/base.exception.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "exception", "file": "src/features/common/auth/exceptions/auth.exception.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "filter", "file": "src/shared/filters/global-exception.filter.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "util", "file": "src/shared/utils/to-response-dto.util.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "schema", "file": "src/database/schemas/administration/user/user.schema.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "plugin", "file": "src/database/plugins/auditable.plugin.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "config", "file": "src/config/environment/environment.config.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "config", "file": "src/config/environment/typed-config.service.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "test-config", "file": "jest.config.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "test-config", "file": "jest.e2e.config.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "test-util", "file": "test/utils/get-mock-config.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "tsconfig", "file": "tsconfig.json", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "ci", "file": ".github/workflows/ci.yml", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "ci", "file": ".github/workflows/e2e.yml", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "infra", "file": "docker-compose.yml", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "infra", "file": ".husky/pre-commit", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "web-component", "file": "web/src/App.tsx", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "web-component", "file": "web/src/pages/LoginPage.tsx", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "web-api-client", "file": "web/src/api/client.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "web-test", "file": "web/src/pages/LoginPage.test.tsx", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "web-build", "file": "web/vite.config.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "web-styles", "file": "web/src/styles.css", "lastSampledAt": "2026-08-10T08:57:15Z" }
+    ]
+  }
+}
