@@ -53,6 +53,7 @@ describe('QaService', () => {
         runStatus: 'queued',
       });
       expect(mockWorkflowEngine.start).toHaveBeenCalledWith('answerQuestion', {
+        answerId: answerId.toString(),
         questionText: 'What is the cap rate?',
       });
       expect(mockAuditService.record).toHaveBeenCalledWith({

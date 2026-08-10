@@ -236,6 +236,7 @@ describe('createActivities', () => {
     const mockPersist = jest.fn().mockResolvedValue(persistResult);
     const app = buildApp({ persist: mockPersist });
     const input = {
+      answerId: 'answer-1',
       questionText: 'What is the cap rate?',
       retrievedChunkIds: [],
       outcome: { kind: 'insufficient_evidence' as const, reason: 'none' },

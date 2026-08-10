@@ -18,8 +18,15 @@ export interface IngestDocumentVersionResult {
  * it — single-tenant until multi-tenancy ships (`DEFAULT_TENANT_ID`). The workflow never imports
  * that constant (it would pull `src/database/**` into `src/workflows/**`); the default is applied
  * activity-side, in `EvidenceRetrievalService`/`AnswerPersistenceService`.
+ *
+ * `answerId` names the `queued` `Answer` row `QaService.startQuestion` already created before
+ * starting this workflow — a plain string field, not a `mongoose`/`src/providers/**` import, so it
+ * doesn't cross the determinism fence. `persistAnswer` updates that row rather than creating a
+ * second one; see `AnswerPersistenceService`'s doc comment for the fail-closed behavior when it's
+ * missing.
  */
 export interface AnswerQuestionInput {
+  readonly answerId: string;
   readonly questionText: string;
   readonly tenantId?: string;
 }

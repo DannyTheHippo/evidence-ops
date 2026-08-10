@@ -4,9 +4,28 @@ import { Test } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { Answer } from '../../../../src/database/schemas/evidence/answer/answer.schema';
 import { AnswerPersistenceService } from '../../../../src/features/evidence/qa/answer-persistence.service';
+import { AnswerNotFoundException } from '../../../../src/features/evidence/qa/exceptions/qa.exception';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
 import { getMockModel } from '../../../utils/get-mock-model';
+
+/** A stand-in for the `AnswerDocument` `findById` resolves — mutable fields plus a `save` mock,
+ * mirroring the findById-then-mutate-then-save shape `AnswerPersistenceService.persist` now uses
+ * (see `DocumentsService.addVersion`'s sibling test for the same document-mock pattern). */
+function buildAnswerDoc(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
+  return {
+    _id: new Types.ObjectId(),
+    runStatus: 'queued',
+    retrievedChunkIds: [],
+    outcome: undefined,
+    claims: [],
+    claimCoverage: undefined,
+    verificationReport: undefined,
+    tenantId: 'default',
+    save: jest.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
 
 describe('AnswerPersistenceService', () => {
   let service: AnswerPersistenceService;
@@ -28,43 +47,59 @@ describe('AnswerPersistenceService', () => {
     jest.resetAllMocks();
   });
 
-  it('should insert with runStatus completed and default tenantId for an insufficient_evidence outcome', async () => {
-    const answerId = new Types.ObjectId();
+  it('should throw AnswerNotFoundException instead of creating a new row when the queued Answer is missing', async () => {
+    // Regression for the fix: a missing row must fail closed, not silently `create` a second,
+    // unrelated `Answer` document under the id nobody can address — that would just reintroduce
+    // the original bug (two unrelated answer rows) under a different id.
+    const answerId = new Types.ObjectId().toString();
+    mockAnswerModel.findById.mockResolvedValueOnce(null);
+
+    await expect(
+      service.persist({
+        answerId,
+        questionText: 'What is the vacancy rate?',
+        retrievedChunkIds: [],
+        outcome: { kind: 'insufficient_evidence', reason: 'no supporting evidence' },
+        claims: [],
+      }),
+    ).rejects.toBeInstanceOf(AnswerNotFoundException);
+    expect(mockAnswerModel.create).not.toHaveBeenCalled();
+  });
+
+  it('should update the existing row to runStatus completed with default tenantId for an insufficient_evidence outcome', async () => {
     const outcome = { kind: 'insufficient_evidence' as const, reason: 'no supporting evidence' };
-    mockAnswerModel.create.mockResolvedValueOnce({
-      _id: answerId,
-      outcome,
-      claimCoverage: undefined,
-    });
+    const answerDoc = buildAnswerDoc();
+    mockAnswerModel.findById.mockResolvedValueOnce(answerDoc);
 
     const result = await service.persist({
+      answerId: (answerDoc._id as Types.ObjectId).toString(),
       questionText: 'What is the vacancy rate?',
       retrievedChunkIds: [],
       outcome,
       claims: [],
     });
 
-    expect(mockAnswerModel.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        questionText: 'What is the vacancy rate?',
-        runStatus: 'completed',
-        tenantId: 'default',
-        retrievedChunkIds: [],
-        outcome,
-        claims: [],
-        claimCoverage: undefined,
-        verificationReport: undefined,
-      }),
+    expect(mockAnswerModel.findById).toHaveBeenCalledWith(
+      (answerDoc._id as Types.ObjectId).toString(),
     );
+    expect(answerDoc).toMatchObject({
+      runStatus: 'completed',
+      tenantId: 'default',
+      retrievedChunkIds: [],
+      outcome,
+      claims: [],
+      claimCoverage: undefined,
+      verificationReport: undefined,
+    });
+    expect(answerDoc.save).toHaveBeenCalled();
     expect(result).toEqual({
-      answerId: answerId.toString(),
+      answerId: (answerDoc._id as Types.ObjectId).toString(),
       outcomeKind: 'insufficient_evidence',
       claimCoverage: undefined,
     });
   });
 
   it('should map retrievedChunkIds to ObjectIds and pass an explicit tenantId and gate fields through for an answered outcome', async () => {
-    const answerId = new Types.ObjectId();
     const chunkId = new Types.ObjectId();
     const outcome = {
       kind: 'answered' as const,
@@ -88,13 +123,11 @@ describe('AnswerPersistenceService', () => {
       totalClaimCount: 1,
       droppedClaims: [],
     };
-    mockAnswerModel.create.mockResolvedValueOnce({
-      _id: answerId,
-      outcome,
-      claimCoverage: 1,
-    });
+    const answerDoc = buildAnswerDoc();
+    mockAnswerModel.findById.mockResolvedValueOnce(answerDoc);
 
     const result = await service.persist({
+      answerId: (answerDoc._id as Types.ObjectId).toString(),
       questionText: 'What is the cap rate?',
       tenantId: 'acme',
       retrievedChunkIds: [chunkId.toString()],
@@ -104,16 +137,15 @@ describe('AnswerPersistenceService', () => {
       verificationReport,
     });
 
-    expect(mockAnswerModel.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tenantId: 'acme',
-        retrievedChunkIds: [chunkId],
-        claimCoverage: 1,
-        verificationReport,
-      }),
-    );
+    expect(answerDoc).toMatchObject({
+      tenantId: 'acme',
+      retrievedChunkIds: [chunkId],
+      claimCoverage: 1,
+      verificationReport,
+    });
+    expect(answerDoc.save).toHaveBeenCalled();
     expect(result).toEqual({
-      answerId: answerId.toString(),
+      answerId: (answerDoc._id as Types.ObjectId).toString(),
       outcomeKind: 'answered',
       claimCoverage: 1,
     });

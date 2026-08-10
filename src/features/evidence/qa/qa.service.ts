@@ -57,12 +57,10 @@ export class QaService {
   }
 
   /**
-   * Creates the `queued` `Answer` row this endpoint is the API-side trigger for (see
-   * `AnswerPersistenceService`'s doc comment: "the API-side trigger that would create one is
-   * wired in a later step" — this is that step). The workflow is started with the existing
-   * `AnswerQuestionInput` shape only — no `answerId` travels through it, since `src/workflows/**`
-   * is committed and out of scope here; a later step is responsible for having the worker resolve
-   * back to this row.
+   * Creates the `queued` `Answer` row and threads its id through as `AnswerQuestionInput.answerId`
+   * so `persistAnswer` updates this same row instead of creating an unrelated one — `GET
+   * /api/v1/answers/:id` (`getAnswerById` below) only ever observes completion because both sides
+   * now agree on one id.
    */
   async startQuestion(input: StartQuestionInput): Promise<StartQuestionResult> {
     const answer = await this.answerModel.create({
@@ -71,6 +69,7 @@ export class QaService {
     });
 
     await this.workflowEngine.start(ANSWER_QUESTION_WORKFLOW_TYPE, {
+      answerId: answer._id.toString(),
       questionText: input.questionText,
     } satisfies AnswerQuestionInput);
 

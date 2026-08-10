@@ -5,8 +5,10 @@ import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
 import { Answer, AnswerDocument } from '../../../database/schemas/evidence/answer/answer.schema';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { AnswerContract, Claim, VerificationReport } from './contracts/answer.contract';
+import { AnswerNotFoundException } from './exceptions/qa.exception';
 
 export interface PersistAnswerInput {
+  readonly answerId: string;
   readonly questionText: string;
   readonly tenantId?: string;
   readonly retrievedChunkIds: readonly string[];
@@ -23,13 +25,20 @@ export interface PersistAnswerResult {
 }
 
 /**
- * Single insert, `runStatus: 'completed'` from the start — there is no pre-created `queued`
- * `Answer` to update. `ProvidersModule`'s comment on `WORKFLOW_ENGINE` says the API-side trigger
- * that would create one is "wired in a later step", and a run that fails before reaching this
- * activity writes nothing at all: per ADR-0003, Temporal (not a hand-rolled `runStatus: 'failed'`
- * row) is the system of record for a failed or still-retrying run. `Answer.schema.ts`'s
- * `pre('validate')` hook — `outcome` may only be set alongside `runStatus: 'completed'` — is
- * satisfied because both always arrive together on this path.
+ * Updates the `queued` `Answer` row `QaService.startQuestion` created and threaded through as
+ * `AnswerQuestionInput.answerId` — this is the "later step" the class used to describe itself as
+ * waiting for. Loaded with `findById` and mutated via `.save()`, not `findByIdAndUpdate`: the
+ * schema's `pre('validate')` invariant (`outcome` only alongside `runStatus: 'completed'`) is
+ * document middleware, keyed off `this.invalidate(...)`, and only fires reliably on the
+ * document-level save path (see `DocumentsService.addVersion` for the same
+ * findById-then-mutate-then-save shape elsewhere in the codebase).
+ *
+ * Fails closed when the row is missing: a run that fails before reaching this activity leaves the
+ * row `queued` forever rather than writing nothing (per ADR-0003, Temporal — not a hand-rolled
+ * `runStatus: 'failed'` row — remains the system of record for a still-retrying run), but a
+ * missing row at this point means the API-side create either never ran or wrote to a different id.
+ * Silently creating a replacement row here would just reintroduce the original bug (two unrelated
+ * answer rows) under a different id, so this throws instead.
  */
 @Injectable()
 export class AnswerPersistenceService {
@@ -43,18 +52,22 @@ export class AnswerPersistenceService {
   }
 
   async persist(input: PersistAnswerInput): Promise<PersistAnswerResult> {
-    const answer = await this.answerModel.create({
-      questionText: input.questionText,
-      runStatus: 'completed',
-      retrievedChunkIds: input.retrievedChunkIds.map((id) => new Types.ObjectId(id)),
-      outcome: input.outcome,
-      // `Answer.claims` (`Claim[]`, mutable) doesn't accept `PersistAnswerInput.claims`'s
-      // `readonly Claim[]` directly — spread rather than widen the input contract's own type.
-      claims: [...input.claims],
-      claimCoverage: input.claimCoverage,
-      verificationReport: input.verificationReport,
-      tenantId: input.tenantId ?? DEFAULT_TENANT_ID,
-    });
+    const answer = await this.answerModel.findById(input.answerId);
+    if (!answer) {
+      throw new AnswerNotFoundException(`Answer '${input.answerId}' not found`);
+    }
+
+    answer.runStatus = 'completed';
+    answer.retrievedChunkIds = input.retrievedChunkIds.map((id) => new Types.ObjectId(id));
+    answer.outcome = input.outcome;
+    // `Answer.claims` (`Claim[]`, mutable) doesn't accept `PersistAnswerInput.claims`'s
+    // `readonly Claim[]` directly — spread rather than widen the input contract's own type.
+    answer.claims = [...input.claims];
+    answer.claimCoverage = input.claimCoverage;
+    answer.verificationReport = input.verificationReport;
+    answer.tenantId = input.tenantId ?? DEFAULT_TENANT_ID;
+
+    await answer.save();
 
     this.logger.debug(
       `Persisted answer '${answer._id.toString()}' with outcome '${input.outcome.kind}'`,

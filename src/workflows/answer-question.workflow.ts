@@ -30,11 +30,12 @@ const groundingActivities = proxyActivities<Pick<Activities, 'groundingCheck'>>(
   retry: { maximumAttempts: 5 },
 });
 
-// A Mongo insert, but non-idempotent for the same reason the model call is: at-least-once
-// execution re-running this after a crash between "insert succeeded" and "activity reported
-// complete" would write two `Answer` documents for one run. Low `maximumAttempts` for the same
-// reasoning as `synthesisActivities`, even though the timeout budget is Mongo-write-fast rather
-// than model-call-slow.
+// A Mongo update against the single `answerId` row (see `AnswerQuestionInput`'s doc comment), not
+// an insert — retrying it after a crash between "write succeeded" and "activity reported complete"
+// re-applies the same field values to the same row rather than creating a second `Answer`, so
+// unlike the comment this replaced, this activity is now idempotent. `maximumAttempts` is left
+// unchanged at 2 regardless — raising it is a separate operational tuning decision, out of scope
+// for this fix.
 const persistActivities = proxyActivities<Pick<Activities, 'persistAnswer'>>({
   startToCloseTimeout: '10 seconds',
   scheduleToCloseTimeout: '30 seconds',
@@ -66,6 +67,7 @@ export async function answerQuestion(input: AnswerQuestionInput): Promise<Answer
   });
 
   const persisted = await persistActivities.persistAnswer({
+    answerId: input.answerId,
     questionText: input.questionText,
     tenantId: input.tenantId,
     retrievedChunkIds: chunks.map((chunk) => chunk.chunkId),
