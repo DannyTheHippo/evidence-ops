@@ -6,6 +6,7 @@ import { DEFAULT_TENANT_ID } from '../../../../src/database/constants/tenant.con
 import { Conflict } from '../../../../src/database/schemas/evidence/conflict/conflict.schema';
 import { ExtractedFact } from '../../../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import { ConflictsService } from '../../../../src/features/evidence/conflicts/conflicts.service';
+import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
 import { getMockModel } from '../../../utils/get-mock-model';
@@ -15,6 +16,7 @@ describe('ConflictsService', () => {
 
   const mockExtractedFactModel = getMockModel();
   const mockConflictModel = getMockModel();
+  const mockAuditService = { record: jest.fn() };
 
   const buildFact = (
     factKey: { entity: string; metric: string; period: string },
@@ -31,6 +33,7 @@ describe('ConflictsService', () => {
         ConflictsService,
         { provide: getModelToken(ExtractedFact.name), useValue: mockExtractedFactModel },
         { provide: getModelToken(Conflict.name), useValue: mockConflictModel },
+        { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: getMockLogger() },
       ],
     }).compile();
@@ -121,5 +124,70 @@ describe('ConflictsService', () => {
 
     expect(mockConflictModel.insertMany).not.toHaveBeenCalled();
     expect(result).toEqual({ conflictsCreated: 0 });
+  });
+
+  describe('list', () => {
+    it('should page conflicts for the default tenant and record an audit event scoped to the actor', async () => {
+      const actorId = new Types.ObjectId().toString();
+      const factIdA = new Types.ObjectId();
+      const factIdB = new Types.ObjectId();
+      const conflict = {
+        _id: new Types.ObjectId(),
+        factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+        factIds: [factIdA, factIdB],
+        magnitude: 0.0085,
+        status: 'open',
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      };
+      mockConflictModel.find.mockResolvedValueOnce([conflict]);
+      mockConflictModel.countDocuments.mockResolvedValueOnce(1);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      const result = await service.list({ skip: 0, limit: 20 }, actorId);
+
+      expect(mockConflictModel.find).toHaveBeenCalledWith({ tenantId: DEFAULT_TENANT_ID }, null, {
+        sort: { createdAt: -1 },
+        skip: 0,
+        limit: 20,
+      });
+      expect(mockConflictModel.countDocuments).toHaveBeenCalledWith({
+        tenantId: DEFAULT_TENANT_ID,
+      });
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'conflicts.listed',
+        actorId,
+        subject: { entityType: 'User', entityId: actorId },
+        tenantId: DEFAULT_TENANT_ID,
+      });
+      expect(result).toEqual({
+        docs: [
+          {
+            id: conflict._id.toString(),
+            factKey: conflict.factKey,
+            factIds: [factIdA.toString(), factIdB.toString()],
+            magnitude: 0.0085,
+            status: 'open',
+            createdAt: conflict.createdAt,
+          },
+        ],
+        count: 1,
+      });
+    });
+
+    it('should scope the query to an explicit tenantId when provided', async () => {
+      const actorId = new Types.ObjectId().toString();
+      mockConflictModel.find.mockResolvedValueOnce([]);
+      mockConflictModel.countDocuments.mockResolvedValueOnce(0);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      const result = await service.list({ skip: 0, limit: 20 }, actorId, 'acme-corp');
+
+      expect(mockConflictModel.find).toHaveBeenCalledWith({ tenantId: 'acme-corp' }, null, {
+        sort: { createdAt: -1 },
+        skip: 0,
+        limit: 20,
+      });
+      expect(result).toEqual({ docs: [], count: 0 });
+    });
   });
 });

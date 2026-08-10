@@ -10,8 +10,12 @@ import {
   ExtractedFact,
   ExtractedFactDocument,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import type { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
+import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
+import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
 import { METRIC_ONTOLOGY } from '../facts/metric-ontology';
+import { ConflictResponseDto } from './dtos/response/conflict.response.dto';
 import { detectConflicts, groupKey } from './detect-conflicts';
 
 export interface ConflictScanResult {
@@ -27,9 +31,41 @@ export class ConflictsService {
     @InjectModel(Conflict.name)
     private readonly conflictModel: Model<ConflictDocument>,
 
+    private readonly auditService: AuditService,
     private readonly logger: AppLogger,
   ) {
     this.logger.init(ConflictsService.name);
+  }
+
+  /**
+   * Audit subject: a paginated list has no single conflict to attach the event to, so the
+   * requesting user stands in as the subject rather than a fabricated ObjectId that would
+   * dangle with no referent.
+   */
+  async list(
+    pagination: PaginationRequestDto,
+    actorId: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<DocumentResultWithCount<ConflictResponseDto>> {
+    const filter = { tenantId };
+
+    const [conflicts, count] = await Promise.all([
+      this.conflictModel.find(filter, null, {
+        sort: { createdAt: -1 },
+        skip: pagination.skip,
+        limit: pagination.limit,
+      }),
+      this.conflictModel.countDocuments(filter),
+    ]);
+
+    await this.auditService.record({
+      action: 'conflicts.listed',
+      actorId,
+      subject: { entityType: 'User', entityId: actorId },
+      tenantId,
+    });
+
+    return { docs: conflicts.map((conflict) => this.toConflictDto(conflict)), count };
   }
 
   /**
@@ -83,5 +119,24 @@ export class ConflictsService {
     this.logger.debug(`Created ${newCandidates.length} conflicts for tenant '${tenantId}'`);
 
     return { conflictsCreated: newCandidates.length };
+  }
+
+  private toConflictDto(conflict: ConflictDocument): ConflictResponseDto {
+    return {
+      id: conflict._id.toString(),
+      // Spread rather than pass `conflict.factKey` through by reference: unlike
+      // `ExtractedFact.factKey` (which uses an explicit `{ _id: false }` sub-schema), this path's
+      // inline `{ type: {...} }` shorthand lets Mongoose mint an `_id` on the nested subdocument
+      // — spreading the three declared fields keeps that stray id out of the response.
+      factKey: {
+        entity: conflict.factKey.entity,
+        metric: conflict.factKey.metric,
+        period: conflict.factKey.period,
+      },
+      factIds: conflict.factIds.map((id) => id.toString()),
+      magnitude: conflict.magnitude,
+      status: conflict.status,
+      createdAt: conflict.createdAt,
+    };
   }
 }

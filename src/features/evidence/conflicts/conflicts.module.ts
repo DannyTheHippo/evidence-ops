@@ -8,6 +8,7 @@ import {
   ExtractedFact,
   ExtractedFactSchema,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import { ConflictsController } from './conflicts.controller';
 import { ConflictsService } from './conflicts.service';
 
 @Module({
@@ -17,6 +18,7 @@ import { ConflictsService } from './conflicts.service';
       { name: Conflict.name, schema: ConflictSchema },
     ]),
   ],
+  controllers: [ConflictsController],
   providers: [ConflictsService],
   exports: [ConflictsService],
 })
