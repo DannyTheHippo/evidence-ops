@@ -54,6 +54,17 @@ export const EvalCaseSchema = z
     category: EvalCategorySchema,
     question: z.string().min(1),
     expectedLocators: z.array(LocatorSchema),
+    /**
+     * Substrings that must appear in the text at `expectedLocators`, written exactly as the
+     * document renders them ("5.25%", not "5.25 percent") because the check is string containment
+     * against parsed text.
+     *
+     * Two jobs. It lets `dataset.spec.ts` prove a locator points at the *right* text rather than
+     * merely existing — the weaker check is what allowed a fixture bug to shift every PDF page by
+     * one while every test stayed green. And it gives the eval harness something to score answer
+     * correctness against; locators and an outcome alone can only score retrieval and abstention.
+     */
+    expectedAnswerContains: z.array(z.string().min(1)).optional(),
     expectedOutcome: EvalOutcomeSchema,
     notes: z.string().min(1),
   })
@@ -67,6 +78,13 @@ export const EvalCaseSchema = z
         code: z.ZodIssueCode.custom,
         message: `category "${evalCase.category}" requires at least one expected locator`,
         path: ['expectedLocators'],
+      });
+    }
+    if (requiresLocators && (evalCase.expectedAnswerContains ?? []).length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `category "${evalCase.category}" requires expectedAnswerContains — without it the case can assert that a locator exists but not that it holds the answer`,
+        path: ['expectedAnswerContains'],
       });
     }
     if (evalCase.category === 'conflicting' && evalCase.expectedOutcome !== 'surface_conflict') {

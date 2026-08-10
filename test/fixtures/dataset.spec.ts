@@ -1,5 +1,6 @@
 import cases from '../../eval/dataset/cases.json';
 import { EvalDatasetSchema, type Locator } from '../../eval/dataset/schema';
+import { resolveLocatorText } from '../../eval/resolve-locator';
 import manifest from '../../fixtures/data-room/manifest.json';
 
 type Manifest = typeof manifest;
@@ -112,5 +113,50 @@ describe('eval dataset', () => {
         assertLocatorExistsInManifest(locator, manifest);
       }
     }
+  });
+
+  // The check above only proves the dataset agrees with the generated manifest. When the fixture
+  // generator was emitting a stray blank page after every content page, the manifest recorded the
+  // page numbers it *intended* and the dataset matched them perfectly — while every PDF locator
+  // pointed one page off, at blank paper. Both artifacts agreed and both were wrong.
+  //
+  // These two assertions go to the documents themselves, via the same parsers ingestion uses.
+  describe('expected locators hold the expected answer (parsed from the documents)', () => {
+    jest.setTimeout(60_000);
+
+    const grounded = EvalDatasetSchema.parse(cases).filter(
+      (evalCase) => (evalCase.expectedAnswerContains ?? []).length > 0,
+    );
+
+    it('covers every answerable and conflicting case', () => {
+      const requiring = EvalDatasetSchema.parse(cases).filter(
+        (evalCase) => evalCase.category === 'answerable' || evalCase.category === 'conflicting',
+      );
+
+      expect(grounded.map((c) => c.id).sort()).toEqual(requiring.map((c) => c.id).sort());
+    });
+
+    it.each(grounded.map((evalCase) => [evalCase.id, evalCase] as const))(
+      '%s',
+      async (_id, evalCase) => {
+        const texts = await Promise.all(
+          evalCase.expectedLocators.map((locator) => resolveLocatorText(locator)),
+        );
+
+        // An empty resolution means the locator points at nothing at all — a broken case, not a
+        // near miss, so it is worth failing distinctly from a missing substring.
+        texts.forEach((text, index) => {
+          expect({ locator: evalCase.expectedLocators[index], empty: text.trim() === '' }).toEqual({
+            locator: evalCase.expectedLocators[index],
+            empty: false,
+          });
+        });
+
+        const combined = texts.join('\n');
+        for (const needle of evalCase.expectedAnswerContains ?? []) {
+          expect(combined).toContain(needle);
+        }
+      },
+    );
   });
 });
