@@ -1,0 +1,167 @@
+import { HttpStatus, UnauthorizedException } from '@nestjs/common';
+import { JwtModule, JwtService } from '@nestjs/jwt';
+import { getModelToken } from '@nestjs/mongoose';
+import type { TestingModule } from '@nestjs/testing';
+import { Test } from '@nestjs/testing';
+import bcrypt from 'bcryptjs';
+import type { StringValue } from 'ms';
+import { User } from '../../../../src/database/schemas/administration/user/user.schema';
+import { AuthService } from '../../../../src/features/common/auth/auth.service';
+import {
+  EmailAlreadyRegisteredException,
+  InvalidCredentialsException,
+} from '../../../../src/features/common/auth/exceptions/auth.exception';
+import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
+import { getMockConfig } from '../../../utils/get-mock-config';
+import { getMockLogger } from '../../../utils/get-mock-logger';
+import { getMockModel } from '../../../utils/get-mock-model';
+
+describe('AuthService', () => {
+  let service: AuthService;
+  let jwtService: JwtService;
+
+  const mockUserId = '65f1c2e4a1b2c3d4e5f6a7b8';
+  const mockUserModel = getMockModel();
+  const mockConfig = getMockConfig();
+
+  const buildMockUser = (overrides: Record<string, unknown> = {}) => ({
+    _id: { toString: () => mockUserId },
+    email: 'user@example.com',
+    password: 'irrelevant-placeholder-hash',
+    createdAt: new Date('2026-07-01T00:00:00.000Z'),
+    ...overrides,
+  });
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      imports: [
+        JwtModule.register({
+          secret: mockConfig.auth.jwtSecret,
+          signOptions: { expiresIn: mockConfig.auth.jwtExpiresIn as StringValue },
+        }),
+      ],
+      providers: [
+        AuthService,
+        {
+          provide: getModelToken(User.name),
+          useValue: mockUserModel,
+        },
+        {
+          provide: AppLogger,
+          useValue: getMockLogger(),
+        },
+      ],
+    }).compile();
+
+    service = module.get<AuthService>(AuthService);
+    jwtService = module.get<JwtService>(JwtService);
+  });
+
+  afterEach(() => {
+    jest.resetAllMocks();
+  });
+
+  describe('register', () => {
+    it('should hash the password before storing it', async () => {
+      mockUserModel.findOne.mockResolvedValueOnce(null);
+      mockUserModel.create.mockImplementationOnce((doc: { email: string; password: string }) =>
+        Promise.resolve(buildMockUser(doc)),
+      );
+
+      const result = await service.register({ email: 'user@example.com', password: 'password123' });
+
+      const calls = mockUserModel.create.mock.calls as Array<[{ email: string; password: string }]>;
+      const createdDoc = calls[0][0];
+      expect(createdDoc.password).not.toBe('password123');
+      expect(await bcrypt.compare('password123', createdDoc.password)).toBe(true);
+      expect(result.id).toBe(mockUserId);
+    });
+
+    it('should lowercase the email before lookup and storage', async () => {
+      mockUserModel.findOne.mockResolvedValueOnce(null);
+      mockUserModel.create.mockImplementationOnce((doc: { email: string; password: string }) =>
+        Promise.resolve(buildMockUser(doc)),
+      );
+
+      await service.register({ email: 'User@Example.COM', password: 'password123' });
+
+      expect(mockUserModel.findOne).toHaveBeenCalledWith({ email: 'user@example.com' });
+      const calls = mockUserModel.create.mock.calls as Array<[{ email: string; password: string }]>;
+      const createdDoc = calls[0][0];
+      expect(createdDoc.email).toBe('user@example.com');
+    });
+
+    it('should throw EmailAlreadyRegisteredException with 409 Conflict on a duplicate email', async () => {
+      mockUserModel.findOne.mockResolvedValueOnce(buildMockUser());
+
+      const error = await service
+        .register({ email: 'user@example.com', password: 'password123' })
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(EmailAlreadyRegisteredException);
+      expect((error as EmailAlreadyRegisteredException).getStatus()).toBe(HttpStatus.CONFLICT);
+      expect(mockUserModel.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('login', () => {
+    it('should throw a generic 401 for an unknown email after exercising the dummy-hash compare', async () => {
+      mockUserModel.findOne.mockResolvedValueOnce(null);
+
+      const error = await service
+        .login({ email: 'unknown@example.com', password: 'password123' })
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(InvalidCredentialsException);
+      expect((error as InvalidCredentialsException).getStatus()).toBe(HttpStatus.UNAUTHORIZED);
+      expect((error as InvalidCredentialsException).message).toBe('Invalid email or password');
+    });
+
+    it('should throw a generic 401 when the password does not match', async () => {
+      const storedHash = await bcrypt.hash('correct-password', 12);
+      mockUserModel.findOne.mockResolvedValueOnce(buildMockUser({ password: storedHash }));
+
+      const error = await service
+        .login({ email: 'user@example.com', password: 'wrong-password' })
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(InvalidCredentialsException);
+      expect((error as InvalidCredentialsException).getStatus()).toBe(HttpStatus.UNAUTHORIZED);
+      expect((error as InvalidCredentialsException).message).toBe('Invalid email or password');
+    });
+
+    it('should return an accessToken carrying sub+email and the mapped user on success', async () => {
+      const storedHash = await bcrypt.hash('correct-password', 12);
+      mockUserModel.findOne.mockResolvedValueOnce(buildMockUser({ password: storedHash }));
+
+      const result = await service.login({
+        email: 'user@example.com',
+        password: 'correct-password',
+      });
+
+      const decoded = jwtService.verify<{ sub: string; email: string }>(result.accessToken);
+      expect(decoded.sub).toBe(mockUserId);
+      expect(decoded.email).toBe('user@example.com');
+      expect(result.user.id).toBe(mockUserId);
+      expect(result.user.email).toBe('user@example.com');
+    });
+  });
+
+  describe('me', () => {
+    it('should return the mapped user when found', async () => {
+      mockUserModel.findById.mockResolvedValueOnce(buildMockUser());
+
+      const result = await service.me(mockUserId);
+
+      expect(mockUserModel.findById).toHaveBeenCalledWith(mockUserId);
+      expect(result.id).toBe(mockUserId);
+      expect(result.email).toBe('user@example.com');
+    });
+
+    it('should throw UnauthorizedException when the user is not found', async () => {
+      mockUserModel.findById.mockResolvedValueOnce(null);
+
+      await expect(service.me(mockUserId)).rejects.toThrow(UnauthorizedException);
+    });
+  });
+});
