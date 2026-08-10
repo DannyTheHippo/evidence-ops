@@ -1,0 +1,105 @@
+import { z } from 'zod';
+
+/**
+ * Locators point at a place in a source document, not at a chunk id. Chunking strategy will
+ * change repeatedly as retrieval is tuned; a dataset keyed to chunk ids would silently rot
+ * every time chunk boundaries move, whereas a locator (file + page / paragraph index /
+ * sheet+cell) stays meaningful and can be resolved against whatever chunks exist at run time
+ * by span overlap. See eval/dataset/README.md.
+ */
+export const PdfPageLocatorSchema = z.object({
+  kind: z.literal('pdf-page'),
+  file: z.string().min(1),
+  page: z.number().int().positive(),
+});
+
+export const XlsxCellLocatorSchema = z.object({
+  kind: z.literal('xlsx-cell'),
+  file: z.string().min(1),
+  sheet: z.string().min(1),
+  // Single cell ("F2") or a range ("A2:H11").
+  cell: z.string().regex(/^[A-Z]+\d+(:[A-Z]+\d+)?$/, 'expected an A1-style cell or range'),
+});
+
+export const DocxParagraphLocatorSchema = z.object({
+  kind: z.literal('docx-paragraph'),
+  file: z.string().min(1),
+  paragraphIndex: z.number().int().nonnegative(),
+  headingPath: z.array(z.string().min(1)),
+});
+
+export const LocatorSchema = z.discriminatedUnion('kind', [
+  PdfPageLocatorSchema,
+  XlsxCellLocatorSchema,
+  DocxParagraphLocatorSchema,
+]);
+
+export const EvalCategorySchema = z.enum([
+  'answerable',
+  'unanswerable',
+  'conflicting',
+  'adversarial',
+]);
+
+export const EvalOutcomeSchema = z.enum([
+  'answer',
+  'abstain',
+  'surface_conflict',
+  'refuse_injection',
+]);
+
+export const EvalCaseSchema = z
+  .object({
+    id: z.string().regex(/^[a-z]+-\d{3}$/, 'expected "<category-prefix>-NNN", e.g. "ans-001"'),
+    category: EvalCategorySchema,
+    question: z.string().min(1),
+    expectedLocators: z.array(LocatorSchema),
+    expectedOutcome: EvalOutcomeSchema,
+    notes: z.string().min(1),
+  })
+  .superRefine((evalCase, ctx) => {
+    // unanswerable/adversarial cases have no ground-truth answer location by construction;
+    // answerable/conflicting cases must point somewhere or the case is untestable.
+    const requiresLocators =
+      evalCase.category === 'answerable' || evalCase.category === 'conflicting';
+    if (requiresLocators && evalCase.expectedLocators.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `category "${evalCase.category}" requires at least one expected locator`,
+        path: ['expectedLocators'],
+      });
+    }
+    if (evalCase.category === 'conflicting' && evalCase.expectedOutcome !== 'surface_conflict') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'category "conflicting" must have expectedOutcome "surface_conflict"',
+        path: ['expectedOutcome'],
+      });
+    }
+    if (evalCase.category === 'unanswerable' && evalCase.expectedOutcome !== 'abstain') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'category "unanswerable" must have expectedOutcome "abstain"',
+        path: ['expectedOutcome'],
+      });
+    }
+    if (evalCase.category === 'adversarial' && evalCase.expectedOutcome !== 'refuse_injection') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'category "adversarial" must have expectedOutcome "refuse_injection"',
+        path: ['expectedOutcome'],
+      });
+    }
+    if (evalCase.category === 'answerable' && evalCase.expectedOutcome !== 'answer') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'category "answerable" must have expectedOutcome "answer"',
+        path: ['expectedOutcome'],
+      });
+    }
+  });
+
+export const EvalDatasetSchema = z.array(EvalCaseSchema);
+
+export type Locator = z.infer<typeof LocatorSchema>;
+export type EvalCase = z.infer<typeof EvalCaseSchema>;
