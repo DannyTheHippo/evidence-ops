@@ -41,8 +41,11 @@ async function readErrorMessage(res: Response): Promise<string> {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
+  const isFormData = init?.body instanceof FormData;
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+    // A FormData body needs the browser to set its own multipart boundary; a fixed
+    // 'application/json' header here would make the server unable to parse the upload.
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
     ...(init?.headers as Record<string, string> | undefined),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -90,4 +93,153 @@ export function logout(): void {
 
 export function getMe(): Promise<Me> {
   return request<Me>('/auth/me');
+}
+
+// ── Documents ────────────────────────────────────────────────────────────
+
+export type DocumentSourceKind = 'pdf' | 'docx' | 'xlsx';
+export type DocumentVersionIngestionStatus = 'pending' | 'completed';
+
+export interface DocumentVersion {
+  id: string;
+  versionNumber: number;
+  sha256: string;
+  sizeBytes: number;
+  ingestionStatus: DocumentVersionIngestionStatus;
+  createdAt: string;
+}
+
+// Named `EvidenceDocument`, not `Document` — the latter shadows the DOM global that the rest
+// of the SPA (and jsdom in tests) relies on.
+export interface EvidenceDocument {
+  id: string;
+  title: string;
+  sourceKind: DocumentSourceKind;
+  mimeType: string;
+  currentVersion: DocumentVersion;
+  createdAt: string;
+}
+
+export interface DocumentWithVersions extends EvidenceDocument {
+  versions: DocumentVersion[];
+}
+
+export interface WithCount<T> {
+  docs: T[];
+  count: number;
+}
+
+export function uploadDocument(
+  file: File,
+  options?: { documentId?: string; title?: string },
+): Promise<EvidenceDocument> {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (options?.documentId) formData.append('documentId', options.documentId);
+  if (options?.title) formData.append('title', options.title);
+  return request<EvidenceDocument>('/documents', { method: 'POST', body: formData });
+}
+
+export function listDocuments(): Promise<WithCount<EvidenceDocument>> {
+  return request<WithCount<EvidenceDocument>>('/documents');
+}
+
+export function getDocumentById(id: string): Promise<DocumentWithVersions> {
+  return request<DocumentWithVersions>(`/documents/${id}`);
+}
+
+// ── Questions & answers ─────────────────────────────────────────────────
+
+export type AnswerRunStatus = 'queued' | 'running' | 'completed' | 'failed';
+
+export type Locator =
+  | {
+      kind: 'pdf-page';
+      extractorVersion: string;
+      page: number;
+      boundingBox?: { x: number; y: number; width: number; height: number };
+    }
+  | {
+      kind: 'docx-paragraph';
+      extractorVersion: string;
+      paragraphIndex: number;
+      headingPath: string[];
+    }
+  | { kind: 'xlsx-region'; extractorVersion: string; sheetName: string; range: string }
+  | { kind: 'xlsx-cell'; extractorVersion: string; sheetName: string; cell: string };
+
+export interface Citation {
+  docVersionId: string;
+  sha256: string;
+  chunkId: string;
+  locator: Locator;
+  quote: string;
+}
+
+export interface Claim {
+  statement: string;
+  citations: Citation[];
+}
+
+export interface ConflictingValue {
+  value: number;
+  unit: string;
+  sourceChunkId: string;
+}
+
+export interface ConflictingFactKey {
+  entity: string;
+  metric: string;
+  period: string;
+}
+
+export type AnswerOutcome =
+  | { kind: 'answered'; claims: Claim[] }
+  | { kind: 'insufficient_evidence'; reason: string }
+  | { kind: 'conflicting_evidence'; factKey: ConflictingFactKey; values: ConflictingValue[] };
+
+export interface Answer {
+  id: string;
+  questionText: string;
+  runStatus: AnswerRunStatus;
+  // Present only once runStatus is 'completed' — never render this as a final outcome before
+  // then (see qa.controller.ts / answer.response.dto.ts).
+  outcome?: AnswerOutcome;
+  claimCoverage?: number;
+  citations: Citation[];
+  conflictIds: string[];
+  createdAt: string;
+}
+
+export interface StartQuestionResult {
+  id: string;
+  runStatus: AnswerRunStatus;
+}
+
+export function startQuestion(questionText: string): Promise<StartQuestionResult> {
+  return request<StartQuestionResult>('/questions', {
+    method: 'POST',
+    ...jsonBody({ questionText }),
+  });
+}
+
+export function getAnswerById(id: string): Promise<Answer> {
+  return request<Answer>(`/answers/${id}`);
+}
+
+// ── Conflicts ────────────────────────────────────────────────────────────
+
+export type ConflictStatus = 'open' | 'resolved' | 'dismissed';
+
+export interface Conflict {
+  id: string;
+  factKey: ConflictingFactKey;
+  factIds: string[];
+  magnitude: number;
+  status: ConflictStatus;
+  createdAt: string;
+}
+
+export function listConflicts(): Promise<WithCount<Conflict>> {
+  return request<WithCount<Conflict>>('/conflicts');
 }
