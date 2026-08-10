@@ -133,6 +133,69 @@ describe('PdfParser', () => {
     expect(parsed.elements[0].text).toContain('&lt;');
   });
 
+  describe('parse — caller buffer safety', () => {
+    it('should return identical, correct results when parsing the same Buffer twice', async () => {
+      const buffer = await readFile(path.join(DATA_ROOM_DIR, 'market-overview.pdf'));
+
+      const first = await parser.parse(buffer);
+      const second = await parser.parse(buffer);
+
+      // toEqual alone would pass for two equally-empty results; anchoring the first call to the
+      // manifest-recorded page count is what confirms both calls actually extracted the document,
+      // not just that they failed identically.
+      expect(first.elements).toHaveLength(manifest.files['market-overview.pdf'].pageCount);
+      expect(second).toEqual(first);
+    });
+
+    it("should leave the caller's buffer readable and unmutated after parsing", async () => {
+      const buffer = await readFile(path.join(DATA_ROOM_DIR, 'market-overview.pdf'));
+      const originalLength = buffer.byteLength;
+      const originalBytes = Buffer.from(buffer);
+
+      await parser.parse(buffer);
+
+      expect(buffer.byteLength).toBe(originalLength);
+      expect(buffer.equals(originalBytes)).toBe(true);
+    });
+
+    // Not reproducible against pdfjs-dist@6: `getDataProp` (node_modules/pdfjs-dist/legacy/build/
+    // pdf.mjs:14687-14700) only hands pdf.js the caller's Uint8Array as-is — the object it later
+    // transfers/detaches — when `val.byteLength === val.buffer.byteLength`, i.e. the view spans
+    // its *entire* underlying ArrayBuffer. A pooled Buffer.allocUnsafe allocation is always
+    // smaller than half the pool (`Buffer.poolSize >>> 1`), so it can never satisfy that equality
+    // while still sharing the pool with another live Buffer: the moment a slice's byteLength
+    // equals its buffer's byteLength, it has consumed the whole slab and there is no room left for
+    // a neighbor to share it. pdf.js copies every genuinely pool-shared slice internally
+    // (`new Uint8Array(val)`) before this library's fix would even run. This test therefore passes
+    // pre-fix too — it is kept as an invariant guard on *this parser's* contract (the copy in
+    // `parse()` shields the caller regardless of pdf.js's internal behavior, including in a future
+    // pdf.js version without this guard), not as a regression test that catches the original bug.
+    it('should not corrupt a neighboring Buffer that shares the same pooled ArrayBuffer', async () => {
+      const pdfBytes = await readFile(path.join(DATA_ROOM_DIR, 'market-overview.pdf'));
+      // The fixture must stay under half the pool size for Buffer.allocUnsafe to pool it at all
+      // (Node 26's default Buffer.poolSize is 65536, not the historical 8192 — checked dynamically
+      // so this assertion stays true across Node versions).
+      expect(pdfBytes.length).toBeLessThan(Buffer.poolSize >>> 1);
+
+      const neighbor = Buffer.allocUnsafe(pdfBytes.length).fill(0xab);
+      const neighborLength = neighbor.byteLength;
+      const content = Buffer.allocUnsafe(pdfBytes.length);
+      pdfBytes.copy(content);
+
+      // Precondition: neighbor and content must share the same underlying pooled ArrayBuffer, or
+      // this test proves nothing about the pooled-buffer hazard.
+      expect(content.buffer).toBe(neighbor.buffer);
+
+      await parser.parse(content);
+
+      // A detach of the shared ArrayBuffer would collapse neighbor's length to 0, which would
+      // make `every()` on an empty array pass vacuously — the length assertion is what makes this
+      // test actually catch the hazard instead of rubber-stamping it.
+      expect(neighbor.byteLength).toBe(neighborLength);
+      expect(neighbor.every((byte) => byte === 0xab)).toBe(true);
+    });
+  });
+
   describe('parse — malformed input', () => {
     it('should reject a buffer with no PDF header with a clear, typed error', async () => {
       await expect(

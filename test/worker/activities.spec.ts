@@ -1,4 +1,6 @@
 import type { INestApplicationContext } from '@nestjs/common';
+import { ConflictsService } from '../../src/features/evidence/conflicts/conflicts.service';
+import { FactsService } from '../../src/features/evidence/facts/facts.service';
 import { IngestionService } from '../../src/features/evidence/ingestion/ingestion.service';
 import { AnswerPersistenceService } from '../../src/features/evidence/qa/answer-persistence.service';
 import type { Claim } from '../../src/features/evidence/qa/contracts/answer.contract';
@@ -15,6 +17,8 @@ import { createActivities } from '../../src/worker/activities';
  */
 function buildApp(overrides: {
   ingestVersion?: jest.Mock;
+  extractFacts?: jest.Mock;
+  scanForConflicts?: jest.Mock;
   retrieve?: jest.Mock;
   synthesizeAnswer?: jest.Mock;
   verify?: jest.Mock;
@@ -22,6 +26,8 @@ function buildApp(overrides: {
 }): INestApplicationContext {
   const services = new Map<unknown, unknown>([
     [IngestionService, { ingestVersion: overrides.ingestVersion ?? jest.fn() }],
+    [FactsService, { extractFacts: overrides.extractFacts ?? jest.fn() }],
+    [ConflictsService, { scanForConflicts: overrides.scanForConflicts ?? jest.fn() }],
     [EvidenceRetrievalService, { retrieve: overrides.retrieve ?? jest.fn() }],
     [SynthesisService, { synthesizeAnswer: overrides.synthesizeAnswer ?? jest.fn() }],
     [GroundingGateService, { verify: overrides.verify ?? jest.fn() }],
@@ -95,6 +101,30 @@ describe('createActivities', () => {
 
     expect(mockIngestVersion).toHaveBeenCalledWith('doc-1');
     expect(result).toEqual({ chunksCreated: 3, alreadyIngested: false });
+  });
+
+  it('should delegate extractFacts to FactsService.extractFacts', async () => {
+    const mockExtractFacts = jest
+      .fn()
+      .mockResolvedValue({ factsCreated: 2, alreadyExtracted: false });
+    const app = buildApp({ extractFacts: mockExtractFacts });
+
+    const activities = createActivities(app);
+    const result = await activities.extractFacts('version-1');
+
+    expect(mockExtractFacts).toHaveBeenCalledWith('version-1');
+    expect(result).toEqual({ factsCreated: 2, alreadyExtracted: false });
+  });
+
+  it('should delegate scanForConflicts to ConflictsService.scanForConflicts', async () => {
+    const mockScanForConflicts = jest.fn().mockResolvedValue({ conflictsCreated: 1 });
+    const app = buildApp({ scanForConflicts: mockScanForConflicts });
+
+    const activities = createActivities(app);
+    const result = await activities.scanForConflicts('acme-corp');
+
+    expect(mockScanForConflicts).toHaveBeenCalledWith('acme-corp');
+    expect(result).toEqual({ conflictsCreated: 1 });
   });
 
   it('should delegate retrieveEvidence to EvidenceRetrievalService.retrieve', async () => {

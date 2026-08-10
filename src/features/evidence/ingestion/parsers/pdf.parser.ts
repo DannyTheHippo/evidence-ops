@@ -205,8 +205,19 @@ export class PdfParser implements DocumentParser {
     const loadingTask = pdfjs.getDocument({
       // pdf.js rejects a Node `Buffer` outright ("Please provide binary data as `Uint8Array`"),
       // even though Buffer extends Uint8Array — it checks the constructor, not the prototype
-      // chain. This is a zero-copy view over the same memory, not a duplicate of the file.
-      data: new Uint8Array(content.buffer, content.byteOffset, content.byteLength),
+      // chain.
+      //
+      // pdf.js also takes ownership of whatever `data` array it is handed and detaches
+      // (transfers) its underlying `ArrayBuffer` once the document is done with it — a view over
+      // `content`'s own memory would leave `content` unreadable after the first parse, breaking
+      // any caller that parses the same buffer twice (this pipeline does, once to chunk and once
+      // to extract facts). Worse, Node pools `Buffer`s under ~half its pool size inside a shared
+      // `ArrayBuffer`; detaching that shared buffer would silently corrupt unrelated pooled
+      // `Buffer`s that happen to share the slab, not just this one. `new Uint8Array(content)`
+      // copies the bytes into a fresh, dedicated `ArrayBuffer` pdf.js can safely take ownership of
+      // and detach without touching the caller's memory. Cost: one copy per parse, bounded by the
+      // upload size cap.
+      data: new Uint8Array(content),
       standardFontDataUrl: STANDARD_FONT_DATA_URL,
       cMapUrl: CMAP_URL,
       cMapPacked: true,

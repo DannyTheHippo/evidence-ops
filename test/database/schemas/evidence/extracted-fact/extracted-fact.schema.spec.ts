@@ -15,6 +15,7 @@ const buildFactInput = () => ({
   confidence: 0.92,
   extractionMethod: 'llm' as const,
   chunkId: new mongoose.Types.ObjectId(),
+  documentVersionId: new mongoose.Types.ObjectId(),
   locator: {
     kind: 'xlsx-cell' as const,
     extractorVersion: 'xlsx-extractor@1.0.0',

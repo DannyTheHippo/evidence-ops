@@ -182,6 +182,7 @@ describe('FactsService', () => {
             factKey: { entity: string; metric: string; period: string };
             value: { amount: number; unit: string };
             chunkId: Types.ObjectId;
+            documentVersionId: Types.ObjectId;
             tenantId: string;
           }[],
         ]
@@ -195,6 +196,9 @@ describe('FactsService', () => {
       });
       expect(insertedFacts[0].value).toEqual({ amount: 5.25, unit: 'percent' });
       expect(insertedFacts[0].chunkId).toBe(chunkId);
+      // Regression: `documentVersionId` must be on the inserted document, or the idempotency
+      // check and rollback filters (both scoped by this field) never match anything they wrote.
+      expect(insertedFacts[0].documentVersionId).toBe(versionId);
       expect(insertedFacts[0].tenantId).toBe('default');
       expect(result).toEqual({ factsCreated: 1, alreadyExtracted: false });
     });
@@ -308,6 +312,7 @@ describe('FactsService', () => {
             value: { amount: number; unit: string };
             rawText: string;
             chunkId: Types.ObjectId;
+            documentVersionId: Types.ObjectId;
           }[],
         ]
       >;
@@ -315,6 +320,7 @@ describe('FactsService', () => {
       expect(insertedFacts).toHaveLength(1);
       expect(insertedFacts[0].rawText).toBe('cap rate is 5.25%');
       expect(insertedFacts[0].chunkId).toBe(chunkId);
+      expect(insertedFacts[0].documentVersionId).toBe(versionId);
       // Confirms the ungrounded candidate's rejection reached the service's own logging, not just
       // `extractProseFacts`'s internal bookkeeping.
       expect(mockLogger.debug).toHaveBeenCalledWith(

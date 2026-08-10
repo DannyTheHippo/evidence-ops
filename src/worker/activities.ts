@@ -1,4 +1,9 @@
 import type { INestApplicationContext } from '@nestjs/common';
+import {
+  ConflictsService,
+  type ConflictScanResult,
+} from '../features/evidence/conflicts/conflicts.service';
+import { FactsService, type FactsExtractionResult } from '../features/evidence/facts/facts.service';
 import { IngestionService } from '../features/evidence/ingestion/ingestion.service';
 import {
   AnswerPersistenceService,
@@ -50,6 +55,8 @@ export interface GroundingCheckActivityResult {
  */
 export interface Activities {
   ingestDocumentVersion(documentVersionId: string): Promise<IngestDocumentVersionResult>;
+  extractFacts(documentVersionId: string): Promise<FactsExtractionResult>;
+  scanForConflicts(tenantId?: string): Promise<ConflictScanResult>;
   retrieveEvidence(input: RetrieveEvidenceInput): Promise<RetrievedChunk[]>;
   synthesizeAnswer(input: SynthesizeAnswerActivityInput): Promise<AnswerContract>;
   groundingCheck(input: GroundingCheckActivityInput): Promise<GroundingCheckActivityResult>;
@@ -64,6 +71,8 @@ export interface Activities {
  */
 export function createActivities(app: INestApplicationContext): Activities {
   const ingestionService = app.get(IngestionService);
+  const factsService = app.get(FactsService);
+  const conflictsService = app.get(ConflictsService);
   const evidenceRetrievalService = app.get(EvidenceRetrievalService);
   const synthesisService = app.get(SynthesisService);
   const groundingGateService = app.get(GroundingGateService);
@@ -71,6 +80,10 @@ export function createActivities(app: INestApplicationContext): Activities {
 
   return {
     ingestDocumentVersion: (documentVersionId) => ingestionService.ingestVersion(documentVersionId),
+
+    extractFacts: (documentVersionId) => factsService.extractFacts(documentVersionId),
+
+    scanForConflicts: (tenantId) => conflictsService.scanForConflicts(tenantId),
 
     retrieveEvidence: (input) => evidenceRetrievalService.retrieve(input),
 

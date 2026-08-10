@@ -129,6 +129,7 @@ export class FactsService {
           confidence: candidate.confidence,
           extractionMethod: candidate.extractionMethod,
           chunkId: candidate.chunkId,
+          documentVersionId: version._id,
           locator: candidate.locator,
           tenantId: version.tenantId,
         })),

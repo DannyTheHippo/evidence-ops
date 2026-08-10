@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import request from 'supertest';
+import { FakeWorkflowEngine } from '../../src/providers/workflow-engine/fake-workflow.engine';
+import { WORKFLOW_ENGINE } from '../../src/providers/workflow-engine/workflow-engine.interface';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
 
 const FIXTURES = path.join(__dirname, '../../fixtures/data-room');
@@ -13,6 +15,7 @@ interface DocumentVersionBody {
   versionNumber: number;
   sha256: string;
   sizeBytes: number;
+  ingestionStatus: string;
   createdAt: string;
 }
 
@@ -30,9 +33,11 @@ describe('Documents (e2e)', () => {
   let token: string;
   let comps: Buffer;
   let memo: Buffer;
+  let fakeWorkflowEngine: FakeWorkflowEngine;
 
   beforeAll(async () => {
     app = await createTestApp();
+    fakeWorkflowEngine = app.get<FakeWorkflowEngine>(WORKFLOW_ENGINE);
 
     const credentials = { email: 'documents-e2e@example.com', password: 'correct-horse-battery' };
     await request(getTestServer(app)).post('/api/v1/auth/register').send(credentials);
@@ -77,6 +82,9 @@ describe('Documents (e2e)', () => {
     expect(body.currentVersion.versionNumber).toBe(1);
     expect(body.currentVersion.sha256).toBe(createHash('sha256').update(comps).digest('hex'));
     expect(body.currentVersion.sizeBytes).toBe(comps.byteLength);
+    // FakeWorkflowEngine records the start but never executes it, so the version's own
+    // `ingestionStatus` field stays at its schema default here.
+    expect(body.currentVersion.ingestionStatus).toBe('pending');
 
     // Asserting the exact key set is the only gate that catches a response-DTO field missing
     // @Expose() — such a field is silently dropped from the payload with no error anywhere.
@@ -84,20 +92,34 @@ describe('Documents (e2e)', () => {
       ['id', 'title', 'sourceKind', 'mimeType', 'currentVersion', 'createdAt'].sort(),
     );
     expect(Object.keys(body.currentVersion).sort()).toEqual(
-      ['id', 'versionNumber', 'sha256', 'sizeBytes', 'createdAt'].sort(),
+      ['id', 'versionNumber', 'sha256', 'sizeBytes', 'ingestionStatus', 'createdAt'].sort(),
     );
     expect(JSON.stringify(body)).not.toMatch(/storageKey/i);
+
+    // Proves work item 1 end to end within what this sandbox-safe e2e can observe: the upload
+    // request actually reaches `WorkflowEngine.start` with the new version's id. The chain the
+    // workflow itself runs (chunk+embed → extract facts → scan conflicts) is proven separately by
+    // the gated integration spec — FakeWorkflowEngine never executes what it records.
+    const started = fakeWorkflowEngine.started.find(
+      (call) =>
+        call.workflowType === 'ingestDocumentVersion' &&
+        (call.input as { documentVersionId: string }).documentVersionId === body.currentVersion.id,
+    );
+    expect(started).toBeDefined();
   });
 
   it('does not create a second version when the same bytes are re-uploaded', async () => {
     const first = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Idempotent' });
     const documentId = (first.body as DocumentBody).id;
 
+    const startedBeforeReupload = fakeWorkflowEngine.started.length;
     const again = await upload(comps, 'comps.xlsx', XLSX_MIME, { documentId });
     const body = again.body as DocumentBody;
 
     expect(body.currentVersion.versionNumber).toBe(1);
     expect(body.currentVersion.id).toBe((first.body as DocumentBody).currentVersion.id);
+    // Content-addressed dedupe: no new version was created, so no second ingestion workflow starts.
+    expect(fakeWorkflowEngine.started).toHaveLength(startedBeforeReupload);
 
     const detail = await request(getTestServer(app))
       .get(`/api/v1/documents/${documentId}`)

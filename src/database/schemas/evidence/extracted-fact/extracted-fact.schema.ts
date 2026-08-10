@@ -64,6 +64,12 @@ export class ExtractedFact extends AuditableDocument {
   @Prop({ type: Types.ObjectId, ref: 'EvidenceChunk', required: true })
   chunkId: Types.ObjectId;
 
+  // Scopes `FactsService.extractFacts`'s idempotency check and partial-insert rollback to exactly
+  // this version's facts — the same role `EvidenceChunk.documentVersionId` plays for
+  // `IngestionService.ingestVersion`'s analogous check.
+  @Prop({ type: Types.ObjectId, ref: 'DocumentVersion', required: true })
+  documentVersionId: Types.ObjectId;
+
   // Own copy of the locator, not just the chunk's: the fact may pin a narrower position than the
   // chunk it was extracted from (e.g. one `xlsx-cell` inside a chunk spanning an `xlsx-region`).
   @Prop({ type: MongooseSchema.Types.Mixed, required: true })

@@ -21,8 +21,13 @@ import {
   DOCUMENT_STORE,
   type DocumentStore,
 } from '../../../providers/storage/document-store.interface';
+import {
+  WORKFLOW_ENGINE,
+  type WorkflowEngine,
+} from '../../../providers/workflow-engine/workflow-engine.interface';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import type { IngestDocumentVersionInput } from '../../../workflows/types';
 import { MIME_TYPE_TO_SOURCE_KIND } from './documents.constant';
 import type { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import { UploadDocumentRequestDto } from './dtos/request/upload-document.request.dto';
@@ -39,7 +44,21 @@ import type { UploadedFileLike } from './types/uploaded-file.type';
 interface UploadResult {
   document: DocumentDocument;
   currentVersion: DocumentVersionDocument;
+  /** False on the content-addressed dedupe path (`addVersion` reusing an existing sha256) —
+   * distinguishes "no new bytes were stored" from every path that actually created a version, so
+   * `upload()` only ever starts ingestion for a version that needs it. */
+  isNewVersion: boolean;
 }
+
+/**
+ * `ingestDocumentVersion` — the Temporal workflow type name in
+ * `src/workflows/ingest-document-version.workflow.ts` — is not exported as a constant anywhere in
+ * `src/workflows/**` (that directory only exports argument/return types; see its determinism-fence
+ * rationale, also called out in `qa.service.ts`'s identical `ANSWER_QUESTION_WORKFLOW_TYPE`
+ * comment). Duplicated here rather than imported, for the same reason: this module reaches into
+ * `src/workflows/**` for types only, never runtime exports.
+ */
+const INGEST_DOCUMENT_VERSION_WORKFLOW_TYPE = 'ingestDocumentVersion';
 
 @Injectable()
 export class DocumentsService {
@@ -52,6 +71,9 @@ export class DocumentsService {
 
     @Inject(DOCUMENT_STORE)
     private readonly documentStore: DocumentStore,
+
+    @Inject(WORKFLOW_ENGINE)
+    private readonly workflowEngine: WorkflowEngine,
 
     private readonly logger: AppLogger,
   ) {
@@ -77,9 +99,19 @@ export class DocumentsService {
 
     const sha256 = createHash('sha256').update(file.buffer).digest('hex');
 
-    const { document, currentVersion } = dto.documentId
+    const { document, currentVersion, isNewVersion } = dto.documentId
       ? await this.addVersion(dto.documentId, sha256, file)
       : await this.createDocument(dto, sourceKind, sha256, file);
+
+    // Fire-and-forget, mirroring `QaService.startQuestion`: a slow parse/embed must never block
+    // the upload response, which is the entire point of running ingestion as a durable workflow
+    // rather than an inline call into `IngestionService`. Never starts for the dedupe path — no
+    // new bytes were stored, so there is nothing new to ingest.
+    if (isNewVersion) {
+      await this.workflowEngine.start(INGEST_DOCUMENT_VERSION_WORKFLOW_TYPE, {
+        documentVersionId: currentVersion._id.toString(),
+      } satisfies IngestDocumentVersionInput);
+    }
 
     this.logger.debug(
       `Document '${document._id.toString()}' upload resolved to version '${currentVersion._id.toString()}'`,
@@ -165,7 +197,7 @@ export class DocumentsService {
       // response returns that existing version as-is. If the matched version predates the
       // document's actual current version (stale bytes re-uploaded), this does NOT move the
       // current pointer back — only a genuinely new hash ever advances `currentVersionId`.
-      return { document, currentVersion: existingVersion };
+      return { document, currentVersion: existingVersion, isNewVersion: false };
     }
 
     const versionCount = await this.documentVersionModel.countDocuments({
@@ -189,7 +221,7 @@ export class DocumentsService {
     document.currentVersionId = version._id;
     await document.save();
 
-    return { document, currentVersion: version };
+    return { document, currentVersion: version, isNewVersion: true };
   }
 
   private async createDocument(
@@ -230,7 +262,7 @@ export class DocumentsService {
     document.currentVersionId = version._id;
     await document.save();
 
-    return { document, currentVersion: version };
+    return { document, currentVersion: version, isNewVersion: true };
   }
 
   // A document created by this service always gets `currentVersionId` set in the same call that
@@ -269,6 +301,9 @@ export class DocumentsService {
       versionNumber: version.versionNumber,
       sha256: version.sha256,
       sizeBytes: version.sizeBytes,
+      // The observable marker for the ingestion workflow this version's upload just started —
+      // 'pending' until the worker's `finalizeCompletion` flips it (`IngestionService`).
+      ingestionStatus: version.ingestionStatus,
       createdAt: version.createdAt,
     };
   }

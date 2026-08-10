@@ -1,5 +1,9 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose } from 'class-transformer';
+import {
+  DOCUMENT_VERSION_INGESTION_STATUSES,
+  type DocumentVersionIngestionStatus,
+} from '../../../../../database/schemas/evidence/document-version/document-version.schema';
 
 export class DocumentVersionResponseDto {
   @Expose()
@@ -20,6 +24,14 @@ export class DocumentVersionResponseDto {
   @Expose()
   @ApiProperty({ example: 245760, description: 'Size of the version bytes, in bytes.' })
   sizeBytes: number;
+
+  @Expose()
+  @ApiProperty({
+    example: 'pending',
+    enum: DOCUMENT_VERSION_INGESTION_STATUSES,
+    description: 'Progress marker for the ingestion workflow started on upload.',
+  })
+  ingestionStatus: DocumentVersionIngestionStatus;
 
   @Expose()
   @ApiProperty({ example: '2026-07-01T00:00:00.000Z', description: 'Version creation timestamp.' })

@@ -17,6 +17,10 @@ import {
   DOCUMENT_STORE,
   type DocumentStore,
 } from '../../../../src/providers/storage/document-store.interface';
+import {
+  WORKFLOW_ENGINE,
+  type WorkflowEngine,
+} from '../../../../src/providers/workflow-engine/workflow-engine.interface';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
 import { getMockModel } from '../../../utils/get-mock-model';
@@ -35,6 +39,10 @@ describe('DocumentsService', () => {
     get: jest.fn(),
     delete: jest.fn(),
   } satisfies Record<keyof DocumentStore, jest.Mock>;
+  const mockWorkflowEngine = {
+    start: jest.fn(),
+    status: jest.fn(),
+  } satisfies Record<keyof WorkflowEngine, jest.Mock>;
 
   const documentId = new Types.ObjectId();
   const versionId = new Types.ObjectId();
@@ -58,6 +66,7 @@ describe('DocumentsService', () => {
     sha256: 'a'.repeat(64),
     sizeBytes: 1024,
     storageKey: 'gridfs-id-1',
+    ingestionStatus: 'pending',
     createdAt: new Date('2026-07-01T00:00:00.000Z'),
     ...overrides,
   });
@@ -77,6 +86,7 @@ describe('DocumentsService', () => {
         { provide: getModelToken(Document.name), useValue: mockDocumentModel },
         { provide: getModelToken(DocumentVersion.name), useValue: mockDocumentVersionModel },
         { provide: DOCUMENT_STORE, useValue: mockDocumentStore },
+        { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
         { provide: AppLogger, useValue: getMockLogger() },
       ],
     }).compile();
@@ -151,6 +161,11 @@ describe('DocumentsService', () => {
       expect(mockDocument.currentVersionId).toEqual(versionId);
       expect(result.currentVersion.versionNumber).toBe(1);
       expect(result.currentVersion.sha256).toBe(expectedSha256);
+      // A new document always creates a new version, so ingestion must start for it — the whole
+      // point of running it as a durable workflow is that this never blocks the upload response.
+      expect(mockWorkflowEngine.start).toHaveBeenCalledWith('ingestDocumentVersion', {
+        documentVersionId: versionId.toString(),
+      });
     });
   });
 
@@ -185,6 +200,8 @@ describe('DocumentsService', () => {
       expect(mockDocumentVersionModel.create).not.toHaveBeenCalled();
       expect(mockDocument.save).not.toHaveBeenCalled();
       expect(result.currentVersion.id).toBe(versionId.toString());
+      // Content-addressed dedupe: no new bytes were stored, so there is nothing new to ingest.
+      expect(mockWorkflowEngine.start).not.toHaveBeenCalled();
     });
 
     it('should create version 2 when the uploaded bytes are new for the document', async () => {
@@ -211,6 +228,9 @@ describe('DocumentsService', () => {
       expect(mockDocument.save).toHaveBeenCalled();
       expect(mockDocument.currentVersionId).toEqual(newVersionId);
       expect(result.currentVersion.versionNumber).toBe(2);
+      expect(mockWorkflowEngine.start).toHaveBeenCalledWith('ingestDocumentVersion', {
+        documentVersionId: newVersionId.toString(),
+      });
     });
   });
 

@@ -2,6 +2,15 @@ services:
   mongo:
     image: mongodb/mongodb-atlas-local:8.3.4
     container_name: evidence-ops-mongo
+    # Load-bearing, not cosmetic: the image starts mongod with `--replSet <container hostname>`,
+    # and the replica-set config persisted in `evidence_ops_data` records that name in its `_id`.
+    # Docker assigns a fresh random hostname on every container recreate, so without pinning this
+    # the next `docker compose up` starts mongod under a set name the stored config does not match
+    # ("Our replica set config is invalid or we are not a member of it") — the node never becomes
+    # primary and mongot never starts, which surfaces as `Error connecting to Search Index
+    # Management service`. A set `_id` cannot be changed by reconfig, so recovery means wiping the
+    # volume. Pinning the hostname keeps the name stable across recreates.
+    hostname: evidence-ops-mongo
     restart: always
     ports:
       # Host port is overridable because 27017 is the default for every Mongo project on a
@@ -14,7 +23,19 @@ services:
     networks:
       - evidence_ops_net
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      # Fails CLOSED on a node that is up but unusable. `ping` alone answers on a node whose
+      # replica set is invalid — it reported healthy while writes were failing `not primary` and
+      # search was unreachable, so every dependent service started against a broken database.
+      # `isWritablePrimary` is the property callers actually need: migrations, GridFS writes and
+      # `$rankFusion` all require a primary.
+      test:
+        [
+          "CMD",
+          "mongosh",
+          "--quiet",
+          "--eval",
+          "db.hello().isWritablePrimary || (function(){ throw new Error('not a writable primary') })()",
+        ]
       interval: 10s
       timeout: 10s
       retries: 12
