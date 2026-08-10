@@ -44,11 +44,12 @@ services exist under the `full` compose profile; the default `up` starts only `m
 | `npm run test`                        | unit tests with coverage (100% branches/functions/lines/statements on gated services) |
 | `npm run test:e2e`                    | end-to-end suites against `mongodb-memory-server`                                     |
 | `npm run migrate:up` / `migrate:down` | apply/roll back migrations in `migrations/`                                           |
-| `npm run format` / `format:check`     | prettier `--write` / `--check` on `src`, `test`, `migrations`                         |
-| `npm run lint` / `lint:check`         | eslint `--fix` / read-only on `src`, `test`, `migrations`                             |
+| `npm run format` / `format:check`     | prettier `--write` / `--check` on `src`, `test`, `migrations`, `scripts`, `eval`       |
+| `npm run lint` / `lint:check`         | eslint `--fix` / read-only on `src`, `test`, `migrations`, `scripts`, `eval`           |
 | `npm run tsc`                         | `tsc --noEmit`                                                                        |
+| `npm run test:integration`            | live-Mongo suites against `mongodb/mongodb-atlas-local` — needs Docker; not run by `checks`/`checks:ci` or CI |
 | `npm run temporal:dev`                | starts a local Temporal dev server (`temporal server start-dev`)                      |
-| `npm run worker:dev`                  | starts the Temporal worker (placeholder until `src/worker/main.ts` exists)            |
+| `npm run worker:dev`                  | starts the Temporal worker (`src/worker/main.ts`); needs a running Temporal server to connect to |
 
 `format` and `lint` rewrite files and always exit 0, so they cannot serve as a gate. Anywhere a
 check must be able to fail — CI, a pre-merge hook — use `format:check` / `lint:check`, which is what

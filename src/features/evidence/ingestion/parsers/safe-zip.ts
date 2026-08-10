@@ -55,7 +55,7 @@ function assertSafeEntryPath(entry: JSZip.JSZipObject): void {
  * crafted zip can under-report them and slip past these caps, and the real cost is only paid when
  * an entry is decompressed. That is why this is not the only control — the upload endpoint caps
  * the compressed payload before a parser ever sees it, which bounds the worst case. Treat this as
- * a cheap first filter, not a decompression-bomb proof. Recorded in the threat model.
+ * a cheap first filter, not a decompression-bomb proof.
  */
 export function assertSafeArchive(zip: JSZip): void {
   const entries = Object.values(zip.files);

@@ -3,9 +3,9 @@ import { z } from 'zod';
 // `rules/typescript-general.md` / project convention reserves zod for env parsing
 // (`environment.config.ts`); HTTP request/response DTOs use class-validator/class-transformer
 // instead. This file is the deliberate exception: `answerContractSchema` is converted to a JSON
-// Schema to constrain the model's structured output, and the same schema is reused by the eval
-// harness to score responses — a single runtime-validatable source of truth matters more here
-// than consistency with the DTO convention.
+// Schema to constrain the model's structured output, and the same schema is meant to be reused by
+// the eval dataset in `eval/` once a runner exists to score responses against it — a single
+// runtime-validatable source of truth matters more here than consistency with the DTO convention.
 
 /**
  * Mirrors `EvidenceLocator` in
@@ -83,8 +83,9 @@ export const answeredOutcomeSchema = z.object({
 
 export type AnsweredOutcome = z.infer<typeof answeredOutcomeSchema>;
 
-// `insufficient_evidence` is a valid success state, not an error — the eval harness rewards
-// producing it on genuinely unanswerable questions rather than fabricating a claim.
+// `insufficient_evidence` is a valid success state, not an error — the (not yet built) eval
+// harness is meant to reward producing it on genuinely unanswerable questions rather than
+// fabricating a claim.
 const insufficientEvidenceOutcomeSchema = z.object({
   kind: z.literal('insufficient_evidence'),
   reason: z.string().min(1),

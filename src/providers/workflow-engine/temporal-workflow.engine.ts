@@ -20,10 +20,10 @@ function toWorkflowStatus(name: WorkflowExecutionStatusName): WorkflowStatus {
 }
 
 /**
- * Real `WorkflowEngine` binding via `@temporalio/client`. Deliberately not the binding
- * `ProvidersModule` uses for `WORKFLOW_ENGINE` yet — the real answer workflow is wired in a
- * later step, and `test/utils/create-test-app.ts` overrides the token back to
- * `FakeWorkflowEngine` for e2e regardless, so the suite never dials a Temporal server.
+ * Real `WorkflowEngine` binding via `@temporalio/client`. This is what `ProvidersModule` binds
+ * `WORKFLOW_ENGINE` to (ADR-0003) — `QaService.startQuestion` calls `start()` on it for the real
+ * answer workflow. `test/utils/create-test-app.ts` overrides the token back to
+ * `FakeWorkflowEngine` for e2e, so the suite never dials a Temporal server.
  *
  * `Connection.connect()` is deferred to first use (`getClient()`) rather than the constructor:
  * instantiating this class never attempts a network connection, only calling `start`/`status`

@@ -4,8 +4,8 @@ import type { z } from 'zod/v4';
  * Deliberate convention exception: `.claude/CLAUDE.md` says "zod is env-only; requests use
  * class-validator". That rule targets HTTP DTOs. The provider layer uses zod as the schema
  * language for model input/output because the schema must convert to JSON Schema for
- * Anthropic's `output_format` and be reusable by the eval harness. Scoped to `src/providers/**`
- * and model contracts only.
+ * Anthropic's `output_format` and stay reusable by the eval dataset in `eval/` once a runner
+ * exists to score against it. Scoped to `src/providers/**` and model contracts only.
  *
  * `zod/v4` specifically (not the bare `zod` import, which resolves to v3 in this package's
  * transitional 3.25.x release) — `@anthropic-ai/sdk`'s `zodOutputFormat()` helper requires a

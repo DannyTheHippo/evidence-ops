@@ -63,10 +63,10 @@ const MODEL_CACHE_DEFAULT_OPTIONS: CachingModelProviderOptions = {
     // here — their fakes stay in the tree because unit tests still bind them directly, not
     // through this module. WORKFLOW_ENGINE is the one exception that needs an e2e-level override
     // rather than just a unit-level one: TemporalWorkflowEngine only dials a server when
-    // start()/status() is actually called (nothing does yet — the real answer workflow is wired
-    // in a later step), but `test/utils/create-test-app.ts` still overrides the token back to
-    // FakeWorkflowEngine defensively, so no future e2e spec can accidentally reach a live
-    // Temporal server just by booting AppModule.
+    // start()/status() is actually called, and QaService.startQuestion does call start() on the
+    // real answer workflow — so `test/utils/create-test-app.ts` overrides the token back to
+    // FakeWorkflowEngine, so no e2e spec accidentally reaches a live Temporal server just by
+    // booting AppModule.
     { provide: RETRIEVAL_STORE, useClass: MongoHybridRetrievalStore },
     { provide: DOCUMENT_STORE, useClass: GridFsDocumentStore },
     { provide: WORKFLOW_ENGINE, useClass: TemporalWorkflowEngine },

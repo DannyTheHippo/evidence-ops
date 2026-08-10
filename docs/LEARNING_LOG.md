@@ -177,7 +177,7 @@ grammatically illegal and confident fabrication becomes the only legal output: t
 for safety causes the hallucination.
 
 **What we chose, and why here.** Native structured output, because the answer genuinely *is* a JSON
-object and the same schema is what the eval harness scores against. It is a discriminated union with
+object and the same schema is what the planned eval harness will score against. It is a discriminated union with
 three branches — `answered`, `insufficient_evidence`, `conflicting_evidence` — so abstention and "the
 sources disagree" are both legal, first-class outputs. And a vendor guarantee is a claim to check,
 not an axiom: we constrain at the API *and* re-validate app-side.

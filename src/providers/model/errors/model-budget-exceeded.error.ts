@@ -1,8 +1,8 @@
 /**
  * Not a `BaseException`/`HttpException` — the provider layer runs outside HTTP request scope
- * (Temporal activities, the eval harness, `scripts/`), so it cannot assume a controller is
- * there to catch it. Callers that do sit behind a controller are responsible for mapping this
- * to an HTTP response themselves.
+ * (Temporal activities, `scripts/`, and eventually an eval runner), so it cannot assume a
+ * controller is there to catch it. Callers that do sit behind a controller are responsible for
+ * mapping this to an HTTP response themselves.
  *
  * Thrown when the pre-call worst-case cost estimate exceeds `maxCostUsd`. The budget gate fails
  * CLOSED — refusing outright is the only safe response; silently clamping `maxTokens` down to

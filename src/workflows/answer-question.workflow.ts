@@ -32,10 +32,9 @@ const groundingActivities = proxyActivities<Pick<Activities, 'groundingCheck'>>(
 
 // A Mongo update against the single `answerId` row (see `AnswerQuestionInput`'s doc comment), not
 // an insert — retrying it after a crash between "write succeeded" and "activity reported complete"
-// re-applies the same field values to the same row rather than creating a second `Answer`, so
-// unlike the comment this replaced, this activity is now idempotent. `maximumAttempts` is left
-// unchanged at 2 regardless — raising it is a separate operational tuning decision, out of scope
-// for this fix.
+// re-applies the same field values to the same row rather than creating a second `Answer` — so
+// this activity is idempotent, which is what makes a retry safe here. `maximumAttempts` stays at 2
+// regardless: raising it is an operational tuning decision, not a consequence of idempotency.
 const persistActivities = proxyActivities<Pick<Activities, 'persistAnswer'>>({
   startToCloseTimeout: '10 seconds',
   scheduleToCloseTimeout: '30 seconds',

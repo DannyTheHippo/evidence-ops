@@ -8,14 +8,26 @@ Senior TypeScript full-stack coding agent. NestJS + Mongoose API, React SPA.
 
 ## Stack
 
-- **API** (repo root): NestJS 11 on Express, Mongoose 9, `@nestjs/swagger`, `@nestjs/jwt` + bcryptjs, `@nestjs/throttler`, helmet, zod (env only), class-validator (requests), class-transformer (responses), migrate-mongo (TypeScript migrations via `tsx`), AsyncLocalStorage request context.
+- **API** (repo root): NestJS 11 on Express, Mongoose 9, `@nestjs/swagger`, `@nestjs/jwt` + bcryptjs, `@nestjs/throttler`, helmet, zod (env parsing, plus the deliberate exception in `src/providers/**`/`answer.contract.ts` for model I/O schemas — see those files), class-validator (requests), class-transformer (responses), migrate-mongo (TypeScript migrations via `tsx`), AsyncLocalStorage request context.
 - **SPA** (`web/`): React 18.3, react-router-dom 6, Vite 6, plain CSS. No state library, no data-fetching library.
 - **Data**: MongoDB via `mongodb/mongodb-atlas-local` — chosen because retrieval depends on `$search`, `$vectorSearch`, `$rankFusion`.
-- **Testing**: jest 30 + ts-jest + supertest + mongodb-memory-server (API); vitest 4 + Testing Library (SPA).
+- **Testing**: jest 30 + ts-jest + supertest + mongodb-memory-server (API unit/e2e); a separate `jest.integration.config.ts` lane runs live-Mongo specs against `mongodb/mongodb-atlas-local` (Docker required, not run by CI); vitest 4 + Testing Library (SPA).
 - **Runtime**: Node 26 (`engines >=26 <27`, `.nvmrc`, `node:26-slim`, CI node 26).
 - **Infra**: Docker Compose (mongo + one-shot migrate; app/web behind the `full` profile), GitHub Actions, husky pre-commit.
 
-Scaffolded but **not wired**: Temporal. The `@temporalio/*` packages and `config.temporal` exist; there are no `@temporalio` imports in `src/`, no `src/worker/`, and `worker:dev` exits 1. Do not write code that assumes a running worker.
+**Temporal is wired** (ADR-0003), a second process alongside the API: `src/worker/main.ts` boots
+`WorkerModule` (a DI slice mirroring `AppModule` minus HTTP-only concerns) and starts a
+`@temporalio/worker` `Worker` polling `config.temporal.taskQueue`. `src/workflows/` holds two
+workflows — `answer-question.workflow.ts` and `ingest-document-version.workflow.ts` — each pure
+orchestration that proxies to activities in `src/worker/activities.ts` for every side effect (Mongo,
+model calls, the grounding check). `src/workflows/**` sits behind a determinism fence (ADR-0003,
+`eslint.config.mjs`, enforced again by Temporal's own workflow-bundling step in `Worker.create`):
+it may only import from `src/workflows/**` itself and pure type-only files, never services, Mongoose,
+or `src/providers/**` directly. `ProvidersModule` binds `WORKFLOW_ENGINE` to the real
+`TemporalWorkflowEngine`, and `QaService.startQuestion` calls `start()` on it — so the live path
+needs both `docker compose up -d mongo` and a running Temporal dev server (`npm run temporal:dev`,
+requires the Temporal CLI) before `worker:dev` can do anything. E2E and unit tests never need
+either: `test/utils/create-test-app.ts` overrides `WORKFLOW_ENGINE` back to `FakeWorkflowEngine`.
 
 ## Project Structure
 
@@ -90,7 +102,7 @@ Detail: `rules/jest-tests.md` (API), `rules/react.md` § SPA Testing (web).
 - **Errors.** Feature exceptions extend `BaseException(message, status, cause?)`. A bare `Error` collapses to a 500 `Internal server error` in `GlobalExceptionFilter` and loses the detail; `cause` is how a failure stays debuggable (attached to the body below prod-like environments only).
 - **Request context.** `CorrelationMiddleware` + `AsyncLocalStorageMiddleware` are applied globally with an explicit exclusion list; `JwtAuthGuard` stamps the user id into the ALS store, and `auditablePlugin` reads it. A Mongoose Query is lazy — one built inside a request but awaited outside the ALS scope stamps no audit fields, silently.
 - **Config refuses at construction.** zod validates `process.env` synchronously during `AppModule` decorator evaluation and aborts boot listing every offending variable. `MONGO_DB_URI` and `JWT_SECRET` are required under `production`/`staging`, dev-defaulted below.
-- **zod is env-only.** Requests use class-validator, responses use class-transformer.
+- **zod is for env and model contracts; HTTP DTOs are not.** Requests use class-validator, responses use class-transformer. zod additionally owns `src/config/environment/`, `src/providers/**`, and the model-facing contracts (`answer.contract.ts`, `fact-extraction.contract.ts`) — those schemas must convert to JSON Schema for Anthropic's `output_format`, which class-validator cannot do. Note the provider layer imports `zod/v4` explicitly.
 - **SPA API base is relative** — `const API = '/api/v1'`, proxied by Vite in dev and nginx in prod. No `VITE_*` vars, no `import.meta.env`, no hardcoded origins. Auth state is `localStorage`, read per render; there is no `AuthContext`.
 - **Response contracts are duplicated by hand** across the two roots (`web/src/api/client.ts` interfaces mirror the API response DTOs). Change both in the same commit.
 - **Security posture in place:** helmet (CSP off so Swagger UI loads), CORS with an explicit origin, throttler as a global fail-closed guard, bcrypt cost 12 with a dummy-hash compare on unknown-email login for timing parity.
@@ -106,6 +118,10 @@ Detail: `rules/jest-tests.md` (API), `rules/react.md` § SPA Testing (web).
 | `npm run checks:web`   | SPA: lint → typecheck → test. Note `lint` here is the mutating `--fix` form. |
 
 Individual: `npm run format:check`, `npm run lint:check`, `npm run tsc`, `npm run test`, `npm run test:e2e`; SPA `npm --prefix web run lint:check | typecheck | test | build`.
+
+`npm run test:integration` runs the live-Mongo specs (`*.integration-spec.ts`) against a real
+`mongodb/mongodb-atlas-local` container — needs Docker (`docker compose up -d mongo`), 300s test
+timeout. Neither `checks`/`checks:ci` nor any CI workflow runs it; it is a manual/local-only lane.
 
 **Never claim done while any of these is red**, including pre-existing failures — surface them, fix them, or halt and escalate.
 

@@ -38,7 +38,8 @@ function isNotFoundError(error: unknown): boolean {
 /**
  * `off` — pass through, no cache read or write (normal live usage).
  * `record` — read-through: reuse an existing fixture if present, otherwise call live and
- *   persist the result, so re-running the eval harness never re-pays for fixtures it already has.
+ *   persist the result, so a future eval runner replaying against these fixtures never re-pays
+ *   for ones it already has.
  * `replay` — read-only: a miss throws rather than calling live (see `ModelReplayCacheMissError`).
  */
 @Injectable()
