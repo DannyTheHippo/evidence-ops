@@ -28,7 +28,10 @@ gets no partial credit.
 3. **Numeric-claim support** (`extract-numeric-tokens.ts`). Every number in the claim's statement
    must be supported — either by a cell-level `ExtractedFact` on a cited chunk (upgrades the
    citation's locator, since a cell fact is strictly stronger evidence than a whole-region quote
-   match) or by the cited chunk's text containing the same number.
+   match) or, for a cited chunk that carries **no** cell facts at all, by the chunk's text
+   containing the same number. A cited chunk that carries any cell fact is authoritative for
+   numbers: an unmatched value there is rejected outright, never accepted on a coincidental digit
+   substring elsewhere in that chunk's raw text (see Known bound 2, narrowed below).
 
 Claim-level survival then degrades to an outcome via `GroundingGateService.verify`: every claim
 survives → `answered` at full coverage; some survive → `answered` at reduced coverage with drops
@@ -58,11 +61,18 @@ interview answer that omits them is a sales pitch, not an ADR.
    system prompt's instruction to treat fenced content as data, not to a model that has been
    successfully turned by it — the gate was never meant to be, and cannot be, a content filter.
 
-2. **Numeric support is digit-pattern matching, not comprehension.** `extractNumericTokens` matches
-   `\$?\d[\d,]*(?:\.\d+)?%?` — a number written in words ("six percent") is invisible to it, and a
-   scaled value written as `"$41 million"` parses as the number `41`, not `41,000,000` (the pattern
-   has no notion of a trailing magnitude word). A claim citing `"$41 million"` against evidence that
-   also happens to contain a bare `41` anywhere would be judged supported for the wrong reason.
+2. **Numeric support is digit-pattern matching, not comprehension — narrowed to chunks with no cell
+   facts.** `extractNumericTokens` matches `\$?\d[\d,]*(?:\.\d+)?%?` — a number written in words
+   ("six percent") is invisible to it, and a scaled value written as `"$41 million"` parses as the
+   number `41`, not `41,000,000` (the pattern has no notion of a trailing magnitude word). This bound
+   still governs any cited chunk with **zero** cell facts (in practice, every prose chunk — PDF,
+   DOCX). A claim citing `"$41 million"` against a prose chunk that also happens to contain a bare
+   `41` anywhere would be judged supported for the wrong reason. A cited chunk that has at least one
+   cell fact no longer has this exposure: `verifyClaim` requires a matching cell fact for every
+   number on that chunk and rejects an unmatched one, even if the raw digits are present elsewhere
+   in the chunk's text (`test/features/evidence/qa/verify-claim.spec.ts`, "should reject a claim
+   whose number appears in the chunk text but is not backed by any cell fact on a chunk that has
+   cell facts").
 
 3. **Conflict-forcing is chunk-scoped and errs toward over-triggering.** A claim is forced to
    `conflicting_evidence` if any cited chunk carries a cell fact whose key matches a known
@@ -77,15 +87,22 @@ interview answer that omits them is a sales pitch, not an ADR.
    shaped like a citation for this gate to verify against. A model could write a fabricated
    `conflicting_evidence.values` entry today and nothing catches it before persistence.
 
-5. **`conflictedFactKeys` is never supplied in the wired path.** `src/worker/activities.ts`'s
-   `groundingCheck` calls `GroundingGateService.verify` without a `conflictedFactKeys` argument —
-   `ConflictsService` isn't wired into this activity (out of scope for this change). `verify`'s
-   forced `conflicting_evidence` override (see the Decision section above) can therefore never
-   actually fire on the path a real request takes; today it is reachable only from
-   `grounding-gate.service.spec.ts` calling `verify` directly. `groundingCheck` still has an
-   explicit unreachable-branch guard for it (throws rather than silently mis-persisting), because
-   the report's type still allows it and a future caller could supply the argument without also
-   updating that guard.
+5. **Resolved: `cellFacts` and `conflictedFactKeys` are both supplied in the wired path.**
+   `src/worker/activities.ts`'s `groundingCheck` now loads both before calling
+   `GroundingGateService.verify`: `FactsService.findCellFacts` for the `xlsx-cell` facts on the
+   request's retrieved chunks, and `ConflictsService.findConflictedFactGroupsForChunks` for every
+   open `Conflict` touched by those chunks' facts. Both queries are scoped to `retrievedChunks` and
+   `tenantId`, never the tenant's whole `extracted_facts`/`conflicts` collections — a request can
+   only draw on cell facts it actually retrieved, and can only be forced to `conflicting_evidence`
+   by a conflict it retrieved evidence for, never by the tenant's conflict backlog at large. The
+   `conflicting_evidence` branch in `groundingCheck` is real now, not an unreachable-branch guard:
+   it looks up which `ConflictedFactGroup` produced the gate's `conflictingFactKey` (via
+   `factKeysMatch`, exported from `grounding-gate.service.ts` for this) and builds the full
+   `conflicting_evidence` outcome from that group's `values` — `groundingCheck` still throws if no
+   group matches or `conflictingFactKey` is unset, but that is now a genuine invariant guard against
+   the gate and this lookup drifting out of sync, not a "not wired yet" placeholder.
+   `migrations/0006-grounding-check-chunk-scoped-indexes.ts` adds the two supporting compound
+   indexes (`extracted_facts.{tenantId,chunkId}`, `conflicts.{tenantId,status,factIds}`).
 
 6. **No fuzzy acceptance on quote matching.** `locate-quote.ts` computes a similarity score via
    bounded edit distance purely to *label* a near-miss as `'fuzzy'` (worth surfacing to a human or

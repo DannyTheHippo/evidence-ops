@@ -1,4 +1,5 @@
 import type { INestApplicationContext } from '@nestjs/common';
+import { DEFAULT_TENANT_ID } from '../database/constants/tenant.constant';
 import {
   ConflictsService,
   type ConflictScanResult,
@@ -19,9 +20,13 @@ import {
   EvidenceRetrievalService,
   type RetrieveEvidenceInput,
 } from '../features/evidence/qa/evidence-retrieval.service';
-import { GroundingGateService } from '../features/evidence/qa/grounding-gate.service';
+import {
+  factKeysMatch,
+  GroundingGateService,
+} from '../features/evidence/qa/grounding-gate.service';
 import { SynthesisService } from '../features/evidence/qa/synthesis.service';
 import type { RetrievedChunk } from '../features/evidence/qa/types/retrieved-chunk.type';
+import type { GroundingCellFact } from '../features/evidence/qa/verify-claim';
 import type { IngestDocumentVersionResult } from '../workflows/types';
 
 export interface SynthesizeAnswerActivityInput {
@@ -32,6 +37,7 @@ export interface SynthesizeAnswerActivityInput {
 export interface GroundingCheckActivityInput {
   readonly outcome: AnswerContract;
   readonly retrievedChunks: readonly RetrievedChunk[];
+  readonly tenantId?: string;
 }
 
 export interface GroundingCheckActivityResult {
@@ -101,24 +107,41 @@ export function createActivities(app: INestApplicationContext): Activities {
     // gets returned as `outcome` (and, via `answer-question.workflow.ts`, what gets persisted).
     // "The model proposes, the application disposes": a model that claimed `answered` with every
     // citation later dropped must not have that claim persisted as-is (see ADR-0004's decision
-    // section for the outcome-level degradation rule this mirrors). `conflictedFactKeys` is never
-    // supplied here (this step doesn't wire `ConflictsService` — out of scope, recorded as a
-    // known bound in ADR-0004), so `report.outcomeKind` can only actually come back `answered` or
-    // `insufficient_evidence`; the `conflicting_evidence` branch below is an unreachable-branch
-    // assertion, not a real path, until that wiring exists.
-    // Stays a plain (non-`async`) arrow: nothing here awaits, so an `async` signature would trip
-    // `@typescript-eslint/require-await`. The `conflicting_evidence` guard below returns a
-    // `Promise.reject(...)` rather than `throw`ing, for the same reason — every call site treats
-    // this as a promise-returning call, and a synchronous throw out of a non-`async` function
-    // would not honor that.
-    groundingCheck: (input) => {
+    // section for the outcome-level degradation rule this mirrors). `cellFacts` and
+    // `conflictedFactKeys` are both loaded here, scoped to `input.retrievedChunks` and
+    // `input.tenantId` (never the tenant's whole `extracted_facts`/`conflicts` collections) — see
+    // `FactsService.findCellFacts` and `ConflictsService.findConflictedFactGroupsForChunks` for
+    // why that scoping is load-bearing, not just an optimization.
+    groundingCheck: async (input) => {
       if (input.outcome.kind !== 'answered') {
-        return Promise.resolve({ outcome: input.outcome, claims: [] });
+        return { outcome: input.outcome, claims: [] };
       }
+
+      const chunkIds = input.retrievedChunks.map((chunk) => chunk.chunkId);
+      const [cellFactDocs, conflictGroups] = await Promise.all([
+        factsService.findCellFacts(chunkIds, input.tenantId ?? DEFAULT_TENANT_ID),
+        conflictsService.findConflictedFactGroupsForChunks(
+          chunkIds,
+          input.tenantId ?? DEFAULT_TENANT_ID,
+        ),
+      ]);
+
+      const cellFacts: GroundingCellFact[] = cellFactDocs.map((fact) => ({
+        chunkId: fact.chunkId.toString(),
+        factKey: {
+          entity: fact.factKey.entity,
+          metric: fact.factKey.metric,
+          period: fact.factKey.period,
+        },
+        value: { amount: fact.value.amount, unit: fact.value.unit },
+        locator: fact.locator,
+      }));
 
       const report = groundingGateService.verify({
         outcome: input.outcome,
         retrievedChunks: input.retrievedChunks,
+        cellFacts,
+        conflictedFactKeys: conflictGroups.map((group) => group.factKey),
       });
       const totalClaimCount = report.claims.length + report.droppedClaims.length;
 
@@ -130,17 +153,47 @@ export function createActivities(app: INestApplicationContext): Activities {
           kind: 'insufficient_evidence',
           reason: `grounding gate verified 0 of ${totalClaimCount} claim(s); every citation failed verification`,
         };
-      } else {
-        return Promise.reject(
-          new Error(
-            "GroundingGateService returned 'conflicting_evidence', but conflictedFactKeys is " +
-              'never supplied here so this branch should be unreachable; wire it together with ' +
-              'ConflictsService (see ADR-0004 Known bounds) before removing this guard',
-          ),
+      } else if (!report.conflictingFactKey) {
+        // `GroundingReport.outcomeKind`/`conflictingFactKey` aren't a discriminated union, so `tsc`
+        // can't narrow this on its own — `GroundingGateService.verify` only ever returns
+        // `outcomeKind: 'conflicting_evidence'` alongside a set `conflictingFactKey` (see its own
+        // implementation), so this is an invariant violation, not a normal branch.
+        throw new Error(
+          "GroundingGateService returned outcomeKind 'conflicting_evidence' with no " +
+            'conflictingFactKey set',
         );
+      } else {
+        // Captured into a local rather than read as `report.conflictingFactKey` inside the closure
+        // below: `tsc` doesn't carry the `else if (!report.conflictingFactKey)` narrowing above
+        // through a callback passed to `.find()`.
+        const conflictingFactKey = report.conflictingFactKey;
+        // `conflictingFactKey` is always one of `conflictGroups`' keys (`verify` can only ever
+        // have matched it against an entry from `conflictedFactKeys`, which came from
+        // `conflictGroups` above) — `factKeysMatch`, not `===`/deep-equal, because the touched key
+        // is the fact's own (free-text, differently-cased) key, not the conflict's canonical one.
+        const matchedGroup = conflictGroups.find((group) =>
+          factKeysMatch(group.factKey, conflictingFactKey),
+        );
+        if (!matchedGroup) {
+          // Invariant violation, not a normal branch: `conflictedFactKeys` supplied to `verify`
+          // above came entirely from `conflictGroups`, so a returned `conflictingFactKey` with no
+          // matching group means the gate and this lookup have drifted out of sync.
+          throw new Error(
+            `GroundingGateService returned 'conflicting_evidence' for a fact key with no ` +
+              'matching entry in conflictGroups; conflictedFactKeys and the group lookup have ' +
+              'drifted out of sync',
+          );
+        }
+        outcome = {
+          kind: 'conflicting_evidence',
+          factKey: matchedGroup.factKey,
+          // `AnswerContract`'s `values` (mutable, zod-inferred) doesn't accept
+          // `ConflictedFactGroup.values`'s `readonly ConflictedFactValue[]` directly.
+          values: [...matchedGroup.values],
+        };
       }
 
-      return Promise.resolve({
+      return {
         outcome,
         claims: report.claims,
         claimCoverage: report.claimCoverage,
@@ -151,7 +204,7 @@ export function createActivities(app: INestApplicationContext): Activities {
           // `readonly DroppedClaim[]` directly.
           droppedClaims: [...report.droppedClaims],
         },
-      });
+      };
     },
 
     persistAnswer: (input) => answerPersistenceService.persist(input),

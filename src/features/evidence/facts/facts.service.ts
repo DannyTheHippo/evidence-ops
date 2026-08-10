@@ -146,6 +146,36 @@ export class FactsService {
     return { factsCreated: candidates.length, alreadyExtracted: false };
   }
 
+  /**
+   * Cell-level facts among a request's retrieved evidence, scoped to `chunkIds` and `tenantId` so
+   * a request can only ever draw on facts extracted from chunks it actually retrieved — never the
+   * tenant's whole `extracted_facts` collection. Only `xlsx-cell` locators qualify: check 3 in
+   * `verifyClaim` only ever upgrades a citation using a fact narrower than the chunk it was
+   * extracted from, and `xlsx-region`/`pdf-page`/`docx-paragraph` facts carry no narrower position
+   * to upgrade to. Returns the raw documents, not `GroundingCellFact` — the caller (`activities.ts`,
+   * DB-aware) projects them, per `GroundingCellFact`'s own doc comment in `verify-claim.ts`.
+   */
+  async findCellFacts(
+    chunkIds: readonly string[],
+    tenantId: string,
+  ): Promise<ExtractedFactDocument[]> {
+    // An id that isn't a valid ObjectId can't match a real chunk — dropped rather than thrown, per
+    // this method's role as an input to a veto-only measurement (a broken lookup for one id must
+    // not block verification of every other retrieved chunk).
+    const objectIds = chunkIds
+      .filter((id) => Types.ObjectId.isValid(id))
+      .map((id) => new Types.ObjectId(id));
+    if (objectIds.length === 0) {
+      return [];
+    }
+
+    return this.extractedFactModel.find({
+      chunkId: { $in: objectIds },
+      tenantId,
+      'locator.kind': 'xlsx-cell',
+    });
+  }
+
   private async buildXlsxCandidates(
     versionId: Types.ObjectId,
     elements: readonly ParsedElement[],

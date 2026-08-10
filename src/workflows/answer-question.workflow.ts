@@ -64,6 +64,7 @@ export async function answerQuestion(input: AnswerQuestionInput): Promise<Answer
   const grounding = await groundingActivities.groundingCheck({
     outcome,
     retrievedChunks: chunks,
+    tenantId: input.tenantId,
   });
 
   const persisted = await persistActivities.persistAnswer({

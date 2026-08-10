@@ -1,3 +1,4 @@
+import { InternalServerErrorException } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
@@ -124,6 +125,131 @@ describe('ConflictsService', () => {
 
     expect(mockConflictModel.insertMany).not.toHaveBeenCalled();
     expect(result).toEqual({ conflictsCreated: 0 });
+  });
+
+  describe('findConflictedFactGroupsForChunks', () => {
+    it('should return an empty array without querying the model when chunkIds is empty', async () => {
+      const result = await service.findConflictedFactGroupsForChunks([], 'acme-corp');
+
+      expect(result).toEqual([]);
+      expect(mockExtractedFactModel.find).not.toHaveBeenCalled();
+    });
+
+    it('should return an empty array without querying the model when every id is invalid', async () => {
+      const result = await service.findConflictedFactGroupsForChunks(
+        ['not-an-object-id'],
+        'acme-corp',
+      );
+
+      expect(result).toEqual([]);
+      expect(mockExtractedFactModel.find).not.toHaveBeenCalled();
+    });
+
+    it('should return an empty array without querying conflicts when no fact touches the given chunks', async () => {
+      const chunkId = new Types.ObjectId();
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+
+      const result = await service.findConflictedFactGroupsForChunks(
+        [chunkId.toString()],
+        'acme-corp',
+      );
+
+      expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
+        { chunkId: { $in: [chunkId] }, tenantId: 'acme-corp' },
+        { _id: 1 },
+      );
+      expect(mockConflictModel.find).not.toHaveBeenCalled();
+      expect(result).toEqual([]);
+    });
+
+    it('should return an empty array when the touched fact has no open conflict', async () => {
+      const chunkId = new Types.ObjectId();
+      const touchedFactId = new Types.ObjectId();
+      mockExtractedFactModel.find.mockResolvedValueOnce([{ _id: touchedFactId }]);
+      mockConflictModel.find.mockResolvedValueOnce([]);
+
+      const result = await service.findConflictedFactGroupsForChunks(
+        [chunkId.toString()],
+        'acme-corp',
+      );
+
+      expect(mockConflictModel.find).toHaveBeenCalledWith({
+        tenantId: 'acme-corp',
+        status: 'open',
+        factIds: { $in: [touchedFactId] },
+      });
+      expect(result).toEqual([]);
+    });
+
+    it('should return every value of an open conflict touched by the given chunks', async () => {
+      const chunkId = new Types.ObjectId();
+      const touchedFactId = new Types.ObjectId();
+      const otherChunkId = new Types.ObjectId();
+      const otherFactId = new Types.ObjectId();
+      const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+      const touchedFact = {
+        ...buildFact(factKey, { amount: 5.25, unit: 'percent' }),
+        _id: touchedFactId,
+        chunkId,
+      };
+      const otherFact = {
+        ...buildFact(factKey, { amount: 6.1, unit: 'percent' }),
+        _id: otherFactId,
+        chunkId: otherChunkId,
+      };
+      mockExtractedFactModel.find
+        .mockResolvedValueOnce([{ _id: touchedFactId }])
+        .mockResolvedValueOnce([touchedFact, otherFact]);
+      const conflict = {
+        _id: new Types.ObjectId(),
+        factKey,
+        factIds: [touchedFactId, otherFactId],
+      };
+      mockConflictModel.find.mockResolvedValueOnce([conflict]);
+
+      const result = await service.findConflictedFactGroupsForChunks(
+        [chunkId.toString()],
+        'acme-corp',
+      );
+
+      expect(result).toEqual([
+        {
+          factKey,
+          values: [
+            { value: 5.25, unit: 'percent', sourceChunkId: chunkId.toString() },
+            { value: 6.1, unit: 'percent', sourceChunkId: otherChunkId.toString() },
+          ],
+        },
+      ]);
+    });
+
+    it('should throw InternalServerErrorException when a conflict references a fact that no longer resolves', async () => {
+      const chunkId = new Types.ObjectId();
+      const touchedFactId = new Types.ObjectId();
+      const missingFactId = new Types.ObjectId();
+      const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+      mockExtractedFactModel.find
+        .mockResolvedValueOnce([{ _id: touchedFactId }])
+        .mockResolvedValueOnce([
+          { ...buildFact(factKey, { amount: 5.25, unit: 'percent' }), _id: touchedFactId, chunkId },
+        ]);
+      const conflict = {
+        _id: new Types.ObjectId(),
+        factKey,
+        factIds: [touchedFactId, missingFactId],
+      };
+      mockConflictModel.find.mockResolvedValueOnce([conflict]);
+
+      let caught: unknown;
+      try {
+        await service.findConflictedFactGroupsForChunks([chunkId.toString()], 'acme-corp');
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(InternalServerErrorException);
+      expect((caught as Error).message).toMatch(/references 2 fact\(s\), but only 1/);
+    });
   });
 
   describe('list', () => {

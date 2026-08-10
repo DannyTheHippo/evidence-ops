@@ -207,7 +207,11 @@ describe('verifyClaim', () => {
     expect(result.claim.citations[0].locator).not.toEqual(XLSX_REGION_LOCATOR);
   });
 
-  it('should not upgrade a citation when no cell fact in the same chunk supports the number', () => {
+  it('should reject a claim whose number appears in the chunk text but is not backed by any cell fact on a chunk that has cell facts', () => {
+    // Regression for the grounding-gate wiring defect: a cited chunk that carries *any* cell-level
+    // fact is authoritative for numbers, so an unmatched value is rejected rather than accepted on
+    // a coincidental digit substring elsewhere in the chunk's raw text — proves check 3 no longer
+    // silently degrades to digit-substring matching once cell facts are actually supplied.
     const cellFact: GroundingCellFact = {
       chunkId: XLSX_CHUNK.chunkId,
       factKey: { entity: 'Northgate Business Park', metric: 'sale_price', period: '2025-03' },
@@ -227,11 +231,10 @@ describe('verifyClaim', () => {
 
     const result = verifyClaim({ claim, retrievedChunks: [XLSX_CHUNK], cellFacts: [cellFact] });
 
-    // The claimed number is still supported by the chunk text itself, so the claim survives —
-    // just without the upgrade, since the only fact present does not support this number.
-    expect(result.kind).toBe('survived');
-    if (result.kind !== 'survived') throw new Error('unreachable');
-    expect(result.claim.citations[0].locator).toEqual(XLSX_REGION_LOCATOR);
+    expect(result.kind).toBe('dropped');
+    if (result.kind !== 'dropped') throw new Error('unreachable');
+    expect(result.violations[0].kind).toBe('numeric-claim-unsupported');
+    expect(result.dropped.reason).toContain('41000000');
   });
 
   it('should return the fact keys of every cellFact sharing a chunk with a surviving claim', () => {

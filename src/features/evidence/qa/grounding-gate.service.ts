@@ -17,8 +17,10 @@ export interface VerifyGroundingInput {
  * lowercased — free text an extractor read off a document; metric and period compared exactly —
  * already canonical). Reimplemented locally rather than imported: `src/features/evidence/conflicts/**`
  * is owned by another agent for this change, and this gate only needs key equality, not the rest of
- * that module's conflict-detection behavior. */
-function factKeysMatch(a: FactKey, b: FactKey): boolean {
+ * that module's conflict-detection behavior. Exported so `activities.ts` can look up which
+ * `ConflictedFactGroup` produced `GroundingReport.conflictingFactKey` without a third
+ * reimplementation. */
+export function factKeysMatch(a: FactKey, b: FactKey): boolean {
   return (
     a.entity.trim().toLowerCase() === b.entity.trim().toLowerCase() &&
     a.metric === b.metric &&

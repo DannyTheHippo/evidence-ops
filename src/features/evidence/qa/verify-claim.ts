@@ -144,9 +144,16 @@ export function verifyClaim(params: {
       continue;
     }
 
-    const supportedByChunkText = citedChunks.some((chunk) =>
-      extractNumericTokens(chunk.text).includes(claimedNumber),
-    );
+    // A cited chunk that carries *any* cell-level fact is treated as authoritative for numbers:
+    // once structured extraction has a ground truth for that chunk, an unmatched value is
+    // rejected rather than accepted on a coincidental digit substring elsewhere in the chunk's
+    // raw text (comps sheets routinely repeat digits across unrelated columns/rows). Raw-text
+    // fallback is only available for a chunk with zero cell facts — a genuinely prose chunk with
+    // no structured extraction to defer to.
+    const supportedByChunkText = citedChunks.some((chunk) => {
+      const chunkHasCellFacts = cellFacts.some((fact) => fact.chunkId === chunk.chunkId);
+      return !chunkHasCellFacts && extractNumericTokens(chunk.text).includes(claimedNumber);
+    });
     if (!supportedByChunkText) {
       numericViolations.push({
         kind: 'numeric-claim-unsupported',

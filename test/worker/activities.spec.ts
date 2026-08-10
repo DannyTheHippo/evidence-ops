@@ -1,4 +1,5 @@
 import type { INestApplicationContext } from '@nestjs/common';
+import { DEFAULT_TENANT_ID } from '../../src/database/constants/tenant.constant';
 import { ConflictsService } from '../../src/features/evidence/conflicts/conflicts.service';
 import { FactsService } from '../../src/features/evidence/facts/facts.service';
 import { IngestionService } from '../../src/features/evidence/ingestion/ingestion.service';
@@ -13,21 +14,39 @@ import { createActivities } from '../../src/worker/activities';
 /**
  * `app.get` resolves each service by class token regardless of call order, so a single mock
  * returning the right stub per token (rather than per call index) mirrors every other service
- * `createActivities` needs, not just the one under test in a given `it`.
+ * `createActivities` needs, not just the one under test in a given `it`. `findCellFacts` and
+ * `findConflictedFactGroupsForChunks` default to resolving `[]` — the same "no grounding input"
+ * shape `GroundingGateService.verify` itself defaults to — so a test that doesn't care about
+ * cell facts/conflicts doesn't have to stub them.
  */
 function buildApp(overrides: {
   ingestVersion?: jest.Mock;
   extractFacts?: jest.Mock;
   scanForConflicts?: jest.Mock;
+  findCellFacts?: jest.Mock;
   retrieve?: jest.Mock;
   synthesizeAnswer?: jest.Mock;
   verify?: jest.Mock;
+  findConflictedFactGroupsForChunks?: jest.Mock;
   persist?: jest.Mock;
 }): INestApplicationContext {
   const services = new Map<unknown, unknown>([
     [IngestionService, { ingestVersion: overrides.ingestVersion ?? jest.fn() }],
-    [FactsService, { extractFacts: overrides.extractFacts ?? jest.fn() }],
-    [ConflictsService, { scanForConflicts: overrides.scanForConflicts ?? jest.fn() }],
+    [
+      FactsService,
+      {
+        extractFacts: overrides.extractFacts ?? jest.fn(),
+        findCellFacts: overrides.findCellFacts ?? jest.fn().mockResolvedValue([]),
+      },
+    ],
+    [
+      ConflictsService,
+      {
+        scanForConflicts: overrides.scanForConflicts ?? jest.fn(),
+        findConflictedFactGroupsForChunks:
+          overrides.findConflictedFactGroupsForChunks ?? jest.fn().mockResolvedValue([]),
+      },
+    ],
     [EvidenceRetrievalService, { retrieve: overrides.retrieve ?? jest.fn() }],
     [SynthesisService, { synthesizeAnswer: overrides.synthesizeAnswer ?? jest.fn() }],
     [GroundingGateService, { verify: overrides.verify ?? jest.fn() }],
@@ -187,7 +206,12 @@ describe('createActivities', () => {
     const activities = createActivities(app);
     const result = await activities.groundingCheck({ outcome, retrievedChunks });
 
-    expect(mockVerify).toHaveBeenCalledWith({ outcome, retrievedChunks });
+    expect(mockVerify).toHaveBeenCalledWith({
+      outcome,
+      retrievedChunks,
+      cellFacts: [],
+      conflictedFactKeys: [],
+    });
     expect(result).toEqual({
       outcome,
       claims: [claim],
@@ -198,6 +222,87 @@ describe('createActivities', () => {
         droppedClaims: [droppedClaim],
       },
     });
+  });
+
+  it('should load cell facts and conflicted fact keys scoped to the retrieved chunks and tenant, and project them for GroundingGateService.verify', async () => {
+    const claim = buildClaim();
+    const chunk = buildRetrievedChunk({ chunkId: 'chunk-xlsx' });
+    const cellFactDoc = {
+      chunkId: { toString: () => 'chunk-xlsx' },
+      factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+      value: { amount: 5.25, unit: 'percent' },
+      locator: { kind: 'xlsx-cell', sheetName: 'Comps', cell: 'F2', extractorVersion: 'v1' },
+    };
+    const conflictedFactKey = {
+      entity: 'Northgate Business Park',
+      metric: 'cap_rate',
+      period: '2025-03',
+    };
+    const mockFindCellFacts = jest.fn().mockResolvedValue([cellFactDoc]);
+    const mockFindConflictedFactGroupsForChunks = jest
+      .fn()
+      .mockResolvedValue([{ factKey: conflictedFactKey, values: [] }]);
+    const mockVerify = jest.fn().mockReturnValue({
+      outcomeKind: 'answered',
+      claims: [claim],
+      droppedClaims: [],
+      violations: [],
+      claimCoverage: 1,
+    });
+    const app = buildApp({
+      findCellFacts: mockFindCellFacts,
+      findConflictedFactGroupsForChunks: mockFindConflictedFactGroupsForChunks,
+      verify: mockVerify,
+    });
+    const outcome = { kind: 'answered' as const, claims: [claim] };
+
+    const activities = createActivities(app);
+    await activities.groundingCheck({ outcome, retrievedChunks: [chunk], tenantId: 'acme-corp' });
+
+    expect(mockFindCellFacts).toHaveBeenCalledWith(['chunk-xlsx'], 'acme-corp');
+    expect(mockFindConflictedFactGroupsForChunks).toHaveBeenCalledWith(['chunk-xlsx'], 'acme-corp');
+    expect(mockVerify).toHaveBeenCalledWith({
+      outcome,
+      retrievedChunks: [chunk],
+      cellFacts: [
+        {
+          chunkId: 'chunk-xlsx',
+          factKey: cellFactDoc.factKey,
+          value: cellFactDoc.value,
+          locator: cellFactDoc.locator,
+        },
+      ],
+      conflictedFactKeys: [conflictedFactKey],
+    });
+  });
+
+  it('should default tenantId to the shared tenant constant when none is provided', async () => {
+    const claim = buildClaim();
+    const mockFindCellFacts = jest.fn().mockResolvedValue([]);
+    const mockFindConflictedFactGroupsForChunks = jest.fn().mockResolvedValue([]);
+    const mockVerify = jest.fn().mockReturnValue({
+      outcomeKind: 'answered',
+      claims: [claim],
+      droppedClaims: [],
+      violations: [],
+      claimCoverage: 1,
+    });
+    const app = buildApp({
+      findCellFacts: mockFindCellFacts,
+      findConflictedFactGroupsForChunks: mockFindConflictedFactGroupsForChunks,
+      verify: mockVerify,
+    });
+    const outcome = { kind: 'answered' as const, claims: [claim] };
+    const retrievedChunks: RetrievedChunk[] = [buildRetrievedChunk()];
+
+    const activities = createActivities(app);
+    await activities.groundingCheck({ outcome, retrievedChunks });
+
+    expect(mockFindCellFacts).toHaveBeenCalledWith([retrievedChunks[0].chunkId], DEFAULT_TENANT_ID);
+    expect(mockFindConflictedFactGroupsForChunks).toHaveBeenCalledWith(
+      [retrievedChunks[0].chunkId],
+      DEFAULT_TENANT_ID,
+    );
   });
 
   it('should degrade the persisted outcome to insufficient_evidence when the gate drops every claim', async () => {
@@ -233,10 +338,44 @@ describe('createActivities', () => {
     });
   });
 
-  it('should throw when the gate returns conflicting_evidence, since conflictedFactKeys is never supplied here', async () => {
-    // `report.outcomeKind === 'conflicting_evidence'` is unreachable in the wired path (see
-    // ADR-0004's Known bounds) because `conflictedFactKeys` is never passed to `verify` below —
-    // this asserts the guard fires loudly rather than silently persisting a mismatched outcome.
+  it('should build a conflicting_evidence outcome from the matching conflict group when the gate forces a conflict', async () => {
+    const claim = buildClaim();
+    const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+    const values = [
+      { value: 5.25, unit: 'percent', sourceChunkId: 'chunk-xlsx' },
+      { value: 6.1, unit: 'percent', sourceChunkId: 'chunk-prose' },
+    ];
+    const mockVerify = jest.fn().mockReturnValue({
+      outcomeKind: 'conflicting_evidence',
+      claims: [claim],
+      droppedClaims: [],
+      violations: [],
+      claimCoverage: 1,
+      conflictingFactKey: factKey,
+    });
+    const mockFindConflictedFactGroupsForChunks = jest
+      .fn()
+      .mockResolvedValue([{ factKey, values }]);
+    const app = buildApp({
+      verify: mockVerify,
+      findConflictedFactGroupsForChunks: mockFindConflictedFactGroupsForChunks,
+    });
+    const outcome = { kind: 'answered' as const, claims: [claim] };
+    const retrievedChunks: RetrievedChunk[] = [buildRetrievedChunk()];
+
+    const activities = createActivities(app);
+    const result = await activities.groundingCheck({ outcome, retrievedChunks });
+
+    expect(result.outcome).toEqual({ kind: 'conflicting_evidence', factKey, values });
+    // The survived claims themselves still come from the report, not emptied out just because the
+    // outcome kind changed — `conflicting_evidence` overrides the outcome, not the claim list.
+    expect(result.claims).toEqual([claim]);
+  });
+
+  it('should throw when the gate forces conflicting_evidence for a fact key with no matching conflict group', async () => {
+    // Invariant guard: `conflictedFactKeys` passed to `verify` comes entirely from
+    // `conflictGroups`, so a returned `conflictingFactKey` with no matching group means the two
+    // have drifted out of sync — this must fail loudly, never silently mis-persist.
     const claim = buildClaim();
     const mockVerify = jest.fn().mockReturnValue({
       outcomeKind: 'conflicting_evidence',
@@ -244,7 +383,34 @@ describe('createActivities', () => {
       droppedClaims: [],
       violations: [],
       claimCoverage: 1,
-      conflictingFactKey: { entity: 'Northgate', metric: 'cap rate', period: '2025' },
+      conflictingFactKey: { entity: 'Northgate', metric: 'cap_rate', period: '2025-03' },
+    });
+    const mockFindConflictedFactGroupsForChunks = jest.fn().mockResolvedValue([]);
+    const app = buildApp({
+      verify: mockVerify,
+      findConflictedFactGroupsForChunks: mockFindConflictedFactGroupsForChunks,
+    });
+    const outcome = { kind: 'answered' as const, claims: [claim] };
+    const retrievedChunks: RetrievedChunk[] = [buildRetrievedChunk()];
+
+    const activities = createActivities(app);
+
+    await expect(activities.groundingCheck({ outcome, retrievedChunks })).rejects.toThrow(
+      /no matching entry in conflictGroups/,
+    );
+  });
+
+  it('should throw when the gate reports conflicting_evidence with no conflictingFactKey set', async () => {
+    // Defensive guard against `GroundingReport`'s own doc comment: `outcomeKind` and
+    // `conflictingFactKey` are not a discriminated union, so a caller has to check both.
+    const claim = buildClaim();
+    const mockVerify = jest.fn().mockReturnValue({
+      outcomeKind: 'conflicting_evidence',
+      claims: [claim],
+      droppedClaims: [],
+      violations: [],
+      claimCoverage: 1,
+      conflictingFactKey: undefined,
     });
     const app = buildApp({ verify: mockVerify });
     const outcome = { kind: 'answered' as const, claims: [claim] };
@@ -253,7 +419,7 @@ describe('createActivities', () => {
     const activities = createActivities(app);
 
     await expect(activities.groundingCheck({ outcome, retrievedChunks })).rejects.toThrow(
-      /conflicting_evidence/,
+      /no conflictingFactKey set/,
     );
   });
 

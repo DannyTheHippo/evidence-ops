@@ -358,6 +358,57 @@ describe('FactsService', () => {
     });
   });
 
+  describe('findCellFacts', () => {
+    it('should return an empty array without querying the model when chunkIds is empty', async () => {
+      const result = await service.findCellFacts([], 'acme-corp');
+
+      expect(result).toEqual([]);
+      expect(mockExtractedFactModel.find).not.toHaveBeenCalled();
+    });
+
+    it('should drop an invalid ObjectId and query only the valid ones', async () => {
+      const chunkId = new Types.ObjectId();
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+
+      const result = await service.findCellFacts(
+        ['not-an-object-id', chunkId.toString()],
+        'acme-corp',
+      );
+
+      expect(mockExtractedFactModel.find).toHaveBeenCalledWith({
+        chunkId: { $in: [chunkId] },
+        tenantId: 'acme-corp',
+        'locator.kind': 'xlsx-cell',
+      });
+      expect(result).toEqual([]);
+    });
+
+    it('should return an empty array without querying the model when every id is invalid', async () => {
+      const result = await service.findCellFacts(['not-an-object-id'], 'acme-corp');
+
+      expect(result).toEqual([]);
+      expect(mockExtractedFactModel.find).not.toHaveBeenCalled();
+    });
+
+    it('should return the xlsx-cell facts scoped to the given chunks and tenant', async () => {
+      const chunkId = new Types.ObjectId();
+      const facts = [
+        {
+          _id: new Types.ObjectId(),
+          chunkId,
+          factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+          value: { amount: 5.25, unit: 'percent' },
+          locator: { kind: 'xlsx-cell', sheetName: SHEET_NAME, cell: 'F2', extractorVersion: 'v1' },
+        },
+      ];
+      mockExtractedFactModel.find.mockResolvedValueOnce(facts);
+
+      const result = await service.findCellFacts([chunkId.toString()], 'acme-corp');
+
+      expect(result).toEqual(facts);
+    });
+  });
+
   it('should roll back and rethrow when the fact insert fails partway', async () => {
     const stored = await fakeDocumentStore.put({
       content: Buffer.from('workbook-bytes'),

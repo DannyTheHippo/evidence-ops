@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
@@ -9,6 +9,7 @@ import {
 import {
   ExtractedFact,
   ExtractedFactDocument,
+  type FactKey,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import type { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import { AuditService } from '../../../shared/services/audit/audit.service';
@@ -20,6 +21,23 @@ import { detectConflicts, groupKey } from './detect-conflicts';
 
 export interface ConflictScanResult {
   readonly conflictsCreated: number;
+}
+
+/** One side of an open `Conflict`, projected for `GroundingGateService.verify`'s
+ * `conflicting_evidence` outcome — shaped to match `conflictingValueSchema`
+ * (`../qa/contracts/answer.contract.ts`) field-for-field. */
+export interface ConflictedFactValue {
+  readonly value: number;
+  readonly unit: string;
+  readonly sourceChunkId: string;
+}
+
+/** An open `Conflict`'s fact key plus every one of its `factIds`' current values — not just the
+ * fact touched by a request's retrieved chunk, since `conflictingEvidenceOutcomeSchema` requires
+ * the *whole* disagreement (`values.min(2)`), not one side of it. */
+export interface ConflictedFactGroup {
+  readonly factKey: FactKey;
+  readonly values: readonly ConflictedFactValue[];
 }
 
 @Injectable()
@@ -119,6 +137,87 @@ export class ConflictsService {
     this.logger.debug(`Created ${newCandidates.length} conflicts for tenant '${tenantId}'`);
 
     return { conflictsCreated: newCandidates.length };
+  }
+
+  /**
+   * Open conflicts touched by a request's retrieved evidence, scoped to `chunkIds` and
+   * `tenantId`. "Touched" means at least one of the conflict's `factIds` was extracted from one of
+   * `chunkIds` — a request must never be able to force `conflicting_evidence` off a conflict in a
+   * document it never retrieved, so this deliberately does not scan the tenant's whole `conflicts`
+   * collection. `resolved`/`dismissed` conflicts are excluded for the same reason
+   * `scanForConflicts` treats them as already handled.
+   */
+  async findConflictedFactGroupsForChunks(
+    chunkIds: readonly string[],
+    tenantId: string,
+  ): Promise<ConflictedFactGroup[]> {
+    // Mirrors `FactsService.findCellFacts`: an id that isn't a valid ObjectId can't match a real
+    // chunk, dropped rather than thrown for the same veto-only-measurement reason.
+    const objectIds = chunkIds
+      .filter((id) => Types.ObjectId.isValid(id))
+      .map((id) => new Types.ObjectId(id));
+    if (objectIds.length === 0) {
+      return [];
+    }
+
+    const touchedFacts = await this.extractedFactModel.find(
+      { chunkId: { $in: objectIds }, tenantId },
+      { _id: 1 },
+    );
+    if (touchedFacts.length === 0) {
+      return [];
+    }
+
+    const conflicts = await this.conflictModel.find({
+      tenantId,
+      status: 'open',
+      factIds: { $in: touchedFacts.map((fact) => fact._id) },
+    });
+    if (conflicts.length === 0) {
+      return [];
+    }
+
+    const everyFactId = [
+      ...new Set(conflicts.flatMap((conflict) => conflict.factIds.map((id) => id.toString()))),
+    ].map((id) => new Types.ObjectId(id));
+    const conflictingFacts = await this.extractedFactModel.find({ _id: { $in: everyFactId } });
+    const factById = new Map(conflictingFacts.map((fact) => [fact._id.toString(), fact]));
+
+    return conflicts.map((conflict) => {
+      const values: ConflictedFactValue[] = [];
+      for (const id of conflict.factIds) {
+        const fact = factById.get(id.toString());
+        if (!fact) {
+          continue;
+        }
+        values.push({
+          value: fact.value.amount,
+          unit: fact.value.unit,
+          sourceChunkId: fact.chunkId.toString(),
+        });
+      }
+
+      if (values.length < conflict.factIds.length) {
+        // A `Conflict.factIds` reference that no longer resolves to an `ExtractedFact` is a
+        // data-integrity fault, not a normal degradation path (mirrors
+        // `EvidenceRetrievalService`'s deleted-version throw) — `conflictingEvidenceOutcomeSchema`
+        // requires >= 2 `values`, and silently persisting a group short of the conflict's real
+        // factIds would emit either a schema-invalid outcome or a `conflicting_evidence` answer
+        // that understates a real disagreement.
+        throw new InternalServerErrorException(
+          `Conflict '${conflict._id.toString()}' references ${conflict.factIds.length} fact(s), but only ${values.length} still resolve to an ExtractedFact`,
+        );
+      }
+
+      return {
+        factKey: {
+          entity: conflict.factKey.entity,
+          metric: conflict.factKey.metric,
+          period: conflict.factKey.period,
+        },
+        values,
+      };
+    });
   }
 
   private toConflictDto(conflict: ConflictDocument): ConflictResponseDto {
