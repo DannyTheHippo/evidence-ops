@@ -72,10 +72,16 @@ export const claimSchema = z.object({
 
 export type Claim = z.infer<typeof claimSchema>;
 
-const answeredOutcomeSchema = z.object({
+// Exported (unlike the other two outcome branches below) because the grounding gate
+// (`../grounding-gate.service.ts`) only ever verifies the `answered` branch — `insufficient_evidence`
+// and `conflicting_evidence` have no claims to check — and needs a name for that narrowed input
+// rather than accepting the full `AnswerContract` union and re-deriving it.
+export const answeredOutcomeSchema = z.object({
   kind: z.literal('answered'),
   claims: z.array(claimSchema).min(1),
 });
+
+export type AnsweredOutcome = z.infer<typeof answeredOutcomeSchema>;
 
 // `insufficient_evidence` is a valid success state, not an error — the eval harness rewards
 // producing it on genuinely unanswerable questions rather than fabricating a claim.
