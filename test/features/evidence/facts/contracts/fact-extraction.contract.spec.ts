@@ -1,0 +1,80 @@
+import {
+  factCandidateSchema,
+  factExtractionResultSchema,
+} from '../../../../../src/features/evidence/facts/contracts/fact-extraction.contract';
+
+const validCandidate = {
+  entity: 'Northgate Business Park',
+  metric: 'cap_rate',
+  periodText: 'March 2025',
+  amount: 6.1,
+  unit: 'percent',
+  quote: 'at a cap rate of approximately 6.10%',
+  confidence: 0.9,
+};
+
+describe('factCandidateSchema', () => {
+  it('should accept a valid candidate', () => {
+    expect(factCandidateSchema.safeParse(validCandidate).success).toBe(true);
+  });
+
+  it('should reject a metric id outside the ontology allowlist — this is the enforcement point', () => {
+    const result = factCandidateSchema.safeParse({ ...validCandidate, metric: 'invented_metric' });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject a quote longer than 300 characters', () => {
+    const result = factCandidateSchema.safeParse({ ...validCandidate, quote: 'x'.repeat(301) });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('should accept a quote at exactly the 300 character limit', () => {
+    const result = factCandidateSchema.safeParse({ ...validCandidate, quote: 'x'.repeat(300) });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('should reject an empty quote', () => {
+    expect(factCandidateSchema.safeParse({ ...validCandidate, quote: '' }).success).toBe(false);
+  });
+
+  it('should reject a confidence outside [0, 1]', () => {
+    expect(factCandidateSchema.safeParse({ ...validCandidate, confidence: 1.5 }).success).toBe(
+      false,
+    );
+    expect(factCandidateSchema.safeParse({ ...validCandidate, confidence: -0.1 }).success).toBe(
+      false,
+    );
+  });
+
+  it('should accept an empty periodText for a source that states no period', () => {
+    expect(factCandidateSchema.safeParse({ ...validCandidate, periodText: '' }).success).toBe(true);
+  });
+});
+
+describe('factExtractionResultSchema', () => {
+  it('should accept an empty facts array', () => {
+    expect(factExtractionResultSchema.safeParse({ facts: [] }).success).toBe(true);
+  });
+
+  it('should accept multiple valid candidates', () => {
+    const result = factExtractionResultSchema.safeParse({
+      facts: [
+        validCandidate,
+        { ...validCandidate, metric: 'sale_price', unit: 'usd', amount: 41_000_000 },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('should reject when any one candidate is invalid', () => {
+    const result = factExtractionResultSchema.safeParse({
+      facts: [validCandidate, { ...validCandidate, metric: 'not_a_real_metric' }],
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
