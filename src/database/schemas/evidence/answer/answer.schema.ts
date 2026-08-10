@@ -1,0 +1,84 @@
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types, WithTimestamps } from 'mongoose';
+import type {
+  AnswerContract,
+  Claim,
+  VerificationReport,
+} from '../../../../features/evidence/qa/contracts/answer.contract';
+import { DEFAULT_TENANT_ID } from '../../../constants/tenant.constant';
+import { AuditableDocument } from '../../../global/auditable-document/auditable-document.schema';
+
+export type AnswerRunStatus = 'queued' | 'running' | 'completed' | 'failed';
+
+export const ANSWER_RUN_STATUSES: readonly AnswerRunStatus[] = [
+  'queued',
+  'running',
+  'completed',
+  'failed',
+];
+
+export interface AnswerUsage {
+  promptTokens: number;
+  completionTokens: number;
+  costUsd: number;
+}
+
+export type AnswerDocument = HydratedDocument<WithTimestamps<Answer>>;
+
+@Schema({ timestamps: true, collection: 'answers' })
+export class Answer extends AuditableDocument {
+  @Prop({ type: String, required: true })
+  questionText: string;
+
+  // Workflow lifecycle. Kept separate from `outcome` (the answer-contract result) because a
+  // `failed` run has no outcome, while a `completed` run's outcome can itself report
+  // `insufficient_evidence` — conflating the two axes would make "no answer yet" and "answered
+  // that there is no answer" indistinguishable.
+  @Prop({ type: String, required: true, enum: ANSWER_RUN_STATUSES, default: 'queued' })
+  runStatus: AnswerRunStatus;
+
+  @Prop({ type: [{ type: Types.ObjectId, ref: 'EvidenceChunk' }], default: [] })
+  retrievedChunkIds: Types.ObjectId[];
+
+  // The model's raw, contract-validated output (see answer.contract.ts). Set only when
+  // `runStatus === 'completed'` — enforced below in `pre('validate')`, not left to convention.
+  @Prop({ type: MongooseSchema.Types.Mixed })
+  outcome?: AnswerContract;
+
+  // The server-verified surviving claims after checking each citation's quote against the
+  // actual chunk bytes — NOT a copy of `outcome.claims`. The two can differ: `verificationReport`
+  // explains what was dropped and why, so `claims` here is the trustworthy, queryable set.
+  @Prop({ type: [MongooseSchema.Types.Mixed], default: [] })
+  claims: Claim[];
+
+  @Prop({ type: Number, min: 0, max: 1 })
+  claimCoverage?: number;
+
+  @Prop({ type: MongooseSchema.Types.Mixed })
+  verificationReport?: VerificationReport;
+
+  @Prop({ type: [{ type: Types.ObjectId, ref: 'Conflict' }], default: [] })
+  conflictIds: Types.ObjectId[];
+
+  @Prop({
+    type: {
+      promptTokens: { type: Number, required: true },
+      completionTokens: { type: Number, required: true },
+      costUsd: { type: Number, required: true },
+    },
+  })
+  usage?: AnswerUsage;
+
+  @Prop({ type: String, required: true, default: DEFAULT_TENANT_ID })
+  tenantId: string;
+}
+
+export const AnswerSchema = SchemaFactory.createForClass(Answer);
+
+// Data-integrity gate, fails closed: `invalidate` rejects the write rather than silently
+// persisting an outcome ahead of the run that was supposed to produce it.
+AnswerSchema.pre('validate', function (this: AnswerDocument): void {
+  if (this.outcome && this.runStatus !== 'completed') {
+    this.invalidate('outcome', 'outcome may only be set when runStatus is completed');
+  }
+});
