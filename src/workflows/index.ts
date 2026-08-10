@@ -3,4 +3,5 @@
  * `bundleWorkflowCode` both discover workflow functions by `require`-ing this file — only what
  * is re-exported here is visible to the worker, per the SDK's bundler.
  */
+export { answerQuestion } from './answer-question.workflow';
 export { ingestDocumentVersion } from './ingest-document-version.workflow';

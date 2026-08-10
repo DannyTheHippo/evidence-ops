@@ -12,3 +12,26 @@ export interface IngestDocumentVersionResult {
   readonly chunksCreated: number;
   readonly alreadyIngested: boolean;
 }
+
+/**
+ * `tenantId` is optional here for the same reason `ConflictsService.scanForConflicts` defaults
+ * it — single-tenant until multi-tenancy ships (`DEFAULT_TENANT_ID`). The workflow never imports
+ * that constant (it would pull `src/database/**` into `src/workflows/**`); the default is applied
+ * activity-side, in `EvidenceRetrievalService`/`AnswerPersistenceService`.
+ */
+export interface AnswerQuestionInput {
+  readonly questionText: string;
+  readonly tenantId?: string;
+}
+
+/**
+ * Deliberately a thin summary, not a mirror of `AnswerContract`/`GroundingReport`
+ * (`src/features/evidence/qa/**`) — see this file's top-of-file comment. The full envelope is
+ * persisted by `persistAnswer`; a caller that wants it back reads the `Answer` document by
+ * `answerId`.
+ */
+export interface AnswerQuestionResult {
+  readonly answerId: string;
+  readonly outcomeKind: 'answered' | 'insufficient_evidence' | 'conflicting_evidence';
+  readonly claimCoverage?: number;
+}

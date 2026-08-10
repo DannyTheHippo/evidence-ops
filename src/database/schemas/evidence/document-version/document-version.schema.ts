@@ -5,6 +5,13 @@ import { AuditableDocument } from '../../../global/auditable-document/auditable-
 
 export type DocumentVersionDocument = HydratedDocument<WithTimestamps<DocumentVersion>>;
 
+export type DocumentVersionIngestionStatus = 'pending' | 'completed';
+
+export const DOCUMENT_VERSION_INGESTION_STATUSES: readonly DocumentVersionIngestionStatus[] = [
+  'pending',
+  'completed',
+];
+
 @Schema({ timestamps: true, collection: 'document_versions' })
 export class DocumentVersion extends AuditableDocument {
   @Prop({ type: Types.ObjectId, ref: 'Document', required: true })
@@ -25,6 +32,28 @@ export class DocumentVersion extends AuditableDocument {
 
   @Prop({ type: String, required: true })
   storageKey: string;
+
+  // Explicit completion marker (closes a tracked defect in `IngestionService.ingestVersion`): a
+  // chunk count alone can't distinguish "never ingested" from "crashed between the chunk insert
+  // and the rollback", because both leave zero-or-partial chunks. `ingestVersion` now reads this
+  // field instead of inferring completion from chunk presence, and treats anything short of
+  // `completed` as needing a clean re-ingest.
+  @Prop({
+    type: String,
+    required: true,
+    enum: DOCUMENT_VERSION_INGESTION_STATUSES,
+    default: 'pending',
+  })
+  ingestionStatus: DocumentVersionIngestionStatus;
+
+  // Compare-and-set lease for `IngestionService.ingestVersion`'s concurrent-attempt guard: set
+  // (overwriting any prior value) when an attempt claims the version, cleared on that same
+  // attempt's successful completion. A later attempt's claim always wins the field, so an
+  // earlier, still-running attempt can detect at completion time that it has been superseded and
+  // must not touch chunks a newer attempt owns. Optional and never read on a version this field
+  // predates, so no backfill migration is needed.
+  @Prop({ type: Types.ObjectId })
+  ingestionLeaseToken?: Types.ObjectId;
 
   @Prop({ type: String, required: true, default: DEFAULT_TENANT_ID })
   tenantId: string;

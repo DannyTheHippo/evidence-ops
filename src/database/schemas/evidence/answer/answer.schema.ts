@@ -40,8 +40,11 @@ export class Answer extends AuditableDocument {
   @Prop({ type: [{ type: Types.ObjectId, ref: 'EvidenceChunk' }], default: [] })
   retrievedChunkIds: Types.ObjectId[];
 
-  // The model's raw, contract-validated output (see answer.contract.ts). Set only when
-  // `runStatus === 'completed'` — enforced below in `pre('validate')`, not left to convention.
+  // The grounding-gate-verified outcome (see `GroundingCheckActivityResult`'s doc comment in
+  // `src/worker/activities.ts`), not necessarily the model's raw output — an `answered` claim
+  // with every citation dropped is persisted here as `insufficient_evidence`, never as-is. Set
+  // only when `runStatus === 'completed'` — enforced below in `pre('validate')`, not left to
+  // convention.
   @Prop({ type: MongooseSchema.Types.Mixed })
   outcome?: AnswerContract;
 

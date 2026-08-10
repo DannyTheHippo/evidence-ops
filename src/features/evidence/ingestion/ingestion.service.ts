@@ -53,19 +53,26 @@ export class IngestionService {
   /**
    * Loads a version's bytes, parses, chunks, embeds, and persists `EvidenceChunk` documents.
    *
-   * Idempotent by a simple existence check rather than a delete-and-replace: a version's bytes
-   * never change once created (a re-upload of different bytes is a new version — see
-   * `DocumentsService.addVersion`), so any chunk already stamped with this `documentVersionId` is
-   * still correct, and skipping avoids paying for re-embedding on every retry.
+   * Idempotent by `ingestionStatus` (not a chunk-count inference): a version's bytes never change
+   * once created (a re-upload of different bytes is a new version — see
+   * `DocumentsService.addVersion`), so `ingestionStatus === 'completed'` is a reliable signal to
+   * skip re-embedding on every retry.
    *
-   * A failed `insertMany` is rolled back below, because the existence check would otherwise turn a
-   * transient write error into permanent half-ingestion — the version would look ingested forever
-   * while serving a partial evidence set, which is silently wrong rather than loudly broken.
+   * Temporal activities are at-least-once (`ingest-document-version.workflow.ts`'s
+   * `maximumAttempts: 3`), so two attempts for the same version can legitimately run concurrently
+   * — a slow embed can outlive the activity's `startToCloseTimeout` and trigger a retry while the
+   * original keeps running. The plain read above is stale the instant that happens, so recovery
+   * and completion are gated behind a compare-and-set lease (`ingestionLeaseToken`) rather than
+   * the read: `claimAttempt` atomically overwrites the token, so whichever attempt claims most
+   * recently is the only one whose eventual `finalizeCompletion` can succeed. A lost claim (this
+   * version is already `completed`) skips straight to a no-op — fails CLOSED toward "someone else
+   * owns this", never toward re-deleting. A lost finalize (a newer attempt claimed the lease while
+   * this one was mid-embed) rolls back only the chunks *this* attempt inserted, by pre-assigned
+   * `_id`, never the whole version's chunks — a newer attempt's own rows must survive.
    *
-   * Residual gap, deliberately not engineered around here: a process crash *between* the partial
-   * insert and the rollback leaves the same partial state. Closing that needs an explicit
-   * completion marker on `DocumentVersion` rather than inferring completion from chunk count —
-   * a schema change, tracked separately.
+   * A failed `insertMany` is rolled back the same way (by the same pre-assigned ids), because
+   * without it a transient write error would leave a half-ingested, undetectable state for the
+   * next retry to walk into.
    */
   async ingestVersion(documentVersionId: string): Promise<IngestionResult> {
     if (!Types.ObjectId.isValid(documentVersionId)) {
@@ -81,15 +88,26 @@ export class IngestionService {
       );
     }
 
-    const existingChunkCount = await this.evidenceChunkModel.countDocuments({
-      documentVersionId: version._id,
-    });
-    if (existingChunkCount > 0) {
+    if (version.ingestionStatus === 'completed') {
+      this.logger.debug(`Document version '${documentVersionId}' already ingested; skipping`);
+      return { chunksCreated: 0, alreadyIngested: true };
+    }
+
+    const leaseToken = new Types.ObjectId();
+    const claimed = await this.claimAttempt(version._id, leaseToken);
+    if (!claimed) {
       this.logger.debug(
-        `Document version '${documentVersionId}' already has ${existingChunkCount} chunks; skipping`,
+        `Document version '${documentVersionId}' completed by a concurrent attempt; skipping`,
       );
       return { chunksCreated: 0, alreadyIngested: true };
     }
+
+    // Clean slate for this attempt now that it holds the current lease — anything left behind by
+    // an earlier attempt (crashed, or since-superseded) is safe to clear, because that attempt's
+    // own `finalizeCompletion` can no longer succeed once this claim has overwritten its token.
+    // `deleteMany` against zero matching documents is a cheap, indexed no-op on the ordinary
+    // first-ingest path.
+    await this.evidenceChunkModel.deleteMany({ documentVersionId: version._id });
 
     const stored = await this.documentStore.get(version.storageKey);
     if (!stored) {
@@ -108,6 +126,16 @@ export class IngestionService {
     const chunks = chunkElements(parsed.elements);
 
     if (chunks.length === 0) {
+      // A version with zero extractable chunks is still a finished ingest, not a pending one —
+      // without marking it `completed` here too, `ingestVersion` would re-parse it from scratch
+      // on every future call forever.
+      const finalized = await this.finalizeCompletion(version._id, leaseToken);
+      if (!finalized) {
+        this.logger.debug(
+          `Document version '${documentVersionId}' ingest superseded by a newer attempt before finalizing zero chunks`,
+        );
+        return { chunksCreated: 0, alreadyIngested: true };
+      }
       this.logger.debug(`Document version '${documentVersionId}' produced no chunks`);
       return { chunksCreated: 0, alreadyIngested: false };
     }
@@ -117,27 +145,76 @@ export class IngestionService {
       inputType: 'document',
     });
 
+    // Pre-assigned so a rollback (insert failure below, or a lost finalize race further down)
+    // can delete exactly the rows this attempt wrote, never a concurrent attempt's.
+    const chunkDocs = chunks.map((chunk, index) => ({
+      _id: new Types.ObjectId(),
+      documentId: version.documentId,
+      documentVersionId: version._id,
+      text: chunk.text,
+      tokenCount: chunk.tokenCount,
+      embedding: embeddingResult.embeddings[index],
+      locator: chunk.locator,
+      tenantId: version.tenantId,
+    }));
+    const chunkIds = chunkDocs.map((doc) => doc._id);
+
     try {
-      await this.evidenceChunkModel.insertMany(
-        chunks.map((chunk, index) => ({
-          documentId: version.documentId,
-          documentVersionId: version._id,
-          text: chunk.text,
-          tokenCount: chunk.tokenCount,
-          embedding: embeddingResult.embeddings[index],
-          locator: chunk.locator,
-          tenantId: version.tenantId,
-        })),
-      );
+      await this.evidenceChunkModel.insertMany(chunkDocs);
     } catch (error) {
-      await this.evidenceChunkModel.deleteMany({ documentVersionId: version._id });
+      await this.rollbackChunks(chunkIds);
       throw error;
     }
 
+    const finalized = await this.finalizeCompletion(version._id, leaseToken);
+    if (!finalized) {
+      // A newer attempt claimed the lease while this one was embedding/inserting — these rows
+      // are stale. Temporal already discards a superseded attempt's return value in favor of the
+      // retry that actually finalizes, so the exact result shape here is inert; `alreadyIngested:
+      // true` just avoids implying this attempt itself finished the job.
+      await this.rollbackChunks(chunkIds);
+      this.logger.debug(
+        `Document version '${documentVersionId}' ingest superseded by a newer attempt; rolled back ${chunkIds.length} chunk(s)`,
+      );
+      return { chunksCreated: 0, alreadyIngested: true };
+    }
+
     this.logger.debug(
-      `Document version '${documentVersionId}' ingested into ${chunks.length} chunks`,
+      `Document version '${documentVersionId}' ingested into ${chunkDocs.length} chunks`,
     );
 
-    return { chunksCreated: chunks.length, alreadyIngested: false };
+    return { chunksCreated: chunkDocs.length, alreadyIngested: false };
+  }
+
+  /** Fails CLOSED: only succeeds (and overwrites the lease) while the version is not yet
+   * `completed` — a concurrent attempt that already finished this version leaves nothing to
+   * claim, so the recovery `deleteMany` below never runs against a version another attempt owns. */
+  private async claimAttempt(
+    versionId: Types.ObjectId,
+    leaseToken: Types.ObjectId,
+  ): Promise<boolean> {
+    const claimed = await this.documentVersionModel.findOneAndUpdate(
+      { _id: versionId, ingestionStatus: { $ne: 'completed' } },
+      { $set: { ingestionLeaseToken: leaseToken } },
+    );
+    return claimed !== null;
+  }
+
+  /** Fails CLOSED: only succeeds while `leaseToken` is still the current one — if a newer attempt
+   * has since claimed the version, this attempt's writes are stale and the caller must roll them
+   * back rather than mark the version `completed` out from under the newer attempt. */
+  private async finalizeCompletion(
+    versionId: Types.ObjectId,
+    leaseToken: Types.ObjectId,
+  ): Promise<boolean> {
+    const finalized = await this.documentVersionModel.findOneAndUpdate(
+      { _id: versionId, ingestionLeaseToken: leaseToken },
+      { $set: { ingestionStatus: 'completed' }, $unset: { ingestionLeaseToken: '' } },
+    );
+    return finalized !== null;
+  }
+
+  private async rollbackChunks(chunkIds: readonly Types.ObjectId[]): Promise<void> {
+    await this.evidenceChunkModel.deleteMany({ _id: { $in: chunkIds } });
   }
 }

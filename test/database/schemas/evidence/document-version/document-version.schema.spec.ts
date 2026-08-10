@@ -55,6 +55,34 @@ describe('DocumentVersion schema', () => {
       expect(version.tenantId).toBe(DEFAULT_TENANT_ID);
       expect(version.validateSync()).toBeUndefined();
     });
+
+    it('defaults ingestionStatus to pending', () => {
+      const version = new DocumentVersionModel({
+        documentId: new mongoose.Types.ObjectId(),
+        versionNumber: 1,
+        sha256: SHA256_FIXTURE,
+        sizeBytes: 1024,
+        storageKey: 's3://bucket/key',
+      });
+
+      expect(version.ingestionStatus).toBe('pending');
+      expect(version.validateSync()).toBeUndefined();
+    });
+
+    it('rejects an ingestionStatus outside the enum', () => {
+      const version = new DocumentVersionModel({
+        documentId: new mongoose.Types.ObjectId(),
+        versionNumber: 1,
+        sha256: SHA256_FIXTURE,
+        sizeBytes: 1024,
+        storageKey: 's3://bucket/key',
+        ingestionStatus: 'not-a-real-status',
+      });
+
+      const error = version.validateSync();
+
+      expect(error?.errors.ingestionStatus).toBeDefined();
+    });
   });
 
   describe('round-trip via mongodb-memory-server', () => {
