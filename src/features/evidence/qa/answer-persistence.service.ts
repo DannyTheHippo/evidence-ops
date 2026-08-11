@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
 import { Answer, AnswerDocument } from '../../../database/schemas/evidence/answer/answer.schema';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
@@ -16,6 +16,10 @@ export interface PersistAnswerInput {
   readonly claims: readonly Claim[];
   readonly claimCoverage?: number;
   readonly verificationReport?: VerificationReport;
+  /** `Conflict._id`(s) that forced `outcome.kind === 'conflicting_evidence'` — absent (or `[]`,
+   * on a retry after the outcome changed) whenever `outcome` is not that kind. See
+   * `GroundingCheckActivityResult.conflictIds`'s doc comment in `../../../worker/activities.ts`. */
+  readonly conflictIds?: readonly string[];
 }
 
 export interface PersistAnswerResult {
@@ -67,6 +71,11 @@ export class AnswerPersistenceService {
     answer.claims = [...input.claims];
     answer.claimCoverage = input.claimCoverage;
     answer.verificationReport = input.verificationReport;
+    // Unconditional assign, not "only when present": a retry that now resolves to a non-conflicting
+    // outcome must clear ids a prior attempt already wrote, not leave them stale alongside the new
+    // outcome. `Conflict._id` (unlike `EvidenceChunk._id` above) is a real ObjectId, so this
+    // coercion is not the chunk-id bug `retrievedChunkIds`'s doc comment warns about.
+    answer.conflictIds = (input.conflictIds ?? []).map((id) => new Types.ObjectId(id));
     answer.tenantId = input.tenantId ?? DEFAULT_TENANT_ID;
 
     await answer.save();

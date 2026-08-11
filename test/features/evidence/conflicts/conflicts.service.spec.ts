@@ -223,6 +223,7 @@ describe('ConflictsService', () => {
 
       expect(result).toEqual([
         {
+          conflictId: conflict._id.toString(),
           factKey,
           values: [
             { value: 5.25, unit: 'percent', sourceChunkId: chunkId },

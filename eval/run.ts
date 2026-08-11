@@ -132,7 +132,7 @@ async function main(): Promise<void> {
 
     if (options.ingest) {
       console.log(`eval: ingesting fixtures into tenant '${EVAL_TENANT_ID}'`);
-      const ingestResult = await ingestFixtures(app, EVAL_TENANT_ID);
+      const ingestResult = await ingestFixtures(app, EVAL_TENANT_ID, db);
       fixtures = ingestResult.fixtures;
       filenameByDocVersionId = ingestResult.filenameByDocVersionId;
       for (const fixture of fixtures) {

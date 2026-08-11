@@ -77,6 +77,7 @@ export async function answerQuestion(input: AnswerQuestionInput): Promise<Answer
     claims: grounding.claims,
     claimCoverage: grounding.claimCoverage,
     verificationReport: grounding.verificationReport,
+    conflictIds: grounding.conflictIds,
   });
 
   return {

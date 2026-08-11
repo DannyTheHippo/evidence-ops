@@ -193,9 +193,18 @@ export interface ConflictingFactKey {
   period: string;
 }
 
+export type InsufficientEvidenceReasonCode =
+  | 'no_relevant_evidence'
+  | 'evidence_does_not_address_question'
+  | 'retrieved_evidence_contradicts_itself';
+
 export type AnswerOutcome =
   | { kind: 'answered'; claims: Claim[] }
-  | { kind: 'insufficient_evidence'; reason: string }
+  // `reasonCode` is present only for a model-authored abstention (absent on legacy answers and on
+  // the grounding gate's own degraded insufficient_evidence — see `answer.contract.ts`'s doc
+  // comment on the API side). It never changes what is rendered here on its own: the API only ever
+  // returns `kind: 'conflicting_evidence'` once it has independently verified the hint.
+  | { kind: 'insufficient_evidence'; reason: string; reasonCode?: InsufficientEvidenceReasonCode }
   | { kind: 'conflicting_evidence'; factKey: ConflictingFactKey; values: ConflictingValue[] };
 
 export interface Answer {

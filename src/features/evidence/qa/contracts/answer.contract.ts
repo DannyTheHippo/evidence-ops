@@ -128,16 +128,6 @@ export type ModelAnsweredOutcome = z.infer<typeof modelAnsweredOutcomeSchema>;
 // `insufficient_evidence` is a valid success state, not an error — the eval harness scores it as
 // correct (abstention accuracy) on genuinely unanswerable questions, so producing it beats
 // fabricating a claim.
-//
-// This is the SERVER-RESOLVED shape — `reason` is rendered by `SynthesisService`'s
-// `renderInsufficientEvidenceReason` from a model-selected `reasonCode`
-// (`modelInsufficientEvidenceOutcomeSchema` below), never accepted as free text from the model
-// (ADR-0004 bound 4, closed). Exported because `answerEnvelopeSchema`/`Answer.outcome` reuse it
-// as-is for persistence.
-export const insufficientEvidenceOutcomeSchema = z.object({
-  kind: z.literal('insufficient_evidence'),
-  reason: z.string().min(1),
-});
 
 /**
  * Closed set of reasons the model may select for `insufficient_evidence` — this, not a free-text
@@ -154,6 +144,28 @@ export const insufficientEvidenceReasonCodeSchema = z.enum([
 ]);
 
 export type InsufficientEvidenceReasonCode = z.infer<typeof insufficientEvidenceReasonCodeSchema>;
+
+// This is the SERVER-RESOLVED shape — `reason` is rendered by `SynthesisService`'s
+// `renderInsufficientEvidenceReason` from a model-selected `reasonCode`
+// (`modelInsufficientEvidenceOutcomeSchema` below), never accepted as free text from the model
+// (ADR-0004 bound 4, closed). Exported because `answerEnvelopeSchema`/`Answer.outcome` reuse it
+// as-is for persistence.
+//
+// `reasonCode` is optional and, when present, is always one of the three closed literals above —
+// safe to carry forward from the model's own selection because bound 4 already constrained it to
+// a non-free-text enum (nothing left to sanitise). It is absent whenever this outcome was not an
+// honest model-authored abstention: a legacy persisted `Answer` recorded before this field
+// existed, or the grounding gate's own degraded `insufficient_evidence` (`activities.ts`'s
+// `groundingCheck`, built when every claim is dropped) never had a model-selected code to begin
+// with — fabricating one there would misrepresent the gate's decision as the model's own.
+// `src/worker/activities.ts`'s `groundingCheck` reads this field as a HINT toward
+// `conflicting_evidence`, never as the verdict — see that file's own doc comment for the
+// independent, server-side verification the hint still has to pass before it changes anything.
+export const insufficientEvidenceOutcomeSchema = z.object({
+  kind: z.literal('insufficient_evidence'),
+  reason: z.string().min(1),
+  reasonCode: insufficientEvidenceReasonCodeSchema.optional(),
+});
 
 /** The model-facing counterpart of `insufficientEvidenceOutcomeSchema` above — see that schema's
  * doc comment and `insufficientEvidenceReasonCodeSchema`'s for why a code, not a rendered

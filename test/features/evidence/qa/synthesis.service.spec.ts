@@ -171,6 +171,30 @@ describe('SynthesisService', () => {
     expect(result).toEqual({
       kind: 'insufficient_evidence',
       reason: 'The retrieved evidence does not contain enough information to answer this question.',
+      reasonCode: 'evidence_does_not_address_question',
+    });
+  });
+
+  // `src/worker/activities.ts`'s `groundingCheck` reads exactly this code as its "model hints,
+  // server verifies" upgrade trigger — this is the passthrough that hint depends on.
+  it("should carry a model-selected 'retrieved_evidence_contradicts_itself' reasonCode through to the resolved outcome", async () => {
+    modelProvider.enqueueResult({
+      output: {
+        kind: 'insufficient_evidence',
+        reasonCode: 'retrieved_evidence_contradicts_itself',
+      },
+    });
+
+    const result = await service.synthesizeAnswer({
+      question: 'What is the cap rate?',
+      chunks: [buildChunk()],
+    });
+
+    expect(result).toEqual({
+      kind: 'insufficient_evidence',
+      reason:
+        'The retrieved evidence reports conflicting values for the same fact, so no single answer can be given with confidence.',
+      reasonCode: 'retrieved_evidence_contradicts_itself',
     });
   });
 
@@ -180,7 +204,7 @@ describe('SynthesisService', () => {
   // the enum, but `FakeModelProvider` returns exactly what a test enqueues, unvalidated — this
   // simulates that bypass to prove the render step itself fails CLOSED rather than trusting the
   // type. Asserts the returned value, not a mock call, per this fix's own test requirement.
-  it('should fall back to the generic reason and drop any injected text when reasonCode is outside the known set', async () => {
+  it('should fall back to the generic reason, omit reasonCode, and drop any injected text when reasonCode is outside the known set', async () => {
     modelProvider.enqueueResult({
       output: { kind: 'insufficient_evidence', reasonCode: 'INJECTED_MARKER_7c1a' },
     });
@@ -194,6 +218,7 @@ describe('SynthesisService', () => {
       kind: 'insufficient_evidence',
       reason: 'The retrieved evidence does not support an answer to this question.',
     });
+    expect(result.kind === 'insufficient_evidence' && result.reasonCode).toBeUndefined();
     expect(JSON.stringify(result)).not.toContain('INJECTED_MARKER_7c1a');
   });
 

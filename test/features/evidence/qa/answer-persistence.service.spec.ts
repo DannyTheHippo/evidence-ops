@@ -104,6 +104,10 @@ describe('AnswerPersistenceService', () => {
       claims: [],
       claimCoverage: undefined,
       verificationReport: undefined,
+      // No `conflictIds` on the input — regression for the always-`[]`-default gap: this outcome
+      // is not `conflicting_evidence`, so persisting must not leave a stale array from a prior
+      // attempt on the same row.
+      conflictIds: [],
     });
     expect(answerDoc.save).toHaveBeenCalled();
     expect(result).toEqual({
@@ -111,6 +115,33 @@ describe('AnswerPersistenceService', () => {
       outcomeKind: 'insufficient_evidence',
       claimCoverage: undefined,
     });
+  });
+
+  it('should persist conflictIds as ObjectIds for a conflicting_evidence outcome', async () => {
+    const conflictObjectId = new Types.ObjectId();
+    const outcome = {
+      kind: 'conflicting_evidence' as const,
+      factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+      values: [
+        { value: 5.25, unit: 'percent', sourceChunkId: 'chunk-xlsx' },
+        { value: 6.1, unit: 'percent', sourceChunkId: 'chunk-prose' },
+      ],
+    };
+    const answerDoc = buildAnswerDoc();
+    mockAnswerModel.findById.mockResolvedValueOnce(answerDoc);
+
+    await service.persist({
+      answerId: (answerDoc._id as Types.ObjectId).toString(),
+      questionText: 'What is the cap rate?',
+      retrievedChunkIds: [],
+      outcome,
+      claims: [],
+      conflictIds: [conflictObjectId.toString()],
+    });
+
+    expect((answerDoc.conflictIds as Types.ObjectId[]).map((id) => id.toString())).toEqual([
+      conflictObjectId.toString(),
+    ]);
   });
 
   it('should persist retrievedChunkIds as-is (content-addressed strings) and pass an explicit tenantId and gate fields through for an answered outcome', async () => {

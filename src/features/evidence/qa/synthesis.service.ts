@@ -117,6 +117,20 @@ function renderInsufficientEvidenceReason(reasonCode: InsufficientEvidenceReason
 }
 
 /**
+ * The same fail-closed lookup `renderInsufficientEvidenceReason` uses, reused to decide whether
+ * `AnswerContract`'s optional `reasonCode` (see that field's own doc comment in
+ * `answer.contract.ts`) is safe to carry forward: a value outside the three known literals never
+ * reaches the returned outcome, even from an unvalidated `ModelProvider` (`FakeModelProvider`) —
+ * `undefined` here is what keeps `src/worker/activities.ts`'s hint-verify upgrade from ever
+ * reading a fabricated code.
+ */
+function resolveReasonCode(
+  reasonCode: InsufficientEvidenceReasonCode,
+): InsufficientEvidenceReasonCode | undefined {
+  return INSUFFICIENT_EVIDENCE_REASON_TEXT.has(reasonCode) ? reasonCode : undefined;
+}
+
+/**
  * Turns the model's `ModelAnswerContract` into the server-resolved `AnswerContract`: resolves
  * every citation in the `answered` branch (`resolveCitation` above), and renders the
  * `insufficient_evidence` branch's fixed sentence from the model's `reasonCode`
@@ -151,6 +165,7 @@ function resolveContract(
     return {
       kind: 'insufficient_evidence',
       reason: renderInsufficientEvidenceReason(output.reasonCode),
+      reasonCode: resolveReasonCode(output.reasonCode),
     };
   }
 

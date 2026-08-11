@@ -39,8 +39,13 @@ export interface ConflictedFactValue {
 
 /** An open `Conflict`'s fact key plus every one of its `factIds`' current values — not just the
  * fact touched by a request's retrieved chunk, since `conflictingEvidenceOutcomeSchema` requires
- * the *whole* disagreement (`values.min(2)`), not one side of it. */
+ * the *whole* disagreement (`values.min(2)`), not one side of it. `conflictId` is the underlying
+ * `Conflict._id` — outside `conflictingEvidenceOutcomeSchema` itself (that schema is what the
+ * server persists as `Answer.outcome`), but is what `activities.ts`'s `groundingCheck` threads
+ * through to `Answer.conflictIds` so a `conflicting_evidence` answer names the record that caused
+ * it, not just its values. */
 export interface ConflictedFactGroup {
+  readonly conflictId: string;
   readonly factKey: FactKey;
   readonly values: readonly ConflictedFactValue[];
 }
@@ -219,6 +224,7 @@ export class ConflictsService {
       }
 
       return {
+        conflictId: conflict._id.toString(),
         factKey: {
           entity: conflict.factKey.entity,
           metric: conflict.factKey.metric,

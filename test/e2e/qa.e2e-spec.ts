@@ -206,6 +206,37 @@ describe('QA and Conflicts (e2e)', () => {
         ].sort(),
       );
     });
+
+    // Regression for the "conflicting_evidence unreachable" gap (ADR-0004 bound 9): `reasonCode`
+    // is a new field on `outcome` for `insufficient_evidence` — an exact `toEqual` here is the
+    // only gate that would catch it silently missing `@Expose()` (it would not: `outcome` passes
+    // through as a whole object, not per-field, but the assertion still proves the wire shape).
+    it('presents a model-authored reasonCode on an insufficient_evidence outcome once completed', async () => {
+      const seeded = await answerModel.create({
+        questionText: 'What is the cap rate?',
+        runStatus: 'completed',
+        outcome: {
+          kind: 'insufficient_evidence',
+          reason:
+            'The retrieved evidence reports conflicting values for the same fact, so no single answer can be given with confidence.',
+          reasonCode: 'retrieved_evidence_contradicts_itself',
+        },
+        claims: [],
+      });
+
+      const response = await request(getTestServer(app))
+        .get(`/api/v1/answers/${seeded._id.toString()}`)
+        .set('Authorization', `Bearer ${token}`);
+      const body = response.body as AnswerBody;
+
+      expect(response.status).toBe(200);
+      expect(body.outcome).toEqual({
+        kind: 'insufficient_evidence',
+        reason:
+          'The retrieved evidence reports conflicting values for the same fact, so no single answer can be given with confidence.',
+        reasonCode: 'retrieved_evidence_contradicts_itself',
+      });
+    });
   });
 
   describe('GET /conflicts', () => {
