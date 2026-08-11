@@ -37,8 +37,11 @@ export class Answer extends AuditableDocument {
   @Prop({ type: String, required: true, enum: ANSWER_RUN_STATUSES, default: 'queued' })
   runStatus: AnswerRunStatus;
 
-  @Prop({ type: [{ type: Types.ObjectId, ref: 'EvidenceChunk' }], default: [] })
-  retrievedChunkIds: Types.ObjectId[];
+  // `EvidenceChunk._id` is a content-addressed string (`computeChunkId`), not an ObjectId — see
+  // that schema's own doc comment. `ref: 'EvidenceChunk'` still resolves correctly against a
+  // String `_id`; Mongoose's `populate` only needs the referenced model name, not an ObjectId type.
+  @Prop({ type: [{ type: String, ref: 'EvidenceChunk' }], default: [] })
+  retrievedChunkIds: string[];
 
   // The grounding-gate-verified outcome (see `GroundingCheckActivityResult`'s doc comment in
   // `src/worker/activities.ts`), not necessarily the model's raw output — an `answered` claim

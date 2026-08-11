@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { Model } from 'mongoose';
 import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
 import { Answer, AnswerDocument } from '../../../database/schemas/evidence/answer/answer.schema';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
@@ -58,7 +58,9 @@ export class AnswerPersistenceService {
     }
 
     answer.runStatus = 'completed';
-    answer.retrievedChunkIds = input.retrievedChunkIds.map((id) => new Types.ObjectId(id));
+    // `EvidenceChunk._id` is a content-addressed string (`computeChunkId`), not an ObjectId — see
+    // that schema's own doc comment. No coercion needed; copy as-is.
+    answer.retrievedChunkIds = [...input.retrievedChunkIds];
     answer.outcome = input.outcome;
     // `Answer.claims` (`Claim[]`, mutable) doesn't accept `PersistAnswerInput.claims`'s
     // `readonly Claim[]` directly — spread rather than widen the input contract's own type.

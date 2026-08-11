@@ -1,0 +1,19 @@
+{
+  // Every entrypoint that builds a real Nest DI graph must run under `ts-node` with this config,
+  // never under `tsx`. Nest resolves constructor dependencies from `emitDecoratorMetadata`, and
+  // `tsx` compiles via esbuild, which does not emit it — so every injected dependency arrives as
+  // `undefined`. The symptom never names the cause: it surfaces as a property access on an
+  // undefined config ("Cannot read properties of undefined (reading 'anthropic')") or as Nest's
+  // "The dependency at index [0] appears to be undefined at runtime", which blames import style.
+  //
+  // This cost the Temporal worker entirely — `worker:dev` ran under `tsx` and died on boot, so no
+  // worker ever polled the task queue, while the determinism-fence tests (which only bundle
+  // workflow code) and the unit tests (which mock the graph) all stayed green.
+  //
+  // `migrate:up`/`fixtures:generate` legitimately stay on `tsx`: they build no DI graph.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node"
+  }
+}
