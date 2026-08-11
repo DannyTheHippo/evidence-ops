@@ -44,9 +44,12 @@ Four processes plus a container. **All four must be running for the demo to comp
 without the worker, an upload returns 201 and then sits at `ingestionStatus: pending` forever, and a
 question sits at `runStatus: queued` forever.
 
-This is the host-loop path — fastest iteration, one process per terminal. The same stack also runs
-as containers with a single command; see [Containerized stack](#containerized-stack-one-command)
-below if you want everything (Temporal included) without four terminals.
+**This host-loop path is the primary development path** — fastest iteration, one process per
+terminal, against a compose-run `mongo` (`docker compose up -d mongo`, the tool's default profile).
+The same stack also runs fully containerized with a single command; see
+[Containerized stack](#containerized-stack-one-command) below, which exists for demo and
+fresh-clone verification, not day-to-day iteration — the compose profiles it uses cost real
+resident memory that the host loop does not.
 
 ## Prerequisites
 
@@ -65,9 +68,24 @@ below if you want everything (Temporal included) without four terminals.
 
 ## Containerized stack (one command)
 
-Everything the host loop runs across four terminals plus Mongo — `mongo`, Temporal (`temporal` +
+`docker-compose.yml` is profile-gated. Plain `docker compose up -d` starts **`mongo` alone** — that
+is the only service with no `profiles:` key, so it is the one thing every other path needs and
+nothing else pays for. Everything else is opt-in:
+
+| Profile | Adds | Resident memory (measured, 2026-08-11) |
+| --- | --- | --- |
+| *(default, no flag)* | `mongo` | ≈551 MiB |
+| `--profile observability` | + `jaeger` | +≈38 MiB |
+| `--profile temporal` | + `temporal`, `temporal-postgres`, `temporal-ui` | +≈431 MiB |
+| `--profile full` | + `migrate` (one-shot), `api`, `worker`, `web`, and all of the above | ≈1.4 GB total |
+
+The rationale: someone doing retrieval or ingestion work against a compose-run `mongo` should not
+be paying for three Temporal containers and a tracing collector they never look at. Reach for
+`--profile temporal` or `--profile observability` only when you need that piece in isolation;
+`--profile full` is for the end-to-end demo and for verifying a fresh clone, where you want
+everything the host loop runs across four terminals — `mongo`, Temporal (`temporal` +
 `temporal-postgres` + `temporal-ui`), `jaeger`, `api`, `worker`, `web`, and the one-shot `migrate` —
-also runs as containers:
+as containers instead:
 
 ```bash
 cp .env.example .env   # then set ANTHROPIC_API_KEY and VOYAGE_API_KEY
@@ -89,7 +107,19 @@ healthcheck (`tctl --address temporal:7233 cluster health`) has not been exercis
 container in this environment, and the pinned `temporalio/auto-setup`/`temporalio/ui` image tags
 have not been checked against a registry. Confirm both on first `up` before relying on this path.
 
-`docker compose --profile full down` stops everything; **never `down -v`** — see Gotchas.
+**Reclaim memory by dropping to a smaller profile, or none at all.** `down` (no `-v`) stops and
+removes containers for the profile you name, keeping the `mongo` data volume — and with it the
+ingested corpus — intact:
+
+```bash
+docker compose --profile full down          # stop api/worker/web + Temporal + jaeger, keep mongo up
+docker compose --profile temporal down       # stop just the Temporal containers
+docker compose --profile observability down  # stop just jaeger
+```
+
+**Never run `down -v`** here — it drops the `mongo` data volume and with it every document you have
+ingested. The one place `-v` is the correct command is the stale-replica-set recovery in Gotchas
+below, which is a different failure mode with no other fix.
 
 ## Demo runbook
 

@@ -12,6 +12,10 @@ services:
     # volume. Pinning the hostname keeps the name stable across recreates.
     hostname: evidence-ops-mongo
     restart: always
+    # mem_limit: 1536m. Observed 550.8 MiB resident (2026-08-11, all 9 services healthy) against the
+    # 4-document eval fixture set — deliberately NOT tuned down to that number. This is mongod plus a
+    # Lucene-backed $search/$vectorSearch index, and both grow with the corpus; 550 MiB is the floor
+    # for a toy corpus, not the ceiling for a real one.
     mem_limit: 1536m
     ports:
       # Host port is overridable because 27017 is the default for every Mongo project on a
@@ -46,7 +50,11 @@ services:
     image: jaegertracing/all-in-one:1.65.0
     container_name: evidence-ops-jaeger
     restart: always
-    mem_limit: 512m
+    # mem_limit: 128m. Observed 37.5 MiB idle (2026-08-11) — the most over-provisioned service in the
+    # original estimate, but not trimmed to `temporal-ui`'s ratio: Jaeger buffers spans in memory
+    # before flushing, so a burst of trace volume needs somewhere to land without OOMing the
+    # collector mid-trace.
+    mem_limit: 128m
     ports:
       # UI
       - "16686:16686"
@@ -57,12 +65,21 @@ services:
       - "4318:4318"
     networks:
       - evidence_ops_net
+    # Gated separately from `temporal`/`temporal-postgres`/`temporal-ui`: retrieval/eval work needs
+    # neither, so `--profile observability` lets someone bring up tracing alone. Also in `full` so a
+    # fresh-clone demo gets everything with one flag.
+    profiles:
+      - observability
+      - full
 
   temporal-postgres:
     image: postgres:16-alpine
     container_name: evidence-ops-temporal-postgres
     restart: always
-    mem_limit: 256m
+    # mem_limit: 384m (up from 256m). Observed 149.8 MiB (2026-08-11) — was 58% of the old limit, the
+    # tightest ratio measured of any service. Raised rather than left tight so Postgres has room to
+    # grow past a single measurement instead of sitting one connection spike from an OOM-kill.
+    mem_limit: 384m
     environment:
       POSTGRES_USER: temporal
       POSTGRES_PASSWORD: temporal
@@ -76,13 +93,20 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+    # `temporal` (below) depends_on this service — Compose requires a shared profile across a
+    # depends_on edge, so this carries every profile `temporal` does.
     profiles:
+      - temporal
       - full
 
   temporal:
     image: temporalio/auto-setup:1.27.2
     container_name: evidence-ops-temporal
     restart: always
+    # mem_limit: 512m. Observed 256.1 MiB (2026-08-11) — left unchanged, ~2x headroom. This process
+    # runs the frontend/history/matching/worker services plus the `auto-setup` schema migration; the
+    # workflow-code bundling spike that forces `worker`'s wider margin happens client-side, in
+    # `worker`, not here.
     mem_limit: 512m
     environment:
       - DB=postgres12
@@ -113,14 +137,20 @@ services:
       timeout: 5s
       retries: 20
       start_period: 15s
+    # `temporal-ui` (below) depends_on this service — carries every profile `temporal-ui` does, for
+    # the same shared-profile reason noted on `temporal-postgres` above.
     profiles:
+      - temporal
       - full
 
   temporal-ui:
     image: temporalio/ui:2.34.0
     container_name: evidence-ops-temporal-ui
     restart: always
-    mem_limit: 256m
+    # mem_limit: 64m (down from 256m). Observed 25.3 MiB (2026-08-11) — this is a static file server
+    # with no in-memory buffering to size for, so it gets the same tight treatment as `web` below
+    # rather than the headroom `jaeger` needs for span buffering.
+    mem_limit: 64m
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
       - TEMPORAL_CORS_ORIGINS=http://localhost:8233
@@ -134,6 +164,7 @@ services:
     networks:
       - evidence_ops_net
     profiles:
+      - temporal
       - full
 
   migrate:
@@ -151,6 +182,12 @@ services:
     networks:
       - evidence_ops_net
     restart: "no"
+    # `api`/`worker` (below) depends_on this completing successfully — Compose requires a shared
+    # profile across a depends_on edge, so this must carry `full` too rather than staying
+    # profile-less; profile-less would start it under the bare `mongo`-only default, which the
+    # acceptance gate forbids.
+    profiles:
+      - full
 
   api:
     build:
@@ -169,7 +206,14 @@ services:
       MONGO_DB_URI: mongodb://mongo:27017/evidence-ops?directConnection=true
       TEMPORAL_ADDRESS: temporal:7233
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
-    mem_limit: 512m
+      # The worker gets this from its own `worker:dev` script; the api's ENTRYPOINT runs node
+      # directly and bypasses npm, so without it here both processes report the same default
+      # service name and a cross-process trace becomes unreadable.
+      OTEL_SERVICE_NAME: evidence-ops-api
+    # mem_limit: 256m (down from 512m). Observed 100.0 MiB (2026-08-11) — a stateless NestJS process
+    # with no in-process bundling step like `worker`'s Temporal `Worker.create`; 2.5x headroom is
+    # enough.
+    mem_limit: 256m
     depends_on:
       mongo:
         condition: service_healthy
@@ -182,7 +226,13 @@ services:
       migrate:
         condition: service_completed_successfully
     ports:
-      - "3000:3000"
+      # Host side defaults to 3001, not 3000, for the same reason `mongo` above defaults to 27018:
+      # 3000 is the default for practically every Node API on a developer machine, and the host dev
+      # loop (`npm run start:dev`, the primary path per the README) already binds it. Publishing
+      # 3000 here made `--profile full up` fail outright with "port is already allocated" against an
+      # unrelated project's container. Container side stays 3000 so nothing inside the network,
+      # including the healthcheck and nginx's `proxy_pass`, has to care.
+      - "${API_HOST_PORT:-3001}:3000"
     networks:
       - evidence_ops_net
     healthcheck:
@@ -204,14 +254,21 @@ services:
   worker:
     build:
       context: .
-      # `build`, not `runtime` — the worker runs source TS under `ts-node`, never `tsx`: esbuild
-      # (what `tsx` uses) drops `emitDecoratorMetadata`, so every Nest constructor injection
-      # arrives `undefined` and the worker dies on boot looking like a config error, not a DI one
-      # (cost a full day once, commit d9a17ce). The `build` stage already carries `src/`,
-      # `node_modules` (with `ts-node`/`typescript`, both devDependencies), and both tsconfigs —
-      # everything `npm run worker:dev` needs, unlike the stripped-down `runtime` stage.
-      target: build
-    command: npm run worker:dev
+      # `runtime`, running COMPILED output — not the `build` stage under `ts-node`.
+      #
+      # The rule this repo learned the hard way (commit d9a17ce, a full day lost) is narrower than
+      # "always ts-node": `tsx`/esbuild drops `emitDecoratorMetadata`, so Nest constructor
+      # injection arrives `undefined` and presents as a config error rather than a DI one. `tsc`
+      # emits that metadata correctly, so `dist/worker/main.js` — produced by `nest build` — is
+      # immune by construction. `ts-node` is the right answer for the HOST dev loop, where there is
+      # no build step; it is the wrong answer in an image that already contains `dist/`.
+      #
+      # Running source here also OOM-killed the container at 512m: `ts-node` compiles the graph
+      # in-process and Temporal's `Worker.create` bundles workflow code on top of it, and V8 sizes
+      # its heap from the container limit. The compiled entrypoint pays neither cost.
+      target: runtime
+    command:
+      ["node", "--import", "./dist/instrumentation.js", "dist/worker/main.js"]
     env_file:
       - path: .env
         required: false
@@ -219,7 +276,16 @@ services:
       MONGO_DB_URI: mongodb://mongo:27017/evidence-ops?directConnection=true
       TEMPORAL_ADDRESS: temporal:7233
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
-    mem_limit: 512m
+      # Set here rather than inherited from `worker:dev`'s inline assignment, which this command
+      # bypasses. Without it the worker and api report the same service name and the cross-process
+      # trace — the whole point of the Temporal OTel interceptors — becomes unreadable.
+      OTEL_SERVICE_NAME: evidence-ops-worker
+    # mem_limit: 768m. Observed 304.4 MiB (2026-08-11) running compiled output — Temporal still
+    # bundles workflow code with webpack inside `Worker.create` at startup, which spikes well above
+    # that steady-state number on every restart (see the OOM-at-512m comment above, from when the
+    # graph was compiled in-process too). Kept generous — a repeatable startup spike, not a one-off
+    # peak — rather than trimmed to steady-state.
+    mem_limit: 768m
     depends_on:
       mongo:
         condition: service_healthy
@@ -235,9 +301,14 @@ services:
   web:
     build:
       context: ./web
+    # mem_limit: 64m. Observed 9.4 MiB (2026-08-11) — a static nginx server; left unchanged, it was
+    # already sized correctly and gets the same tight treatment as `temporal-ui` above.
     mem_limit: 64m
     ports:
-      - "80:80"
+      # Overridable for the same reason as `api` and `mongo` above. 80 is free on this machine
+      # today, but it is the single most contended host port there is, and a demo that dies on
+      # "port is already allocated" is a bad demo.
+      - "${WEB_HOST_PORT:-8090}:80"
     depends_on:
       api:
         condition: service_healthy
