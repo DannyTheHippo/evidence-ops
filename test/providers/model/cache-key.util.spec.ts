@@ -80,4 +80,29 @@ describe('computeCacheKey', () => {
 
     expect(withSchema).not.toBe(withoutSchema);
   });
+
+  // Fixture-compatibility regression: every fixture under `eval/cache/model/` was recorded
+  // before `passOrdinal` existed. If an absent/undefined `passOrdinal` changed the key, every one
+  // of those fixtures would go stale on this change alone.
+  it('should produce the same key whether passOrdinal is omitted or explicitly undefined', () => {
+    const omitted = computeCacheKey(baseInput);
+    const explicitlyUndefined = computeCacheKey({ ...baseInput, passOrdinal: undefined });
+
+    expect(explicitlyUndefined).toBe(omitted);
+  });
+
+  it('should differ across three distinct passOrdinal values, partitioning identical prompts into distinct cache entries', () => {
+    const pass0 = computeCacheKey({ ...baseInput, passOrdinal: 0 });
+    const pass1 = computeCacheKey({ ...baseInput, passOrdinal: 1 });
+    const pass2 = computeCacheKey({ ...baseInput, passOrdinal: 2 });
+
+    expect(new Set([pass0, pass1, pass2]).size).toBe(3);
+  });
+
+  it('should differ from the passOrdinal-less key once passOrdinal is set', () => {
+    const withoutPassOrdinal = computeCacheKey(baseInput);
+    const withPassOrdinal = computeCacheKey({ ...baseInput, passOrdinal: 0 });
+
+    expect(withPassOrdinal).not.toBe(withoutPassOrdinal);
+  });
 });

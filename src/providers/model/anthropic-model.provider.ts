@@ -100,6 +100,9 @@ export class AnthropicModelProvider implements ModelProvider {
     // below are cast to `ModelOutput<TSchema>` explicitly anyway.
     const schema: z.ZodType | undefined = request.outputSchema;
 
+    // Built from named fields, never a spread of `request` — `request.passOrdinal` (cache
+    // partitioning only, see `ModelRequest`'s own doc comment) has no vendor-API counterpart and
+    // must never reach the SDK call below.
     const baseParams: Anthropic.MessageCreateParamsNonStreaming = {
       model: this.info.model,
       max_tokens: request.maxTokens,

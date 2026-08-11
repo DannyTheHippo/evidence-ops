@@ -115,6 +115,15 @@ describe('AnthropicModelProvider', () => {
     expect(factCall).not.toHaveProperty('temperature');
   });
 
+  it('should never forward passOrdinal to the SDK — it is a cache-partitioning field only', async () => {
+    mockCreate.mockResolvedValueOnce(buildMessage('Paris'));
+    const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+    await provider.generate({ ...baseRequest, passOrdinal: 2 });
+
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('passOrdinal');
+  });
+
   it('should price costUsd from the pricing table including cache-write and cache-read multipliers', async () => {
     mockCreate.mockResolvedValueOnce(
       buildMessage('Paris', {

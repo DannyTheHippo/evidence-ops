@@ -77,4 +77,21 @@ describe('CachingModelProvider', () => {
     await expect(provider.generate(request)).rejects.toBeInstanceOf(ModelReplayCacheMissError);
     expect(inner.calls).toHaveLength(0);
   });
+
+  // Regression for the read-through defect this change fixes: without `passOrdinal` folded into
+  // the cache key, three identical-prompt extraction passes would all hash to the same key, and
+  // record mode's read-through (line 72 in the provider) would serve pass 1's cached response to
+  // passes 2 and 3 — making multi-pass agreement vacuous against these fixtures.
+  it('should call through separately for identical requests differing only in passOrdinal, never reusing one pass for another', async () => {
+    const provider = new CachingModelProvider(inner, { mode: 'record', cacheDir });
+    inner.enqueueResult({ output: 'Paris' });
+    inner.enqueueResult({ output: 'London' });
+
+    const first = await provider.generate({ ...request, passOrdinal: 0 });
+    const second = await provider.generate({ ...request, passOrdinal: 1 });
+
+    expect(first.output).toBe('Paris');
+    expect(second.output).toBe('London');
+    expect(inner.calls).toHaveLength(2);
+  });
 });

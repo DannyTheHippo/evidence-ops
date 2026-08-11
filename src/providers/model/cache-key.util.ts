@@ -9,6 +9,8 @@ export interface CacheKeyInput {
   readonly system?: string;
   readonly messages: readonly ModelMessage[];
   readonly outputSchema?: z.ZodType;
+  /** Cache-partitioning field only — see `ModelRequest.passOrdinal`'s own doc comment. */
+  readonly passOrdinal?: number;
 }
 
 /**
@@ -42,6 +44,11 @@ export function computeCacheKey(input: CacheKeyInput): string {
     params: { maxTokens: input.maxTokens },
     prompt: { system: input.system ?? null, messages: input.messages },
     schema: input.outputSchema ? toJSONSchema(input.outputSchema) : null,
+    // Omitted entirely rather than coalesced to `null`, so a caller that never sets
+    // `passOrdinal` (every request today outside the 3-pass extractor) hashes byte-identically to
+    // before this field existed — every committed fixture under `eval/cache/model/` depends on
+    // that. Only a caller that opts in changes the canonical shape at all.
+    ...(input.passOrdinal === undefined ? {} : { passOrdinal: input.passOrdinal }),
   });
 
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');

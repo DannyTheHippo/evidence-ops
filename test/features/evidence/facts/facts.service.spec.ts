@@ -116,7 +116,7 @@ describe('FactsService', () => {
 
     const result = await service.extractFacts(versionId.toString());
 
-    expect(result).toEqual({ factsCreated: 0, alreadyExtracted: true });
+    expect(result).toEqual({ factsCreated: 0, alreadyExtracted: true, skippedChunkCount: 0 });
     expect(getSpy).not.toHaveBeenCalled();
     expect(mockExtractedFactModel.insertMany).not.toHaveBeenCalled();
   });
@@ -200,7 +200,7 @@ describe('FactsService', () => {
       // check and rollback filters (both scoped by this field) never match anything they wrote.
       expect(insertedFacts[0].documentVersionId).toBe(versionId);
       expect(insertedFacts[0].tenantId).toBe('default');
-      expect(result).toEqual({ factsCreated: 1, alreadyExtracted: false });
+      expect(result).toEqual({ factsCreated: 1, alreadyExtracted: false, skippedChunkCount: 0 });
     });
 
     it('should drop a candidate whose cell falls outside every ingested chunk region', async () => {
@@ -224,7 +224,7 @@ describe('FactsService', () => {
 
       const result = await service.extractFacts(versionId.toString());
 
-      expect(result).toEqual({ factsCreated: 0, alreadyExtracted: false });
+      expect(result).toEqual({ factsCreated: 0, alreadyExtracted: false, skippedChunkCount: 0 });
       expect(mockExtractedFactModel.insertMany).not.toHaveBeenCalled();
     });
   });
@@ -273,7 +273,7 @@ describe('FactsService', () => {
       mockEvidenceChunkModel.find.mockResolvedValueOnce([
         { _id: chunkId, text: chunkText, locator: { kind: 'pdf-page', page: 1 } },
       ]);
-      fakeModelProvider.enqueueResult({
+      const modelOutput = {
         output: {
           facts: [
             {
@@ -296,12 +296,17 @@ describe('FactsService', () => {
             },
           ],
         },
-      });
+      };
+      // All 3 passes return the same output — 3-of-3 unanimous agreement on the grounded
+      // candidate, matching this suite's other tests of the single-pass accept/reject split.
+      fakeModelProvider.enqueueResult(modelOutput);
+      fakeModelProvider.enqueueResult(modelOutput);
+      fakeModelProvider.enqueueResult(modelOutput);
       mockExtractedFactModel.insertMany.mockResolvedValueOnce([]);
 
       const result = await service.extractFacts(versionId.toString());
 
-      expect(fakeModelProvider.calls).toHaveLength(1);
+      expect(fakeModelProvider.calls).toHaveLength(3);
       expect(fakeModelProvider.calls[0].taskClass).toBe('fact_extraction');
       expect(fakeModelProvider.calls[0].messages[0].content).toBe(chunkText);
       const insertManyMock = mockExtractedFactModel.insertMany as jest.Mock<
@@ -326,7 +331,7 @@ describe('FactsService', () => {
       expect(mockLogger.debug).toHaveBeenCalledWith(
         expect.stringContaining(`Dropped fact candidate for chunk '${chunkId}'`),
       );
-      expect(result).toEqual({ factsCreated: 1, alreadyExtracted: false });
+      expect(result).toEqual({ factsCreated: 1, alreadyExtracted: false, skippedChunkCount: 0 });
     });
 
     it('should treat a version with zero parsed elements as prose and produce no facts when the model returns none', async () => {
@@ -348,13 +353,62 @@ describe('FactsService', () => {
           locator: { kind: 'pdf-page', page: 1 },
         },
       ]);
+      // All 3 passes agree there is nothing here — a valid unanimous "no facts" outcome, not a
+      // low-agreement skip.
+      fakeModelProvider.enqueueResult({ output: { facts: [] } });
+      fakeModelProvider.enqueueResult({ output: { facts: [] } });
       fakeModelProvider.enqueueResult({ output: { facts: [] } });
 
       const result = await service.extractFacts(versionId.toString());
 
-      expect(fakeModelProvider.calls).toHaveLength(1);
-      expect(result).toEqual({ factsCreated: 0, alreadyExtracted: false });
+      expect(fakeModelProvider.calls).toHaveLength(3);
+      expect(result).toEqual({ factsCreated: 0, alreadyExtracted: false, skippedChunkCount: 0 });
       expect(mockExtractedFactModel.insertMany).not.toHaveBeenCalled();
+    });
+
+    it('should skip a chunk visibly, counted and logged at warn, when fewer than 2 of 3 extraction passes succeed', async () => {
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('%PDF-1.4 fixture bytes'),
+        contentType: PDF_MIME,
+        metadata: {},
+      });
+      mockDocumentVersionModel.findById.mockResolvedValueOnce(
+        buildVersion({ storageKey: stored.id }),
+      );
+      mockExtractedFactModel.countDocuments.mockResolvedValueOnce(0);
+      mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser([buildProseElement()]));
+      const chunkId = 'chunk-prose-flaky';
+      const chunkText = 'The cap rate is 5.25% per the offering memo.';
+      mockEvidenceChunkModel.find.mockResolvedValueOnce([
+        { _id: chunkId, text: chunkText, locator: { kind: 'pdf-page', page: 1 } },
+      ]);
+      // Only 1 of 3 passes returns a queued result — `FakeModelProvider` throws on the other 2
+      // (queue exhausted), so successfulPassCount === 1 regardless of how grounded that one
+      // pass's candidate is.
+      fakeModelProvider.enqueueResult({
+        output: {
+          facts: [
+            {
+              entity: 'Northgate Business Park',
+              metric: 'cap_rate',
+              periodText: '',
+              amount: 5.25,
+              unit: 'percent',
+              quote: 'cap rate is 5.25%',
+              confidence: 0.9,
+            },
+          ],
+        },
+      });
+
+      const result = await service.extractFacts(versionId.toString());
+
+      expect(fakeModelProvider.calls).toHaveLength(3);
+      expect(result).toEqual({ factsCreated: 0, alreadyExtracted: false, skippedChunkCount: 1 });
+      expect(mockExtractedFactModel.insertMany).not.toHaveBeenCalled();
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining(`Chunk '${chunkId}' had only 1 of 3 successful extraction passes`),
+      );
     });
   });
 

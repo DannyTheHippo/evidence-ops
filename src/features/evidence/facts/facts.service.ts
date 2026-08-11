@@ -35,6 +35,11 @@ export interface FactsExtractionResult {
   readonly factsCreated: number;
   /** True when this call was a no-op because the version was already extracted. */
   readonly alreadyExtracted: boolean;
+  /** Prose chunks dropped because fewer than 2 of `extractProseFacts`'s 3 passes returned usable
+   * output — mirrors `ConflictScanResult.skippedFactCount`'s role: a visible count rather than a
+   * silent zero, so an operator can tell "this version genuinely has no facts" apart from "the
+   * model was too unreliable on some of it to trust". Always 0 for a spreadsheet version. */
+  readonly skippedChunkCount: number;
 }
 
 @Injectable()
@@ -94,7 +99,7 @@ export class FactsService {
       this.logger.debug(
         `Document version '${documentVersionId}' already has ${existingFactCount} facts; skipping`,
       );
-      return { factsCreated: 0, alreadyExtracted: true };
+      return { factsCreated: 0, alreadyExtracted: true, skippedChunkCount: 0 };
     }
 
     const stored = await this.documentStore.get(version.storageKey);
@@ -111,13 +116,19 @@ export class FactsService {
     const parsed = await parser.parse(stored.content);
 
     const isSpreadsheet = parsed.elements[0]?.locator.kind === 'xlsx-cell';
-    const candidates = isSpreadsheet
-      ? await this.buildXlsxCandidates(version._id, parsed.elements)
-      : await this.buildProseCandidates(version._id, parsed.elements);
+    let candidates: (FactCandidate & { chunkId: string })[];
+    let skippedChunkCount = 0;
+    if (isSpreadsheet) {
+      candidates = await this.buildXlsxCandidates(version._id, parsed.elements);
+    } else {
+      const prose = await this.buildProseCandidates(version._id, parsed.elements);
+      candidates = prose.candidates;
+      skippedChunkCount = prose.skippedChunkCount;
+    }
 
     if (candidates.length === 0) {
       this.logger.debug(`Document version '${documentVersionId}' produced no facts`);
-      return { factsCreated: 0, alreadyExtracted: false };
+      return { factsCreated: 0, alreadyExtracted: false, skippedChunkCount };
     }
 
     try {
@@ -143,7 +154,7 @@ export class FactsService {
       `Document version '${documentVersionId}' produced ${candidates.length} facts`,
     );
 
-    return { factsCreated: candidates.length, alreadyExtracted: false };
+    return { factsCreated: candidates.length, alreadyExtracted: false, skippedChunkCount };
   }
 
   /**
@@ -215,7 +226,10 @@ export class FactsService {
   private async buildProseCandidates(
     versionId: Types.ObjectId,
     elements: readonly ParsedElement[],
-  ): Promise<(FactCandidate & { chunkId: string })[]> {
+  ): Promise<{
+    readonly candidates: (FactCandidate & { chunkId: string })[];
+    readonly skippedChunkCount: number;
+  }> {
     const chunks = await this.evidenceChunkModel.find({ documentVersionId: versionId });
     if (chunks.length === 0) {
       throw new InternalServerErrorException(
@@ -224,14 +238,29 @@ export class FactsService {
     }
 
     const candidates: (FactCandidate & { chunkId: string })[] = [];
+    let skippedChunkCount = 0;
     for (const chunk of chunks) {
-      const { accepted, rejected } = await extractProseFacts({
-        chunkText: chunk.text,
-        chunkLocator: chunk.locator,
-        sourceElements: elements,
-        modelProvider: this.modelProvider,
-        ontology: METRIC_ONTOLOGY,
-      });
+      const { accepted, rejected, successfulPassCount, skippedForInsufficientPasses } =
+        await extractProseFacts({
+          chunkText: chunk.text,
+          chunkLocator: chunk.locator,
+          sourceElements: elements,
+          modelProvider: this.modelProvider,
+          ontology: METRIC_ONTOLOGY,
+        });
+
+      if (skippedForInsufficientPasses) {
+        // Fewer than 2 of the 3 extraction passes returned usable output — majority agreement
+        // was structurally impossible, so this chunk contributes no facts at all rather than
+        // one pass's unconfirmed guess. Mirrors `ConflictsService.scanForConflicts`'s per-skip
+        // `warn` for the same "visible, not silent" reason.
+        skippedChunkCount += 1;
+        this.logger.warn(
+          `Chunk '${chunk._id.toString()}' had only ${successfulPassCount} of 3 successful extraction passes; skipping (need >= 2 for agreement)`,
+        );
+        continue;
+      }
+
       for (const rejection of rejected) {
         this.logger.debug(
           `Dropped fact candidate for chunk '${chunk._id.toString()}': ${rejection.reason}`,
@@ -239,6 +268,6 @@ export class FactsService {
       }
       candidates.push(...accepted.map((fact) => ({ ...fact, chunkId: chunk._id })));
     }
-    return candidates;
+    return { candidates, skippedChunkCount };
   }
 }

@@ -28,6 +28,14 @@ export interface ModelRequest<TSchema extends z.ZodType | undefined = z.ZodType 
   readonly maxTokens: number;
   /** Refused before the call (fail closed) if the worst-case estimate exceeds this. */
   readonly maxCostUsd: number;
+  /**
+   * Cache-partitioning only — folded into `computeCacheKey` but never forwarded to the vendor
+   * SDK (`AnthropicModelProvider` builds its request params from named fields, not a spread of
+   * `request`). Without this, N identical-prompt extraction passes over the same chunk would all
+   * hash to one cache key, and `CachingModelProvider`'s read-through `record` mode would let
+   * passes 2..N silently replay pass 1's response instead of genuinely re-sampling.
+   */
+  readonly passOrdinal?: number;
 }
 
 export type ModelOutput<TSchema extends z.ZodType | undefined> = TSchema extends z.ZodType

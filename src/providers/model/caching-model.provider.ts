@@ -67,6 +67,7 @@ export class CachingModelProvider implements ModelProvider {
       system: request.system,
       messages: request.messages,
       outputSchema: request.outputSchema,
+      passOrdinal: request.passOrdinal,
     });
 
     const cached = await this.readCacheEntry<TSchema>(key);

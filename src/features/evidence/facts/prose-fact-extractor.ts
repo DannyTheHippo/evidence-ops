@@ -6,6 +6,7 @@ import type {
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import type { ModelProvider } from '../../../providers/model/model-provider.interface';
 import type { ParsedElement } from '../ingestion/parsers/parsed-element.type';
+import { agreeFacts, type AgreementReport } from './agree-facts';
 import {
   factExtractionResultSchema,
   type FactCandidateOutput,
@@ -28,8 +29,25 @@ export interface RejectedFactCandidate {
 }
 
 export interface ProseFactExtractionResult {
+  /** Facts at least `MIN_SUCCESSFUL_PASSES` of the `PASS_COUNT` passes agreed on — see
+   * `agree-facts.ts`. Empty (with `skippedForInsufficientPasses: true`) rather than a single
+   * pass's raw output whenever fewer than `MIN_SUCCESSFUL_PASSES` passes returned usable output
+   * at all. */
   readonly accepted: ExtractedFactInput[];
+  /** Every rejected candidate from every successful pass, concatenated — diagnostic only
+   * (`FactsService` logs each at `debug`), so a candidate rejected identically by more than one
+   * pass appears more than once here. */
   readonly rejected: RejectedFactCandidate[];
+  /** Passes that returned a schema-valid response, out of `PASS_COUNT` attempted. A throw
+   * (`AnthropicModelProvider`'s own retry already exhausted — see its doc comment) is a
+   * non-vote, not a zero-vote, so it is simply absent, never counted as zero facts. */
+  readonly successfulPassCount: number;
+  /** True when `successfulPassCount < MIN_SUCCESSFUL_PASSES`, so majority agreement was
+   * structurally impossible and `accepted` is empty regardless of what the lone (or zero)
+   * successful pass proposed — the whole-chunk analogue of a single rejected candidate, meant to
+   * be counted and logged by the caller rather than read as "this chunk had no facts". */
+  readonly skippedForInsufficientPasses: boolean;
+  readonly agreement: AgreementReport;
 }
 
 const MAX_OUTPUT_TOKENS = 2048;
@@ -37,6 +55,12 @@ const MAX_OUTPUT_TOKENS = 2048;
 // indicate a pricing-table or prompt-construction bug, not a normal call, so the cap is generous
 // rather than tuned tight.
 const MAX_COST_USD = 1;
+
+// A single call to this model tier has measurably produced 8, 2, and 0 facts for byte-identical
+// input across live runs — the model is not stable enough to trust one sample. Three independent
+// passes is the smallest N for which "at least 2 agree" is a majority rather than a tie.
+const PASS_COUNT = 3;
+const MIN_SUCCESSFUL_PASSES = 2;
 
 function buildSystemPrompt(ontology: readonly MetricDefinition[]): string {
   const metricLines = ontology
@@ -77,34 +101,23 @@ function resolveFactLocator(
 }
 
 /**
- * Extracts facts from one already-ingested chunk of PDF/DOCX text via `ModelProvider`. The model
- * proposes; this function disposes: a candidate is only accepted if (a) its metric and unit are
- * both valid per the ontology and (b) its quote is a literal substring of the chunk — verified
- * here, not trusted from the model's own claim, because a hallucinated or paraphrased quote would
- * let an ungrounded claim pass as cited evidence.
+ * Applies the grounding and ontology checks to one pass's raw candidates. The model proposes;
+ * this disposes: a candidate is only accepted if (a) its metric and unit are both valid per the
+ * ontology and (b) its quote is a literal substring of the chunk — verified here, not trusted
+ * from the model's own claim, because a hallucinated or paraphrased quote would let an ungrounded
+ * claim pass as cited evidence.
  */
-export async function extractProseFacts(params: {
-  readonly chunkText: string;
-  readonly chunkLocator: EvidenceLocator;
-  readonly sourceElements: readonly ParsedElement[];
-  readonly modelProvider: ModelProvider;
-  readonly ontology: readonly MetricDefinition[];
-}): Promise<ProseFactExtractionResult> {
-  const { chunkText, chunkLocator, sourceElements, modelProvider, ontology } = params;
-
-  const result = await modelProvider.generate({
-    taskClass: 'fact_extraction',
-    system: buildSystemPrompt(ontology),
-    messages: [{ role: 'user', content: chunkText }],
-    outputSchema: factExtractionResultSchema,
-    maxTokens: MAX_OUTPUT_TOKENS,
-    maxCostUsd: MAX_COST_USD,
-  });
-
+function evaluateCandidates(
+  candidates: readonly FactCandidateOutput[],
+  chunkText: string,
+  sourceElements: readonly ParsedElement[],
+  chunkLocator: EvidenceLocator,
+  ontology: readonly MetricDefinition[],
+): { accepted: ExtractedFactInput[]; rejected: RejectedFactCandidate[] } {
   const accepted: ExtractedFactInput[] = [];
   const rejected: RejectedFactCandidate[] = [];
 
-  for (const candidate of result.output.facts) {
+  for (const candidate of candidates) {
     if (!chunkText.includes(candidate.quote)) {
       rejected.push({ candidate, reason: 'quote not found verbatim in source chunk' });
       continue;
@@ -144,4 +157,72 @@ export async function extractProseFacts(params: {
   }
 
   return { accepted, rejected };
+}
+
+/**
+ * Extracts facts from one already-ingested chunk of PDF/DOCX text via `ModelProvider`, run as
+ * `PASS_COUNT` independent passes over identical input rather than one call — a single call has
+ * measurably returned a different fact count for byte-identical input across live runs, so one
+ * sample is not trustworthy evidence. `agreeFacts` (`agree-facts.ts`) keeps only the
+ * `(entity, metric, period)` groups at least `MIN_SUCCESSFUL_PASSES` passes agreed on.
+ *
+ * Passes run concurrently: nothing in this project throttles calls to the Anthropic model
+ * provider (the 3 RPM throttle in `providers/embedding/voyage-embedding.provider.ts` is Voyage
+ * embeddings, an unrelated provider), and `AnthropicModelProvider` already serializes its own
+ * schema-validation retry per call, so three concurrent calls cost no more wall-clock risk than
+ * three sequential ones would save.
+ */
+export async function extractProseFacts(params: {
+  readonly chunkText: string;
+  readonly chunkLocator: EvidenceLocator;
+  readonly sourceElements: readonly ParsedElement[];
+  readonly modelProvider: ModelProvider;
+  readonly ontology: readonly MetricDefinition[];
+}): Promise<ProseFactExtractionResult> {
+  const { chunkText, chunkLocator, sourceElements, modelProvider, ontology } = params;
+
+  const settlements = await Promise.allSettled(
+    Array.from({ length: PASS_COUNT }, (_, passOrdinal) =>
+      modelProvider.generate({
+        taskClass: 'fact_extraction',
+        system: buildSystemPrompt(ontology),
+        messages: [{ role: 'user', content: chunkText }],
+        outputSchema: factExtractionResultSchema,
+        maxTokens: MAX_OUTPUT_TOKENS,
+        maxCostUsd: MAX_COST_USD,
+        passOrdinal,
+      }),
+    ),
+  );
+
+  const rejected: RejectedFactCandidate[] = [];
+  // Only successful passes contribute an entry — a throw (the SDK's own two retries already
+  // exhausted, or a budget refusal) is a non-vote, not a vote for zero facts, and must not shift
+  // the majority threshold either way.
+  const passResults: ExtractedFactInput[][] = [];
+
+  for (const settlement of settlements) {
+    if (settlement.status === 'rejected') {
+      continue;
+    }
+    const { accepted, rejected: passRejected } = evaluateCandidates(
+      settlement.value.output.facts,
+      chunkText,
+      sourceElements,
+      chunkLocator,
+      ontology,
+    );
+    passResults.push(accepted);
+    rejected.push(...passRejected);
+  }
+
+  const { facts, report } = agreeFacts(passResults, ontology);
+
+  return {
+    accepted: facts,
+    rejected,
+    successfulPassCount: passResults.length,
+    skippedForInsufficientPasses: passResults.length < MIN_SUCCESSFUL_PASSES,
+    agreement: report,
+  };
 }
