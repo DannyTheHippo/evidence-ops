@@ -2,6 +2,14 @@
   "compilerOptions": {
     "outDir": "./dist",
 
+    // This config is for type-checking and editors, never for producing output: `tsconfig.build.json`
+    // is the only one that emits, and it turns this back off. Without it, any bare `tsc` aimed at
+    // `eval/` or `scripts/` writes `.js` + `.d.ts` next to the sources (`declaration` is on below),
+    // and because `.d.ts` matches the lint glob `{src,test,migrations,scripts,eval}/**/*.ts`, the
+    // stray output then fails `lint:check` with parser errors that name the generated file rather
+    // than the command that produced it. That happened; this is the structural fix.
+    "noEmit": true,
+
     "lib": ["ESNext"],
     "target": "ESNext",
 

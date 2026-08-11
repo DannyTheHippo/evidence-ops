@@ -1,15 +1,27 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "rootDir": "./src"
+    "rootDir": "./src",
+    // The base config sets `noEmit` so a stray `tsc` cannot litter the source tree; this is the one
+    // place that is supposed to produce output, so it opts back in. `nest build` reads this file.
+    "noEmit": false
   },
+  // Must exclude every `include` entry of the base config that lives outside `rootDir: ./src`, or
+  // `nest build` fails with TS6059 ("not under rootDir") and emits nothing. `scripts`, `eval` and
+  // `jest.integration.config.ts` were missing here, which broke `npm run build` — and with it
+  // `Dockerfile:12` and therefore the `app` image entirely. It went unnoticed because
+  // `docker compose config` validates YAML without building images, and `npm run tsc` type-checks
+  // against the base config, not this one.
   "exclude": [
     "node_modules",
     "test",
     "dist",
     "migrations",
+    "scripts",
+    "eval",
     "jest.config.ts",
     "jest.e2e.config.ts",
+    "jest.integration.config.ts",
     "**/*spec.ts"
   ]
 }
