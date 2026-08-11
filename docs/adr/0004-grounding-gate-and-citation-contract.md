@@ -74,14 +74,67 @@ interview answer that omits them is a sales pitch, not an ADR.
    whose number appears in the chunk text but is not backed by any cell fact on a chunk that has
    cell facts").
 
-3. **Conflict-forcing is chunk-scoped and errs toward over-triggering.** A claim is forced to
+3. **Narrowed: conflict-forcing matched on chunk co-membership, quantifiably over-triggering — now
+   matches on the claim's own asserted value.** This bound originally read: "A claim is forced to
    `conflicting_evidence` if any cited chunk carries a cell fact whose key matches a known
    conflicted fact key — regardless of whether the claim's specific citations actually touch the
-   conflicting value, or merely share a chunk with it. The chosen direction is deliberate: a false
-   `conflicting_evidence` costs a follow-up question; a false `answered` that silently picks a side
-   of a real disagreement costs trust in every subsequent answer.
+   conflicting value, or merely share a chunk with it." That was not hypothetical either: a live
+   eval run measured it. `comps.xlsx` ingested as one chunk carrying all ten comps' facts (see the
+   chunking bound below), so `touchedFactKeys` — built as "every `cellFacts` entry sharing a chunk
+   with one of the claim's citations" — collected every fact in the workbook for any claim citing
+   that chunk, including Northgate Business Park's seeded conflicted cap rate. Three of twelve
+   answerable eval questions came back `conflicting_evidence` for that reason alone: `ans-006`
+   (Cedar Bluff Logistics Center's building area), `ans-007` (Fenwick Distribution Hub's NOI), and
+   `ans-011` (Meridian Holdings Plaza's cap rate) — three unrelated properties flagged as
+   conflicting because they shared a spreadsheet with one conflicted cell. A false positive on the
+   system's headline capability on a quarter of the answerable set is past the point where "errs
+   toward over-triggering" is an acceptable resting description.
 
-4. **Closed: the two unverified channels were a working exploit, and both are now shut at the
+   **The fix.** `touchedFactKeys` (`verify-claim.ts`) now reuses the same value match check 3
+   already computes for numeric-claim support and citation locator upgrades: a fact only counts as
+   touched when its `value.amount` equals a number the claim's statement actually states, on a
+   chunk the claim cited — not merely any fact extracted from that chunk. A claim about Cedar
+   Bluff's building area states `412,000`, not `5.25` (Northgate's cap rate), so it no longer
+   touches Northgate's fact key even though both live in the same chunk
+   (`test/features/evidence/qa/grounding-gate.service.spec.ts`, "should NOT force
+   'conflicting_evidence' on a claim about one property just because a conflicted fact for a
+   different property shares its cited chunk" — fails against the pre-fix implementation). The
+   genuine seeded conflict — a claim that actually states Northgate's cap rate — still forces
+   `conflicting_evidence`; narrowing the over-trigger did not weaken the fail-closed check that
+   matters, only the chunk-co-membership check that didn't.
+
+   **What remains, honestly.** This is value matching, not identity matching: two distinct facts
+   that happen to carry the exact same `value.amount` in the same cited chunk (two comps priced at
+   precisely the same figure, say) would still cross-touch, because the match is "does this number
+   appear on this fact", not "does this citation's quote name this specific cell". That is a
+   narrower, rarer exposure than the closed one above — it needs an exact numeric collision, not
+   merely sheet co-membership — and the chunking fix below (smaller row-window chunks) further
+   shrinks it by shrinking how many other properties' facts can even share a chunk to begin with,
+   but it is not eliminated. Value matching also narrows in the other direction: a surviving claim
+   that states no digit-parseable number (bound 2's word-number blindness) now touches no facts at
+   all, so it can no longer be forced even when it is genuinely about the conflicted metric — e.g.
+   "Northgate's cap rate is roughly six percent" pre-fix would have been forced by chunk
+   co-membership; post-fix it will not be, unless the claim states the digit form. The direction is
+   still the deliberate one: a false `conflicting_evidence` costs a follow-up question; a false
+   `answered` that silently picks a side of a real disagreement costs trust in every subsequent
+   answer.
+
+4. **Row-window chunking was implemented but its threshold never fired on a realistic sheet.**
+   `chunkSheet` (`chunker.ts`) always had a row-windowing loop, but it shared `OVERFLOW_THRESHOLD`
+   (the 700-token prose target, 805 with the 15% overflow) with `chunkProseRun`. A comps-sized sheet — a handful of narrow
+   columns, short cell values — serializes to a few hundred tokens even across all ten rows, well
+   under that budget, so the loop never closed a window early and the whole sheet became one
+   chunk. This is what made bound 3's over-triggering as bad as measured: one chunk meant every
+   fact in the sheet shared a chunk with every citation into it. Spreadsheets now get their own,
+   much smaller cap (`SHEET_ROWS_PER_WINDOW = 4`), independent of the prose token budget — a window
+   closes at 4 data rows or the shared token overflow, whichever comes first, so `comps.xlsx`'s ten
+   rows now split into several row-window chunks, header repeated in each
+   (`test/features/evidence/ingestion/chunker.spec.ts`, "should split the sheet's 10 data rows into
+   several row-window chunks, not one chunk covering the whole sheet"). Two payoffs beyond bound 3:
+   retrieval precision (a citation now resolves to a handful of rows, not the whole table) and a
+   smaller blast radius for any chunk-scoped logic that remains.
+
+5. **Closed: the two unverified channels were a working exploit, and both are now shut at the
    schema boundary, not filtered.** This bound originally read: "Only the `answered` branch is
    verified. `insufficient_evidence.reason` and the entirety of `conflicting_evidence` (its
    `factKey`, its `values` array) are model-authored text and numbers that reach the caller with
@@ -121,7 +174,7 @@ interview answer that omits them is a sales pitch, not an ADR.
      model-authored left to sanitise.
    - **`conflicting_evidence` — removed from the model-facing schema entirely.** The only
      remaining producer is `src/worker/activities.ts`'s `groundingCheck`, which already builds
-     this outcome server-side from a real `ConflictedFactGroup` (bound 5 below) when the gate
+     this outcome server-side from a real `ConflictedFactGroup` (bound 6 below) when the gate
      forces a conflict — that path was already safe. A model that itself notices conflicting
      values now reports it via `reasonCode: 'retrieved_evidence_contradicts_itself'` instead of
      authoring a `factKey`/`values` payload nothing verified. Requiring the model's `values` to
@@ -140,7 +193,7 @@ interview answer that omits them is a sales pitch, not an ADR.
      both channels: a `reasonCode` bypassing validation and a model-authored `conflicting_evidence`
      bypassing validation each fail to surface their injected marker in the returned outcome.
 
-5. **Resolved: `cellFacts` and `conflictedFactKeys` are both supplied in the wired path.**
+6. **Resolved: `cellFacts` and `conflictedFactKeys` are both supplied in the wired path.**
    `src/worker/activities.ts`'s `groundingCheck` now loads both before calling
    `GroundingGateService.verify`: `FactsService.findCellFacts` for the `xlsx-cell` facts on the
    request's retrieved chunks, and `ConflictsService.findConflictedFactGroupsForChunks` for every
@@ -157,7 +210,7 @@ interview answer that omits them is a sales pitch, not an ADR.
    `migrations/0006-grounding-check-chunk-scoped-indexes.ts` adds the two supporting compound
    indexes (`extracted_facts.{tenantId,chunkId}`, `conflicts.{tenantId,status,factIds}`).
 
-6. **No fuzzy acceptance on quote matching.** `locate-quote.ts` computes a similarity score via
+7. **No fuzzy acceptance on quote matching.** `locate-quote.ts` computes a similarity score via
    bounded edit distance purely to *label* a near-miss as `'fuzzy'` (worth surfacing to a human or
    an eval) rather than `'none'` (no real relationship to the chunk) — but both are rejections.
    `FUZZY_SIMILARITY_THRESHOLD` is diagnostic-only; no similarity value, however close to 1, is ever
@@ -180,15 +233,24 @@ assumed away.
 **Deferred, deliberately.** Teaching the numeric check to parse magnitude words is a real next
 increment — not designed here because it has no forcing example yet the way the canary fixture
 forced the citation-vs-reasoning bound above. Closing the `insufficient_evidence`/
-`conflicting_evidence` channels (bound 4) *did* get a forcing example — the eval run's canary
-leak — and is done, not deferred; see bound 4's write-up for the fix and why a filter was rejected
+`conflicting_evidence` channels (bound 5) *did* get a forcing example — the eval run's canary
+leak — and is done, not deferred; see bound 5's write-up for the fix and why a filter was rejected
 in favor of a closed model-facing schema.
 
-**Cache note.** Bound 4's fix changes `modelAnswerContractSchema` — the JSON Schema constraint
+**Cache note.** Bound 5's fix changes `modelAnswerContractSchema` — the JSON Schema constraint
 sent to Anthropic — so the `qa_answer` structured-output shape changed and every cached
 `qa_answer` response keyed against the old schema (`eval/cache/model/**`) is stale. The eval cache
 needs re-recording (`eval/run.ts --record`) and the hard security gate needs a fresh run before
 `canaryLeakRate` can be trusted again.
+
+Bound 4's chunking fix is a *second*, independent cache invalidation: `chunkSheet` now produces
+different chunk text for every spreadsheet (multiple smaller windows instead of one, each with a
+narrower `xlsx-region` range) than the eval cache was recorded against. Chunk text is the input to
+both the embedding provider and, once retrieved, the model's synthesis prompt — so both
+`eval/cache/embedding/**` and `eval/cache/model/**` are stale for any case touching a spreadsheet
+fixture, on top of bound 5's schema-driven invalidation. The eval needs a full re-record
+(`eval/run.ts --record`), not an incremental one, before any of its metrics — including bound 3's
+"3 of 12" figure above, which was measured pre-fix — can be trusted again post-fix.
 
 ## Interview framing
 

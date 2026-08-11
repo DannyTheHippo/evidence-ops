@@ -207,6 +207,90 @@ describe('GroundingGateService', () => {
     expect(report.outcomeKind).toBe('answered');
   });
 
+  it('should NOT force "conflicting_evidence" on a claim about one property just because a conflicted fact for a different property shares its cited chunk', () => {
+    // Regression for the chunk-grain over-triggering bound (ADR-0004 bound 3, narrowed): a comps
+    // sheet's row-window chunk holds several properties' facts at once. A claim citing that chunk
+    // about Cedar Bluff's building area must not inherit Northgate's cap-rate conflict merely
+    // because both facts were extracted from the same chunk — it must "touch" (per
+    // `verifyClaim`'s value-matched `touchedFactKeys`) only the fact whose value it actually
+    // states. Fails against the pre-fix chunk-scoped implementation, which forced
+    // `conflicting_evidence` here.
+    const compsChunk: RetrievedChunk = {
+      chunkId: 'chunk-comps',
+      docVersionId: 'doc-v1',
+      sha256: SHA256_A,
+      text: 'Cedar Bluff Logistics Center reported a building area of 412,000 SF. Northgate Business Park traded at a cap rate of approximately 6.10%.',
+      locator: { kind: 'xlsx-region', extractorVersion: 'v1', sheetName: 'Comps', range: 'A1:H5' },
+    };
+    const cedarBluffFactKey = {
+      entity: 'Cedar Bluff Logistics Center',
+      metric: 'building_area',
+      period: '2025-03',
+    };
+    const northgateFactKey = {
+      entity: 'Northgate Business Park',
+      metric: 'cap_rate',
+      period: '2025-03',
+    };
+    const cellFacts: GroundingCellFact[] = [
+      {
+        chunkId: compsChunk.chunkId,
+        factKey: cedarBluffFactKey,
+        value: { amount: 412_000, unit: 'sf' },
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'C2' },
+      },
+      {
+        chunkId: compsChunk.chunkId,
+        factKey: northgateFactKey,
+        value: { amount: 6.1, unit: 'percent' },
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F4' },
+      },
+    ];
+    const unrelatedClaim = buildClaim({
+      statement: 'Cedar Bluff Logistics Center has a building area of 412,000 SF.',
+      citations: [
+        buildCitation({
+          chunkId: compsChunk.chunkId,
+          quote: 'Cedar Bluff Logistics Center reported a building area of 412,000 SF.',
+          locator: compsChunk.locator,
+        }),
+      ],
+    });
+    const outcome = buildOutcome([unrelatedClaim]);
+
+    const report = service.verify({
+      outcome,
+      retrievedChunks: [compsChunk],
+      cellFacts,
+      conflictedFactKeys: [northgateFactKey],
+    });
+
+    expect(report.outcomeKind).toBe('answered');
+
+    // The seeded conflict itself — a claim that actually states Northgate's cap rate, citing the
+    // same chunk — must still be forced. Narrowing the over-trigger must not weaken the gate's
+    // fail-closed posture on the check that matters.
+    const northgateClaim = buildClaim({
+      statement: 'Northgate Business Park traded at a cap rate of approximately 6.10%.',
+      citations: [
+        buildCitation({
+          chunkId: compsChunk.chunkId,
+          quote: 'Northgate Business Park traded at a cap rate of approximately 6.10%.',
+          locator: compsChunk.locator,
+        }),
+      ],
+    });
+    const conflictReport = service.verify({
+      outcome: buildOutcome([northgateClaim]),
+      retrievedChunks: [compsChunk],
+      cellFacts,
+      conflictedFactKeys: [northgateFactKey],
+    });
+
+    expect(conflictReport.outcomeKind).toBe('conflicting_evidence');
+    expect(conflictReport.conflictingFactKey).toEqual(northgateFactKey);
+  });
+
   it('should not force a conflict from a fact touched only by a dropped claim', () => {
     const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
     const cellFacts: GroundingCellFact[] = [

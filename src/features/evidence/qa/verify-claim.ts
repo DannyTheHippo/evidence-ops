@@ -23,9 +23,16 @@ export interface GroundingCellFact {
   readonly locator: EvidenceLocator;
 }
 
-/** Fact keys of every `cellFacts` entry sharing a chunk with one of this claim's citations — only
- * ever populated for a survived claim; a dropped claim can never "touch" a conflict (see the
- * grounding gate's own doc comment on why forcing happens post-survival). */
+/** Fact keys of every `cellFacts` entry the claim actually rests on — the same value-matched
+ * facts check 3 finds while verifying numeric support, not every fact sharing a cited chunk.
+ * Chunk-grain touching (bound 3, `docs/adr/0004-grounding-gate-and-citation-contract.md`) forced
+ * `conflicting_evidence` on any claim citing a chunk that merely *contained* a conflicted cell
+ * anywhere in it — a comps-sheet claim about one property inherited every other property's
+ * conflicts because a spreadsheet's row-window chunk holds many properties' facts at once. Value
+ * matching narrows "touches" to "asserts a number this specific fact records", so a claim about
+ * Cedar Bluff's building area no longer touches Northgate's cap-rate fact just because both live
+ * in the same chunk. Only ever populated for a survived claim; a dropped claim can never "touch" a
+ * conflict (see the grounding gate's own doc comment on why forcing happens post-survival). */
 type TouchedFactKeys = readonly FactKey[];
 
 export type ClaimVerificationResult =
@@ -120,9 +127,13 @@ export function verifyClaim(params: {
 
   // Check 3: every citation is retrieval-contained and quote-verified. Every number in the
   // statement must still be supported — one unsupported number drops the whole claim, the same
-  // fail-closed granularity as check 1/2's per-citation failures above.
+  // fail-closed granularity as check 1/2's per-citation failures above. The same value match that
+  // proves support is also what `touchedFactKeys` (below) is built from — a fact only counts as
+  // "touched" by this claim when the claim actually states its value, not merely when it lives in
+  // a cited chunk (see `TouchedFactKeys`'s doc comment).
   const numericViolations: GroundingViolation[] = [];
   const locatorUpgradeByChunkId = new Map<string, EvidenceLocator>();
+  const touchedFacts: GroundingCellFact[] = [];
 
   for (const claimedNumber of extractNumericTokens(claim.statement)) {
     const supportingFact = cellFacts.find(
@@ -136,6 +147,7 @@ export function verifyClaim(params: {
       // always wins the upgrade regardless of whether the chunk text also happens to contain the
       // number verbatim.
       locatorUpgradeByChunkId.set(supportingFact.chunkId, supportingFact.locator);
+      touchedFacts.push(supportingFact);
       continue;
     }
 
@@ -175,9 +187,7 @@ export function verifyClaim(params: {
     return upgradedLocator ? { ...citation, locator: upgradedLocator } : citation;
   });
 
-  const touchedFactKeys = cellFacts
-    .filter((fact) => citedChunks.some((chunk) => chunk.chunkId === fact.chunkId))
-    .map((fact) => fact.factKey);
+  const touchedFactKeys = touchedFacts.map((fact) => fact.factKey);
 
   return {
     kind: 'survived',

@@ -239,5 +239,24 @@ describe('chunkElements', () => {
         expect(endRow).toBeLessThanOrEqual(11);
       }
     });
+
+    it("should split the sheet's 10 data rows into several row-window chunks, not one chunk covering the whole sheet", async () => {
+      // Regression: a comps-sized sheet's markdown never approaches the (prose-sized) token
+      // overflow threshold on its own, so without a row cap dedicated to spreadsheets the whole
+      // sheet collapsed into a single chunk — defeating row-window citation precision and handing
+      // every downstream chunk-scoped lookup (e.g. conflict-forcing) the whole table at once.
+      const content = await readFile(XLSX_FIXTURE_PATH);
+      const parsed = await new XlsxParser().parse(content);
+      const sheet = manifest.files['comps.xlsx'].sheets[0];
+
+      const chunks = chunkElements(parsed.elements);
+
+      expect(sheet.rowCount).toBe(10);
+      expect(chunks.length).toBeGreaterThan(1);
+      const headerLine = `| ${sheet.headerRow.join(' | ')} |`;
+      for (const chunk of chunks) {
+        expect(chunk.text).toContain(headerLine);
+      }
+    });
   });
 });

@@ -23,6 +23,16 @@ const OVERFLOW_THRESHOLD = TARGET_TOKENS * 1.15;
 const OVERLAP_RATIO = 0.12;
 const OVERLAP_TOKENS = Math.round(TARGET_TOKENS * OVERLAP_RATIO);
 
+// A real comparables-style sheet (a handful of narrow columns, short cell values) rarely comes
+// close to `OVERFLOW_THRESHOLD` even across its full row count — a 10-row, 8-column comps sheet
+// serializes to a few hundred tokens, well under 700, so the token budget alone never splits it
+// and the whole sheet becomes one chunk. That defeats row-window chunking's actual purpose (a
+// citation resolving to a handful of rows, not an entire table, and a narrower blast radius for
+// any chunk-scoped fact lookup). Spreadsheets get their own, much smaller cap, independent of the
+// prose token budget: a window closes at whichever comes first, this row count or the shared
+// token overflow (the latter still protects a sheet with unusually wide/long cell content).
+const SHEET_ROWS_PER_WINDOW = 4;
+
 function headingRunKey(headingPath: readonly string[]): string {
   return JSON.stringify(headingPath);
 }
@@ -154,7 +164,9 @@ function toMarkdownRow(cells: readonly string[]): string {
 /**
  * Row-window region chunks for one sheet. The header row is repeated verbatim in every window —
  * without it a window of bare numbers carries no column meaning for an embedding — so each
- * window's markdown is the header, the separator, and only that window's data rows.
+ * window's markdown is the header, the separator, and only that window's data rows. A window
+ * closes at `SHEET_ROWS_PER_WINDOW` rows or the shared token overflow, whichever comes first (see
+ * that constant's doc comment for why row count needs its own, smaller cap).
  */
 function chunkSheet(sheetName: string, elements: readonly ParsedElement[]): Chunk[] {
   const cells: SheetCell[] = elements.map((element) => {
@@ -214,7 +226,11 @@ function chunkSheet(sheetName: string, elements: readonly ParsedElement[]): Chun
     const candidateText =
       windowRows.length === 0 ? `${headerMarkdown}\n${line}` : `${windowText}\n${line}`;
 
-    if (windowRows.length > 0 && approxTokenCount(candidateText) > OVERFLOW_THRESHOLD) {
+    if (
+      windowRows.length > 0 &&
+      (windowRows.length >= SHEET_ROWS_PER_WINDOW ||
+        approxTokenCount(candidateText) > OVERFLOW_THRESHOLD)
+    ) {
       flush();
       windowText = `${headerMarkdown}\n${line}`;
       windowRows = [rowNumber];

@@ -223,7 +223,7 @@ describe('verifyClaim', () => {
     expect(result.dropped.reason).toContain('41000000');
   });
 
-  it('should return the fact keys of every cellFact sharing a chunk with a surviving claim', () => {
+  it('should return the fact key of a cellFact whose value matches a number the claim states', () => {
     const cellFact: GroundingCellFact = {
       chunkId: PROSE_CHUNK.chunkId,
       factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
@@ -239,6 +239,58 @@ describe('verifyClaim', () => {
 
     expect(result.kind).toBe('survived');
     expect(result.touchedFactKeys).toEqual([cellFact.factKey]);
+  });
+
+  it("should not touch an unrelated fact's key merely because it shares a cited chunk with a fact the claim actually states", () => {
+    // Regression for the chunk-grain contamination bound (ADR-0004 bound 3): a comps-sheet chunk
+    // holds many properties' facts at once, and a claim about one property must not inherit a
+    // different property's conflict just because both facts were extracted from the same
+    // row-window chunk. Fails on the pre-fix "every cellFact sharing a chunk" implementation,
+    // which would have returned both fact keys here.
+    const compsChunk: RetrievedChunk = {
+      chunkId: 'chunk-comps',
+      docVersionId: 'doc-v1',
+      sha256: SHA256_A,
+      text: 'Cedar Bluff Logistics Center reported a building area of 412,000 SF. Northgate Business Park traded at a cap rate of approximately 6.10%.',
+      locator: XLSX_REGION_LOCATOR,
+    };
+    const cedarBluffFact: GroundingCellFact = {
+      chunkId: compsChunk.chunkId,
+      factKey: {
+        entity: 'Cedar Bluff Logistics Center',
+        metric: 'building_area',
+        period: '2025-03',
+      },
+      value: { amount: 412_000, unit: 'sf' },
+      locator: XLSX_CELL_LOCATOR,
+    };
+    const northgateFact: GroundingCellFact = {
+      chunkId: compsChunk.chunkId,
+      factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+      value: { amount: 6.1, unit: 'percent' },
+      locator: XLSX_CELL_LOCATOR,
+    };
+    const claim = buildClaim({
+      statement: 'Cedar Bluff Logistics Center has a building area of 412,000 SF.',
+      citations: [
+        buildCitation({
+          chunkId: compsChunk.chunkId,
+          quote: 'Cedar Bluff Logistics Center reported a building area of 412,000 SF.',
+          locator: XLSX_REGION_LOCATOR,
+        }),
+      ],
+    });
+
+    const result = verifyClaim({
+      claim,
+      retrievedChunks: [compsChunk],
+      cellFacts: [cedarBluffFact, northgateFact],
+    });
+
+    expect(result.kind).toBe('survived');
+    if (result.kind !== 'survived') throw new Error('unreachable');
+    expect(result.touchedFactKeys).toEqual([cedarBluffFact.factKey]);
+    expect(result.touchedFactKeys).not.toContainEqual(northgateFact.factKey);
   });
 
   it('should return no touched fact keys for a dropped claim', () => {
