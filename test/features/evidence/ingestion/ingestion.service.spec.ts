@@ -41,7 +41,11 @@ describe('IngestionService', () => {
     _id: versionId,
     documentId,
     storageKey: 'not-set',
-    tenantId: 'default',
+    // Deliberately not `'default'`: a fixture value distinct from `computeChunkId`'s tenant
+    // parameter name and every other test's tenant literal makes the `_id`/`tenantId` assertions
+    // below catch the service passing a hardcoded value instead of wiring `version.tenantId`
+    // through.
+    tenantId: 'tenant-a',
     ingestionStatus: 'pending',
     sha256: 'a'.repeat(64),
     ...overrides,
@@ -212,7 +216,7 @@ describe('IngestionService', () => {
     expect(insertedChunks[0].documentId).toBe(documentId);
     expect(insertedChunks[0].documentVersionId).toBe(versionId);
     expect(insertedChunks[0].text).toBe('Some extracted page text.');
-    expect(insertedChunks[0].tenantId).toBe('default');
+    expect(insertedChunks[0].tenantId).toBe('tenant-a');
     expect(insertedChunks[0].locator).toEqual(
       expect.objectContaining({ kind: 'pdf-page', page: 1 }),
     );
@@ -223,6 +227,7 @@ describe('IngestionService', () => {
     // against the expected inputs is what makes this a check rather than a tautology.
     expect(insertedChunks[0]._id).toBe(
       computeChunkId({
+        tenantId: version.tenantId,
         documentVersionSha256: version.sha256,
         ordinal: 0,
         locator: {

@@ -18,7 +18,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client, Connection } from '@temporalio/client';
-import { MongoClient, ObjectId } from 'mongodb';
+import { MongoClient } from 'mongodb';
 
 const ROOT = join(__dirname, '..');
 const ARTIFACTS = join(ROOT, 'artifacts');
@@ -82,7 +82,7 @@ async function main(): Promise<void> {
       `no document_versions under tenant '${TENANT_ID}' — run 'npm run eval -- --record' first to ingest the fixture data room`,
     );
   }
-  const versionId = version._id as ObjectId;
+  const versionId = version._id;
   // Reset so the ingest actually re-runs: `ingestVersion` short-circuits on `completed`, and its
   // lease guard refuses a version another attempt still owns.
   await db

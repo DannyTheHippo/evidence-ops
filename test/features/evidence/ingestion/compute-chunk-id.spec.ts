@@ -5,6 +5,7 @@ import type {
 import { computeChunkId } from '../../../../src/features/evidence/ingestion/compute-chunk-id';
 
 describe('computeChunkId', () => {
+  const tenantId = 'default';
   const sha256 = 'a'.repeat(64);
   const locator: PdfPageLocator = {
     kind: 'pdf-page',
@@ -12,11 +13,26 @@ describe('computeChunkId', () => {
     extractorVersion: 'pdf-pdfjs-1',
   };
 
-  it('should return the same id for the same sha256, ordinal, and locator', () => {
-    const first = computeChunkId({ documentVersionSha256: sha256, ordinal: 0, locator });
-    const second = computeChunkId({ documentVersionSha256: sha256, ordinal: 0, locator });
+  it('should return the same id for the same tenantId, sha256, ordinal, and locator', () => {
+    const first = computeChunkId({ tenantId, documentVersionSha256: sha256, ordinal: 0, locator });
+    const second = computeChunkId({ tenantId, documentVersionSha256: sha256, ordinal: 0, locator });
 
     expect(first).toBe(second);
+  });
+
+  // The regression that matters: byte-identical content ingested under two different tenants must
+  // never derive the same `_id` — an unscoped id lets one tenant's ingest collide with (or worse,
+  // dedupe into) another tenant's row at the storage layer.
+  it('should return a different id for a different tenantId, holding sha256, ordinal, and locator constant', () => {
+    const first = computeChunkId({ tenantId, documentVersionSha256: sha256, ordinal: 0, locator });
+    const second = computeChunkId({
+      tenantId: 'eval',
+      documentVersionSha256: sha256,
+      ordinal: 0,
+      locator,
+    });
+
+    expect(first).not.toBe(second);
   });
 
   // The property that makes eval replay possible (ADR-0007): re-ingesting identical bytes must
@@ -35,11 +51,13 @@ describe('computeChunkId', () => {
     };
 
     const first = computeChunkId({
+      tenantId,
       documentVersionSha256: sha256,
       ordinal: 3,
       locator: constructedInOrder,
     });
     const second = computeChunkId({
+      tenantId,
       documentVersionSha256: sha256,
       ordinal: 3,
       locator: constructedOutOfOrder,
@@ -49,15 +67,16 @@ describe('computeChunkId', () => {
   });
 
   it('should return a different id for a different ordinal', () => {
-    const first = computeChunkId({ documentVersionSha256: sha256, ordinal: 0, locator });
-    const second = computeChunkId({ documentVersionSha256: sha256, ordinal: 1, locator });
+    const first = computeChunkId({ tenantId, documentVersionSha256: sha256, ordinal: 0, locator });
+    const second = computeChunkId({ tenantId, documentVersionSha256: sha256, ordinal: 1, locator });
 
     expect(first).not.toBe(second);
   });
 
   it('should return a different id for a different documentVersionSha256', () => {
-    const first = computeChunkId({ documentVersionSha256: sha256, ordinal: 0, locator });
+    const first = computeChunkId({ tenantId, documentVersionSha256: sha256, ordinal: 0, locator });
     const second = computeChunkId({
+      tenantId,
       documentVersionSha256: 'b'.repeat(64),
       ordinal: 0,
       locator,
@@ -74,8 +93,9 @@ describe('computeChunkId', () => {
       extractorVersion: 'xlsx-1',
     };
 
-    const first = computeChunkId({ documentVersionSha256: sha256, ordinal: 0, locator });
+    const first = computeChunkId({ tenantId, documentVersionSha256: sha256, ordinal: 0, locator });
     const second = computeChunkId({
+      tenantId,
       documentVersionSha256: sha256,
       ordinal: 0,
       locator: regionLocator,
@@ -84,15 +104,21 @@ describe('computeChunkId', () => {
     expect(first).not.toBe(second);
   });
 
+  it('should throw on an empty tenantId', () => {
+    expect(() =>
+      computeChunkId({ tenantId: '', documentVersionSha256: sha256, ordinal: 0, locator }),
+    ).toThrow(/non-empty tenantId/);
+  });
+
   it('should throw on an empty documentVersionSha256', () => {
-    expect(() => computeChunkId({ documentVersionSha256: '', ordinal: 0, locator })).toThrow(
-      /non-empty documentVersionSha256/,
-    );
+    expect(() =>
+      computeChunkId({ tenantId, documentVersionSha256: '', ordinal: 0, locator }),
+    ).toThrow(/non-empty documentVersionSha256/);
   });
 
   it.each([-1, 1.5])('should throw on a non-integer or negative ordinal (%s)', (ordinal) => {
-    expect(() => computeChunkId({ documentVersionSha256: sha256, ordinal, locator })).toThrow(
-      /non-negative integer ordinal/,
-    );
+    expect(() =>
+      computeChunkId({ tenantId, documentVersionSha256: sha256, ordinal, locator }),
+    ).toThrow(/non-negative integer ordinal/);
   });
 });

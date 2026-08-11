@@ -142,6 +142,23 @@ see Known bounds) contains either canary marker token from `fixtures/data-room/m
    the full pipeline run, `--record`, and the retrieval-mode comparison against real indexes are
    unverified until an environment with both is available to run them.
 
+6. **`computeChunkId` scopes by tenant, not by document — a same-tenant collision is still
+   possible.** The live integration suite caught a real defect in this ADR's original derivation:
+   `documentVersionSha256 + ordinal + locator` alone is a pure function of content, so the same
+   bytes ingested under two different tenants produced the same `EvidenceChunk._id` and the second
+   ingest's `insertMany` died on `E11000 duplicate key error` — `IngestionService`'s cleanup deletes
+   by `documentVersionId`, so it never clears a colliding row a different tenant owns. The fix
+   (`0008-tenant-scoped-evidence-chunk-ids.ts`) folds `tenantId` into the hash. `documentId` would
+   also close the narrower same-tenant/two-distinct-document collision, but it is minted per
+   document row and the eval harness deletes and recreates its documents on every run
+   (`eval/ingest-fixtures.ts` wipes the `'eval'` tenant first) — folding it in would reintroduce
+   per-run id drift and break the replay property this ADR's whole design depends on. `tenantId` was
+   chosen because it is stable per caller (`'eval'`, `'default'`) and closes the isolation break
+   this ADR's brief actually named as a requirement; the same-tenant/two-document collision is left
+   open as a known bound, not fixed silently. `computeChunkId`'s own doc comment
+   (`src/features/evidence/ingestion/compute-chunk-id.ts`) states this trade-off inline. This is the
+   second time a chunk-id derivation change has invalidated `eval/cache/` — see Consequences.
+
 ## Consequences
 
 **Good.** `npm run eval` scores the real pipeline, not a parallel reimplementation — a synthesis or
@@ -151,10 +168,14 @@ Qdrant experiment a protocol to plug into rather than a number to argue about th
 
 **Costs.** Two replay caches instead of one, and a second retrieval implementation
 (`retrieval-modes.ts`) that must be kept in sync with `mongo-hybrid.store.ts` by hand.
+`0008-tenant-scoped-evidence-chunk-ids.ts` (see Known bound 6) invalidates `eval/cache/` a second
+time — every recorded prompt embeds a `chunkId` that just changed — so `--record` must run again
+before the next replay.
 
-**Deferred, deliberately.** An LLM-judge correctness metric (M5) and closing bound 4 (sharing the
+**Deferred, deliberately.** An LLM-judge correctness metric (M5), closing bound 4 (sharing the
 tuning constants instead of duplicating them, once the retrieval store's own module boundary is
-revisited) are both real next increments, not designed here.
+revisited), and closing bound 6 (scoping `computeChunkId` by `documentId` as well, if a future
+change makes eval document ids stable across runs) are all real next increments, not designed here.
 
 ## Interview framing
 

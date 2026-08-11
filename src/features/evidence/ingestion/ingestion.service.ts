@@ -175,6 +175,7 @@ export class IngestionService {
 
     const chunkDocs = chunks.map((chunk, index) => ({
       _id: computeChunkId({
+        tenantId: version.tenantId,
         documentVersionSha256: version.sha256,
         ordinal: index,
         locator: chunk.locator,

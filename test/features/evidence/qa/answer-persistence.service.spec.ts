@@ -17,6 +17,7 @@ import { getMockModel } from '../../../utils/get-mock-model';
 // a hand-made `ObjectId`-shaped fixture would not have caught it, since a 24-hex-char string casts
 // to `ObjectId` without error.
 const CHUNK_ID = computeChunkId({
+  tenantId: 'default',
   documentVersionSha256: 'a'.repeat(64),
   ordinal: 0,
   locator: { kind: 'pdf-page', page: 3, extractorVersion: 'v1' },

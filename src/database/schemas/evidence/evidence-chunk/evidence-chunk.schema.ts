@@ -10,9 +10,11 @@ export type EvidenceChunkDocument = HydratedDocument<WithTimestamps<EvidenceChun
 export class EvidenceChunk extends AuditableDocument<string> {
   // Content-addressed, not auto-generated: `computeChunkId`
   // (`../../../../features/evidence/ingestion/compute-chunk-id.ts`) derives this from the owning
-  // `DocumentVersion.sha256`, the chunk's ordinal, and its locator, so re-ingesting identical
-  // bytes reproduces the identical id — see that function's doc comment for why this is the fix
-  // for the eval replay cache's per-run `chunkId` drift (ADR-0007). Overriding the inherited
+  // tenant, the owning `DocumentVersion.sha256`, the chunk's ordinal, and its locator, so
+  // re-ingesting identical bytes for the same tenant reproduces the identical id — see that
+  // function's doc comment for why this is the fix for the eval replay cache's per-run `chunkId`
+  // drift (ADR-0007), and for why `tenantId` is folded in (a cross-tenant id collision, caught by
+  // the live integration suite). Overriding the inherited
   // `_id` type to `String` disables Mongoose's default ObjectId auto-generation, so `required:
   // true` fails CLOSED on a document written without one — every writer
   // (`IngestionService.ingestVersion`) always computes and assigns one explicitly, so a chunk
