@@ -656,3 +656,78 @@ it isn't happening in the model at all.
 third quote check written independently, elsewhere, would silently reopen exactly the same class of
 bug — normalization discipline has to be a convention (use `locateQuote`, don't write a new
 containment check), not a property of any one shared function.
+
+---
+
+## 011 — Human-in-the-loop as a durability problem, not a UI problem
+
+**ADR:** [0009](./adr/0009-durable-human-approval-gates.md) · **Code:**
+`src/workflows/resolve-conflict.workflow.ts`, `src/workflows/ingest-document-version.workflow.ts`,
+`src/providers/approval-channel/`
+
+**The concept.** "Wait for a human to decide" looks like a UI problem — show a button, wait for a
+click — until you ask what happens to the wait itself while nobody has clicked yet. A human may
+take minutes or days, and whatever is holding that wait has to survive everything that happens in
+between: a deploy, a crash, a routine process recycle. A wait held in one process's memory — a
+promise sitting in a closure, a callback array keyed by request id — dies the moment that process
+does, silently, with no record it was ever waiting. That makes human-in-the-loop fundamentally a
+durable-state problem: the interesting engineering is in *where the wait lives*, not in what the
+approve/reject screen looks like.
+
+Two mechanisms can make a wait durable. A polling loop re-checks some persisted status on a timer
+— durable, but it is a hand-rolled state machine (backoff, retry, "how often is often enough")
+sitting on top of infrastructure that may already offer one. A durable-execution engine's own
+signal-plus-`condition()` primitive persists the wait itself as part of a recorded history, so a
+crashed worker resumes the same wait on replay rather than needing to reconstruct one.
+
+**The trade-off.** A signal is not the same kind of channel a request-scoped callback is. A
+callback closure can only be invoked by code that holds a reference to it — capability by
+construction. A signal is addressed by an id (a workflow id, a channel name) that anything holding
+that id can send to, including a caller who guessed, leaked, or replayed one. Durability and
+capability-based trust point in different directions: making a wait outlive a process means giving
+up the implicit access control a same-process closure gets for free, and that has to be replaced
+with something explicit.
+
+**What we chose, and why here.** Replace it with a rule about what the wake-up is allowed to mean:
+a signal may only ever *wake* the waiting code, never *tell it the answer*. The verdict comes from
+a second, independent read of durable, authoritatively-written state — not from anything the
+wake-up carried. An untrusted party can cause the wake-up to fire; they cannot make the subsequent
+read say something a real decision-maker didn't write.
+
+**In our code.** Both `resolve-conflict.workflow.ts` and `ingest-document-version.workflow.ts`
+register a signal handler that does exactly one thing — flip a local `signaled` flag — and neither
+ever reads the signal's own payload (`claimedDecision`) as the outcome. On waking from
+`condition(() => signaled, '24 hours')`, each calls `getApprovalDecision(approvalId)`, which
+re-reads the `Approval` document `ApprovalsService.decide()` — the one HTTP-authenticated writer —
+last wrote. A caller who sends `{ claimedDecision: 'approved' }` to a real `workflowId` still only
+wakes the workflow; the row it then reads says whatever `decide()` actually persisted, or still
+`pending` if nobody has. `MongoApprovalChannel.getDecision` collapses anything other than exactly
+`'approved'` to `rejected` — a second, independent fail-closed check on top of the workflow's own
+discipline, not a rephrasing of it. A timeout gets the same treatment from the other direction:
+`condition()` returning `false` is its own terminal branch, decided without ever calling
+`getApprovalDecision` at all, so "nobody answered in time" can never be blurred into whatever a
+stale row happens to say.
+
+**How we validated it.** Both workflow specs drive a payload that *claims* approval
+(`claimedDecision: 'approved'`) through the real signal handler while the mocked persisted row says
+`rejected`, and assert the outcome is `rejected` — proving the payload was never consulted, not
+merely asserting the happy path. A separate case drives the timeout branch and asserts
+`getApprovalDecision` was never called at all.
+
+**Interview answer.** I treat "wait for a human" as a durability problem before it's a UI
+problem — the wait has to survive a process restart across a window that can be hours or days, so
+where it lives matters more than what the approve button looks like. The part that took the most
+care wasn't durability itself, though, that's what a workflow engine's signal-plus-`condition()`
+buys directly. It was that making the wait durable also means addressing it by an id anything can
+message, which forfeits the implicit access control a same-process callback gets for free. The fix
+is a rule, not a lock: a signal only ever wakes the code, it never carries the verdict — the
+verdict is a second, independent read of state only an authenticated writer could have produced.
+That's the transferable idea, and it generalized cleanly to a second, unrelated gated action
+without needing a new primitive, which is itself evidence the rule was doing the real work rather
+than something specific to the first workflow it was written for.
+
+**Known limit.** The rule closes forgery of the *verdict*; it does not close forgery of the
+*request* to gate something in the first place. Anything that can start a gated workflow with a
+crafted `subject`/`summary` can still put a plausible-looking entry in front of a human reviewer —
+the review step assumes the request reaching it is legitimate, and checking that is a different,
+unaddressed boundary.

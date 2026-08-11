@@ -14,7 +14,7 @@ import type { PaginationRequestDto } from '../../../shared/dtos/request/paginati
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
-import type { ResolveConflictApprovalSignal } from '../../../workflows/types';
+import type { ApprovalDecisionSignal } from '../../../workflows/types';
 import type { ApprovalResponseDto } from './dtos/response/approval.response.dto';
 import {
   ApprovalAlreadyDecidedException,
@@ -36,12 +36,15 @@ export interface DecideApprovalInput {
 }
 
 /**
- * `'approvalDecision'` — the signal name `resolve-conflict.workflow.ts`'s own
- * `approvalDecisionSignal` registers via `defineSignal` — is not exported as a runtime value from
- * `src/workflows/**` (that directory only exports argument/return types across the determinism
- * fence; see its `types.ts` top-of-file comment). Duplicated here rather than imported, the same
- * reasoning `qa.service.ts`'s `ANSWER_QUESTION_WORKFLOW_TYPE` and `documents.service.ts`'s
- * `INGEST_DOCUMENT_VERSION_WORKFLOW_TYPE` already document for workflow type names.
+ * `'approvalDecision'` — the signal name every workflow with an approval gate registers via
+ * `defineSignal` (`resolve-conflict.workflow.ts`'s `approvalDecisionSignal`,
+ * `ingest-document-version.workflow.ts`'s `ingestApprovalDecisionSignal`) — is not exported as a
+ * runtime value from `src/workflows/**` (that directory only exports argument/return types across
+ * the determinism fence; see its `types.ts` top-of-file comment). Duplicated here rather than
+ * imported, the same reasoning `qa.service.ts`'s `ANSWER_QUESTION_WORKFLOW_TYPE` and
+ * `documents.service.ts`'s `INGEST_DOCUMENT_VERSION_WORKFLOW_TYPE` already document for workflow
+ * type names. One constant signals either kind of gated workflow identically: `decide()` below
+ * only ever looks at `approval.workflowId`, never at which workflow type created the row.
  */
 const APPROVAL_DECISION_SIGNAL = 'approvalDecision';
 
@@ -133,9 +136,11 @@ export class ApprovalsService {
     });
 
     if (!approval.workflowId) {
-      // No workflow to wake — an approval created outside `resolveConflict`'s flow (none exists
-      // yet), or a pre-D3 row minted before `workflowId` was threaded through. The decision is
-      // still durably recorded above; there is simply nothing left to do.
+      // No workflow to wake. Every in-repo requester (`resolveConflict`, D2;
+      // `ingestDocumentVersion`, D5) always sets `workflowId` via `workflowInfo().workflowId`, so
+      // this only fires for a pre-D3 row minted before `workflowId` was threaded through, or a
+      // future caller of `ApprovalChannel.requestApproval` that isn't itself a workflow. The
+      // decision is still durably recorded above; there is simply nothing left to do.
       this.logger.warn(
         `Approval '${id}' has no workflowId — decision persisted with nothing to wake`,
       );
@@ -145,7 +150,7 @@ export class ApprovalsService {
     try {
       await this.workflowEngine.signal(approval.workflowId, APPROVAL_DECISION_SIGNAL, {
         claimedDecision: input.decision,
-      } satisfies ResolveConflictApprovalSignal);
+      } satisfies ApprovalDecisionSignal);
     } catch (error) {
       // FAIL CLOSED: this is the permission-boundary half of `decide()`, not a measurement — a
       // swallowed failure here would leave a live `resolveConflict` execution asleep until its 24h

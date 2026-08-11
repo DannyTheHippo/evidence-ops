@@ -1,5 +1,13 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsMongoId, IsNotEmpty, IsOptional, IsString, ValidateIf } from 'class-validator';
+import { Transform } from 'class-transformer';
+import {
+  IsBoolean,
+  IsMongoId,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  ValidateIf,
+} from 'class-validator';
 
 export class UploadDocumentRequestDto {
   @ApiProperty({
@@ -22,4 +30,23 @@ export class UploadDocumentRequestDto {
   @IsString()
   @IsNotEmpty()
   title?: string;
+
+  @ApiProperty({
+    example: false,
+    description:
+      "Route this upload's ingestion through a human-approval gate (D5 of the approvals " +
+      'milestone) before chunking/embedding proceeds. Default false — an uploader who does not ' +
+      'opt in is never blocked.',
+    required: false,
+    default: false,
+  })
+  @IsOptional()
+  // This body arrives as `multipart/form-data`, so every field is a string on the wire — a bare
+  // `@IsBoolean()` would 400 on the literal string `'true'`. Explicit string comparison, not
+  // `Boolean(value)`/a bare `@Type(() => Boolean)`: those coerce the *non-empty string* `'false'`
+  // to `true`, which would silently gate an uploader who explicitly opted out — the one outcome
+  // this field's whole "default is do not gate" contract forbids.
+  @Transform(({ value }: { value: unknown }) => value === true || value === 'true')
+  @IsBoolean()
+  requireApproval?: boolean;
 }

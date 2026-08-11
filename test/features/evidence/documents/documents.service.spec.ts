@@ -164,9 +164,33 @@ describe('DocumentsService', () => {
       expect(result.currentVersion.sha256).toBe(expectedSha256);
       // A new document always creates a new version, so ingestion must start for it — the whole
       // point of running it as a durable workflow is that this never blocks the upload response.
+      // `requireApproval` is undefined here (the dto never set it) — the ungated default path.
       expect(mockWorkflowEngine.start).toHaveBeenCalledWith('ingestDocumentVersion', {
         documentVersionId: versionId.toString(),
+        requireApproval: undefined,
+        documentTitle: 'Q3 Rent Roll',
       });
+    });
+
+    it('should thread requireApproval through to the ingest workflow input when set on the upload dto', async () => {
+      const file = buildFile();
+      const mockDocument = buildMockDocument();
+      mockDocumentModel.create.mockResolvedValueOnce(mockDocument);
+      mockDocumentStore.put.mockResolvedValueOnce({
+        id: 'gridfs-id-1',
+        content: file.buffer,
+        contentType: file.mimetype,
+        metadata: {},
+      });
+      const version = buildMockVersion();
+      mockDocumentVersionModel.create.mockResolvedValueOnce(version);
+
+      await service.upload(file, { title: 'Q3 Rent Roll', requireApproval: true });
+
+      expect(mockWorkflowEngine.start).toHaveBeenCalledWith(
+        'ingestDocumentVersion',
+        expect.objectContaining({ requireApproval: true }),
+      );
     });
   });
 
@@ -231,6 +255,8 @@ describe('DocumentsService', () => {
       expect(result.currentVersion.versionNumber).toBe(2);
       expect(mockWorkflowEngine.start).toHaveBeenCalledWith('ingestDocumentVersion', {
         documentVersionId: newVersionId.toString(),
+        requireApproval: undefined,
+        documentTitle: 'Q3 Rent Roll',
       });
     });
   });

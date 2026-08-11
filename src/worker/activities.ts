@@ -127,6 +127,12 @@ export interface Activities {
   persistAnswer(input: PersistAnswerInput): Promise<PersistAnswerResult>;
   loadConflict(input: LoadConflictActivityInput): Promise<ConflictResolutionCandidate>;
   requestConflictApproval(request: ApprovalRequest): Promise<ApprovalHandle>;
+  // Same underlying `ApprovalChannel.requestApproval` call as `requestConflictApproval` above —
+  // kept as its own named activity, not a shared generic one, matching the one-activity-per-
+  // calling-workflow convention every other activity in this interface follows (`loadConflict`,
+  // `recordConflictResolution`), so each workflow's `proxyActivities` group names exactly the
+  // calls it makes rather than a name that says "conflict" to a caller that isn't one.
+  requestIngestApproval(request: ApprovalRequest): Promise<ApprovalHandle>;
   getApprovalDecision(approvalId: string): Promise<ApprovalResult>;
   recordConflictResolution(
     input: RecordConflictResolutionInput,
@@ -340,6 +346,8 @@ export function createActivities(app: INestApplicationContext): Activities {
       ),
 
     requestConflictApproval: (request) => approvalChannel.requestApproval(request),
+
+    requestIngestApproval: (request) => approvalChannel.requestApproval(request),
 
     getApprovalDecision: (approvalId) => approvalChannel.getDecision(approvalId),
 

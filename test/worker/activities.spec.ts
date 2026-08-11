@@ -712,6 +712,24 @@ describe('createActivities', () => {
     expect(result).toBe(handle);
   });
 
+  it('should delegate requestIngestApproval to ApprovalChannel.requestApproval', async () => {
+    const handle = { id: 'approval-2' };
+    const mockRequestApproval = jest.fn().mockResolvedValue(handle);
+    const app = buildApp({ requestApproval: mockRequestApproval });
+    const request = {
+      action: 'ingest_document_version',
+      summary: "Approve ingesting 'Q3 Rent Roll' (version 'version-1')",
+      subject: { entityType: 'DocumentVersion', entityId: 'version-1' },
+      workflowId: 'wf-ingest-1',
+    };
+
+    const activities = createActivities(app);
+    const result = await activities.requestIngestApproval(request);
+
+    expect(mockRequestApproval).toHaveBeenCalledWith(request);
+    expect(result).toBe(handle);
+  });
+
   it('should delegate getApprovalDecision to ApprovalChannel.getDecision', async () => {
     const decision = { decision: 'approved' as const, decidedBy: 'reviewer@example.com' };
     const mockGetDecision = jest.fn().mockResolvedValue(decision);

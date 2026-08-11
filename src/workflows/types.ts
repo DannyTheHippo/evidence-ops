@@ -4,13 +4,36 @@
  * importing from a service file here, even `import type`, would defeat the point of this
  * directory being the one place the determinism fence (`eslint.config.mjs`, ADR-0003) polices.
  */
+/**
+ * `requireApproval` is the per-upload opt-in `ingest-document-version.workflow.ts`'s gate checks
+ * (D5 of the approvals milestone) — absent/`false` by default so an ordinary upload is never
+ * blocked; see that workflow's own doc comment for why the default must stay "do not gate". A
+ * plain boolean carried on `input`, not a persisted per-document setting: this field decides
+ * whether *this one upload* gates, the same fields-not-imports escape hatch `winningFactId` below
+ * uses, not a standing policy this workflow would need a second source to look up.
+ *
+ * `documentTitle` is optional and cosmetic only — it never changes the gate's behavior, only the
+ * `summary` a human reviewer reads in the approval inbox (`ApprovalsService.listPending`). Absent
+ * on a caller that doesn't have a title in hand; the workflow falls back to `documentVersionId`.
+ */
 export interface IngestDocumentVersionInput {
   readonly documentVersionId: string;
+  readonly requireApproval?: boolean;
+  readonly documentTitle?: string;
 }
+
+export type IngestApprovalGateOutcome = 'approved' | 'rejected' | 'timed_out';
 
 export interface IngestDocumentVersionResult {
   readonly chunksCreated: number;
   readonly alreadyIngested: boolean;
+  /** Set only when `input.requireApproval` was true — absent on the ordinary ungated path, the
+   *  same "absent means normal, not a special value" contract `GroundingCheckActivityResult
+   *  .conflictIds` (`src/worker/activities.ts`) uses for its own conditional field. `'approved'`
+   *  means the gate passed and the pipeline ran, so `chunksCreated`/`alreadyIngested` reflect the
+   *  real ingest; `'rejected'`/`'timed_out'` mean the pipeline never started, so both stay at
+   *  their empty defaults (`0`/`false`). */
+  readonly gateOutcome?: IngestApprovalGateOutcome;
 }
 
 /**
@@ -74,12 +97,17 @@ export interface ResolveConflictWorkflowResult {
 }
 
 /**
- * Signal payload for `resolve-conflict.workflow.ts`'s wake-up signal. Deliberately inert: the
- * workflow's signal handler flips a wake-up flag and never reads `claimedDecision` (see the
- * workflow's own doc comment on why) — the field exists only so a caller can express intent to a
- * dashboard, and so a test can prove a payload that claims approval is ignored whenever the
- * persisted `Approval` row (read via `getApprovalDecision`) disagrees.
+ * Signal payload for the approval-gate wake-up signal, shared by every workflow that gates on a
+ * human decision — `resolve-conflict.workflow.ts` (D2) and `ingest-document-version.workflow.ts`
+ * (D5), both registering under the same signal name (`'approvalDecision'`,
+ * `ApprovalsService.decide()`'s `APPROVAL_DECISION_SIGNAL`) so that one generic HTTP decision
+ * endpoint can wake whichever workflow an `Approval` row's `workflowId` names, without caring
+ * which kind of gate it is. Deliberately inert: each workflow's signal handler only flips a
+ * wake-up flag and never reads `claimedDecision` (see either workflow's own doc comment on why) —
+ * the field exists only so a caller can express intent to a dashboard, and so a test can prove a
+ * payload that claims approval is ignored whenever the persisted `Approval` row (read via
+ * `getApprovalDecision`) disagrees.
  */
-export interface ResolveConflictApprovalSignal {
+export interface ApprovalDecisionSignal {
   readonly claimedDecision?: 'approved' | 'rejected';
 }

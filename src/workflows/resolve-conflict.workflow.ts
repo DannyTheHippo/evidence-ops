@@ -7,21 +7,22 @@ import {
 } from '@temporalio/workflow';
 import type { Activities } from '../worker/activities';
 import type {
-  ResolveConflictApprovalSignal,
+  ApprovalDecisionSignal,
   ResolveConflictWorkflowInput,
   ResolveConflictWorkflowResult,
 } from './types';
 
 /**
  * Fired to wake this workflow from its approval wait (see `condition()` below) — never trusted as
- * the verdict itself. The handler below never reads `ResolveConflictApprovalSignal.claimedDecision`
- * — only `getApprovalDecision`, reading the durable `Approval` row, decides the outcome. This is
+ * the verdict itself. The handler below never reads `ApprovalDecisionSignal.claimedDecision` —
+ * only `getApprovalDecision`, reading the durable `Approval` row, decides the outcome. This is
  * the fail-closed guarantee `ApprovalChannel`
  * (`src/providers/approval-channel/approval-channel.interface.ts`) documents: "never the signal
- * payload itself, so a spoofed or stale signal can't forge an approval."
+ * payload itself, so a spoofed or stale signal can't forge an approval." Registered under the
+ * same signal name `ingest-document-version.workflow.ts`'s own gate uses — see
+ * `ApprovalDecisionSignal`'s doc comment (`./types.ts`) for why that sharing is load-bearing.
  */
-export const approvalDecisionSignal =
-  defineSignal<[ResolveConflictApprovalSignal]>('approvalDecision');
+export const approvalDecisionSignal = defineSignal<[ApprovalDecisionSignal]>('approvalDecision');
 
 // Two pure Mongo reads (the conflict, then its facts) — same cheap-to-retry reasoning
 // `conflictsActivities`/`groundingActivities` use in the other two workflows: no model call, no

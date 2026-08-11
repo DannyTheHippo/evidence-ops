@@ -110,6 +110,13 @@ export class DocumentsService {
     if (isNewVersion) {
       await this.workflowEngine.start(INGEST_DOCUMENT_VERSION_WORKFLOW_TYPE, {
         documentVersionId: currentVersion._id.toString(),
+        // Per-upload opt-in (D5 of the approvals milestone) — see `IngestDocumentVersionInput`'s
+        // own doc comment (`src/workflows/types.ts`) for why this travels on the workflow input
+        // rather than a persisted per-document setting, and why the default must stay "do not
+        // gate": `dto.requireApproval` undefined/false here means this key doesn't change the
+        // ungated path at all.
+        requireApproval: dto.requireApproval,
+        documentTitle: document.title,
       } satisfies IngestDocumentVersionInput);
     }
 

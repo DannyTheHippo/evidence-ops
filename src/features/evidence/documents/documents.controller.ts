@@ -46,6 +46,7 @@ export class DocumentsController {
         file: { type: 'string', format: 'binary' },
         documentId: { type: 'string' },
         title: { type: 'string' },
+        requireApproval: { type: 'boolean' },
       },
     },
   })
