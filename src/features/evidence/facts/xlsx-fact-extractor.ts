@@ -20,6 +20,23 @@ export interface FactCandidate {
   readonly locator: EvidenceLocator;
 }
 
+/** A cell that named a valid metric and parsed to a numeric value, but whose parsed unit is not
+ * one the metric declares — dropped rather than persisted with a unit `normalizeFactValue` can
+ * never convert. Mirrors `RejectedFactCandidate` in `prose-fact-extractor.ts`: same "model
+ * proposes, extraction disposes" contract, applied here to the deterministic display parsers
+ * instead of a model's structured output. */
+export interface RejectedXlsxCandidate {
+  readonly factKey: FactKey;
+  readonly value: FactValue;
+  readonly locator: EvidenceLocator;
+  readonly reason: string;
+}
+
+export interface XlsxFactExtractionResult {
+  readonly accepted: FactCandidate[];
+  readonly rejected: RejectedXlsxCandidate[];
+}
+
 // A spreadsheet has no dedicated "entity" or "period" column type — which header plays that role
 // is a convention this fixture corpus follows and real data rooms generally follow too. Kept as a
 // short alias list, matched the same case-insensitive way as a metric alias, rather than
@@ -64,8 +81,18 @@ const MAGNITUDE_SUFFIXES: Readonly<Record<string, string>> = {
  * amount and which unit (plain dollars vs. a magnitude suffix) it was expressed in, so
  * `normalizeFactValue` (conflicts/normalize-fact-value.ts) is the only place that ever has to
  * reconcile the two.
+ *
+ * A currency column is not always dollars-per-whole-unit — `price_per_sf` and `base_rent_psf`
+ * are dollar amounts too, but their ontology entry declares `usd_per_sf`/`usd_per_sf_per_year`,
+ * never plain `usd`. A bare number with no magnitude suffix (`$276.10`) resolves to *this
+ * metric's* own base unit (the one `MetricUnitDefinition` with `toCanonicalFactor === 1`), not a
+ * hardcoded `usd` — otherwise a price-per-square-foot cell would silently mint a fact
+ * `normalizeFactValue` can never convert for that metric, one that only ever measures whole
+ * dollars. A magnitude suffix (`M`/`K`) still only resolves if the metric actually declares that
+ * unit, so a suffix on a metric that has no notion of scale (`price_per_sf`) is rejected rather
+ * than guessed.
  */
-function parseCurrencyDisplay(text: string): FactValue | undefined {
+function parseCurrencyDisplay(text: string, metric: MetricDefinition): FactValue | undefined {
   const cleaned = text.replace(/[$,]/g, '').trim();
   const match = /^(-?\d+(?:\.\d+)?)\s*([a-zA-Z]+)?$/.exec(cleaned);
   if (!match) {
@@ -77,12 +104,16 @@ function parseCurrencyDisplay(text: string): FactValue | undefined {
   }
   const suffix = match[2]?.toLowerCase();
   if (!suffix) {
-    return { amount, unit: 'usd' };
+    const baseUnit = metric.units.find((unit) => unit.toCanonicalFactor === 1);
+    return baseUnit ? { amount, unit: baseUnit.id } : undefined;
   }
-  const unit = MAGNITUDE_SUFFIXES[suffix];
-  // An unrecognized suffix ("41,000,000x") is not a currency amount this parser understands —
-  // dropping it is safer than guessing a magnitude that was never stated.
-  return unit ? { amount, unit } : undefined;
+  const unitId = MAGNITUDE_SUFFIXES[suffix];
+  // An unrecognized suffix ("41,000,000x") is not a currency amount this parser understands, and
+  // a recognized suffix the metric itself never declares (a magnitude on `price_per_sf`) is
+  // equally ungrounded — dropping either is safer than guessing a magnitude that was never
+  // stated, or that this metric has no unit for.
+  const unitDeclared = unitId && metric.units.some((unit) => unit.id === unitId);
+  return unitDeclared ? { amount, unit: unitId } : undefined;
 }
 
 function parsePercentageDisplay(text: string): FactValue | undefined {
@@ -109,7 +140,7 @@ function parseDisplayValue(text: string, metric: MetricDefinition): FactValue | 
     return parsePercentageDisplay(text);
   }
   if (metric.valueType === 'currency') {
-    return parseCurrencyDisplay(text);
+    return parseCurrencyDisplay(text, metric);
   }
   if (metric.valueType === 'area') {
     return parseAreaDisplay(text);
@@ -130,14 +161,14 @@ interface SheetCell {
 function extractSheetFacts(
   elements: readonly ParsedElement[],
   ontology: readonly MetricDefinition[],
-): FactCandidate[] {
+): XlsxFactExtractionResult {
   const cells: SheetCell[] = elements.map((element) => ({
     ...parseCellAddress((element.locator as XlsxCellLocator).cell),
     text: element.text,
     locator: element.locator,
   }));
   if (cells.length === 0) {
-    return [];
+    return { accepted: [], rejected: [] };
   }
 
   const headerRow = Math.min(...cells.map((cell) => cell.row));
@@ -153,7 +184,8 @@ function extractSheetFacts(
     rowsByNumber.set(cell.row, row);
   }
 
-  const candidates: FactCandidate[] = [];
+  const accepted: FactCandidate[] = [];
+  const rejected: RejectedXlsxCandidate[] = [];
   for (const rowCells of rowsByNumber.values()) {
     const entityCell = rowCells.find((cell) => isEntityHeader(headerByColumn.get(cell.column)));
     const entity = entityCell?.text.trim();
@@ -180,8 +212,22 @@ function extractSheetFacts(
       if (!value) {
         continue;
       }
-      candidates.push({
-        factKey: { entity, metric: metric.id, period },
+      const factKey: FactKey = { entity, metric: metric.id, period };
+      // Same unit-per-metric check `extractProseFacts` runs on a model's structured output
+      // (prose-fact-extractor.ts) — applied here to the deterministic display parsers too, so a
+      // parser that ever emits a unit its own metric doesn't declare is caught before persisting
+      // rather than silently producing a fact `normalizeFactValue` can never convert.
+      if (!metric.units.some((unit) => unit.id === value.unit)) {
+        rejected.push({
+          factKey,
+          value,
+          locator: cell.locator,
+          reason: `unit '${value.unit}' is not valid for metric '${metric.id}'`,
+        });
+        continue;
+      }
+      accepted.push({
+        factKey,
         value,
         rawText: cell.text,
         // Deterministic, verbatim from the source cell — no model involved to be less than certain.
@@ -191,7 +237,7 @@ function extractSheetFacts(
       });
     }
   }
-  return candidates;
+  return { accepted, rejected };
 }
 
 /** Derives `ExtractedFact` candidates from a parsed spreadsheet's cells with no model
@@ -202,7 +248,7 @@ function extractSheetFacts(
 export function extractXlsxFacts(
   elements: readonly ParsedElement[],
   ontology: readonly MetricDefinition[],
-): FactCandidate[] {
+): XlsxFactExtractionResult {
   const bySheet = new Map<string, ParsedElement[]>();
   for (const element of elements) {
     if (element.locator.kind !== 'xlsx-cell') {
@@ -214,9 +260,12 @@ export function extractXlsxFacts(
     bySheet.set(sheetName, sheetElements);
   }
 
-  const candidates: FactCandidate[] = [];
+  const accepted: FactCandidate[] = [];
+  const rejected: RejectedXlsxCandidate[] = [];
   for (const sheetElements of bySheet.values()) {
-    candidates.push(...extractSheetFacts(sheetElements, ontology));
+    const sheetResult = extractSheetFacts(sheetElements, ontology);
+    accepted.push(...sheetResult.accepted);
+    rejected.push(...sheetResult.rejected);
   }
-  return candidates;
+  return { accepted, rejected };
 }

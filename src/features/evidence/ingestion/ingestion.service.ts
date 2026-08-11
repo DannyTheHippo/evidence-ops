@@ -21,6 +21,7 @@ import { AppLogger } from '../../../shared/services/logger/logger.service';
 import { chunkElements } from './chunker';
 import { DocumentVersionNotFoundException } from './exceptions/ingestion.exception';
 import { ParserRegistry } from './parser.registry';
+import { screenInstructionInjection } from './screen-instruction-injection';
 
 export interface IngestionResult {
   readonly chunksCreated: number;
@@ -123,7 +124,27 @@ export class IngestionService {
 
     const parser = this.parserRegistry.resolve(stored.contentType);
     const parsed = await parser.parse(stored.content);
-    const chunks = chunkElements(parsed.elements);
+
+    // Screened before chunking, not after: `chunkElements` merges a run of elements sharing a
+    // heading path (prose) or a window of rows (spreadsheet) into one `Chunk`, so screening a
+    // whole chunk would quarantine every legitimate element merged alongside the one flagged
+    // element — for this corpus, an entire comps table sharing one row-window, or (PDF elements
+    // carry no heading path at all, so `chunkProse` treats a whole document as a single run) every
+    // page of a PDF. An element is the finest unit a parser produces (`ParsedElement`'s own doc
+    // comment), so filtering here is the smallest quarantine the pipeline can express. It is still
+    // not free: a PDF page is also the finest unit `PdfPageLocator` can address (`pdf.parser.ts`),
+    // so a flagged page's legitimate text on the same page is quarantined along with it.
+    const safeElements = parsed.elements.filter(
+      (element) => !screenInstructionInjection(element.text),
+    );
+    const quarantinedCount = parsed.elements.length - safeElements.length;
+    if (quarantinedCount > 0) {
+      this.logger.debug(
+        `Document version '${documentVersionId}' quarantined ${quarantinedCount} element(s) flagged by the instruction-injection screen; excluded before chunking and embedding`,
+      );
+    }
+
+    const chunks = chunkElements(safeElements);
 
     if (chunks.length === 0) {
       // A version with zero extractable chunks is still a finished ingest, not a pending one —

@@ -187,8 +187,16 @@ export class FactsService {
       );
     }
 
+    // `extractXlsxFacts`'s `rejected` list (a candidate whose parsed unit isn't declared by its
+    // own metric) is not consumed here: with today's ontology every display parser only ever
+    // emits a unit its metric declares (see xlsx-fact-extractor.ts's own doc comments), so
+    // `rejected` is always empty for real input — a log statement gated on it would be dead code
+    // in this 100%-coverage-gated file. `extractXlsxFacts`'s own test suite (a synthetic,
+    // deliberately misconfigured ontology) is where that branch is exercised.
+    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+
     const candidates: (FactCandidate & { chunkId: Types.ObjectId })[] = [];
-    for (const candidate of extractXlsxFacts(elements, METRIC_ONTOLOGY)) {
+    for (const candidate of accepted) {
       const cellLocator = candidate.locator as XlsxCellLocator;
       const containingChunk = findXlsxRegionChunk(
         chunks,

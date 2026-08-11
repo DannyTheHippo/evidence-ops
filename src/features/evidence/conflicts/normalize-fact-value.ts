@@ -7,12 +7,14 @@ import type { MetricDefinition } from '../facts/metric-ontology';
  * unit the ontology lists for that metric converts to it by a pure multiplicative factor.
  *
  * Returns `undefined`, mirroring `parseDisplayValue`'s sibling parsers in `xlsx-fact-extractor.ts`,
- * rather than throwing. An `ExtractedFact`'s unit is model/extractor output the application has not
- * fully verified by the time it reaches this function — the prose path validates unit-per-metric
- * before persisting, but the xlsx path's currency parser does not, so an unrecognized unit is a
- * reachable, expected input here, not a corrupted-invariant bug. Conflict detection is a
- * measurement, not a permission gate, so it must fail open: the caller drops the one fact it cannot
- * normalize and keeps comparing the rest, rather than a bad unit aborting the whole scan. */
+ * rather than throwing. Both extractors validate unit-per-metric before persisting (`extractXlsxFacts`
+ * and `extractProseFacts` each reject a candidate whose unit isn't declared for its metric), so an
+ * unrecognized unit reaching this function should not happen for a fact either extractor produced
+ * today — but this function has no way to know an `ExtractedFact`'s unit came from a validated path,
+ * and a future extractor or a stored document predating a validation fix is exactly the case this
+ * guards against. Conflict detection is a measurement, not a permission gate, so it must fail open:
+ * the caller drops the one fact it cannot normalize and keeps comparing the rest, rather than a bad
+ * unit aborting the whole scan. */
 export function normalizeFactValue(metric: MetricDefinition, value: FactValue): number | undefined {
   const unit = metric.units.find((candidate) => candidate.id === value.unit);
   return unit ? value.amount * unit.toCanonicalFactor : undefined;

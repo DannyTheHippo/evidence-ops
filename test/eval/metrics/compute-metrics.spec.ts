@@ -7,7 +7,8 @@ function makeCase(
     actualOutcomeKind: 'answered',
     retrievedOverlaps: [],
     citationOverlaps: [],
-    canaryLeaked: false,
+    canaryOwnVoiceLeaked: false,
+    canaryVerifiedQuoteLeaked: false,
     ...overrides,
   };
 }
@@ -115,21 +116,47 @@ describe('computeMetrics', () => {
     expect(computeMetrics(results).conflictRecall).toBeCloseTo(0.5);
   });
 
-  it('should compute a nonzero canary leak rate across the whole dataset, not only adversarial cases', () => {
+  it('should compute a nonzero own-voice canary leak rate across the whole dataset, not only adversarial cases', () => {
     const results: CaseResult[] = [
-      makeCase({ id: 'ans-001', category: 'answerable', canaryLeaked: true }),
-      makeCase({ id: 'adv-001', category: 'adversarial', canaryLeaked: false }),
+      makeCase({ id: 'ans-001', category: 'answerable', canaryOwnVoiceLeaked: true }),
+      makeCase({ id: 'adv-001', category: 'adversarial', canaryOwnVoiceLeaked: false }),
     ];
 
-    expect(computeMetrics(results).canaryLeakRate).toBeCloseTo(0.5);
+    expect(computeMetrics(results).canaryOwnVoiceLeakRate).toBeCloseTo(0.5);
   });
 
-  it('should report a 0 canary leak rate when nothing leaked', () => {
+  it("should report a 0 own-voice canary leak rate when nothing leaked in the model's own voice", () => {
     const results: CaseResult[] = [
-      makeCase({ id: 'adv-001', category: 'adversarial', canaryLeaked: false }),
+      makeCase({ id: 'adv-001', category: 'adversarial', canaryOwnVoiceLeaked: false }),
     ];
 
-    expect(computeMetrics(results).canaryLeakRate).toBe(0);
+    expect(computeMetrics(results).canaryOwnVoiceLeakRate).toBe(0);
+  });
+
+  it('should compute the verified-quote canary leak rate independently of the own-voice rate', () => {
+    const results: CaseResult[] = [
+      // Own voice only — no verified-quote leak on this case.
+      makeCase({ id: 'ans-001', category: 'answerable', canaryOwnVoiceLeaked: true }),
+      // Verified quote only — correctly cited hostile text, not a hard-gate failure.
+      makeCase({
+        id: 'adv-001',
+        category: 'adversarial',
+        canaryOwnVoiceLeaked: false,
+        canaryVerifiedQuoteLeaked: true,
+      }),
+    ];
+
+    const metrics = computeMetrics(results);
+    expect(metrics.canaryOwnVoiceLeakRate).toBeCloseTo(0.5);
+    expect(metrics.canaryVerifiedQuoteLeakRate).toBeCloseTo(0.5);
+  });
+
+  it('should report a 0 verified-quote canary leak rate when nothing was cited from hostile text', () => {
+    const results: CaseResult[] = [
+      makeCase({ id: 'adv-001', category: 'adversarial', canaryVerifiedQuoteLeaked: false }),
+    ];
+
+    expect(computeMetrics(results).canaryVerifiedQuoteLeakRate).toBe(0);
   });
 
   it('should count every category, including zero-count ones', () => {

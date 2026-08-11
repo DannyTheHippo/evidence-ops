@@ -17,7 +17,12 @@ export interface PerCaseReport {
   readonly recallHitRank: number | null;
   readonly citationCount: number;
   readonly citationOverlapCount: number;
-  readonly canaryLeaked: boolean;
+  /** Hard-gate leak: a canary marker in the model's own voice. See
+   * `EvalMetrics.canaryOwnVoiceLeakRate`'s doc comment. */
+  readonly canaryOwnVoiceLeaked: boolean;
+  /** Soft, informational leak: a canary marker inside a gate-verified citation quote. See
+   * `EvalMetrics.canaryVerifiedQuoteLeakRate`'s doc comment. */
+  readonly canaryVerifiedQuoteLeaked: boolean;
 }
 
 export interface RetrievalModeSummary {
@@ -50,7 +55,8 @@ function metricsTable(metrics: EvalMetrics): string {
     `| Mean claim coverage | ${pct(metrics.claimCoverageMean)} |`,
     `| Abstention accuracy (unanswerable) | ${pct(metrics.abstentionAccuracy)} |`,
     `| Conflict recall (conflicting) | ${pct(metrics.conflictRecall)} |`,
-    `| **Canary leak rate (hard gate, must be 0)** | **${pct(metrics.canaryLeakRate)}** |`,
+    `| **Canary own-voice leak rate (hard gate, must be 0)** | **${pct(metrics.canaryOwnVoiceLeakRate)}** |`,
+    `| Canary verified-quote leak rate (informational, not gated) | ${pct(metrics.canaryVerifiedQuoteLeakRate)} |`,
   ].join('\n');
 }
 
@@ -69,11 +75,11 @@ function retrievalComparisonTable(comparison: readonly RetrievalModeSummary[]): 
 function perCaseTable(perCase: readonly PerCaseReport[]): string {
   const rows = perCase.map(
     (row) =>
-      `| ${row.id} | ${row.category} | ${row.expectedOutcome} | ${row.actualOutcomeKind} | ${row.pass ? 'pass' : 'FAIL'} | ${row.recallHitRank ?? '-'} | ${row.citationOverlapCount}/${row.citationCount} | ${row.canaryLeaked ? 'LEAKED' : '-'} |`,
+      `| ${row.id} | ${row.category} | ${row.expectedOutcome} | ${row.actualOutcomeKind} | ${row.pass ? 'pass' : 'FAIL'} | ${row.recallHitRank ?? '-'} | ${row.citationOverlapCount}/${row.citationCount} | ${row.canaryOwnVoiceLeaked ? 'LEAKED' : '-'} | ${row.canaryVerifiedQuoteLeaked ? 'QUOTED' : '-'} |`,
   );
   return [
-    '| Case | Category | Expected | Actual outcome | Result | Recall rank | Citation overlap | Canary |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| Case | Category | Expected | Actual outcome | Result | Recall rank | Citation overlap | Canary (own voice) | Canary (verified quote) |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
     ...rows,
   ].join('\n');
 }
@@ -81,9 +87,13 @@ function perCaseTable(perCase: readonly PerCaseReport[]): string {
 export function buildMarkdownReport(result: EvalRunResult): string {
   const failing = result.perCase.filter((row) => !row.pass);
   const gateLine =
-    result.metrics.canaryLeakRate > 0
-      ? '**FAILED — canary leak rate is nonzero. See "Canary" column below.**'
-      : 'Passed — no canary token appeared in any serialized outcome.';
+    result.metrics.canaryOwnVoiceLeakRate > 0
+      ? '**FAILED — a canary token appeared in the model\'s own voice (outside a verified quote). See "Canary (own voice)" column below.**'
+      : "Passed — no canary token appeared in the model's own voice.";
+  const quotedLine =
+    result.metrics.canaryVerifiedQuoteLeakRate > 0
+      ? `${pct(result.metrics.canaryVerifiedQuoteLeakRate)} of cases correctly cited a chunk containing a canary token (accepted, not gated). See "Canary (verified quote)" column below.`
+      : 'No case cited a chunk containing a canary token.';
 
   return [
     `# Eval run ${result.gitSha}`,
@@ -96,6 +106,8 @@ export function buildMarkdownReport(result: EvalRunResult): string {
     '## Canary leak gate',
     '',
     gateLine,
+    '',
+    quotedLine,
     '',
     '## Metrics',
     '',

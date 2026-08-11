@@ -1,7 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { XlsxCellLocator } from '../../../../src/database/schemas/evidence/evidence-chunk/evidence-locator.type';
-import { METRIC_ONTOLOGY } from '../../../../src/features/evidence/facts/metric-ontology';
+import {
+  METRIC_ONTOLOGY,
+  type MetricDefinition,
+} from '../../../../src/features/evidence/facts/metric-ontology';
 import { extractXlsxFacts } from '../../../../src/features/evidence/facts/xlsx-fact-extractor';
 import { XlsxParser } from '../../../../src/features/evidence/ingestion/parsers/xlsx.parser';
 import type { ParsedElement } from '../../../../src/features/evidence/ingestion/parsers/parsed-element.type';
@@ -44,8 +47,8 @@ describe('extractXlsxFacts — real comps.xlsx fixture', () => {
     const parsed = await new XlsxParser().parse(content);
     const conflictLocation = rawManifest.conflict.locations[0];
 
-    const facts = extractXlsxFacts(parsed.elements, METRIC_ONTOLOGY);
-    const capRateFact = facts.find(
+    const { accepted } = extractXlsxFacts(parsed.elements, METRIC_ONTOLOGY);
+    const capRateFact = accepted.find(
       (fact) =>
         fact.factKey.entity === rawManifest.conflict.property && fact.factKey.metric === 'cap_rate',
     );
@@ -63,12 +66,29 @@ describe('extractXlsxFacts — real comps.xlsx fixture', () => {
     expect(capRateFact?.confidence).toBe(1);
   });
 
+  // Regression for the diagnosed `price_per_sf` unit bug: a bare currency cell ("$276.10") must
+  // resolve to this metric's own declared unit (`usd_per_sf`), not the hardcoded `usd` that made
+  // the fact unrecognizable to `normalizeFactValue` and silently unusable for conflict detection.
+  it('should derive a price_per_sf fact with the metric-declared usd_per_sf unit, not usd', async () => {
+    const content = await readFile(FIXTURE_PATH);
+    const parsed = await new XlsxParser().parse(content);
+
+    const { accepted, rejected } = extractXlsxFacts(parsed.elements, METRIC_ONTOLOGY);
+    const pricePerSfFact = accepted.find(
+      (fact) =>
+        fact.factKey.entity === 'Northgate Business Park' && fact.factKey.metric === 'price_per_sf',
+    );
+
+    expect(pricePerSfFact?.value).toEqual({ amount: 276.1, unit: 'usd_per_sf' });
+    expect(rejected).toEqual([]);
+  });
+
   it('should derive the same entity+period key for every metric column on one row', async () => {
     const content = await readFile(FIXTURE_PATH);
     const parsed = await new XlsxParser().parse(content);
 
-    const facts = extractXlsxFacts(parsed.elements, METRIC_ONTOLOGY);
-    const northgateFacts = facts.filter(
+    const { accepted } = extractXlsxFacts(parsed.elements, METRIC_ONTOLOGY);
+    const northgateFacts = accepted.filter(
       (fact) => fact.factKey.entity === 'Northgate Business Park',
     );
 
@@ -83,17 +103,17 @@ describe('extractXlsxFacts — real comps.xlsx fixture', () => {
     const content = await readFile(FIXTURE_PATH);
     const parsed = await new XlsxParser().parse(content);
 
-    const facts = extractXlsxFacts(parsed.elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(parsed.elements, METRIC_ONTOLOGY);
 
-    expect(facts.some((fact) => (fact.locator as XlsxCellLocator).cell === 'H2')).toBe(false);
+    expect(accepted.some((fact) => (fact.locator as XlsxCellLocator).cell === 'H2')).toBe(false);
   });
 
   it('should produce facts for all ten comp rows', async () => {
     const content = await readFile(FIXTURE_PATH);
     const parsed = await new XlsxParser().parse(content);
 
-    const facts = extractXlsxFacts(parsed.elements, METRIC_ONTOLOGY);
-    const entities = new Set(facts.map((fact) => fact.factKey.entity));
+    const { accepted } = extractXlsxFacts(parsed.elements, METRIC_ONTOLOGY);
+    const entities = new Set(accepted.map((fact) => fact.factKey.entity));
 
     expect(entities.size).toBe(10);
   });
@@ -116,26 +136,48 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
       2,
     );
 
-    const facts = extractXlsxFacts(elements, METRIC_ONTOLOGY);
-    const salePrice = facts.find((fact) => fact.factKey.metric === 'sale_price');
+    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const salePrice = accepted.find((fact) => fact.factKey.metric === 'sale_price');
 
     expect(salePrice?.value).toEqual({ amount: 12, unit: 'usd_millions' });
+  });
+
+  it("should resolve a bare currency cell to its metric's own declared unit, not a hardcoded usd", () => {
+    const pricePerSfHeader = ['Property Name', 'Price per SF (USD)'] as const;
+    const elements = buildRow('Sheet1', pricePerSfHeader, ['Acme Tower', '$250.00'], 2);
+
+    const { accepted, rejected } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+
+    expect(accepted[0].value).toEqual({ amount: 250, unit: 'usd_per_sf' });
+    expect(rejected).toEqual([]);
+  });
+
+  it('should drop a magnitude suffix the metric has no unit for, rather than guess', () => {
+    const pricePerSfHeader = ['Property Name', 'Price per SF (USD)'] as const;
+    const elements = buildRow('Sheet1', pricePerSfHeader, ['Acme Tower', '$1.2M'], 2);
+
+    const { accepted, rejected } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+
+    // A silent parse-drop (parseCurrencyDisplay returns undefined), not a rejection — this metric
+    // never gets far enough to have a `value` to validate against its declared units.
+    expect(accepted).toEqual([]);
+    expect(rejected).toEqual([]);
   });
 
   it('should drop a row with no entity-column value', () => {
     const elements = buildRow('Sheet1', headerRow, ['', '2025-01-15', '100,000', '$1,000', ''], 2);
 
-    expect(extractXlsxFacts(elements, METRIC_ONTOLOGY)).toEqual([]);
+    expect(extractXlsxFacts(elements, METRIC_ONTOLOGY)).toEqual({ accepted: [], rejected: [] });
   });
 
   it('should derive the undated sentinel when the sheet has no period column', () => {
     const noDateHeader = ['Property Name', 'Building Area (SF)', 'Notes'] as const;
     const elements = buildRow('Sheet1', noDateHeader, ['Acme Tower', '100,000', ''], 2);
 
-    const facts = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
 
-    expect(facts).toHaveLength(1);
-    expect(facts[0].factKey.period).toBe('undated');
+    expect(accepted).toHaveLength(1);
+    expect(accepted[0].factKey.period).toBe('undated');
   });
 
   it('should drop a cell that cannot be parsed as a number for its metric type', () => {
@@ -146,9 +188,9 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
       2,
     );
 
-    const facts = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
 
-    expect(facts.some((fact) => fact.factKey.metric === 'building_area_sf')).toBe(false);
+    expect(accepted.some((fact) => fact.factKey.metric === 'building_area_sf')).toBe(false);
   });
 
   it('should drop a currency cell with an unrecognized magnitude suffix', () => {
@@ -159,22 +201,57 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
       2,
     );
 
-    const facts = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
 
-    expect(facts.some((fact) => fact.factKey.metric === 'sale_price')).toBe(false);
+    expect(accepted.some((fact) => fact.factKey.metric === 'sale_price')).toBe(false);
   });
 
   it('should treat a ratio-metric cell with no "%" as an already-fractional value', () => {
     const ratioHeader = ['Property Name', 'Cap Rate'] as const;
     const elements = buildRow('Sheet1', ratioHeader, ['Acme Tower', '0.0525'], 2);
 
-    const facts = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
 
-    expect(facts[0].value).toEqual({ amount: 0.0525, unit: 'ratio' });
+    expect(accepted[0].value).toEqual({ amount: 0.0525, unit: 'ratio' });
+  });
+
+  it('should reject a candidate whose parsed unit is not declared by its metric', () => {
+    // A contrived ontology entry — its `valueType` says 'percentage' but its `units` list omits
+    // both `percent` and `ratio`, so `parsePercentageDisplay`'s output (always one of those two
+    // ids) can never satisfy it. Exercises the final validate-and-reject step generically, for any
+    // future extractor/ontology drift, not just the price_per_sf/base_rent_psf case it was
+    // diagnosed from.
+    const misconfiguredOntology: MetricDefinition[] = [
+      {
+        id: 'cap_rate',
+        label: 'Cap Rate',
+        aliases: ['Cap Rate'],
+        valueType: 'percentage',
+        canonicalUnit: 'bps',
+        units: [{ id: 'bps', toCanonicalFactor: 0.0001 }],
+        toleranceKind: 'absolute',
+        tolerance: 0.0025,
+      },
+    ];
+    const ratioHeader = ['Property Name', 'Cap Rate'] as const;
+    const elements = buildRow('Sheet1', ratioHeader, ['Acme Tower', '5.25%'], 2);
+
+    const { accepted, rejected } = extractXlsxFacts(elements, misconfiguredOntology);
+
+    expect(accepted).toEqual([]);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].factKey).toEqual({
+      entity: 'Acme Tower',
+      metric: 'cap_rate',
+      period: 'undated',
+    });
+    expect(rejected[0].value).toEqual({ amount: 5.25, unit: 'percent' });
+    expect(rejected[0].reason).toBe("unit 'percent' is not valid for metric 'cap_rate'");
+    expect(rejected[0].locator).toEqual(expect.objectContaining({ kind: 'xlsx-cell', cell: 'B2' }));
   });
 
   it('should return no facts for an empty element list', () => {
-    expect(extractXlsxFacts([], METRIC_ONTOLOGY)).toEqual([]);
+    expect(extractXlsxFacts([], METRIC_ONTOLOGY)).toEqual({ accepted: [], rejected: [] });
   });
 
   it('should skip a non-xlsx-cell element without throwing', () => {
@@ -186,6 +263,6 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
       },
     ];
 
-    expect(extractXlsxFacts(elements, METRIC_ONTOLOGY)).toEqual([]);
+    expect(extractXlsxFacts(elements, METRIC_ONTOLOGY)).toEqual({ accepted: [], rejected: [] });
   });
 });

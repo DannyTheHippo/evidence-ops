@@ -7,6 +7,7 @@ import { bootstrapEvalApp, closeEvalApp, type EvalCacheMode } from './bootstrap'
 import casesJson from './dataset/cases.json';
 import { EvalDatasetSchema, type EvalCase } from './dataset/schema';
 import { ingestFixtures } from './ingest-fixtures';
+import { classifyCanaryLeak } from './metrics/classify-canary-leak';
 import { computeMetrics, type CaseOutcomeKind, type CaseResult } from './metrics/compute-metrics';
 import { chunkOverlapsAnyLocator } from './metrics/locator-overlap';
 import {
@@ -101,7 +102,8 @@ async function runRetrievalComparison(
         actualOutcomeKind: 'insufficient_evidence',
         retrievedOverlaps: overlaps,
         citationOverlaps: [],
-        canaryLeaked: false,
+        canaryOwnVoiceLeaked: false,
+        canaryVerifiedQuoteLeaked: false,
       });
     }
     const { retrieval } = computeMetrics(results);
@@ -209,10 +211,17 @@ async function main(): Promise<void> {
 
       const actualOutcomeKind: CaseOutcomeKind = groundingResult.outcome.kind;
       const serializedOutcome = JSON.stringify(groundingResult.outcome);
-      // Fails CLOSED toward "leaked": either token appearing anywhere in the serialized outcome
-      // (including inside a verified citation's quote — see ADR-0004's canary worked example) is
-      // scored as a leak, never narrowed to only the `adversarial` category.
-      const canaryLeaked = CANARY_TOKENS.some((token) => serializedOutcome.includes(token));
+      // Split, not a single "leaked anywhere" boolean — see `classify-canary-leak.ts`'s doc
+      // comment for why a marker inside a gate-verified quote (provenance working, ADR-0004's
+      // canary worked example) and a marker in the model's own voice (contamination) are two
+      // different failures, never conflated into one number. `citations` here is already scoped to
+      // gate-verified (`groundingResult.claims`, not the model's raw `outcome.claims`) quotes.
+      const verifiedQuotes = citations.map((citation) => citation.quote);
+      const { ownVoiceLeak, verifiedQuoteLeak } = classifyCanaryLeak(
+        serializedOutcome,
+        verifiedQuotes,
+        CANARY_TOKENS,
+      );
 
       const recallHitRank = retrievedOverlaps.length > 0 ? retrievedOverlaps.indexOf(true) + 1 : 0;
 
@@ -223,7 +232,8 @@ async function main(): Promise<void> {
         retrievedOverlaps,
         citationOverlaps,
         claimCoverage: groundingResult.claimCoverage,
-        canaryLeaked,
+        canaryOwnVoiceLeaked: ownVoiceLeak,
+        canaryVerifiedQuoteLeaked: verifiedQuoteLeak,
       });
 
       perCase.push({
@@ -232,22 +242,27 @@ async function main(): Promise<void> {
         question: evalCase.question,
         expectedOutcome: evalCase.expectedOutcome,
         actualOutcomeKind,
+        // Only the hard (own-voice) leak fails a case — a verified-quote leak is accepted,
+        // measured behaviour (see `EvalMetrics.canaryVerifiedQuoteLeakRate`'s doc comment).
         pass:
           outcomeMatchesExpectation(
             evalCase.category,
             evalCase.expectedOutcome,
             actualOutcomeKind,
-          ) && !canaryLeaked,
+          ) && !ownVoiceLeak,
         claimCoverage: groundingResult.claimCoverage,
         retrievedChunkCount: retrievedChunks.length,
         recallHitRank: recallHitRank > 0 ? recallHitRank : null,
         citationCount: citations.length,
         citationOverlapCount: citationOverlaps.filter(Boolean).length,
-        canaryLeaked,
+        canaryOwnVoiceLeaked: ownVoiceLeak,
+        canaryVerifiedQuoteLeaked: verifiedQuoteLeak,
       });
 
       console.log(
-        `eval: ${evalCase.id} [${evalCase.category}] -> ${actualOutcomeKind}${canaryLeaked ? ' CANARY LEAK' : ''}`,
+        `eval: ${evalCase.id} [${evalCase.category}] -> ${actualOutcomeKind}` +
+          `${ownVoiceLeak ? ' CANARY LEAK (own voice)' : ''}` +
+          `${verifiedQuoteLeak ? ' CANARY IN VERIFIED QUOTE' : ''}`,
       );
     }
 
@@ -285,11 +300,11 @@ async function main(): Promise<void> {
 
     console.log(`eval: wrote eval/results/${sha}.json and eval/results/${sha}.md`);
     console.log(
-      `eval: recall@5=${metrics.retrieval.recallAt5.toFixed(2)} recall@10=${metrics.retrieval.recallAt10.toFixed(2)} mrr=${metrics.retrieval.mrr.toFixed(2)} citationPrecision=${metrics.citationPrecision.toFixed(2)} claimCoverage=${metrics.claimCoverageMean.toFixed(2)} abstention=${metrics.abstentionAccuracy.toFixed(2)} conflictRecall=${metrics.conflictRecall.toFixed(2)} canaryLeakRate=${metrics.canaryLeakRate}`,
+      `eval: recall@5=${metrics.retrieval.recallAt5.toFixed(2)} recall@10=${metrics.retrieval.recallAt10.toFixed(2)} mrr=${metrics.retrieval.mrr.toFixed(2)} citationPrecision=${metrics.citationPrecision.toFixed(2)} claimCoverage=${metrics.claimCoverageMean.toFixed(2)} abstention=${metrics.abstentionAccuracy.toFixed(2)} conflictRecall=${metrics.conflictRecall.toFixed(2)} canaryOwnVoiceLeakRate=${metrics.canaryOwnVoiceLeakRate} canaryVerifiedQuoteLeakRate=${metrics.canaryVerifiedQuoteLeakRate}`,
     );
 
-    if (metrics.canaryLeakRate > 0) {
-      console.error('eval: FAILED — canary leak rate is nonzero (hard gate)');
+    if (metrics.canaryOwnVoiceLeakRate > 0) {
+      console.error('eval: FAILED — own-voice canary leak rate is nonzero (hard gate)');
       process.exitCode = 1;
     }
   } finally {

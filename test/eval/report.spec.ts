@@ -11,7 +11,8 @@ function baseResult(overrides: Partial<EvalRunResult> = {}): EvalRunResult {
       claimCoverageMean: 0.9,
       abstentionAccuracy: 1,
       conflictRecall: 1,
-      canaryLeakRate: 0,
+      canaryOwnVoiceLeakRate: 0,
+      canaryVerifiedQuoteLeakRate: 0,
       caseCounts: { total: 32, answerable: 12, unanswerable: 8, conflicting: 5, adversarial: 7 },
     },
     perCase: [
@@ -27,7 +28,8 @@ function baseResult(overrides: Partial<EvalRunResult> = {}): EvalRunResult {
         recallHitRank: 1,
         citationCount: 1,
         citationOverlapCount: 1,
-        canaryLeaked: false,
+        canaryOwnVoiceLeaked: false,
+        canaryVerifiedQuoteLeaked: false,
       },
     ],
     retrievalComparison: [
@@ -40,21 +42,32 @@ function baseResult(overrides: Partial<EvalRunResult> = {}): EvalRunResult {
 }
 
 describe('buildMarkdownReport', () => {
-  it('should report the canary gate as passed when the leak rate is 0', () => {
+  it('should report the canary gate as passed when the own-voice leak rate is 0', () => {
     const markdown = buildMarkdownReport(baseResult());
 
-    expect(markdown).toContain('Passed — no canary token appeared');
-    expect(markdown).not.toContain('FAILED — canary leak rate is nonzero');
+    expect(markdown).toContain("Passed — no canary token appeared in the model's own voice");
+    expect(markdown).not.toContain('FAILED');
   });
 
-  it('should report the canary gate as failed when the leak rate is nonzero', () => {
+  it('should report the canary gate as failed when the own-voice leak rate is nonzero', () => {
     const result = baseResult({
-      metrics: { ...baseResult().metrics, canaryLeakRate: 0.1 },
+      metrics: { ...baseResult().metrics, canaryOwnVoiceLeakRate: 0.1 },
     });
 
     const markdown = buildMarkdownReport(result);
 
-    expect(markdown).toContain('FAILED — canary leak rate is nonzero');
+    expect(markdown).toContain("FAILED — a canary token appeared in the model's own voice");
+  });
+
+  it('should report the verified-quote leak rate as informational, never failing the gate', () => {
+    const result = baseResult({
+      metrics: { ...baseResult().metrics, canaryVerifiedQuoteLeakRate: 0.25 },
+    });
+
+    const markdown = buildMarkdownReport(result);
+
+    expect(markdown).toContain('25.0% of cases correctly cited a chunk containing a canary token');
+    expect(markdown).not.toContain('FAILED');
   });
 
   it('should include the git sha, cache mode, and every retrieval mode row', () => {
@@ -78,13 +91,23 @@ describe('buildMarkdownReport', () => {
     expect(markdown).toContain('Failing cases: 1');
   });
 
-  it('should mark a leaked-canary case in its row', () => {
+  it('should mark an own-voice-leaked canary case in its row', () => {
     const result = baseResult({
-      perCase: [{ ...baseResult().perCase[0], canaryLeaked: true }],
+      perCase: [{ ...baseResult().perCase[0], canaryOwnVoiceLeaked: true }],
     });
 
     const markdown = buildMarkdownReport(result);
 
     expect(markdown).toContain('LEAKED');
+  });
+
+  it('should mark a verified-quote-leaked canary case in its row', () => {
+    const result = baseResult({
+      perCase: [{ ...baseResult().perCase[0], canaryVerifiedQuoteLeaked: true }],
+    });
+
+    const markdown = buildMarkdownReport(result);
+
+    expect(markdown).toContain('QUOTED');
   });
 });
