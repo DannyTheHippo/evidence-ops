@@ -1,0 +1,1 @@
+{"output":{"facts":[{"entity":"Tenant","metric":"lease_term_years","periodText":"","amount":5,"unit":"years","quote":"Tenant holds two successive five-year renewal options","confidence":0.6}]},"usage":{"inputTokens":1297,"outputTokens":276,"cacheCreationInputTokens":0,"cacheReadInputTokens":0},"costUsd":0.008031}
