@@ -18,6 +18,7 @@ import {
   type EmbeddingProvider,
 } from '../src/providers/embedding/embedding-provider.interface';
 import { assertAtlasSearchSupported } from '../src/providers/retrieval/atlas-search-capability.util';
+import { assertRequiredSearchIndexesExist } from '../src/providers/retrieval/required-search-indexes.util';
 import { buildMarkdownReport, type EvalRunResult, type PerCaseReport } from './report';
 import { runRetrievalComparison } from './retrieval/retrieval-comparison';
 import manifest from '../fixtures/data-room/manifest.json';
@@ -126,6 +127,14 @@ async function main(): Promise<void> {
     // Unconditional, not gated on RETRIEVAL_FUSION: see `MongoHybridRetrievalStore.search`'s
     // identical guard for why both fusion modes need it.
     await assertAtlasSearchSupported(db);
+    // Same fail-CLOSED direction as `MongoHybridRetrievalStore` (see
+    // `required-search-indexes.util.ts`'s doc comment) — capability alone is not enough here
+    // either: this is the exact check that was missing when a recreated `mongot` container lost
+    // its index files and every eval question silently recorded `insufficient_evidence` instead
+    // of a loud failure. An eval run over a corpus with no working indexes doesn't just answer
+    // wrong, it *records* a wrong recall/precision number as if it were real — a loud stop here
+    // beats a quietly false metric in `eval/results/`.
+    await assertRequiredSearchIndexesExist(db);
 
     let fixtures: readonly IngestedFixture[];
     let filenameByDocVersionId: ReadonlyMap<string, string>;

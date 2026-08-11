@@ -7,8 +7,10 @@ import type { EvidenceLocator } from '../../../src/database/schemas/evidence/evi
 import { EMBEDDING_PROVIDER } from '../../../src/providers/embedding/embedding-provider.interface';
 import { FakeEmbeddingProvider } from '../../../src/providers/embedding/fake-embedding.provider';
 import { AtlasSearchUnavailableError } from '../../../src/providers/retrieval/errors/atlas-search-unavailable.error';
+import { RequiredSearchIndexesMissingError } from '../../../src/providers/retrieval/errors/required-search-indexes-missing.error';
 import { MongoHybridRetrievalStore } from '../../../src/providers/retrieval/mongo-hybrid.store';
 import type { RetrievalHit } from '../../../src/providers/retrieval/retrieval-store.interface';
+import { SEARCH_INDEX, VECTOR_INDEX } from '../../../src/providers/retrieval/retrieval.constant';
 import { getMockTypedConfig } from '../../utils/get-mock-typed-config';
 
 interface RawDocFixture {
@@ -77,15 +79,21 @@ function createAggregateMock() {
 }
 
 /**
- * Every `search()` call now runs `assertAtlasSearchSupported` before touching `aggregate` (see
- * `mongo-hybrid.store.ts`'s `ensureSearchCapability`), so every collection mock in this file
- * needs a `listSearchIndexes` stub too — defaults to a healthy, mongot-backed server so the
- * existing behavioural tests below stay about fusion/RRF, not the capability guard.
+ * Every `search()` call now runs `assertAtlasSearchSupported` then `assertRequiredSearchIndexesExist`
+ * before touching `aggregate` (see `mongo-hybrid.store.ts`'s `ensureSearchCapability`), so every
+ * collection mock in this file needs a `listSearchIndexes` stub too — defaults to a healthy,
+ * mongot-backed server with both required indexes `READY`/queryable so the existing behavioural
+ * tests below stay about fusion/RRF, not the capability/index-existence guards.
  */
 function buildCollectionMock(aggregate: ReturnType<typeof createAggregateMock>) {
   return {
     aggregate,
-    listSearchIndexes: jest.fn().mockReturnValue({ toArray: jest.fn().mockResolvedValue([]) }),
+    listSearchIndexes: jest.fn().mockReturnValue({
+      toArray: jest.fn().mockResolvedValue([
+        { name: SEARCH_INDEX, status: 'READY', queryable: true },
+        { name: VECTOR_INDEX, status: 'READY', queryable: true },
+      ]),
+    }),
   };
 }
 
@@ -383,21 +391,53 @@ describe('MongoHybridRetrievalStore', () => {
     await expect(
       store.search({ text: 'cap rate', limit: 5, filter: { tenantId: 'tenant-a' } }),
     ).rejects.toThrow(AtlasSearchUnavailableError);
+    // Capability fails first, so `assertRequiredSearchIndexesExist`'s own `listSearchIndexes`
+    // call never runs — the `.then()` chain in `ensureSearchCapability` short-circuits.
     expect(listSearchIndexes).toHaveBeenCalledTimes(1);
   });
 
-  it('should probe search capability at most once per process across repeated searches', async () => {
+  it('should throw RequiredSearchIndexesMissingError, not run aggregate/embedding, when a required index is missing', async () => {
+    const listSearchIndexes = jest.fn().mockReturnValue({
+      // Capability check passes (list answers), but only the search index is present — the
+      // exact shape of the incident this guard exists to catch (indexes lost, server still
+      // mongot-backed).
+      toArray: jest
+        .fn()
+        .mockResolvedValue([{ name: SEARCH_INDEX, status: 'READY', queryable: true }]),
+    });
+    const aggregate = createAggregateMock();
+    const collection = jest.fn().mockReturnValue({ aggregate, listSearchIndexes });
+    const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider, 'server');
+
+    await expect(
+      store.search({ text: 'cap rate', limit: 5, filter: { tenantId: 'tenant-a' } }),
+    ).rejects.toThrow(RequiredSearchIndexesMissingError);
+
+    // Same property the capability guard already protects: a store that can't serve the query
+    // must never reach the embedding call (real spend) or an aggregate call.
+    expect(fakeEmbeddingProvider.calls).toHaveLength(0);
+    expect(aggregate).not.toHaveBeenCalled();
+  });
+
+  it('should probe search capability and required indexes at most once per process across repeated searches', async () => {
     const aggregate = createAggregateMock();
     aggregate.mockReturnValue({ toArray: jest.fn().mockResolvedValue([]) });
-    const listSearchIndexes = jest
-      .fn()
-      .mockReturnValue({ toArray: jest.fn().mockResolvedValue([]) });
+    const listSearchIndexes = jest.fn().mockReturnValue({
+      toArray: jest.fn().mockResolvedValue([
+        { name: SEARCH_INDEX, status: 'READY', queryable: true },
+        { name: VECTOR_INDEX, status: 'READY', queryable: true },
+      ]),
+    });
     const collection = jest.fn().mockReturnValue({ aggregate, listSearchIndexes });
     const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider, 'server');
 
     await store.search({ text: 'first', limit: 5, filter: { tenantId: 'tenant-a' } });
     await store.search({ text: 'second', limit: 5, filter: { tenantId: 'tenant-a' } });
 
-    expect(listSearchIndexes).toHaveBeenCalledTimes(1);
+    // 2, not 1: `ensureSearchCapability` chains two probes (`assertAtlasSearchSupported`, then
+    // `assertRequiredSearchIndexesExist`), each calling `listSearchIndexes` once — but the whole
+    // chain is memoized in a single promise, so both calls happen only during the first `search()`
+    // and neither repeats on the second.
+    expect(listSearchIndexes).toHaveBeenCalledTimes(2);
   });
 });

@@ -8,6 +8,7 @@ import {
   type EmbeddingProvider,
 } from '../embedding/embedding-provider.interface';
 import { assertAtlasSearchSupported } from './atlas-search-capability.util';
+import { assertRequiredSearchIndexesExist } from './required-search-indexes.util';
 import type { RetrievalHit, RetrievalQuery, RetrievalStore } from './retrieval-store.interface';
 import { COLLECTION, SEARCH_INDEX, VECTOR_INDEX } from './retrieval.constant';
 
@@ -111,9 +112,15 @@ interface RawFusionResultDoc extends RawEvidenceChunkDoc {
 export class MongoHybridRetrievalStore implements RetrievalStore {
   private readonly db: mongo.Db;
 
-  // Memoizes `assertAtlasSearchSupported` across calls to `search()` — this store is a Nest
-  // singleton (`ProvidersModule` binds it once to `RETRIEVAL_STORE`), so one resolved/rejected
-  // field is one round trip for the lifetime of the process, not one per query.
+  // Memoizes `assertAtlasSearchSupported` + `assertRequiredSearchIndexesExist` across calls to
+  // `search()` — this store is a Nest singleton (`ProvidersModule` binds it once to
+  // `RETRIEVAL_STORE`), so both round trips happen once for the lifetime of the process, not once
+  // per query. WHERE, deliberately: not a Nest `onModuleInit` boot hook, but the existing
+  // `assertAtlasSearchSupported` precedent already made this "first call pays, every call after is
+  // free" trade-off — consistency with it beats re-probing per query (which would double this
+  // store's per-request Mongo round trips) or adding a second, boot-time-only mechanism next to
+  // it. Cost of that choice, accepted deliberately rather than silently: an index dropped or lost
+  // mid-process (the exact incident this closes) is not re-detected until the process restarts.
   private searchCapabilityVerified: Promise<void> | undefined;
 
   constructor(
@@ -161,7 +168,13 @@ export class MongoHybridRetrievalStore implements RetrievalStore {
 
   private async ensureSearchCapability(): Promise<void> {
     if (!this.searchCapabilityVerified) {
-      this.searchCapabilityVerified = assertAtlasSearchSupported(this.db);
+      // Order matters: capability first, so a plain (non-mongot) server fails with the clearer
+      // `AtlasSearchUnavailableError` instead of `assertRequiredSearchIndexesExist` racing ahead
+      // into a `listSearchIndexes` call the server itself rejects — see that function's own doc
+      // comment for why it assumes capability was already established.
+      this.searchCapabilityVerified = assertAtlasSearchSupported(this.db).then(() =>
+        assertRequiredSearchIndexesExist(this.db),
+      );
     }
     return this.searchCapabilityVerified;
   }
