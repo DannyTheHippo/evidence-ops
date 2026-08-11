@@ -44,6 +44,10 @@ Four processes plus a container. **All four must be running for the demo to comp
 without the worker, an upload returns 201 and then sits at `ingestionStatus: pending` forever, and a
 question sits at `runStatus: queued` forever.
 
+This is the host-loop path — fastest iteration, one process per terminal. The same stack also runs
+as containers with a single command; see [Containerized stack](#containerized-stack-one-command)
+below if you want everything (Temporal included) without four terminals.
+
 ## Prerequisites
 
 - **Node.js 26** — `.nvmrc`, `engines` pins `>=26 <27`, both Dockerfiles use `node:26-slim`.
@@ -51,11 +55,41 @@ question sits at `runStatus: queued` forever.
   retrieval depends on `$search`, `$vectorSearch` and `$rankFusion`. It self-manages its single-node
   replica set, so no manual `rs.initiate`.
 - **Temporal CLI** — `brew install temporal` on macOS. Without Homebrew, `temporalio/docker-compose`
-  is the alternative. The dev server exposes gRPC on 7233 and a Web UI on 8233.
+  is the alternative. The dev server exposes gRPC on 7233 and a Web UI on 8233. Not needed for the
+  containerized path below — `docker-compose.yml`'s `full` profile runs Temporal (`auto-setup` +
+  its Postgres + the Web UI) as containers instead.
 - **An Anthropic API key and a Voyage API key.** Both are optional for boot — the app starts without
   them — but the ingestion and answer paths call both providers, so the demo does not work without
   them. There is no offline mode for the running app; the replay cache is an eval-harness feature,
   not an application one.
+
+## Containerized stack (one command)
+
+Everything the host loop runs across four terminals plus Mongo — `mongo`, Temporal (`temporal` +
+`temporal-postgres` + `temporal-ui`), `jaeger`, `api`, `worker`, `web`, and the one-shot `migrate` —
+also runs as containers:
+
+```bash
+cp .env.example .env   # then set ANTHROPIC_API_KEY and VOYAGE_API_KEY
+docker compose --profile full up -d
+docker compose ps      # wait for api, worker, web healthy/running
+```
+
+Then continue from **step 6** below (Create a user) — the SPA is at <http://localhost> (port 80,
+not 5173); Temporal's Web UI is at <http://localhost:8233>, matching the host dev-loop's URL so
+either path gives the same address. `api` and `worker` wait on `mongo` and `temporal` reporting
+healthy **and** on `migrate` completing successfully before they start — the search/vector indexes
+`0003-search-indexes.ts` builds take tens of seconds on a fresh volume, and starting the API against
+an unindexed store would silently match nothing rather than fail loudly.
+
+The same port-27017-collision gotcha applies to `mongo` here — see Gotchas below.
+
+Two things about this path are unverified rather than silently assumed: the `temporal` service's
+healthcheck (`tctl --address temporal:7233 cluster health`) has not been exercised against a running
+container in this environment, and the pinned `temporalio/auto-setup`/`temporalio/ui` image tags
+have not been checked against a registry. Confirm both on first `up` before relying on this path.
+
+`docker compose --profile full down` stops everything; **never `down -v`** — see Gotchas.
 
 ## Demo runbook
 
@@ -180,9 +214,15 @@ Not shown, and not claimed:
 
 - **Weak conflict recall.** The eval has run end to end and its results are committed under
   `eval/results/`; abstention is perfect and the own-voice canary leak rate is 0. Conflict recall is
-  not: prose fact extraction varies between runs, and sampling cannot be pinned on this model tier
-  (`temperature` is deprecated for it), so a conflict can be found on one recording and missed on
-  the next. The replay cache makes the measurement reproducible, not the pipeline deterministic.
+  not: it depends on prose fact extraction, whose quote-verification check now uses the same
+  normalized comparison as the answer boundary's citation check (`locateQuote`,
+  `src/shared/utils/locate-quote.util.ts`) rather than raw substring — the raw check deterministically
+  dropped any fact whose source sentence wrapped across a hard PDF line break, since a model always
+  renders that wrap as a space. What remains is genuine model sampling noise on this tier
+  (`temperature` is deprecated for it; a single call has measurably returned a different fact count
+  for byte-identical input), mitigated but not eliminated by 3-pass majority agreement, so a conflict
+  can still be found on one recording and missed on the next. The replay cache makes the measurement
+  reproducible, not the pipeline deterministic.
 - **No tenant isolation.** Authentication is enforced; authorization is not. See
   [`docs/threat-model.md`](docs/threat-model.md) §5.
 - **No OpenTelemetry.** `TELEMETRY` binds to a logger.

@@ -173,10 +173,17 @@ leak-rate metric is also split: markers appearing inside a gate-verified quote a
 reported separately from markers in the model's own voice, because the first is provenance working
 and only the second is contamination.
 
-What the numbers do not cover: conflict recall is weak (prose fact extraction varies between runs
-and sampling cannot be pinned on this model tier), so a conflict may be detected on one recording
-and missed on the next. Replay makes the measurement reproducible; it does not make the pipeline
-deterministic.
+What the numbers do not cover: conflict recall is weak. It depends on prose fact extraction, which
+had a deterministic gap — its quote check compared the model's returned quote against raw chunk
+text, and a PDF chunk preserves the source's hard line wraps while the model renders that wrap as a
+space, so any fact whose source sentence wrapped a line was rejected as "not found verbatim" on
+every run, not just some. That check now uses the same normalized comparison the answer boundary's
+citation check uses (`locateQuote`, `src/shared/utils/locate-quote.util.ts`; see
+[ADR-0004](adr/0004-grounding-gate-and-citation-contract.md)). What remains is genuine model
+sampling noise on this tier — a single call has measurably returned a different fact count for
+byte-identical input — mitigated but not eliminated by 3-pass majority agreement, so a conflict may
+still be detected on one recording and missed on the next. Replay makes the measurement
+reproducible; it does not make the pipeline deterministic.
 
 ## Explicitly out of scope
 

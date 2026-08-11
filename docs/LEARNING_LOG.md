@@ -273,11 +273,18 @@ injected sentence genuinely present in the source is truthfully cited and passes
 one layer beside prompt fencing and canary tests.
 
 **Known limits.** Numeric support is digit-pattern matching in `extract-numeric-tokens.ts`, so a
-figure written in words ("six percent") is invisible to it. Only the `answered` branch is verified at
-all — `groundingCheck` in `src/worker/activities.ts` returns early on the other two, since there are
-no claims to check. And the `conflicting_evidence` override cannot fire on the wired path:
-`conflictedFactKeys` is never supplied there, so that branch is guarded by a `Promise.reject`
-carrying an unreachable-branch assertion until `ConflictsService` is wired in.
+figure written in words ("six percent") is invisible to it. Per-claim verification only ever has
+claims to check on the `answered` branch — an abstention carries no citations to verify. That no
+longer means an abstention is a simple pass-through, though, and the asymmetry is worth knowing.
+The `answered` branch's own conflict-forcing (ADR-0004 bounds 3, 6, 9) is checked independently of
+anything the model said: any surviving claim stating a number that matches a known conflict, cited
+from the chunk it names, forces `conflicting_evidence` whether or not the model noticed.
+`groundingCheck` (`src/worker/activities.ts`) can also upgrade an `insufficient_evidence`
+abstention to `conflicting_evidence` (ADR-0004 bound 9) — but only when the model's own
+`reasonCode` names the contradiction itself ("model hints, server verifies"). An abstention for any
+other reason, even against a corpus that holds a real, seeded conflict the model simply didn't
+flag, is returned unchanged, because nothing else scans an abstention for a conflict it never
+claimed to have found.
 
 ---
 
@@ -524,3 +531,128 @@ green. Two derived artifacts agreeing with each other isn't evidence about the d
 from, so locators are now resolved against the real document using the same parsers ingestion uses.
 And I don't trust an assertion that passed on its first run — it hasn't distinguished "the property
 holds" from "this assertion cannot fail", so I make each one go red before I believe it.
+
+---
+
+## 009 — Self-consistency across independent passes: what agreement buys, and what it can't
+
+**ADR:** [0007](./adr/0007-eval-replay-cache.md) · **Code:**
+`src/features/evidence/facts/agree-facts.ts`, `prose-fact-extractor.ts`,
+`src/providers/model/cache-key.util.ts`
+
+**The concept.** A single model call at temperature zero is not a deterministic function of its
+prompt — sampling, batching, and vendor-side routing all leave room for the same input to produce a
+different output on two calls. Self-consistency treats that as measurable rather than assumed away:
+run the same prompt N times independently, and keep only the answer(s) a majority of passes agree
+on. What that recovers is *stability* — the same input reliably yields the same accepted output, run
+to run — not *correctness*. Agreement across samples is evidence the model is confident and
+consistent, not evidence it is right; three passes converging on a wrong answer is still wrong, just
+now repeatably wrong.
+
+**The trade-off.** More passes buy more confidence in the majority at linearly increasing cost — N
+calls instead of one, run concurrently if latency matters, still N times the spend. The payoff
+saturates fast: for a 2-of-N-agree rule, N=3 is already a majority rather than a tie, so N=5 mostly
+adds cost, not signal, unless the underlying variance is high enough that 2-of-3 is itself
+unreliable. The sharper limit isn't cost, though — it's scope. Self-consistency can only recover a
+fact that at least two passes were *capable* of producing in the first place. If a downstream,
+deterministic filter rejects a fact on every pass for the same structural reason — not sampling
+noise — N passes reject it N times, and agreement has nothing to vote on. Variance reduction cannot
+fix a bug.
+
+**What we chose, and why here.** Three independent extraction passes over identical chunk text,
+keeping any `(entity, metric, period)` group at least two passes agree on within the metric's own
+tolerance — because a single pass measurably returned 8, 2, and 0 facts for byte-identical real
+document text across live runs, and a deterministic downstream conflict scan cannot be fed input
+that unstable.
+
+**In our code.** `prose-fact-extractor.ts` fires `PASS_COUNT = 3` calls via `Promise.allSettled`, so
+a thrown pass (the SDK's own retries already exhausted) is a *non-vote*, never miscounted as a vote
+for zero facts. `agree-facts.ts`'s `agreeFacts()` groups candidates by fact key and tries every vote
+as its own pivot (`largestAgreeingCluster`) rather than a single min/max spread check, because a
+spread check drops a real 2-of-3 majority whenever the third pass lands far enough outside tolerance
+— exactly the case the majority rule exists to recover.
+
+The detail worth stealing on its own: `ModelRequest.passOrdinal` is folded into `computeCacheKey`
+but never forwarded to the vendor SDK — a cache-partitioning field, invisible to the model. Without
+it, three identical prompts hash to one cache key, and the caching provider's read-through record
+mode would silently replay pass 1's response for passes 2 and 3, making agreement vacuous in every
+recorded/replayed eval run while the live path genuinely varied call to call. Varying the *prompt*
+per pass instead (a "this is attempt 2" preamble) would have solved the cache-collision problem too,
+at the cost of changing what the model actually sees and sends to the vendor — a key-only field
+partitions the cache without touching the request the model reasons over.
+
+**How we validated it.** `test/features/evidence/facts/agree-facts.spec.ts` drives the pivot-search
+majority logic directly, including the case a naive spread check gets wrong. A live re-record and
+replay against the real model measured the intended effect (stable fact counts across identical
+input) directly, rather than trusting the design.
+
+**Interview answer.** Self-consistency is a variance-reduction technique, not a correctness
+technique — running N passes and keeping majority agreement makes "what the model reliably produces
+for this input" repeatable, it doesn't make that output right. I use it where I measured real
+sample-to-sample variance (8, 2, 0 facts for identical input), and I fold the pass number into the
+*cache key only*, never into the prompt, so record/replay stays honest about whether three genuinely
+independent samples were taken. And I know its ceiling: it can only recover a fact the model was
+*capable* of producing on some pass. If a downstream deterministic check rejects a fact for a
+structural reason — not noise — agreement has nothing left to vote on, and no amount of resampling
+fixes that.
+
+**Known limit.** A pass that throws is a non-vote, correctly — but that also means a systematically
+flaky provider (rate limits, timeouts) can silently degrade N real independent passes down to one or
+two without ever surfacing as a wrong answer, only as a quieter warning.
+
+---
+
+## 010 — When two verifiers check the same invariant at different strictness, the stricter one fails silently
+
+**ADR:** [0004](./adr/0004-grounding-gate-and-citation-contract.md) · **Code:**
+`src/shared/utils/locate-quote.util.ts`, `src/features/evidence/facts/prose-fact-extractor.ts`
+
+**The concept.** A pipeline that checks the same kind of thing twice — "is this quote really in the
+source" — can quietly implement that check two different ways in two different places, once someone
+reaches for the nearest string method instead of the module that already owns the check. Both pass
+the tests written against them, because both are internally consistent; they just don't agree with
+*each other* on borderline input. The failure that surfaces is not "the verifier is wrong" in any
+obvious sense — it's a class of otherwise-valid input the stricter check rejects and the looser one
+wouldn't have, and it reads exactly like model unreliability: the same fact, the same document,
+extracted sometimes and not others, for no reason anyone can see by staring at the prompt.
+
+**The trade-off.** Sharing one verifier everywhere is the obvious fix once you see the drift, but it
+isn't free: a verifier tuned exactly right for one call site (an answer's citation, checked against a
+whole retrieved chunk) may be laxer or stricter than a second call site actually wants (a candidate
+fact, checked mid-extraction against the same chunk) — reusing it means either call site inherits
+tolerances it did not independently choose. The alternative, two independently-tuned checks,
+guarantees the drift comes back the moment either one changes without the other noticing.
+
+**What we chose, and why here.** Share the verifier. `verifyClaim` (answer citations) already used
+`locateQuote` — whitespace-run and unicode quote/dash-variant normalized containment, deliberately
+still rejecting anything that isn't a genuine verbatim match. `prose-fact-extractor.ts`'s two quote
+checks used raw `.includes()` instead, and a PDF chunk preserves the source's hard line wraps while a
+model always renders a wrapped line as a space when it quotes it back — so any fact whose source
+sentence happened to wrap mid-line failed the raw check on *every* extraction pass, deterministically.
+It looked like the model "couldn't find" a specific figure; the model had extracted it correctly
+every time, and a stricter, independently-written check downstream discarded it every time.
+
+**In our code.** `prose-fact-extractor.ts`'s `evaluateCandidates()` (accepting a candidate) and
+`resolveFactLocator()` (recovering which parsed element a fact came from) both now call the same
+`locateQuote()` `verifyClaim` uses, requiring `kind === 'exact'` — not a weaker bar than the raw
+check, since it relaxes whitespace-run and unicode-variant strictness only; a paraphrased or
+fabricated quote still normalizes to a different string and still fails closed.
+
+**How we validated it.** The eval harness's own `conflictRecall` metric was the forcing function: a
+seeded conflict whose PDF-side value happened to wrap across a line was structurally unstorable
+before the fix, extraction-pass count notwithstanding, and reachable after it — measured, not
+inferred, across a real record/replay pair.
+
+**Interview answer.** Two components checking the same invariant at different strictness is a bug
+that presents as model unreliability, not as a verifier bug — the symptom is "this figure gets
+extracted sometimes," and nothing about that symptom points at a whitespace-normalization mismatch
+between two quote checks written at different times. When I see a deterministic pipeline behave
+inconsistently on what looks like the same input, I now check for a second implementation of the
+same check before I suspect the model — a raw `.includes()` next to a shared, already-normalized
+verifier is exactly the shape of bug that a re-prompt or a temperature change can never fix, because
+it isn't happening in the model at all.
+
+**Known limit.** Sharing the verifier only closes the drift for the two call sites that now use it. A
+third quote check written independently, elsewhere, would silently reopen exactly the same class of
+bug — normalization discipline has to be a convention (use `locateQuote`, don't write a new
+containment check), not a property of any one shared function.

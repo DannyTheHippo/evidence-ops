@@ -22,9 +22,10 @@ gets no partial credit.
 1. **Retrieval containment.** The cited `chunkId` must be among the chunks actually retrieved for
    this request, and its `docVersionId`/`sha256` must match the retrieved chunk's — a real chunk id
    paired with a fabricated document version is still an unverifiable provenance claim.
-2. **Quote containment** (`locate-quote.ts`). The citation's `quote` must appear in the cited
-   chunk's text under normalization (`normalize-quote-text.ts` — whitespace/smart-quote/line-break
-   tolerant). Exact normalized containment is the only passing outcome.
+2. **Quote containment** (`shared/utils/locate-quote.util.ts`). The citation's `quote` must appear
+   in the cited chunk's text under normalization (`shared/utils/normalize-quote-text.util.ts` —
+   whitespace/smart-quote/line-break tolerant). Exact normalized containment is the only passing
+   outcome.
 3. **Numeric-claim support** (`extract-numeric-tokens.ts`). Every number in the claim's statement
    must be supported — either by a cell-level `ExtractedFact` on a cited chunk (upgrades the
    citation's locator, since a cell fact is strictly stronger evidence than a whole-region quote
@@ -210,14 +211,98 @@ interview answer that omits them is a sales pitch, not an ADR.
    `migrations/0006-grounding-check-chunk-scoped-indexes.ts` adds the two supporting compound
    indexes (`extracted_facts.{tenantId,chunkId}`, `conflicts.{tenantId,status,factIds}`).
 
-7. **No fuzzy acceptance on quote matching.** `locate-quote.ts` computes a similarity score via
-   bounded edit distance purely to *label* a near-miss as `'fuzzy'` (worth surfacing to a human or
-   an eval) rather than `'none'` (no real relationship to the chunk) — but both are rejections.
-   `FUZZY_SIMILARITY_THRESHOLD` is diagnostic-only; no similarity value, however close to 1, is ever
-   treated as verified. The reasoning is stated in that file: accepting a near-miss as verified is
-   exactly how paraphrase and fabrication leak through a citation checker — the entire value of
-   requiring a *verbatim*, normalized-substring match is that a model cannot get credit for a
-   citation that merely sounds right.
+7. **No fuzzy acceptance on quote matching.** `shared/utils/locate-quote.util.ts` computes a
+   similarity score via bounded edit distance purely to *label* a near-miss as `'fuzzy'` (worth
+   surfacing to a human or an eval) rather than `'none'` (no real relationship to the chunk) — but
+   both are rejections. `FUZZY_SIMILARITY_THRESHOLD` is diagnostic-only; no similarity value,
+   however close to 1, is ever treated as verified. The reasoning is stated in that file: accepting
+   a near-miss as verified is exactly how paraphrase and fabrication leak through a citation
+   checker — the entire value of requiring a *verbatim*, normalized-substring match is that a model
+   cannot get credit for a citation that merely sounds right.
+
+8. **`locateQuote` now also gates prose fact extraction, not just answer citations — sharing the
+   verifier, not weakening it.** `prose-fact-extractor.ts`'s two quote checks (accepting a
+   candidate fact, and resolving which parsed element it came from) used to compare the model's
+   quote against raw chunk/element text with `.includes()`. A PDF chunk preserves the source's hard
+   line wraps; a model always renders that wrap as a space, so any fact whose source sentence
+   wrapped a line was rejected as ungrounded on every run — a deterministic gap, not the sampling
+   variance this document previously (and wrongly) blamed weak conflict recall on. Both checks now
+   call the same `locateQuote` this ADR's checks 2 and bound 7 describe, requiring `kind === 'exact'`.
+   This is not a weaker bar than the raw check: it relaxes whitespace-run and unicode
+   quote/dash-variant strictness only (the same normalization checks 2 already applies to answer
+   citations), and a paraphrased or fabricated quote still normalizes to a different string and
+   still fails closed. Reusing the module — moved to `src/shared/utils/` so both feature slices can
+   import it — also avoids a second, independently-drifting copy of a verbatim-quote check, rather
+   than reimplementing the same normalized-containment logic inside `facts/`.
+
+9. **Closed: `conflicting_evidence` was effectively unreachable — bound 4's fix removed the only
+   producer without giving the application a way to independently reach the same conclusion.**
+   Bound 4 correctly deleted `conflicting_evidence` from `modelAnswerContractSchema` (the eval
+   metric that outcome fed had scored 1.0 purely because the model self-declared a conflict with
+   nothing verifying it). But after that fix, the only two paths that could ever *produce*
+   `conflicting_evidence` were (a) the gate's own per-claim forcing above, which only ever fires
+   from `cellFacts` — deliberately `xlsx-cell`-only (bound 2's numeric-authority signal shares that
+   array) — and (b) nothing else. A model that noticed a genuine contradiction had exactly one way
+   to report it, `insufficient_evidence` with `reasonCode: 'retrieved_evidence_contradicts_itself'`,
+   and that reason code reached the response as inert rendered text — nothing ever read it back.
+   An answer that cited only prose (PDF/DOCX) evidence on both sides of a real, seeded conflict
+   could never surface as `conflicting_evidence` at all.
+
+   **The fix: "model hints, server verifies," implemented in `src/worker/activities.ts`'s
+   `groundingCheck`, not the gate.** `insufficientEvidenceOutcomeSchema` (`answer.contract.ts`)
+   gained an optional `reasonCode` field, carried through by `SynthesisService.resolveContract`
+   whenever the model's own selection is one of the three closed literals
+   (`resolveReasonCode` — reusing the same fail-closed lookup `renderInsufficientEvidenceReason`
+   already used) and otherwise omitted. This is safe to add to the *server-resolved* schema
+   without reopening bound 4/5: the field only ever holds one of three closed literals (or is
+   absent), so it carries no free-text injection surface, and it changes nothing about
+   `modelAnswerContractSchema` — no structured-output change, no eval-cache invalidation (unlike
+   bounds 4/5's fix, recorded in the Cache note below). `reasonCode` is deliberately absent from
+   the gate's own degraded `insufficient_evidence` (built when every claim drops, a few lines
+   above) and from any answer persisted before this field existed — both lack an honest
+   model-authored selection, and fabricating one would misrepresent a server decision as the
+   model's own.
+
+   `groundingCheck` reads `reasonCode` as a HINT, never the verdict — the model's claim that
+   evidence contradicts itself does not, by itself, change anything. Only when `reasonCode` is
+   `'retrieved_evidence_contradicts_itself'` does the server independently query
+   `ConflictsService.findConflictedFactGroupsForChunks`, scoped to `input.retrievedChunks` and
+   `input.tenantId` — the exact same scoping bound 6 already established for the `answered` branch
+   (never the tenant's whole `conflicts` collection; a request cannot be flipped by a conflict it
+   never retrieved). Fails CLOSED: no group found means the abstention is returned completely
+   unchanged, regardless of the model's claim. A group found upgrades to `conflicting_evidence`
+   using the first group, the same deterministic first-match convention the gate's own
+   `answered`-branch forcing uses. There are no claims to narrow the choice by here — the model
+   abstained, so there is nothing to scope to beyond the retrieval itself — unlike the `answered`
+   branch below, which does have per-claim citations to scope to.
+
+   **Sub-decision: widen the `answered`-branch forcing to the prose side too ("either side"),
+   implemented as a second, independent check in `activities.ts`, not by widening `cellFacts`.**
+   The gate's own forcing (bound 3, in `verifyClaim`/`GroundingGateService.verify`) only ever fires
+   from `cellFacts`, populated by `FactsService.findCellFacts`'s `xlsx-cell`-only query. Widening
+   that query to every locator kind was considered and rejected: `cellFacts` doubles as bound 2's
+   numeric-support authority signal ("a cited chunk with at least one cell fact rejects any
+   unmatched number outright") — prose extraction is model-based and incomplete, so making every
+   prose chunk with even one extracted fact "authoritative" would reject a claim's other numbers
+   that structured extraction simply never captured, trading a narrow conflict-forcing gap for a
+   broader false-negative one on ordinary answered claims. Instead, `activities.ts` runs a second,
+   independent check (`findEitherSideConflict`) after the gate returns `outcomeKind: 'answered'`
+   (i.e. the gate's own xlsx-side forcing found nothing), over `conflictGroups` already loaded for
+   the abstention-hint path above — never a second query. It reuses bound 3's exact discipline: a
+   claim forces `conflicting_evidence` only when it states a number that is itself one of a known
+   conflict's values, sourced from a chunk that claim's own citations name, never merely because
+   the claim cites a chunk that also happens to hold an unrelated conflicted fact. It inherits
+   bound 3's honest remainders for the same reason — a claim stating a conflicted value in words
+   ("six percent") is invisible to `extractNumericTokens`, and two distinct facts sharing the exact
+   same `value` on the same cited chunk would still cross-touch. The asymmetry (an answered claim
+   is scoped per-claim-citation; an abstention is scoped to the whole retrieval) is a consequence of
+   what each outcome carries, not an inconsistency: an abstention has no surviving claims to narrow
+   the check by, only the retrieved chunks themselves.
+
+   Test coverage: `test/features/evidence/qa/synthesis.service.spec.ts` (reasonCode passthrough and
+   fail-closed omission for an unvalidated value), `test/worker/activities.spec.ts` (hint-plus-verified
+   upgrade, hint-plus-nothing-verified fail-closed with the lookup proven to have run, unrelated
+   reasonCode never querying at all, and both either-side widening directions).
 
 ## Consequences
 

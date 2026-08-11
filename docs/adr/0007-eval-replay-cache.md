@@ -1,8 +1,8 @@
 # ADR-0007 — Eval harness: replay-cached, locator-space ground truth, one fair-comparison protocol
 
-- **Status:** Accepted — implemented, unit-tested; not yet executed end-to-end (needs a reachable
-  Mongo and live `ANTHROPIC_API_KEY`/`VOYAGE_API_KEY` to `--record` a first cache, neither
-  available in the sandboxed session that wrote it — see Known bounds)
+- **Status:** Accepted — implemented, executed end-to-end, recorded and replayed twice against
+  Atlas Local (`mongodb://localhost:27018/evidence-ops`, commit base `038eb54`), byte-identical
+  both times — see Known bound 5
 - **Date:** 2026-08-10
 - **Supersedes:** —
 
@@ -26,9 +26,10 @@ real Temporal worker — for `retrieveEvidence` → `synthesizeAnswer` → `grou
 eval harness is a caller of the production pipeline, not a parallel implementation of it; a
 pipeline behaviour change is automatically reflected in eval results without touching `eval/`.
 
-Ingestion bypasses `DocumentsService.upload`, which fire-and-forgets an `ingestDocumentVersion`
-Temporal workflow that has no worker to run it (Temporal is scaffolded but not wired — see
-`.claude/CLAUDE.md`). `eval/ingest-fixtures.ts` instead writes the fixture bytes to the document
+Ingestion bypasses `DocumentsService.upload`, which starts an `ingestDocumentVersion` Temporal
+workflow that needs a running worker process and a live Temporal dev server to actually execute
+(Temporal is wired, per `.claude/CLAUDE.md`, but is a second process this eval harness does not
+stand up). `eval/ingest-fixtures.ts` instead writes the fixture bytes to the document
 store and calls `IngestionService.ingestVersion` / `FactsService.extractFacts` directly, in the
 order the workflow would have run them. It runs under a dedicated `tenantId` ('eval'), wiping only
 that tenant's rows first — the upload path's sha256 dedupe never runs on this path, so a second
@@ -103,6 +104,65 @@ model call to judge correctness. Canary leak rate is a **hard gate at 0**: `eval
 nonzero process exit code whenever any case's serialized outcome (not only `adversarial` cases —
 see Known bounds) contains either canary marker token from `fixtures/data-room/manifest.json`.
 
+### Ingest-once is what makes replay deterministic; the corpus fingerprint is what makes that checkable
+
+An earlier version of this harness re-ingested the fixture corpus on every run. That broke replay
+silently: Atlas Search is free to reorder results across two ingests of identical bytes, a
+reordered retrieval set changes the assembled synthesis prompt, and a changed prompt is a changed
+cache key — so a "replay" could quietly miss the cache it was supposed to hit. Ingestion is now
+opt-in behind `--ingest`; the default reuses whatever corpus already exists for the `'eval'` tenant
+and fails closed, naming the exact remediation command, when none does. Silently re-ingesting on a
+cache miss here would reintroduce the exact nondeterminism `--ingest` exists to make opt-in.
+
+Reuse is what makes replay deterministic. It is not, by itself, what makes that determinism
+*checkable* by anything other than trusting the harness. `eval/compute-corpus-fingerprint.ts`
+hashes the sorted set of `evidence_chunks._id` values — sha256, order-independent so query-planner
+ordering noise can never be mistaken for a real corpus change — into a single fingerprint, written
+to `eval/cache/manifest.json` at `--record` time and asserted against the live corpus at every
+replay. A corpus that drifted under a recorded cache (re-ingested, re-chunked, or simply pointed at
+the wrong database) fails loudly with a fingerprint mismatch instead of a confusing per-case cache
+miss, or worse, a silent score against evidence the cache was never recorded against. The
+fingerprint is what turns "this replay is deterministic" from a claim this ADR makes into a claim
+`npm run eval` checks on every invocation. See Known bound 7 for what it does *not* check.
+
+### `conflictRecall` needed two independent, deterministic fixes — multi-pass agreement was not one of them
+
+Multi-pass fact extraction (`agree-facts.ts`, `prose-fact-extractor.ts`) was designed on the belief
+that `conflictRecall`'s failure was sampling variance: one extraction pass measurably returned 8, 2,
+and 0 facts for byte-identical input across live runs, so the fix was three independent passes,
+keeping only what at least two agreed on. That belief did not survive measurement. `conflictRecall`
+was `0.00` before multi-pass agreement shipped and `0.00` after — a real re-record and replay, not a
+hunch, and the metric did not move at all. Recording the belief and why it was wrong is more useful
+here than deleting it: multi-pass agreement is a genuine fix for a genuine problem (variance in
+*which* facts survive extraction, run to run, over otherwise-identical input) — it was simply not a
+fix for this one.
+
+What actually moved `conflictRecall` from `0.00` to `1.00` (measured 2026-08-11, replayed twice
+against the recorded cache, byte-identical both times) were two independent, deterministic pins,
+both of which had to be pulled before either fact could reach the metric:
+
+1. **The fact extractor's verbatim-quote check rejected every quote spanning a PDF hard line
+   wrap**, deterministically — not a coin flip multi-pass agreement could average away, since none
+   of three passes ever produced a quote that survived the check in the first place. The PDF side
+   of the seeded Northgate Business Park conflict wrapped exactly this way, so it was never stored
+   as a fact, and a conflict needs two stored facts to exist. See ADR-0004 bound 8 for the fix
+   (sharing `locateQuote`, the same normalized-containment verifier the answer boundary already
+   used for citations, instead of a stricter ad hoc `.includes()` check).
+2. **`conflictRecall` scores an answer *outcome* the application had no deterministic path to
+   reach**, independent of whether the underlying facts existed. Even with both sides of a conflict
+   stored, nothing in the wired pipeline could turn "these two facts disagree" into a
+   `conflicting_evidence` answer for a claim citing only prose evidence — the gate's own
+   conflict-forcing ran off `cellFacts` (`xlsx-cell`-only) alone. See ADR-0004 bound 9 for the fix
+   (`findEitherSideConflict` in `src/worker/activities.ts`, "model hints, server verifies").
+
+Both fixes had to land before the metric moved: closing only the quote-check gap would have
+surfaced a fact with nothing to force the outcome from it; closing only the outcome-forcing gap
+would have had no second fact to force `conflicting_evidence` from. The now-stored PDF-side fact
+resolves to page 2 — not the chunk's own page-1 anchor locator, since the chunk merges elements
+from two pages and `resolveFactLocator` recovers the fact's actual source element rather than
+defaulting to the chunk's anchor (ADR-0008) — which is the concrete, checkable proof that the
+locator half of the fix, not only the outcome-forcing half, is doing real work.
+
 ## Known bounds
 
 1. **Deterministic metrics measure groundedness and retrieval, not correctness.** Recall, MRR, and
@@ -135,12 +195,17 @@ see Known bounds) contains either canary marker token from `fixtures/data-room/m
    comparison protocol silently stops being fair — nothing currently enforces the two stay in sync
    beyond this note and matching comments in both files.
 
-5. **Not executed end-to-end in the session that wrote it.** The sandbox this was implemented in
-   cannot bind sockets (no Mongo) or reach the network (no live Anthropic/Voyage calls), so `eval/cache/`
-   is currently empty and `npm run eval -- --record` has not been run. `npm run tsc`, `lint:check`,
-   `format:check`, and the pure-logic unit tests (`test/eval/**`, run via `npm run test`) all pass;
-   the full pipeline run, `--record`, and the retrieval-mode comparison against real indexes are
-   unverified until an environment with both is available to run them.
+5. **Closed: executed end-to-end, recorded, and replayed byte-identical.** This bound originally
+   read: "Not executed end-to-end in the session that wrote it. The sandbox this was implemented in
+   cannot bind sockets (no Mongo) or reach the network (no live Anthropic/Voyage calls), so
+   `eval/cache/` is currently empty and `npm run eval -- --record` has not been run." That gap is
+   closed: `npm run eval -- --ingest --record` has run against Atlas Local
+   (`mongodb://localhost:27018/evidence-ops`), and `npm run eval` (replay) has run twice more
+   against that recording, byte-identical both times — same `corpusFingerprint`
+   (`6a8119f6a1c49bd8d00c172615314862ecf11b3481df479a087444672ff8435a`), same metrics, zero live API
+   calls on either replay. The retrieval-mode comparison (`retrieval-modes.ts`) queries the live
+   `evidence_chunks` collection directly, so it runs on every eval invocation, replay included, not
+   gated behind `--record` the way the model/embedding caches are.
 
 6. **`computeChunkId` scopes by tenant, not by document — a same-tenant collision is still
    possible.** The live integration suite caught a real defect in this ADR's original derivation:
@@ -159,18 +224,30 @@ see Known bounds) contains either canary marker token from `fixtures/data-room/m
    (`src/features/evidence/ingestion/compute-chunk-id.ts`) states this trade-off inline. This is the
    second time a chunk-id derivation change has invalidated `eval/cache/` — see Consequences.
 
+7. **The corpus fingerprint pins content, not location — verified empirically, not theorized.** It
+   hashes the sorted set of content-addressed chunk ids (`computeChunkId`, ADR-0008), so identical
+   fixture bytes ingested into an entirely different Mongo server produce an identical fingerprint.
+   A green fingerprint proves the corpus a cache was recorded against still exists with the same
+   content; it says nothing about which server holds it. This was checked directly rather than
+   assumed: a replay pointed at the wrong database prints the same fingerprint as one pointed at the
+   right one. A fingerprint match is a necessary check on this harness's determinism claim, not a
+   sufficient one — pointing the connection string at the intended server is still on whoever runs
+   it.
+
 ## Consequences
 
 **Good.** `npm run eval` scores the real pipeline, not a parallel reimplementation — a synthesis or
-grounding-gate change is reflected in the next eval run automatically. Once recorded, CI can run the
-full dataset at zero API cost and byte-stable output. The retrieval-mode comparison gives M4's future
-Qdrant experiment a protocol to plug into rather than a number to argue about the methodology of.
+grounding-gate change is reflected in the next eval run automatically. Once recorded, replay runs the
+full dataset at zero API cost with byte-stable output — proven, not assumed: two replays against the
+same recording produced identical metrics and an identical corpus fingerprint. The retrieval-mode
+comparison gives M4's future Qdrant experiment a protocol to plug into rather than a number to argue
+about the methodology of.
 
 **Costs.** Two replay caches instead of one, and a second retrieval implementation
 (`retrieval-modes.ts`) that must be kept in sync with `mongo-hybrid.store.ts` by hand.
-`0008-tenant-scoped-evidence-chunk-ids.ts` (see Known bound 6) invalidates `eval/cache/` a second
-time — every recorded prompt embeds a `chunkId` that just changed — so `--record` must run again
-before the next replay.
+`0008-tenant-scoped-evidence-chunk-ids.ts` (see Known bound 6) invalidated `eval/cache/` a second
+time — every recorded prompt embedded a `chunkId` that had just changed — so `--record` had to run
+again before the next replay; it has, see Known bound 5.
 
 **Deferred, deliberately.** An LLM-judge correctness metric (M5), closing bound 4 (sharing the
 tuning constants instead of duplicating them, once the retrieval store's own module boundary is
@@ -179,10 +256,18 @@ change makes eval document ids stable across runs) are all real next increments,
 
 ## Interview framing
 
-> Two things I'd flag before anyone else does. First, I found a gap the plan didn't call out: a
+> Three things I'd flag before anyone else does. First, I found a gap the plan didn't call out: a
 > single model-call cache does not make a replay run free — ingestion and query embedding both call
 > the embedding provider directly, so I built a second cache for that, mirroring the first one's
-> exact record/replay/fail-loud shape. Second, I could not actually run this: the environment I
-> built it in has no Mongo socket and no live API keys, so the cache is empty and the pipeline run
-> is unverified beyond type-check, lint, and the pure-logic unit tests. I'd rather say that plainly
-> than claim a green run I don't have.
+> exact record/replay/fail-loud shape. Second, I got this running end to end, and the interesting
+> part isn't that it's green — it's that I was wrong about why one of the numbers was red before
+> that. I built multi-pass fact extraction assuming it would fix `conflictRecall`; it shipped and the
+> metric didn't move at all. The real fixes were two deterministic gaps downstream of extraction
+> agreement entirely — a quote-verification check too strict for a PDF's own line wraps, and no path
+> from "these two facts disagree" to a `conflicting_evidence` answer for a claim that only cited
+> prose. I'd rather record that I was wrong about the mechanism than quietly rewrite the history once
+> the real fix landed. Third: the corpus fingerprint that makes this harness's determinism claim
+> machine-checked pins content, not location — it hashes content-addressed chunk ids, so it proves
+> the corpus still has the content a cache was recorded against, and it is structurally incapable of
+> telling you whether that corpus is sitting on the right server. I checked that directly rather than
+> assumed it, because a green check that implies more than it verifies is worse than no check at all.
