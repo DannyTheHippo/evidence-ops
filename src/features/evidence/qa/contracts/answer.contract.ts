@@ -129,13 +129,43 @@ export type ModelAnsweredOutcome = z.infer<typeof modelAnsweredOutcomeSchema>;
 // correct (abstention accuracy) on genuinely unanswerable questions, so producing it beats
 // fabricating a claim.
 //
-// Exported (unlike before this file grew a model-facing schema) because it carries no citations —
-// nothing in it is a server-known fact to resolve — so `modelAnswerContractSchema` and
-// `answerContractSchema` share this one instance rather than each declaring an identical copy.
+// This is the SERVER-RESOLVED shape — `reason` is rendered by `SynthesisService`'s
+// `renderInsufficientEvidenceReason` from a model-selected `reasonCode`
+// (`modelInsufficientEvidenceOutcomeSchema` below), never accepted as free text from the model
+// (ADR-0004 bound 4, closed). Exported because `answerEnvelopeSchema`/`Answer.outcome` reuse it
+// as-is for persistence.
 export const insufficientEvidenceOutcomeSchema = z.object({
   kind: z.literal('insufficient_evidence'),
   reason: z.string().min(1),
 });
+
+/**
+ * Closed set of reasons the model may select for `insufficient_evidence` — this, not a free-text
+ * `reason`, is what the model's structured output actually carries (see
+ * `modelInsufficientEvidenceOutcomeSchema`). `SynthesisService.renderInsufficientEvidenceReason`
+ * maps each code to a fixed, server-authored sentence. A closed enum cannot smuggle a
+ * prompt-injection marker the way a free-text field can — there is no sanitiser to outrun because
+ * there is nothing left to sanitise.
+ */
+export const insufficientEvidenceReasonCodeSchema = z.enum([
+  'no_relevant_evidence',
+  'evidence_does_not_address_question',
+  'retrieved_evidence_contradicts_itself',
+]);
+
+export type InsufficientEvidenceReasonCode = z.infer<typeof insufficientEvidenceReasonCodeSchema>;
+
+/** The model-facing counterpart of `insufficientEvidenceOutcomeSchema` above — see that schema's
+ * doc comment and `insufficientEvidenceReasonCodeSchema`'s for why a code, not a rendered
+ * sentence, is what the model is asked to produce. */
+export const modelInsufficientEvidenceOutcomeSchema = z.object({
+  kind: z.literal('insufficient_evidence'),
+  reasonCode: insufficientEvidenceReasonCodeSchema,
+});
+
+export type ModelInsufficientEvidenceOutcome = z.infer<
+  typeof modelInsufficientEvidenceOutcomeSchema
+>;
 
 const conflictingValueSchema = z.object({
   value: z.number(),
@@ -143,8 +173,19 @@ const conflictingValueSchema = z.object({
   sourceChunkId: z.string().min(1),
 });
 
-// Exported for the same reason as `insufficientEvidenceOutcomeSchema` above: no citations, so no
-// resolution step, so both the model-facing and server-resolved contracts share it as-is.
+/**
+ * The `conflicting_evidence` outcome, server-resolved shape. Deliberately absent from
+ * `modelAnswerContractSchema` below (ADR-0004 bound 4, closed) — the model is never offered this
+ * branch at all, so `factKey`'s free-text labels and `values[].unit`/`sourceChunkId` can never
+ * reach a caller as model-authored text with no check. The only producer is
+ * `src/worker/activities.ts`'s `groundingCheck`, which builds this outcome server-side from a
+ * real `ConflictedFactGroup` when the grounding gate forces a conflict — never from a model's own
+ * say-so. A model that itself notices conflicting evidence has no way to report it except
+ * `insufficient_evidence` with `reasonCode: 'retrieved_evidence_contradicts_itself'`; verifying an
+ * arbitrary model-authored `factKey`/`values` was considered and rejected — see this schema's own
+ * ADR-0004 bound 4 write-up for why containment-checking free text against the retrieved chunks
+ * does not close this channel (the canary text is, genuinely, present in a retrieved chunk).
+ */
 export const conflictingEvidenceOutcomeSchema = z.object({
   kind: z.literal('conflicting_evidence'),
   factKey: z.object({
@@ -159,26 +200,31 @@ export const conflictingEvidenceOutcomeSchema = z.object({
  * What is actually sent to Anthropic as the structured-output JSON Schema constraint (see
  * `SynthesisService.synthesizeAnswer`, `toStructuredOutputFormat`). Its `answered` branch uses
  * `modelAnsweredOutcomeSchema` (citations are `chunkId` + `quote` only — see
- * `modelCitationSchema`'s doc comment for why); `insufficient_evidence` and `conflicting_evidence`
- * carry no citations, so they need no server-known fields resolved and are shared as-is with
- * `answerContractSchema` below. The model can never be asked to (and never legitimately can)
- * produce `claimCoverage`, a verification report, or a dropped-claim record either way — those
- * exist only in `AnswerEnvelope` further below, which the model never sees.
+ * `modelCitationSchema`'s doc comment for why); `insufficient_evidence` uses
+ * `modelInsufficientEvidenceOutcomeSchema` (`reasonCode`, not free text — see that schema's doc
+ * comment). `conflicting_evidence` is not offered to the model at all (see
+ * `conflictingEvidenceOutcomeSchema`'s doc comment) — the two branches this union does **not**
+ * carry are exactly the two channels ADR-0004 bound 4 named as reaching a caller unverified. The
+ * model can never be asked to (and never legitimately can) produce `claimCoverage`, a
+ * verification report, or a dropped-claim record either way — those exist only in
+ * `AnswerEnvelope` further below, which the model never sees.
  */
 export const modelAnswerContractSchema = z.discriminatedUnion('kind', [
   modelAnsweredOutcomeSchema,
-  insufficientEvidenceOutcomeSchema,
-  conflictingEvidenceOutcomeSchema,
+  modelInsufficientEvidenceOutcomeSchema,
 ]);
 
 export type ModelAnswerContract = z.infer<typeof modelAnswerContractSchema>;
 
 /**
- * The server-resolved counterpart of `modelAnswerContractSchema`: identical except its `answered`
- * branch's citations also carry `docVersionId`/`sha256`/`locator`, filled in by
- * `SynthesisService.synthesizeAnswer` from the retrieved chunk each citation's `chunkId` names.
- * This is what `GroundingGateService` verifies, what `Answer.outcome` persists, and what
- * `eval/run.ts` scores against — never what the model produces directly.
+ * The server-resolved counterpart of `modelAnswerContractSchema`: its `answered` branch's
+ * citations also carry `docVersionId`/`sha256`/`locator`, filled in by
+ * `SynthesisService.synthesizeAnswer` from the retrieved chunk each citation's `chunkId` names;
+ * its `insufficient_evidence` branch carries a server-rendered `reason` sentence, not the model's
+ * `reasonCode`; its `conflicting_evidence` branch is never produced from a model-facing schema at
+ * all (see `conflictingEvidenceOutcomeSchema`'s doc comment). This is what `GroundingGateService`
+ * verifies, what `Answer.outcome` persists, and what `eval/run.ts` scores against — never what
+ * the model produces directly.
  */
 export const answerContractSchema = z.discriminatedUnion('kind', [
   answeredOutcomeSchema,

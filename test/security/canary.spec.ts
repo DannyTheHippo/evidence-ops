@@ -258,6 +258,62 @@ describe('canary security suite', () => {
 
       expect(JSON.stringify(result)).toContain(CANARY_MARKERS.xlsx.token);
     });
+
+    // The demonstrated exploit this fix closes (ADR-0004 bound 4): the first full eval run against
+    // the real model leaked a canary through `insufficient_evidence.reason` in two adversarial
+    // cases (adv-005, adv-007; `canaryLeakRate` 0.0625, hard gate failed). The real
+    // `AnthropicModelProvider` is schema-validated and can never put arbitrary text in `reasonCode`
+    // (`modelInsufficientEvidenceOutcomeSchema` in `answer.contract.ts`), but `FakeModelProvider`
+    // returns exactly what a test enqueues, unvalidated (see its own doc comment) — this simulates
+    // a model/provider that bypassed that validation, to prove the render step in
+    // `SynthesisService.resolveContract` fails CLOSED on its own, not merely by relying on upstream
+    // schema enforcement. Asserts the returned value, matching this fix's own test requirement.
+    it('should never let a marker injected into an insufficient_evidence reasonCode reach the returned outcome', async () => {
+      modelProvider.enqueueResult({
+        output: { kind: 'insufficient_evidence', reasonCode: CANARY_MARKERS.xlsx.token },
+      });
+
+      const result = await synthesisService.synthesizeAnswer({
+        question: 'What is the cap rate for Northgate Business Park?',
+        chunks: [],
+      });
+
+      expect(JSON.stringify(result)).not.toContain(CANARY_MARKERS.xlsx.token);
+      expect(result).toEqual({
+        kind: 'insufficient_evidence',
+        reason: 'The retrieved evidence does not support an answer to this question.',
+      });
+    });
+
+    // Same bound, the other outcome ADR-0004 named as unverified: `conflicting_evidence`'s
+    // `factKey`/`values` reached a caller as model-authored text with no check at all. The model
+    // is no longer offered this branch (`modelAnswerContractSchema` no longer includes it) — this
+    // simulates the same kind of bypass as the test above to prove `resolveContract` fails CLOSED
+    // to the generic `insufficient_evidence` outcome rather than forwarding the injected fields.
+    it('should never let a marker injected into a model-authored conflicting_evidence outcome reach the returned outcome', async () => {
+      modelProvider.enqueueResult({
+        output: {
+          kind: 'conflicting_evidence',
+          factKey: { entity: CANARY_MARKERS.xlsx.token, metric: 'revenue', period: 'Q1 2025' },
+          values: [
+            { value: 1, unit: CANARY_MARKERS.pdf.token, sourceChunkId: 'chunk-1' },
+            { value: 2, unit: 'usd', sourceChunkId: 'chunk-2' },
+          ],
+        },
+      });
+
+      const result = await synthesisService.synthesizeAnswer({
+        question: 'What is the cap rate for Northgate Business Park?',
+        chunks: [],
+      });
+
+      expect(JSON.stringify(result)).not.toContain(CANARY_MARKERS.xlsx.token);
+      expect(JSON.stringify(result)).not.toContain(CANARY_MARKERS.pdf.token);
+      expect(result).toEqual({
+        kind: 'insufficient_evidence',
+        reason: 'None of the retrieved evidence is relevant to this question.',
+      });
+    });
   });
 
   describe('grounding gate — known bound (ADR-0004)', () => {

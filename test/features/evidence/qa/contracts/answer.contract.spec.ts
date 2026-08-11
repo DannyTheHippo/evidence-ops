@@ -6,6 +6,7 @@ import {
   locatorSchema,
   modelAnswerContractSchema,
   modelCitationSchema,
+  modelInsufficientEvidenceOutcomeSchema,
   type Locator,
 } from '../../../../../src/features/evidence/qa/contracts/answer.contract';
 import { toStructuredOutputFormat } from '../../../../../src/providers/model/structured-output-format.util';
@@ -128,6 +129,70 @@ describe('modelCitationSchema', () => {
     const citation = { chunkId: 'chunk-1', quote: 'x'.repeat(301) };
 
     expect(modelCitationSchema.safeParse(citation).success).toBe(false);
+  });
+});
+
+// ADR-0004 bound 4 (closed): the model may no longer author free text for `insufficient_evidence`
+// or the `conflicting_evidence` outcome at all — see `modelInsufficientEvidenceOutcomeSchema` and
+// `conflictingEvidenceOutcomeSchema`'s doc comments in `answer.contract.ts`.
+describe('modelInsufficientEvidenceOutcomeSchema', () => {
+  it('accepts a valid reasonCode', () => {
+    const outcome = { kind: 'insufficient_evidence', reasonCode: 'no_relevant_evidence' };
+
+    expect(modelInsufficientEvidenceOutcomeSchema.safeParse(outcome).success).toBe(true);
+  });
+
+  it('rejects a reasonCode outside the closed set', () => {
+    const outcome = { kind: 'insufficient_evidence', reasonCode: 'EOPS_CANARY_XLSX_9F3B21' };
+
+    expect(modelInsufficientEvidenceOutcomeSchema.safeParse(outcome).success).toBe(false);
+  });
+
+  it('rejects the old free-text reason field with no reasonCode', () => {
+    const outcome = { kind: 'insufficient_evidence', reason: 'the evidence does not mention this' };
+
+    expect(modelInsufficientEvidenceOutcomeSchema.safeParse(outcome).success).toBe(false);
+  });
+
+  it('strips an accompanying free-text reason field rather than accepting or reporting it', () => {
+    // Captures the exact exploit shape: a model that tries to smuggle a marker through a
+    // leftover/forged `reason` alongside a valid `reasonCode` gets it silently dropped by zod's
+    // default unknown-key stripping, not merely ignored by a consumer that reads `reasonCode`
+    // instead — a caller stringifying the parsed value can never observe it either.
+    const outcome = {
+      kind: 'insufficient_evidence',
+      reasonCode: 'no_relevant_evidence',
+      reason: 'EOPS_CANARY_XLSX_9F3B21',
+    };
+
+    const result = modelInsufficientEvidenceOutcomeSchema.safeParse(outcome);
+
+    expect(result.success).toBe(true);
+    expect(JSON.stringify(result.success && result.data)).not.toContain('EOPS_CANARY_XLSX_9F3B21');
+  });
+});
+
+describe('modelAnswerContractSchema', () => {
+  it('rejects a "conflicting_evidence" outcome — the model is never offered this branch', () => {
+    const outcome = {
+      kind: 'conflicting_evidence',
+      factKey: { entity: 'Acme Corp', metric: 'revenue', period: 'Q3-2025' },
+      values: [
+        { value: 12_000_000, unit: 'usd', sourceChunkId: 'chunk-1' },
+        { value: 12_500_000, unit: 'usd', sourceChunkId: 'chunk-2' },
+      ],
+    };
+
+    expect(modelAnswerContractSchema.safeParse(outcome).success).toBe(false);
+  });
+
+  it('accepts an "insufficient_evidence" outcome with a valid reasonCode', () => {
+    const outcome = {
+      kind: 'insufficient_evidence',
+      reasonCode: 'retrieved_evidence_contradicts_itself',
+    };
+
+    expect(modelAnswerContractSchema.safeParse(outcome).success).toBe(true);
   });
 });
 

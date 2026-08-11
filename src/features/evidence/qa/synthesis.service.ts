@@ -8,6 +8,7 @@ import {
   modelAnswerContractSchema,
   type AnswerContract,
   type Citation,
+  type InsufficientEvidenceReasonCode,
   type Locator,
   type ModelAnswerContract,
   type ModelCitation,
@@ -77,39 +78,101 @@ function resolveCitation(
 }
 
 /**
- * Turns the model's `ModelAnswerContract` into the server-resolved `AnswerContract` by resolving
- * every citation in the `answered` branch (`resolveCitation` above); `insufficient_evidence` and
- * `conflicting_evidence` carry no citations, so they pass through unchanged — the two schemas
- * share those branches verbatim (`answer.contract.ts`).
+ * Fixed, server-authored sentences for each `InsufficientEvidenceReasonCode` — the only text that
+ * ever reaches a caller as the `insufficient_evidence` outcome's `reason` (see
+ * `renderInsufficientEvidenceReason` below and ADR-0004 bound 4).
+ */
+const INSUFFICIENT_EVIDENCE_REASON_TEXT: ReadonlyMap<InsufficientEvidenceReasonCode, string> =
+  new Map([
+    ['no_relevant_evidence', 'None of the retrieved evidence is relevant to this question.'],
+    [
+      'evidence_does_not_address_question',
+      'The retrieved evidence does not contain enough information to answer this question.',
+    ],
+    [
+      'retrieved_evidence_contradicts_itself',
+      'The retrieved evidence reports conflicting values for the same fact, so no single answer can be given with confidence.',
+    ],
+  ]);
+
+/** Fail-closed default for a `reasonCode` outside `INSUFFICIENT_EVIDENCE_REASON_TEXT` — see
+ * `renderInsufficientEvidenceReason`'s doc comment for when this is actually reachable. */
+const GENERIC_INSUFFICIENT_EVIDENCE_REASON =
+  'The retrieved evidence does not support an answer to this question.';
+
+/**
+ * Renders a model-selected `reasonCode` into the fixed sentence persisted/returned as
+ * `AnswerContract`'s `insufficient_evidence.reason` — the model never supplies this text itself
+ * (ADR-0004 bound 4, closed). `reasonCode` is typed as one of three literals by
+ * `modelInsufficientEvidenceOutcomeSchema`, and a real `AnthropicModelProvider` call enforces that
+ * at the structured-output layer (`safeParseJson`), so this lookup should always hit. It still
+ * fails CLOSED to a generic sentence for a value outside the map rather than trusting the type,
+ * because not every `ModelProvider` in this codebase validates its output —
+ * `FakeModelProvider.generate` returns exactly what a test enqueues, unvalidated (see its own doc
+ * comment) — and the whole point of this fix is that nothing the model writes ever reaches a
+ * caller as free text again, even a value that slipped past validation upstream.
+ */
+function renderInsufficientEvidenceReason(reasonCode: InsufficientEvidenceReasonCode): string {
+  return INSUFFICIENT_EVIDENCE_REASON_TEXT.get(reasonCode) ?? GENERIC_INSUFFICIENT_EVIDENCE_REASON;
+}
+
+/**
+ * Turns the model's `ModelAnswerContract` into the server-resolved `AnswerContract`: resolves
+ * every citation in the `answered` branch (`resolveCitation` above), and renders the
+ * `insufficient_evidence` branch's fixed sentence from the model's `reasonCode`
+ * (`renderInsufficientEvidenceReason` above) rather than passing any model-authored text through.
+ *
+ * `modelAnswerContractSchema` only ever offers `answered` or `insufficient_evidence` — see that
+ * schema's doc comment for why `conflicting_evidence` is not a model-facing branch at all. A real
+ * `AnthropicModelProvider` call cannot reach the fallback branch below: `safeParseJson` rejects
+ * any other `kind` before this function ever runs. The fallback exists only because
+ * `FakeModelProvider` (and, in principle, a future unvalidated `ModelProvider`) can hand this
+ * function a shape `ModelAnswerContract` promises will never occur — it fails CLOSED to a generic
+ * `insufficient_evidence` rather than forwarding an unverified `factKey`/`values` or throwing on
+ * a shape it was never told to expect.
  */
 function resolveContract(
   output: ModelAnswerContract,
   chunks: readonly RetrievedChunk[],
 ): AnswerContract {
-  if (output.kind !== 'answered') {
-    return output;
+  if (output.kind === 'answered') {
+    const chunkById = new Map(chunks.map((chunk) => [chunk.chunkId, chunk] as const));
+
+    return {
+      kind: 'answered',
+      claims: output.claims.map((claim) => ({
+        statement: claim.statement,
+        citations: claim.citations.map((citation) => resolveCitation(citation, chunkById)),
+      })),
+    };
   }
 
-  const chunkById = new Map(chunks.map((chunk) => [chunk.chunkId, chunk] as const));
+  if (output.kind === 'insufficient_evidence') {
+    return {
+      kind: 'insufficient_evidence',
+      reason: renderInsufficientEvidenceReason(output.reasonCode),
+    };
+  }
 
   return {
-    kind: 'answered',
-    claims: output.claims.map((claim) => ({
-      statement: claim.statement,
-      citations: claim.citations.map((citation) => resolveCitation(citation, chunkById)),
-    })),
+    kind: 'insufficient_evidence',
+    reason: renderInsufficientEvidenceReason('no_relevant_evidence'),
   };
 }
 
 /**
  * Turns retrieved evidence into a model-authored `AnswerContract`. Still a generator, not a
- * verifier: `resolveContract` only fills in the server-known provenance fields the model was never
- * shown (`docVersionId`, `sha256`, `locator` — see `modelCitationSchema`'s doc comment) by
- * `chunkId` lookup against the same `chunks` this call was given; it adds no claim coverage, no
- * verification report, no dropped-claim record, and it drops nothing the model didn't already
- * omit. Those are computed by `GroundingGateService` (`./grounding-gate.service.ts`) from this
- * output; conflating the two would let an unverified model claim reach a caller under the same
- * shape as a gate-checked one.
+ * citation verifier: on the `answered` branch, `resolveContract` only fills in the server-known
+ * provenance fields the model was never shown (`docVersionId`, `sha256`, `locator` — see
+ * `modelCitationSchema`'s doc comment) by `chunkId` lookup against the same `chunks` this call was
+ * given — it adds no claim coverage, no verification report, no dropped-claim record; those are
+ * computed by `GroundingGateService` (`./grounding-gate.service.ts`) from this output, and
+ * conflating the two would let an unverified model claim reach a caller under the same shape as a
+ * gate-checked one. On `insufficient_evidence`, `resolveContract` renders the model's `reasonCode`
+ * into a fixed, server-authored sentence rather than passing any model text through (ADR-0004
+ * bound 4); on anything else, it fails CLOSED to that same fixed outcome rather than forwarding an
+ * unverified payload — see `resolveContract`'s own doc comment for why and when that branch is
+ * actually reachable.
  *
  * No retry loop here: `AnthropicModelProvider` already retries once on schema-validation failure,
  * and the Anthropic SDK itself retries transient (network/5xx) failures twice. A third layer would

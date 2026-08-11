@@ -40,12 +40,13 @@ function buildSystemPrompt(): string {
     'exact source text verbatim.',
     '',
     'If the evidence does not contain enough information to answer the question, return the',
-    'insufficient_evidence outcome with a reason. That is a valid, correct answer — never',
-    'fabricate a claim, or stretch a citation to a chunk that does not actually support it, to',
-    'avoid returning it.',
-    '',
-    'If the evidence contains genuinely conflicting values for the same underlying fact, return',
-    'the conflicting_evidence outcome instead of silently picking one side.',
+    'insufficient_evidence outcome with the reasonCode that best matches why: use',
+    '"no_relevant_evidence" when nothing retrieved bears on the question,',
+    '"evidence_does_not_address_question" when relevant evidence exists but does not answer it,',
+    'or "retrieved_evidence_contradicts_itself" when the evidence itself reports genuinely',
+    'conflicting values for the same underlying fact. Each of these is a valid, correct answer —',
+    'never fabricate a claim, or stretch a citation to a chunk that does not actually support it,',
+    'to avoid returning one of them.',
   ].join('\n');
 }
 
