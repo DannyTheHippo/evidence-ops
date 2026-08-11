@@ -12,6 +12,7 @@ const mockClient = jest.fn();
 const mockClose = jest.fn();
 const mockStart = jest.fn();
 const mockGetHandle = jest.fn();
+const mockSignal = jest.fn();
 
 jest.mock('@temporalio/client', () => ({
   __esModule: true,
@@ -91,6 +92,16 @@ describe('TemporalWorkflowEngine', () => {
 
     expect(mockGetHandle).toHaveBeenCalledWith('wf-1');
     expect(handle).toEqual({ id: 'wf-1', status: expected });
+  });
+
+  it('should signal a running workflow by id, name, and payload', async () => {
+    mockGetHandle.mockReturnValue({ signal: mockSignal });
+    const engine = new TemporalWorkflowEngine(config);
+
+    await engine.signal('wf-1', 'approvalDecision', { claimedDecision: 'approved' });
+
+    expect(mockGetHandle).toHaveBeenCalledWith('wf-1');
+    expect(mockSignal).toHaveBeenCalledWith('approvalDecision', { claimedDecision: 'approved' });
   });
 
   it('should close the connection on module destroy if one was opened', async () => {

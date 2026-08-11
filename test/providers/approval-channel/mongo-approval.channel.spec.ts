@@ -38,6 +38,7 @@ describe('MongoApprovalChannel', () => {
         subject: { entityType: 'Conflict', entityId },
         requestedBy: 'analyst@example.com',
         tenantId: 'acme-corp',
+        workflowId: 'wf-1',
       });
 
       expect(mockApprovalModel.create).toHaveBeenCalledWith({
@@ -47,6 +48,7 @@ describe('MongoApprovalChannel', () => {
         requestedBy: 'analyst@example.com',
         tenantId: 'acme-corp',
         state: 'pending',
+        workflowId: 'wf-1',
       });
       expect(handle).toEqual({ id: approvalId.toString() });
     });

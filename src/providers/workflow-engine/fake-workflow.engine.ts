@@ -7,6 +7,10 @@ import type { WorkflowEngine, WorkflowHandle, WorkflowStatus } from './workflow-
 export class FakeWorkflowEngine implements WorkflowEngine {
   readonly started: { workflowType: string; input: unknown }[] = [];
 
+  /** Recorded so a test can assert what a caller signalled without a real Temporal server —
+   *  mirrors `started`'s own reasoning. */
+  readonly signals: { id: string; signalName: string; payload: unknown }[] = [];
+
   private readonly handles = new Map<string, WorkflowHandle>();
 
   setStatus(id: string, status: WorkflowStatus): void {
@@ -31,5 +35,14 @@ export class FakeWorkflowEngine implements WorkflowEngine {
       throw new Error(`FakeWorkflowEngine has no workflow with id '${id}'`);
     }
     return handle;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await -- interface is async; the fake resolves synchronously
+  async signal(id: string, signalName: string, payload: unknown): Promise<void> {
+    const handle = this.handles.get(id);
+    if (!handle) {
+      throw new Error(`FakeWorkflowEngine has no workflow with id '${id}'`);
+    }
+    this.signals.push({ id, signalName, payload });
   }
 }

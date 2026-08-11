@@ -38,6 +38,7 @@ export class MongoApprovalChannel implements ApprovalChannel {
       // other write path — never assume a tenant here (9f0c2f2 was exactly this failure mode).
       tenantId: request.tenantId,
       state: 'pending',
+      workflowId: request.workflowId,
     });
 
     return { id: approval._id.toString() };

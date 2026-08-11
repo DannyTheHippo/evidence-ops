@@ -42,6 +42,7 @@ describe('DocumentsService', () => {
   const mockWorkflowEngine = {
     start: jest.fn(),
     status: jest.fn(),
+    signal: jest.fn(),
   } satisfies Record<keyof WorkflowEngine, jest.Mock>;
 
   const documentId = new Types.ObjectId();

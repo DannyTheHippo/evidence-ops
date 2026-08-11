@@ -37,9 +37,11 @@ import { IngestionService } from '../../src/features/evidence/ingestion/ingestio
 import { ParserRegistry } from '../../src/features/evidence/ingestion/parser.registry';
 import { PdfParser } from '../../src/features/evidence/ingestion/parsers/pdf.parser';
 import { XlsxParser } from '../../src/features/evidence/ingestion/parsers/xlsx.parser';
+import type { WorkflowRunsService } from '../../src/features/evidence/workflow-runs/workflow-runs.service';
 import { FakeEmbeddingProvider } from '../../src/providers/embedding/fake-embedding.provider';
 import { FakeModelProvider } from '../../src/providers/model/fake-model.provider';
 import { FakeDocumentStore } from '../../src/providers/storage/fake-document.store';
+import { FakeWorkflowEngine } from '../../src/providers/workflow-engine/fake-workflow.engine';
 import type { AppLogger } from '../../src/shared/services/logger/logger.service';
 import type { AuditService } from '../../src/shared/services/audit/audit.service';
 import { getMockLogger } from '../utils/get-mock-logger';
@@ -152,9 +154,16 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
       parserRegistry,
       logger,
     );
+    // This pipeline never resolves a conflict — it only detects one — so a real
+    // WorkflowEngine/WorkflowRunsService is unneeded; the fake and a minimal stub satisfy the
+    // constructor without pulling Temporal or another Mongo model into this integration lane.
+    const workflowEngine = new FakeWorkflowEngine();
+    const workflowRunsService = { create: jest.fn() } as unknown as WorkflowRunsService;
     const conflictsService = new ConflictsService(
       extractedFactModel,
       conflictModel,
+      workflowEngine,
+      workflowRunsService,
       auditService,
       logger,
     );

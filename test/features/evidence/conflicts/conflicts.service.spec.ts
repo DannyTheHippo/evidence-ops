@@ -11,6 +11,8 @@ import {
   ConflictNotFoundException,
   InvalidConflictResolutionException,
 } from '../../../../src/features/evidence/conflicts/exceptions/conflicts.exception';
+import { WorkflowRunsService } from '../../../../src/features/evidence/workflow-runs/workflow-runs.service';
+import { WORKFLOW_ENGINE } from '../../../../src/providers/workflow-engine/workflow-engine.interface';
 import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
@@ -21,6 +23,8 @@ describe('ConflictsService', () => {
 
   const mockExtractedFactModel = getMockModel();
   const mockConflictModel = getMockModel();
+  const mockWorkflowEngine = { start: jest.fn(), status: jest.fn(), signal: jest.fn() };
+  const mockWorkflowRunsService = { create: jest.fn(), findById: jest.fn() };
   const mockAuditService = { record: jest.fn() };
   const mockLogger = getMockLogger();
 
@@ -39,6 +43,8 @@ describe('ConflictsService', () => {
         ConflictsService,
         { provide: getModelToken(ExtractedFact.name), useValue: mockExtractedFactModel },
         { provide: getModelToken(Conflict.name), useValue: mockConflictModel },
+        { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
+        { provide: WorkflowRunsService, useValue: mockWorkflowRunsService },
         { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: mockLogger },
       ],
@@ -447,6 +453,120 @@ describe('ConflictsService', () => {
           { factId: factIdB.toString(), value: 6.1, unit: 'percent', sourceChunkId: 'chunk-prose' },
         ],
       });
+    });
+  });
+
+  describe('requestResolution', () => {
+    const conflictId = new Types.ObjectId().toString();
+    const winningFactId = new Types.ObjectId().toString();
+    const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+    const actorId = new Types.ObjectId().toString();
+
+    const stubOpenConflict = () => {
+      mockConflictModel.findOne.mockResolvedValueOnce({
+        _id: new Types.ObjectId(conflictId),
+        factKey,
+        factIds: [new Types.ObjectId(winningFactId), new Types.ObjectId()],
+        status: 'open',
+      });
+      mockExtractedFactModel.find.mockResolvedValueOnce([
+        {
+          _id: new Types.ObjectId(winningFactId),
+          value: { amount: 5.25, unit: 'percent' },
+          chunkId: 'chunk-xlsx',
+        },
+        {
+          _id: new Types.ObjectId(),
+          value: { amount: 6.1, unit: 'percent' },
+          chunkId: 'chunk-prose',
+        },
+      ]);
+    };
+
+    it('should start the resolveConflict workflow, record the run, and audit — defaulting tenantId', async () => {
+      stubOpenConflict();
+      mockWorkflowEngine.start.mockResolvedValueOnce({ id: 'wf-1', status: 'running' });
+      const run = {
+        id: 'run-1',
+        workflowId: 'wf-1',
+        status: 'running',
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      };
+      mockWorkflowRunsService.create.mockResolvedValueOnce(run);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      const result = await service.requestResolution({
+        conflictId,
+        winningFactId,
+        actorId,
+        requestedBy: 'analyst@example.com',
+      });
+
+      expect(mockWorkflowEngine.start).toHaveBeenCalledWith('resolveConflict', {
+        conflictId,
+        winningFactId,
+        requestedBy: 'analyst@example.com',
+        tenantId: DEFAULT_TENANT_ID,
+      });
+      expect(mockWorkflowRunsService.create).toHaveBeenCalledWith({
+        workflowId: 'wf-1',
+        status: 'running',
+        tenantId: DEFAULT_TENANT_ID,
+      });
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'conflicts.resolution_requested',
+        actorId,
+        subject: { entityType: 'Conflict', entityId: conflictId },
+        tenantId: DEFAULT_TENANT_ID,
+      });
+      expect(result).toEqual(run);
+    });
+
+    it('should scope the workflow start and the run to an explicit tenantId when provided', async () => {
+      stubOpenConflict();
+      mockWorkflowEngine.start.mockResolvedValueOnce({ id: 'wf-2', status: 'running' });
+      mockWorkflowRunsService.create.mockResolvedValueOnce({
+        id: 'run-2',
+        workflowId: 'wf-2',
+        status: 'running',
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      });
+
+      await service.requestResolution({
+        conflictId,
+        winningFactId,
+        actorId,
+        requestedBy: 'analyst@example.com',
+        tenantId: 'acme-corp',
+      });
+
+      expect(mockWorkflowEngine.start).toHaveBeenCalledWith(
+        'resolveConflict',
+        expect.objectContaining({ tenantId: 'acme-corp' }),
+      );
+      expect(mockWorkflowRunsService.create).toHaveBeenCalledWith(
+        expect.objectContaining({ tenantId: 'acme-corp' }),
+      );
+    });
+
+    it("should propagate loadConflictForResolution's validation failure without starting a workflow", async () => {
+      mockConflictModel.findOne.mockResolvedValueOnce({
+        _id: new Types.ObjectId(conflictId),
+        factKey,
+        factIds: [new Types.ObjectId(winningFactId), new Types.ObjectId()],
+        status: 'resolved',
+      });
+
+      await expect(
+        service.requestResolution({
+          conflictId,
+          winningFactId,
+          actorId,
+          requestedBy: 'analyst@example.com',
+        }),
+      ).rejects.toThrow(InvalidConflictResolutionException);
+      expect(mockWorkflowEngine.start).not.toHaveBeenCalled();
+      expect(mockWorkflowRunsService.create).not.toHaveBeenCalled();
     });
   });
 

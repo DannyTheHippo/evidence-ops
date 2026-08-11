@@ -8,11 +8,13 @@ import { mongooseModuleOptions } from './config/mongo.config';
 import { AuthModule } from './features/common/auth/auth.module';
 import { HealthModule } from './features/common/health/health.module';
 import { InfoModule } from './features/common/info/info.module';
+import { ApprovalsModule } from './features/evidence/approvals/approvals.module';
 import { ConflictsModule } from './features/evidence/conflicts/conflicts.module';
 import { DocumentsModule } from './features/evidence/documents/documents.module';
 import { FactsModule } from './features/evidence/facts/facts.module';
 import { IngestionModule } from './features/evidence/ingestion/ingestion.module';
 import { QaModule } from './features/evidence/qa/qa.module';
+import { WorkflowRunsModule } from './features/evidence/workflow-runs/workflow-runs.module';
 import { AuthzModule } from './features/platform/authz/authz.module';
 import { GlobalExceptionFilter } from './shared/filters/global-exception.filter';
 import { SelectInterceptor } from './shared/interceptors/select.interceptor';
@@ -48,6 +50,8 @@ import { SharedModule } from './shared/shared.module';
     FactsModule,
     ConflictsModule,
     QaModule,
+    ApprovalsModule,
+    WorkflowRunsModule,
     AuthzModule,
   ],
 })

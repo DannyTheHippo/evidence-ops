@@ -1,4 +1,10 @@
-import { condition, defineSignal, proxyActivities, setHandler } from '@temporalio/workflow';
+import {
+  condition,
+  defineSignal,
+  proxyActivities,
+  setHandler,
+  workflowInfo,
+} from '@temporalio/workflow';
 import type { Activities } from '../worker/activities';
 import type {
   ResolveConflictApprovalSignal,
@@ -111,6 +117,9 @@ export async function resolveConflict(
     subject: { entityType: 'Conflict', entityId: input.conflictId },
     requestedBy: input.requestedBy,
     tenantId: input.tenantId,
+    // `workflowInfo()` is deterministic (this execution's own id never changes on replay) — see
+    // `ApprovalRequest.workflowId`'s doc comment for why the HTTP decision endpoint (D3) needs it.
+    workflowId: workflowInfo().workflowId,
   });
 
   // The handler only ever flips this flag — see `approvalDecisionSignal`'s own doc comment for why

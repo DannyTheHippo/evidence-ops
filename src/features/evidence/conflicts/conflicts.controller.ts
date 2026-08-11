@@ -1,8 +1,11 @@
 import {
+  Body,
   Controller,
   Get,
   HttpCode,
   HttpStatus,
+  Param,
+  Post,
   Query,
   UnauthorizedException,
   Version,
@@ -13,8 +16,10 @@ import { PaginationRequestDto } from '../../../shared/dtos/request/pagination.re
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
 import { AuthenticatedRequest } from '../../../shared/types/authenticated-request.type';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
+import { WorkflowRunResponseDto } from '../workflow-runs/dtos/response/workflow-run.response.dto';
 import { conflictsApiExamples } from './api-examples/conflicts.api-examples';
 import { ConflictsService } from './conflicts.service';
+import { RequestConflictResolutionRequestDto } from './dtos/request/request-conflict-resolution.request.dto';
 import { ConflictResponseDto } from './dtos/response/conflict.response.dto';
 
 @Controller('conflicts')
@@ -40,5 +45,31 @@ export class ConflictsController {
     const { docs, count } = await this.conflictsService.list(pagination, user.userId);
 
     return { docs: docs.map((doc) => toResponseDto(ConflictResponseDto, doc)), count };
+  }
+
+  @Post(':id/resolution-requests')
+  @Version('1')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiResponse(conflictsApiExamples.resolutionRequested)
+  @ApiResponse(conflictsApiExamples.notFound)
+  @ApiResponse(conflictsApiExamples.invalidResolution)
+  async requestResolution(
+    @Param('id') id: string,
+    @Body() dto: RequestConflictResolutionRequestDto,
+    @CurrentUser() user: AuthenticatedRequest['user'],
+  ): Promise<WorkflowRunResponseDto> {
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    return toResponseDto(
+      WorkflowRunResponseDto,
+      await this.conflictsService.requestResolution({
+        conflictId: id,
+        winningFactId: dto.winningFactId,
+        actorId: user.userId,
+        requestedBy: user.email,
+      }),
+    );
   }
 }

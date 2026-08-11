@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { Inject, Injectable, InternalServerErrorException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
@@ -12,11 +12,20 @@ import {
   ExtractedFactDocument,
   type FactKey,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import {
+  WORKFLOW_ENGINE,
+  type WorkflowEngine,
+} from '../../../providers/workflow-engine/workflow-engine.interface';
 import type { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import type { ResolveConflictWorkflowInput } from '../../../workflows/types';
 import { METRIC_ONTOLOGY } from '../facts/metric-ontology';
+import {
+  WorkflowRunsService,
+  type WorkflowRunResult,
+} from '../workflow-runs/workflow-runs.service';
 import { ConflictResponseDto } from './dtos/response/conflict.response.dto';
 import { detectConflicts, groupKey } from './detect-conflicts';
 import {
@@ -93,6 +102,25 @@ export interface RecordConflictResolutionResult {
   readonly outcome: ConflictResolutionOutcome;
 }
 
+export interface RequestConflictResolutionInput {
+  readonly conflictId: string;
+  readonly winningFactId: string;
+  readonly actorId: string;
+  /** Threaded into `ResolveConflictWorkflowInput.requestedBy` and, eventually, `Approval.requestedBy`
+   *  — an opaque string (an email), not the account id, matching those fields' own doc comments. */
+  readonly requestedBy: string;
+  readonly tenantId?: string;
+}
+
+/**
+ * `resolveConflict` — the Temporal workflow type name in `src/workflows/resolve-conflict.workflow.ts`
+ * — is not exported as a runtime value from `src/workflows/**` (types only, across the determinism
+ * fence). Duplicated here rather than imported, the same reasoning `qa.service.ts`'s
+ * `ANSWER_QUESTION_WORKFLOW_TYPE` and `documents.service.ts`'s
+ * `INGEST_DOCUMENT_VERSION_WORKFLOW_TYPE` already document.
+ */
+const RESOLVE_CONFLICT_WORKFLOW_TYPE = 'resolveConflict';
+
 @Injectable()
 export class ConflictsService {
   constructor(
@@ -101,6 +129,11 @@ export class ConflictsService {
 
     @InjectModel(Conflict.name)
     private readonly conflictModel: Model<ConflictDocument>,
+
+    @Inject(WORKFLOW_ENGINE)
+    private readonly workflowEngine: WorkflowEngine,
+
+    private readonly workflowRunsService: WorkflowRunsService,
 
     private readonly auditService: AuditService,
     private readonly logger: AppLogger,
@@ -339,6 +372,48 @@ export class ConflictsService {
         sourceChunkId: fact.chunkId,
       })),
     };
+  }
+
+  /**
+   * D3 of the approvals milestone: `POST /conflicts/:id/resolution-requests`. Validates the
+   * proposal via `loadConflictForResolution` (the same fail-closed checks `resolveConflict`'s own
+   * `loadConflict` activity applies) before ever starting a workflow — no point starting a
+   * `resolveConflict` execution, and no point creating a `WorkflowRun` row for it, for a proposal
+   * that can't be honored. `workflowEngine.start` never chooses the winner (see
+   * `ResolveConflictWorkflowInput`'s own doc comment); it only starts the gate. The returned
+   * `WorkflowRunResult` — from `WorkflowRunsService.create`, this collection's first writer — gives
+   * the caller an id to poll `GET /workflow-runs/:id` with.
+   */
+  async requestResolution(input: RequestConflictResolutionInput): Promise<WorkflowRunResult> {
+    const tenantId = input.tenantId ?? DEFAULT_TENANT_ID;
+
+    await this.loadConflictForResolution(input.conflictId, input.winningFactId, tenantId);
+
+    const handle = await this.workflowEngine.start(RESOLVE_CONFLICT_WORKFLOW_TYPE, {
+      conflictId: input.conflictId,
+      winningFactId: input.winningFactId,
+      requestedBy: input.requestedBy,
+      tenantId,
+    } satisfies ResolveConflictWorkflowInput);
+
+    const run = await this.workflowRunsService.create({
+      workflowId: handle.id,
+      status: handle.status,
+      tenantId,
+    });
+
+    await this.auditService.record({
+      action: 'conflicts.resolution_requested',
+      actorId: input.actorId,
+      subject: { entityType: 'Conflict', entityId: input.conflictId },
+      tenantId,
+    });
+
+    this.logger.debug(
+      `Started resolveConflict workflow '${handle.id}' for conflict '${input.conflictId}'`,
+    );
+
+    return run;
   }
 
   /**

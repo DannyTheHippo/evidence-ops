@@ -55,6 +55,11 @@ export class TemporalWorkflowEngine implements WorkflowEngine, OnModuleDestroy {
     return { id, status: toWorkflowStatus(description.status.name) };
   }
 
+  async signal(id: string, signalName: string, payload: unknown): Promise<void> {
+    const client = await this.getClient();
+    await client.workflow.getHandle(id).signal(signalName, payload);
+  }
+
   /** Mirrors `mongo.config.ts`'s `stopInMemoryMongo` concern: an opened connection left unclosed
    *  outlives the module that opened it. */
   async onModuleDestroy(): Promise<void> {

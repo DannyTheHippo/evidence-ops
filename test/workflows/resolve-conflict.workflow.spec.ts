@@ -12,6 +12,7 @@ interface MockedTemporalWorkflow {
   activityStubs: ActivityStubs;
   setHandler: jest.Mock;
   condition: jest.Mock;
+  workflowInfo: jest.Mock;
 }
 
 type SignalHandler = (payload?: { claimedDecision?: 'approved' | 'rejected' }) => void;
@@ -41,13 +42,14 @@ jest.mock('@temporalio/workflow', () => {
     defineSignal: jest.fn((name: string) => ({ name })),
     setHandler: jest.fn(),
     condition: jest.fn(),
+    workflowInfo: jest.fn(() => ({ workflowId: 'wf-1' })),
   };
 });
 
 const temporalWorkflowMock = jest.requireMock(
   '@temporalio/workflow',
 ) as unknown as MockedTemporalWorkflow;
-const { activityStubs, setHandler, condition } = temporalWorkflowMock;
+const { activityStubs, setHandler, condition, workflowInfo } = temporalWorkflowMock;
 
 const candidate = {
   conflictId: 'conflict-1',
@@ -76,6 +78,9 @@ describe('resolveConflict', () => {
     });
     activityStubs.loadConflict.mockResolvedValue(candidate);
     activityStubs.requestConflictApproval.mockResolvedValue({ id: 'approval-1' });
+    // `resetAllMocks()` below wipes `jest.mock`'s factory-time implementation every test — must be
+    // re-set here (`jest-tests.md`'s own convention for a `jest.fn` carrying an implementation).
+    workflowInfo.mockReturnValue({ workflowId: 'wf-1' });
   });
 
   afterEach(() => {
@@ -112,6 +117,7 @@ describe('resolveConflict', () => {
         subject: { entityType: 'Conflict', entityId: 'conflict-1' },
         requestedBy: 'reviewer@example.com',
         tenantId: 'acme-corp',
+        workflowId: 'wf-1',
       }),
     );
     expect(activityStubs.getApprovalDecision).toHaveBeenCalledWith('approval-1');
