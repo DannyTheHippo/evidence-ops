@@ -37,6 +37,9 @@ export const getMockConfig = (): EnvironmentConfig => ({
     apiKey: undefined,
     model: 'voyage-4',
     dimensions: 1024,
+    requestsPerMinute: 3,
+    maxRetries: 5,
+    maxRetryWaitMs: 300000,
   },
 
   temporal: {

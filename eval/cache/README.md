@@ -9,12 +9,16 @@ zero API cost, byte-stable — see `docs/adr/0007-eval-replay-cache.md`).
   inputType, inputs) request, written by `CachingEmbeddingProvider`
   (`eval/providers/caching-embedding.provider.ts`).
 
-Both are currently **empty**: populating them requires live `ANTHROPIC_API_KEY`/`VOYAGE_API_KEY`
-and a reachable Mongo (`npm run eval -- --record`), neither of which is available in a sandboxed
-implementation session. `npm run eval` in the default replay mode will fail loudly with a
-`ModelReplayCacheMissError`/`EmbeddingReplayCacheMissError` until a `--record` run populates these
-directories — that failure is the intended fail-loud behaviour (never a silent live call), not a
-bug.
+Populating these requires live `ANTHROPIC_API_KEY`/`VOYAGE_API_KEY` and a reachable Mongo
+(`npm run eval -- --record`) — neither is available inside a sandboxed implementation session, so
+recording is always an operator-run step.
+
+A partially-recorded cache is the normal state during development, and `npm run eval` in the
+default replay mode fails loudly with `ModelReplayCacheMissError`/`EmbeddingReplayCacheMissError`
+on the first request it has no fixture for. That failure is the intended behaviour — never a silent
+live call — not a bug. It also means the cache is only as complete as the last `--record` run got:
+a run that died partway leaves the entries it had already written, which is why the counts here can
+grow without the eval yet producing results.
 
 Once recorded, both directories are committed: CI runs `npm run eval` replay-only, at zero cost.
 Re-record deliberately (`--record`) after any change to the corpus, the dataset questions, the

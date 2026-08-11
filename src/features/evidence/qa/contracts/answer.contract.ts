@@ -3,9 +3,9 @@ import { z } from 'zod';
 // `rules/typescript-general.md` / project convention reserves zod for env parsing
 // (`environment.config.ts`); HTTP request/response DTOs use class-validator/class-transformer
 // instead. This file is the deliberate exception: `answerContractSchema` is converted to a JSON
-// Schema to constrain the model's structured output, and the same schema is meant to be reused by
-// the eval dataset in `eval/` once a runner exists to score responses against it — a single
-// runtime-validatable source of truth matters more here than consistency with the DTO convention.
+// Schema to constrain the model's structured output, and the same schema is reused by the eval
+// runner (`eval/run.ts`) to score responses — a single runtime-validatable source of truth matters
+// more here than consistency with the DTO convention.
 
 /**
  * Mirrors `EvidenceLocator` in
@@ -54,7 +54,12 @@ export type Locator = z.infer<typeof locatorSchema>;
 
 /** A citation pins the exact bytes a claim rests on: which version, which content hash, which
  * chunk, where inside it, and a verbatim (not paraphrased) quote capped at 300 characters so a
- * citation can be spot-checked against the source without re-reading the whole chunk. */
+ * citation can be spot-checked against the source without re-reading the whole chunk.
+ *
+ * This is the server-resolved shape, not what the model produces — see `modelCitationSchema`
+ * below for what the model is actually shown and asked to cite, and `SynthesisService.
+ * synthesizeAnswer` (`../synthesis.service.ts`) for where `docVersionId`/`sha256`/`locator` get
+ * filled in from the retrieved chunk a citation's `chunkId` names. */
 export const citationSchema = z.object({
   docVersionId: z.string().min(1),
   sha256: z.string().regex(/^[a-f0-9]{64}$/i, 'sha256 must be a 64-character hex digest'),
@@ -72,6 +77,34 @@ export const claimSchema = z.object({
 
 export type Claim = z.infer<typeof claimSchema>;
 
+/**
+ * What the model is actually shown for a chunk — `chunkId` and a human-readable `locator` display
+ * string such as "PDF page 3" (`formatLocator` in `../prompts/format-locator.ts`) — and therefore
+ * all it can honestly cite by. `docVersionId`, `sha256`, and the *structured* `locator` object
+ * `citationSchema` above requires (in particular `extractorVersion`, which appears in no form
+ * anywhere in the prompt) are never shown to the model at all. Requiring any of the three from the
+ * model asked for a value the prompt structurally cannot supply — the model invented one every
+ * time (the incident this schema split fixes: every `sha256` in a real response failed
+ * `ModelSchemaValidationError` after one retry with "sha256 must be a 64-character hex digest",
+ * because the model was fabricating a string, not reporting a real hash). All three are
+ * server-known facts about a retrieved chunk, not judgements the model is making, so they are
+ * resolved server-side by `chunkId` lookup instead — see `SynthesisService.synthesizeAnswer`'s
+ * `resolveCitation`.
+ */
+export const modelCitationSchema = z.object({
+  chunkId: z.string().min(1),
+  quote: z.string().min(1).max(300),
+});
+
+export type ModelCitation = z.infer<typeof modelCitationSchema>;
+
+export const modelClaimSchema = z.object({
+  statement: z.string().min(1),
+  citations: z.array(modelCitationSchema).min(1),
+});
+
+export type ModelClaim = z.infer<typeof modelClaimSchema>;
+
 // Exported (unlike the other two outcome branches below) because the grounding gate
 // (`../grounding-gate.service.ts`) only ever verifies the `answered` branch — `insufficient_evidence`
 // and `conflicting_evidence` have no claims to check — and needs a name for that narrowed input
@@ -83,10 +116,23 @@ export const answeredOutcomeSchema = z.object({
 
 export type AnsweredOutcome = z.infer<typeof answeredOutcomeSchema>;
 
-// `insufficient_evidence` is a valid success state, not an error — the (not yet built) eval
-// harness is meant to reward producing it on genuinely unanswerable questions rather than
+/** Same narrowing rationale as `answeredOutcomeSchema` above, for the schema actually sent to the
+ * model — see `modelAnswerContractSchema`. */
+export const modelAnsweredOutcomeSchema = z.object({
+  kind: z.literal('answered'),
+  claims: z.array(modelClaimSchema).min(1),
+});
+
+export type ModelAnsweredOutcome = z.infer<typeof modelAnsweredOutcomeSchema>;
+
+// `insufficient_evidence` is a valid success state, not an error — the eval harness scores it as
+// correct (abstention accuracy) on genuinely unanswerable questions, so producing it beats
 // fabricating a claim.
-const insufficientEvidenceOutcomeSchema = z.object({
+//
+// Exported (unlike before this file grew a model-facing schema) because it carries no citations —
+// nothing in it is a server-known fact to resolve — so `modelAnswerContractSchema` and
+// `answerContractSchema` share this one instance rather than each declaring an identical copy.
+export const insufficientEvidenceOutcomeSchema = z.object({
   kind: z.literal('insufficient_evidence'),
   reason: z.string().min(1),
 });
@@ -97,7 +143,9 @@ const conflictingValueSchema = z.object({
   sourceChunkId: z.string().min(1),
 });
 
-const conflictingEvidenceOutcomeSchema = z.object({
+// Exported for the same reason as `insufficientEvidenceOutcomeSchema` above: no citations, so no
+// resolution step, so both the model-facing and server-resolved contracts share it as-is.
+export const conflictingEvidenceOutcomeSchema = z.object({
   kind: z.literal('conflicting_evidence'),
   factKey: z.object({
     entity: z.string().min(1),
@@ -108,10 +156,29 @@ const conflictingEvidenceOutcomeSchema = z.object({
 });
 
 /**
- * The model-authored part of an answer. This is the only schema converted to a JSON Schema for
- * the structured-output constraint, so the model can never be asked to (and never legitimately
- * can) produce `claimCoverage`, a verification report, or a dropped-claim record — those exist
- * only in `AnswerEnvelope` below, which the model never sees.
+ * What is actually sent to Anthropic as the structured-output JSON Schema constraint (see
+ * `SynthesisService.synthesizeAnswer`, `toStructuredOutputFormat`). Its `answered` branch uses
+ * `modelAnsweredOutcomeSchema` (citations are `chunkId` + `quote` only — see
+ * `modelCitationSchema`'s doc comment for why); `insufficient_evidence` and `conflicting_evidence`
+ * carry no citations, so they need no server-known fields resolved and are shared as-is with
+ * `answerContractSchema` below. The model can never be asked to (and never legitimately can)
+ * produce `claimCoverage`, a verification report, or a dropped-claim record either way — those
+ * exist only in `AnswerEnvelope` further below, which the model never sees.
+ */
+export const modelAnswerContractSchema = z.discriminatedUnion('kind', [
+  modelAnsweredOutcomeSchema,
+  insufficientEvidenceOutcomeSchema,
+  conflictingEvidenceOutcomeSchema,
+]);
+
+export type ModelAnswerContract = z.infer<typeof modelAnswerContractSchema>;
+
+/**
+ * The server-resolved counterpart of `modelAnswerContractSchema`: identical except its `answered`
+ * branch's citations also carry `docVersionId`/`sha256`/`locator`, filled in by
+ * `SynthesisService.synthesizeAnswer` from the retrieved chunk each citation's `chunkId` names.
+ * This is what `GroundingGateService` verifies, what `Answer.outcome` persists, and what
+ * `eval/run.ts` scores against — never what the model produces directly.
  */
 export const answerContractSchema = z.discriminatedUnion('kind', [
   answeredOutcomeSchema,

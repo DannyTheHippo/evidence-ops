@@ -4,8 +4,11 @@ import {
   citationSchema,
   claimSchema,
   locatorSchema,
+  modelAnswerContractSchema,
+  modelCitationSchema,
   type Locator,
 } from '../../../../../src/features/evidence/qa/contracts/answer.contract';
+import { toStructuredOutputFormat } from '../../../../../src/providers/model/structured-output-format.util';
 
 const SHA256_FIXTURE = 'a'.repeat(64);
 
@@ -108,6 +111,26 @@ describe('citationSchema', () => {
   });
 });
 
+describe('modelCitationSchema', () => {
+  it('accepts a chunkId and quote with no docVersionId, sha256, or locator', () => {
+    const citation = { chunkId: 'chunk-1', quote: 'Revenue grew 12% year over year.' };
+
+    expect(modelCitationSchema.safeParse(citation).success).toBe(true);
+  });
+
+  it('rejects a citation missing chunkId', () => {
+    const citation = { quote: 'Revenue grew 12% year over year.' };
+
+    expect(modelCitationSchema.safeParse(citation).success).toBe(false);
+  });
+
+  it('rejects a quote longer than 300 characters, same bound as citationSchema', () => {
+    const citation = { chunkId: 'chunk-1', quote: 'x'.repeat(301) };
+
+    expect(modelCitationSchema.safeParse(citation).success).toBe(false);
+  });
+});
+
 describe('answerContractSchema', () => {
   it('accepts a valid "answered" outcome', () => {
     const outcome = {
@@ -200,5 +223,84 @@ describe('answerContractSchema', () => {
     expect(
       result.success && (result.data as Record<string, unknown>).verificationReport,
     ).toBeUndefined();
+  });
+});
+
+describe('answerContractSchema emitted as a structured-output JSON Schema', () => {
+  // Regression test for a live 400 from Anthropic: `answerContractSchema` reuses `claimSchema`
+  // and `citationSchema` (each referenced once, but through an array element, which zod's
+  // `reused: 'ref'` mode still hoists) inside a `z.discriminatedUnion`. The SDK's own
+  // `zodOutputFormat()` helper hardcodes `reused: 'ref'`, which produced `$defs`/`$ref` nested
+  // under `anyOf` — Anthropic's structured-outputs API rejects that combination outright. See
+  // `structured-output-format.util.ts` for the fix. This asserts the property the live API
+  // actually enforces, since the API itself cannot be called from this test environment.
+  const format = toStructuredOutputFormat(answerContractSchema);
+  const serialized = JSON.stringify(format.schema);
+
+  it('contains no $defs', () => {
+    expect(serialized).not.toContain('$defs');
+  });
+
+  it('contains no $ref', () => {
+    expect(serialized).not.toContain('$ref');
+  });
+
+  it('still expresses the three-way discriminated union via anyOf', () => {
+    const anyOf = format.schema['anyOf'] as Array<Record<string, unknown>>;
+
+    expect(Array.isArray(anyOf)).toBe(true);
+    expect(anyOf).toHaveLength(3);
+  });
+
+  it('requires "kind" and "claims" on the answered branch, with no $ref standing in for the shape', () => {
+    const anyOf = format.schema['anyOf'] as Array<Record<string, unknown>>;
+    const answeredBranch = anyOf.find(
+      (branch) =>
+        (branch['properties'] as Record<string, unknown> | undefined)?.['kind'] !== undefined &&
+        JSON.stringify(branch).includes('answered'),
+    );
+
+    expect(answeredBranch?.['required']).toEqual(['kind', 'claims']);
+    expect((answeredBranch?.['properties'] as Record<string, unknown>)['claims']).toBeDefined();
+  });
+});
+
+describe('modelAnswerContractSchema emitted as a structured-output JSON Schema', () => {
+  // Regression test for the live incident this schema split fixes: `answerContractSchema`
+  // required `docVersionId`/`sha256`/a structured `locator` on every citation, but the prompt
+  // (`assemble-answer-messages.ts`) never shows the model any of those three — only `chunkId` and
+  // a display-string `locator`. Every real answer's `sha256` failed `ModelSchemaValidationError`
+  // because the model had no real value to report. `modelAnswerContractSchema` is what is now
+  // actually sent to Anthropic (`SynthesisService.synthesizeAnswer`); this asserts it never asks
+  // for what the prompt cannot supply.
+  const format = toStructuredOutputFormat(modelAnswerContractSchema);
+  const serialized = JSON.stringify(format.schema);
+
+  it('never mentions sha256, docVersionId, or locator anywhere in the emitted schema', () => {
+    expect(serialized).not.toContain('sha256');
+    expect(serialized).not.toContain('docVersionId');
+    expect(serialized).not.toContain('locator');
+  });
+
+  it('requires only chunkId and quote on a citation within the answered branch', () => {
+    const anyOf = format.schema['anyOf'] as Array<Record<string, unknown>>;
+    const answeredBranch = anyOf.find(
+      (branch) =>
+        (branch['properties'] as Record<string, unknown> | undefined)?.['kind'] !== undefined &&
+        JSON.stringify(branch).includes('answered'),
+    );
+    const claimsSchema = (answeredBranch?.['properties'] as Record<string, unknown>)[
+      'claims'
+    ] as Record<string, unknown>;
+    const claimItemSchema = claimsSchema['items'] as Record<string, unknown>;
+    const citationsSchema = (claimItemSchema['properties'] as Record<string, unknown>)[
+      'citations'
+    ] as Record<string, unknown>;
+    const citationItemSchema = citationsSchema['items'] as Record<string, unknown>;
+
+    expect(citationItemSchema['required']).toEqual(['chunkId', 'quote']);
+    expect(Object.keys(citationItemSchema['properties'] as Record<string, unknown>).sort()).toEqual(
+      ['chunkId', 'quote'],
+    );
   });
 });

@@ -1,7 +1,7 @@
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { EVIDENCE_DELIMITER_TAG } from '../../../../src/features/evidence/ingestion/sanitize-evidence-text';
-import { answerContractSchema } from '../../../../src/features/evidence/qa/contracts/answer.contract';
+import { modelAnswerContractSchema } from '../../../../src/features/evidence/qa/contracts/answer.contract';
 import { SynthesisService } from '../../../../src/features/evidence/qa/synthesis.service';
 import type { RetrievedChunk } from '../../../../src/features/evidence/qa/types/retrieved-chunk.type';
 import { MODEL_PROVIDER } from '../../../../src/providers/model/model-provider.interface';
@@ -81,9 +81,10 @@ describe('SynthesisService', () => {
     expect(modelProvider.calls).toHaveLength(1);
     const call = modelProvider.calls[0];
     expect(call.taskClass).toBe('qa_answer');
-    // A schema swap (e.g. to `answerEnvelopeSchema`, which would invite the model to author
-    // `claimCoverage`) must fail this — `.toBeDefined()` would not catch it.
-    expect(call.outputSchema).toBe(answerContractSchema);
+    // A schema swap (e.g. to `answerContractSchema`, which would ask the model for `sha256`/
+    // `docVersionId` it was never shown, or to `answerEnvelopeSchema`, which would invite the
+    // model to author `claimCoverage`) must fail this — `.toBeDefined()` would not catch it.
+    expect(call.outputSchema).toBe(modelAnswerContractSchema);
     expect(call.maxTokens).toBe(4096);
     expect(call.maxCostUsd).toBe(2);
   });
@@ -166,31 +167,85 @@ describe('SynthesisService', () => {
     });
   });
 
-  it('should round-trip an answered outcome with claims cleanly', async () => {
-    const answered = {
+  it("should resolve a cited chunkId's docVersionId, sha256, and locator from the retrieved chunk, not the model", async () => {
+    // The model is never shown `docVersionId`/`sha256`/the structured `locator` (see
+    // `modelCitationSchema`'s doc comment) — its structured output can only carry `chunkId` and
+    // `quote`. This is the model-facing shape `FakeModelProvider` is enqueued with here.
+    const modelOutput = {
       kind: 'answered' as const,
+      claims: [
+        {
+          statement: 'The cap rate is approximately 6.10%.',
+          citations: [{ chunkId: 'chunk-1', quote: 'at a cap rate of approximately 6.10%' }],
+        },
+      ],
+    };
+    modelProvider.enqueueResult({ output: modelOutput });
+    const chunk = buildChunk({
+      chunkId: 'chunk-1',
+      docVersionId: 'version-1',
+      sha256: 'a'.repeat(64),
+      locator: { kind: 'pdf-page', page: 3, extractorVersion: 'v1' },
+    });
+
+    const result = await service.synthesizeAnswer({
+      question: 'What is the cap rate?',
+      chunks: [chunk],
+    });
+
+    expect(result).toEqual({
+      kind: 'answered',
       claims: [
         {
           statement: 'The cap rate is approximately 6.10%.',
           citations: [
             {
+              chunkId: 'chunk-1',
               docVersionId: 'version-1',
               sha256: 'a'.repeat(64),
-              chunkId: 'chunk-1',
-              locator: { kind: 'pdf-page' as const, page: 3, extractorVersion: 'v1' },
+              locator: { kind: 'pdf-page', page: 3, extractorVersion: 'v1' },
               quote: 'at a cap rate of approximately 6.10%',
             },
           ],
         },
       ],
-    };
-    modelProvider.enqueueResult({ output: answered });
+    });
+  });
+
+  it('should carry through a fabricated chunkId as an unresolved citation so the grounding gate still rejects it', async () => {
+    modelProvider.enqueueResult({
+      output: {
+        kind: 'answered',
+        claims: [
+          {
+            statement: 'The cap rate is approximately 6.10%.',
+            citations: [{ chunkId: 'chunk-fabricated', quote: 'a fabricated quote' }],
+          },
+        ],
+      },
+    });
 
     const result = await service.synthesizeAnswer({
       question: 'What is the cap rate?',
-      chunks: [buildChunk()],
+      chunks: [buildChunk({ chunkId: 'chunk-1' })],
     });
 
-    expect(result).toEqual(answered);
+    expect(result).toEqual({
+      kind: 'answered',
+      claims: [
+        {
+          statement: 'The cap rate is approximately 6.10%.',
+          citations: [
+            {
+              chunkId: 'chunk-fabricated',
+              docVersionId: '',
+              sha256: '',
+              locator: { kind: 'pdf-page', extractorVersion: 'unresolved', page: 1 },
+              quote: 'a fabricated quote',
+            },
+          ],
+        },
+      ],
+    });
   });
 });

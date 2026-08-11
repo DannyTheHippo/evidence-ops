@@ -16,7 +16,10 @@ function fact(overrides: Partial<FactForConflictScan> = {}): FactForConflictScan
 
 describe('detectConflicts', () => {
   it('should emit no conflict for a single fact (nothing to disagree with)', () => {
-    expect(detectConflicts([fact({ id: 'a' })], METRIC_ONTOLOGY)).toEqual([]);
+    expect(detectConflicts([fact({ id: 'a' })], METRIC_ONTOLOGY)).toEqual({
+      conflicts: [],
+      skipped: [],
+    });
   });
 
   it('should emit a conflict when two facts sharing a key disagree past tolerance', () => {
@@ -25,12 +28,13 @@ describe('detectConflicts', () => {
       fact({ id: 'pdf-fact', value: { amount: 6.1, unit: 'percent' } }),
     ];
 
-    const conflicts = detectConflicts(facts, METRIC_ONTOLOGY);
+    const { conflicts, skipped } = detectConflicts(facts, METRIC_ONTOLOGY);
 
     expect(conflicts).toHaveLength(1);
     expect(conflicts[0].factKey).toEqual(facts[0].factKey);
     expect(conflicts[0].factIds.sort()).toEqual(['pdf-fact', 'xlsx-fact']);
     expect(conflicts[0].magnitude).toBeCloseTo(0.0085, 10);
+    expect(skipped).toEqual([]);
   });
 
   it('should not emit a conflict when two facts sharing a key agree within tolerance', () => {
@@ -39,7 +43,7 @@ describe('detectConflicts', () => {
       fact({ id: 'b', value: { amount: 5.26, unit: 'percent' } }),
     ];
 
-    expect(detectConflicts(facts, METRIC_ONTOLOGY)).toEqual([]);
+    expect(detectConflicts(facts, METRIC_ONTOLOGY)).toEqual({ conflicts: [], skipped: [] });
   });
 
   it('should group entities case-insensitively and trimmed, but keep metric and period exact', () => {
@@ -55,7 +59,7 @@ describe('detectConflicts', () => {
       }),
     ];
 
-    expect(detectConflicts(facts, METRIC_ONTOLOGY)).toHaveLength(1);
+    expect(detectConflicts(facts, METRIC_ONTOLOGY).conflicts).toHaveLength(1);
   });
 
   it('should not group facts with the same entity+metric but a different period', () => {
@@ -71,7 +75,7 @@ describe('detectConflicts', () => {
       }),
     ];
 
-    expect(detectConflicts(facts, METRIC_ONTOLOGY)).toEqual([]);
+    expect(detectConflicts(facts, METRIC_ONTOLOGY).conflicts).toEqual([]);
   });
 
   it('should not group facts for different entities or different metrics', () => {
@@ -92,7 +96,7 @@ describe('detectConflicts', () => {
       }),
     ];
 
-    expect(detectConflicts(facts, METRIC_ONTOLOGY)).toEqual([]);
+    expect(detectConflicts(facts, METRIC_ONTOLOGY).conflicts).toEqual([]);
   });
 
   it('should include every fact in the group in factIds, not just the extremal pair', () => {
@@ -102,7 +106,7 @@ describe('detectConflicts', () => {
       fact({ id: 'c', value: { amount: 6.1, unit: 'percent' } }),
     ];
 
-    const conflicts = detectConflicts(facts, METRIC_ONTOLOGY);
+    const { conflicts } = detectConflicts(facts, METRIC_ONTOLOGY);
 
     expect(conflicts).toHaveLength(1);
     expect(conflicts[0].factIds.sort()).toEqual(['a', 'b', 'c']);
@@ -118,11 +122,75 @@ describe('detectConflicts', () => {
       }),
     ];
 
-    expect(detectConflicts(facts, METRIC_ONTOLOGY)).toEqual([]);
+    expect(detectConflicts(facts, METRIC_ONTOLOGY)).toEqual({ conflicts: [], skipped: [] });
   });
 
   it('should return no conflicts for an empty fact list', () => {
-    expect(detectConflicts([], METRIC_ONTOLOGY)).toEqual([]);
+    expect(detectConflicts([], METRIC_ONTOLOGY)).toEqual({ conflicts: [], skipped: [] });
+  });
+
+  // Regression for the live `npm run eval -- --record` failure: a model-extracted `price_per_sf`
+  // fact carried unit 'usd', which the ontology does not define for that metric
+  // (metric-ontology.ts's `price_per_sf` only lists `usd_per_sf`). The live traceback shows the
+  // throw happening inside the `Array.map` that normalized one *group's* facts together
+  // (detect-conflicts.ts:69, inside the map at :67) — reproduced here by putting the
+  // un-normalizable fact in the *same* group as a genuine conflict, not an unrelated singleton.
+  // Against the pre-fix code, `normalizeFactValue` threw `UnknownMetricUnitError` from inside that
+  // group's `.map()`, aborting the scan before the xlsx/pdf conflict below it was ever emitted.
+  it('should skip an un-normalizable fact and still detect a conflict among the rest of its own group', () => {
+    const facts = [
+      fact({
+        id: 'xlsx-fact',
+        factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+        value: { amount: 5.25, unit: 'percent' },
+      }),
+      fact({
+        id: 'pdf-fact',
+        factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+        value: { amount: 6.1, unit: 'percent' },
+      }),
+      fact({
+        id: 'model-fact',
+        factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+        value: { amount: 250, unit: 'usd' },
+      }),
+    ];
+
+    const { conflicts, skipped } = detectConflicts(facts, METRIC_ONTOLOGY);
+
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0].factIds.sort()).toEqual(['pdf-fact', 'xlsx-fact']);
+    expect(skipped).toEqual([
+      {
+        fact: facts[2],
+        reason: "Metric 'cap_rate' does not define a conversion for unit 'usd'",
+      },
+    ]);
+  });
+
+  it('should skip a whole group when dropping its un-normalizable fact leaves fewer than two comparable values', () => {
+    const facts = [
+      fact({
+        id: 'a',
+        factKey: { entity: 'Sablewood Retail Court', metric: 'price_per_sf', period: '2025-03' },
+        value: { amount: 250, unit: 'usd_per_sf' },
+      }),
+      fact({
+        id: 'b',
+        factKey: { entity: 'Sablewood Retail Court', metric: 'price_per_sf', period: '2025-03' },
+        value: { amount: 250, unit: 'usd' },
+      }),
+    ];
+
+    const { conflicts, skipped } = detectConflicts(facts, METRIC_ONTOLOGY);
+
+    expect(conflicts).toEqual([]);
+    expect(skipped).toEqual([
+      {
+        fact: facts[1],
+        reason: "Metric 'price_per_sf' does not define a conversion for unit 'usd'",
+      },
+    ]);
   });
 });
 

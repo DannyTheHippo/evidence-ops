@@ -21,6 +21,11 @@ import { detectConflicts, groupKey } from './detect-conflicts';
 
 export interface ConflictScanResult {
   readonly conflictsCreated: number;
+  /** Facts `detectConflicts` could not normalize (an unrecognized unit) and dropped from this
+   * scan — also logged individually at `warn` (see `scanForConflicts`), but surfaced here too so a
+   * caller (the `eval` harness, a future admin surface) can assert on or alert on the count without
+   * scraping logs. Zero on every run where every fact's unit was recognized. */
+  readonly skippedFactCount: number;
 }
 
 /** One side of an open `Conflict`, projected for `GroundingGateService.verify`'s
@@ -99,7 +104,7 @@ export class ConflictsService {
    */
   async scanForConflicts(tenantId: string = DEFAULT_TENANT_ID): Promise<ConflictScanResult> {
     const facts = await this.extractedFactModel.find({ tenantId });
-    const candidates = detectConflicts(
+    const { conflicts: candidates, skipped } = detectConflicts(
       facts.map((fact) => ({
         id: fact._id.toString(),
         factKey: fact.factKey,
@@ -108,9 +113,18 @@ export class ConflictsService {
       METRIC_ONTOLOGY,
     );
 
+    // A silently-dropped fact is a fact that can never conflict — the quiet correctness loss this
+    // whole scan exists to prevent — so every skip is logged individually with the context (fact
+    // id, metric, unit) needed to act on it, not just counted.
+    for (const { fact, reason } of skipped) {
+      this.logger.warn(
+        `Skipped fact '${fact.id}' (metric '${fact.factKey.metric}', unit '${fact.value.unit}') from conflict detection: ${reason}`,
+      );
+    }
+
     if (candidates.length === 0) {
       this.logger.debug(`No conflicts detected for tenant '${tenantId}'`);
-      return { conflictsCreated: 0 };
+      return { conflictsCreated: 0, skippedFactCount: skipped.length };
     }
 
     const openConflicts = await this.conflictModel.find({ tenantId, status: 'open' });
@@ -121,7 +135,7 @@ export class ConflictsService {
 
     if (newCandidates.length === 0) {
       this.logger.debug(`All detected conflicts for tenant '${tenantId}' are already open`);
-      return { conflictsCreated: 0 };
+      return { conflictsCreated: 0, skippedFactCount: skipped.length };
     }
 
     await this.conflictModel.insertMany(
@@ -136,7 +150,7 @@ export class ConflictsService {
 
     this.logger.debug(`Created ${newCandidates.length} conflicts for tenant '${tenantId}'`);
 
-    return { conflictsCreated: newCandidates.length };
+    return { conflictsCreated: newCandidates.length, skippedFactCount: skipped.length };
   }
 
   /**

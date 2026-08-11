@@ -18,6 +18,7 @@ describe('ConflictsService', () => {
   const mockExtractedFactModel = getMockModel();
   const mockConflictModel = getMockModel();
   const mockAuditService = { record: jest.fn() };
+  const mockLogger = getMockLogger();
 
   const buildFact = (
     factKey: { entity: string; metric: string; period: string },
@@ -35,7 +36,7 @@ describe('ConflictsService', () => {
         { provide: getModelToken(ExtractedFact.name), useValue: mockExtractedFactModel },
         { provide: getModelToken(Conflict.name), useValue: mockConflictModel },
         { provide: AuditService, useValue: mockAuditService },
-        { provide: AppLogger, useValue: getMockLogger() },
+        { provide: AppLogger, useValue: mockLogger },
       ],
     }).compile();
 
@@ -53,7 +54,7 @@ describe('ConflictsService', () => {
 
     expect(mockExtractedFactModel.find).toHaveBeenCalledWith({ tenantId: DEFAULT_TENANT_ID });
     expect(mockConflictModel.find).not.toHaveBeenCalled();
-    expect(result).toEqual({ conflictsCreated: 0 });
+    expect(result).toEqual({ conflictsCreated: 0, skippedFactCount: 0 });
   });
 
   it('should return conflictsCreated 0 without querying existing conflicts when normalized values agree within tolerance', async () => {
@@ -71,7 +72,7 @@ describe('ConflictsService', () => {
     expect(mockExtractedFactModel.find).toHaveBeenCalledWith({ tenantId });
     expect(mockConflictModel.find).not.toHaveBeenCalled();
     expect(mockConflictModel.insertMany).not.toHaveBeenCalled();
-    expect(result).toEqual({ conflictsCreated: 0 });
+    expect(result).toEqual({ conflictsCreated: 0, skippedFactCount: 0 });
   });
 
   it('should persist a conflict for facts whose normalized values diverge beyond tolerance', async () => {
@@ -110,7 +111,7 @@ describe('ConflictsService', () => {
     expect(insertedConflicts[0].magnitude).toBeCloseTo(0.0085, 4);
     expect(insertedConflicts[0].status).toBe('open');
     expect(insertedConflicts[0].tenantId).toBe(tenantId);
-    expect(result).toEqual({ conflictsCreated: 1 });
+    expect(result).toEqual({ conflictsCreated: 1, skippedFactCount: 0 });
   });
 
   it('should skip a candidate whose group already has an open Conflict record', async () => {
@@ -124,7 +125,30 @@ describe('ConflictsService', () => {
     const result = await service.scanForConflicts(tenantId);
 
     expect(mockConflictModel.insertMany).not.toHaveBeenCalled();
-    expect(result).toEqual({ conflictsCreated: 0 });
+    expect(result).toEqual({ conflictsCreated: 0, skippedFactCount: 0 });
+  });
+
+  it('should skip an un-normalizable fact, log it with real context, and still create a conflict for the rest of its group', async () => {
+    const tenantId = 'acme-corp';
+    const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+    const factLow = buildFact(factKey, { amount: 5.25, unit: 'percent' });
+    const factHigh = buildFact(factKey, { amount: 6.1, unit: 'percent' });
+    // Reproduces the live `npm run eval -- --record` failure: a fact sharing the same conflict
+    // group carries an ontology-unrecognized unit ('usd' is not one of cap_rate's declared units)
+    // and must not abort detection of the genuine factLow/factHigh conflict alongside it.
+    const unnormalizableFact = buildFact(factKey, { amount: 250, unit: 'usd' });
+    mockExtractedFactModel.find.mockResolvedValueOnce([factLow, factHigh, unnormalizableFact]);
+    mockConflictModel.find.mockResolvedValueOnce([]);
+    mockConflictModel.insertMany.mockResolvedValueOnce([]);
+
+    const result = await service.scanForConflicts(tenantId);
+
+    expect(result).toEqual({ conflictsCreated: 1, skippedFactCount: 1 });
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(unnormalizableFact._id.toString()),
+    );
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining("metric 'cap_rate'"));
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining("unit 'usd'"));
   });
 
   describe('findConflictedFactGroupsForChunks', () => {

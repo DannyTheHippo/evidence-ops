@@ -65,24 +65,19 @@ export function verifyClaim(params: {
     const retrieved = chunkById.get(citation.chunkId);
 
     if (!retrieved) {
-      // Check 1a: a model citing a chunk it was never shown has fabricated it, regardless of
-      // whether that chunk exists in the database at all.
+      // Check 1: retrieval containment. A citation's `docVersionId`/`sha256` are no longer
+      // supplied by the model — `SynthesisService.resolveCitation` (`../synthesis.service.ts`)
+      // resolves them server-side from the retrieved chunk a citation's `chunkId` names, before
+      // this function ever runs — so a citation can only diverge from what was retrieved by
+      // naming a `chunkId` that was never retrieved in the first place. There is no longer a
+      // separate field-by-field provenance comparison to make once the lookup below succeeds,
+      // because a successful lookup is exactly where `citation.docVersionId`/`citation.sha256`
+      // came from. This `chunkById.get` is now the entire containment check: it proves the cited
+      // chunk was among the chunks retrieved for this request, nothing less and nothing more.
       citationViolations.push({
         kind: 'chunk-not-retrieved',
         claimStatement: claim.statement,
         detail: `chunk '${citation.chunkId}' was not among the chunks retrieved for this request`,
-        chunkId: citation.chunkId,
-      });
-      continue;
-    }
-
-    if (retrieved.docVersionId !== citation.docVersionId || retrieved.sha256 !== citation.sha256) {
-      // Check 1b: the chunk id alone is not the whole citation — a real chunk id paired with a
-      // fabricated document version or hash is still an unverifiable claim about provenance.
-      citationViolations.push({
-        kind: 'citation-provenance-mismatch',
-        claimStatement: claim.statement,
-        detail: `citation for chunk '${citation.chunkId}' does not match the retrieved chunk's document version or hash`,
         chunkId: citation.chunkId,
       });
       continue;

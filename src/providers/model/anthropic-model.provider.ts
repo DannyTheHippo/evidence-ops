@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import Anthropic from '@anthropic-ai/sdk';
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import type { z } from 'zod/v4';
 import { TypedConfigService } from '../../config/environment/typed-config.service';
 import { ANTHROPIC_PRICING, computeAnthropicCostUsd } from './anthropic-pricing.table';
@@ -19,6 +18,7 @@ import type {
   ModelResult,
   ModelUsage,
 } from './model-provider.interface';
+import { toStructuredOutputFormat } from './structured-output-format.util';
 
 /**
  * Rough chars-per-token heuristic (~4 chars/token for English) used only to pre-flight the
@@ -105,7 +105,7 @@ export class AnthropicModelProvider implements ModelProvider {
       max_tokens: request.maxTokens,
       system: request.system,
       messages: toAnthropicMessages(request.messages),
-      output_config: schema ? { format: zodOutputFormat(schema) } : undefined,
+      output_config: schema ? { format: toStructuredOutputFormat(schema) } : undefined,
     };
 
     const first = await this.client.messages.create(baseParams);

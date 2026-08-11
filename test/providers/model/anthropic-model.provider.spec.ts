@@ -169,5 +169,28 @@ describe('AnthropicModelProvider', () => {
       expect(retryMessage?.role).toBe('user');
       expect(retryMessage?.content).toContain('failed schema validation');
     });
+
+    it('should send a structured-output schema with no $defs/$ref for a discriminated union that reuses a branch-nested schema', async () => {
+      // Regression test for a live 400: `@anthropic-ai/sdk`'s `zodOutputFormat()` hardcodes
+      // `reused: 'ref'`, which hoists a schema like `answerContractSchema` (a discriminated union
+      // reusing an array-element schema inside one branch) into `$defs`/`$ref` — Anthropic's
+      // structured-outputs API rejects `$defs` under `anyOf`. See `structured-output-format.util.ts`.
+      const item = z.object({ value: z.string() });
+      const unionSchema = z.discriminatedUnion('kind', [
+        z.object({ kind: z.literal('a'), items: z.array(item) }),
+        z.object({ kind: z.literal('b'), reason: z.string() }),
+      ]);
+      mockCreate.mockResolvedValueOnce(buildMessage('{"kind":"b","reason":"no data"}'));
+      const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+      await provider.generate({ ...baseRequest, outputSchema: unionSchema });
+
+      const call = mockCreate.mock.calls[0][0] as {
+        output_config: { format: { schema: Record<string, unknown> } };
+      };
+      const serializedSchema = JSON.stringify(call.output_config.format.schema);
+      expect(serializedSchema).not.toContain('$defs');
+      expect(serializedSchema).not.toContain('$ref');
+    });
   });
 });

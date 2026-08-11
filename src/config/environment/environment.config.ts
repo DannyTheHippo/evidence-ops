@@ -75,6 +75,11 @@ export const environmentSchema = z
     VOYAGE_API_KEY: zOptionalString(),
     VOYAGE_MODEL: z.string().default('voyage-4'),
     VOYAGE_DIMENSIONS: zNumEnum(1024, [256, 512, 1024, 2048] as const),
+    // Free-tier default (3 RPM, 5 retries, 5min wait budget) — the account this ships against has
+    // no payment method on file and is throttled to those limits; see voyage-embedding.provider.ts.
+    VOYAGE_REQUESTS_PER_MINUTE: zNum(3),
+    VOYAGE_MAX_RETRIES: zNum(5),
+    VOYAGE_MAX_RETRY_WAIT_MS: zNum(300_000),
 
     TEMPORAL_ADDRESS: z.string().default('localhost:7233'),
     TEMPORAL_NAMESPACE: z.string().default('default'),
@@ -140,6 +145,9 @@ export const environmentSchema = z
         apiKey: e.VOYAGE_API_KEY,
         model: e.VOYAGE_MODEL,
         dimensions: e.VOYAGE_DIMENSIONS,
+        requestsPerMinute: e.VOYAGE_REQUESTS_PER_MINUTE,
+        maxRetries: e.VOYAGE_MAX_RETRIES,
+        maxRetryWaitMs: e.VOYAGE_MAX_RETRY_WAIT_MS,
       },
       temporal: {
         address: e.TEMPORAL_ADDRESS,

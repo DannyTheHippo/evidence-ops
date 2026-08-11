@@ -5,7 +5,6 @@ import {
 import {
   isConflictingPair,
   normalizeFactValue,
-  UnknownMetricUnitError,
 } from '../../../../src/features/evidence/conflicts/normalize-fact-value';
 
 const capRate = findMetricById(METRIC_ONTOLOGY, 'cap_rate');
@@ -34,10 +33,8 @@ describe('normalizeFactValue', () => {
     expect(fromMillions).toBe(12_000_000);
   });
 
-  it('should throw UnknownMetricUnitError for a unit the metric does not declare', () => {
-    expect(() => normalizeFactValue(capRate, { amount: 1, unit: 'usd' })).toThrow(
-      UnknownMetricUnitError,
-    );
+  it('should return undefined, not throw, for a unit the metric does not declare', () => {
+    expect(normalizeFactValue(capRate, { amount: 1, unit: 'usd' })).toBeUndefined();
   });
 });
 

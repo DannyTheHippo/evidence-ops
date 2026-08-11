@@ -2,18 +2,16 @@ import type { FactKey } from '../../../../database/schemas/evidence/extracted-fa
 import type { Claim, DroppedClaim } from '../contracts/answer.contract';
 
 /**
- * Every way a claim's grounding can fail. `chunk-not-retrieved` and `citation-provenance-mismatch`
- * are check 1 (retrieval containment); `quote-not-found` and `quote-fuzzy-match` are check 2 (quote
+ * Every way a claim's grounding can fail. `chunk-not-retrieved` is check 1 (retrieval containment
+ * — a single `chunkId` lookup against the retrieved set; see `verifyClaim`'s doc comment on why
+ * that lookup alone is now the whole check, `docVersionId`/`sha256` no longer being independent,
+ * model-supplied fields to compare); `quote-not-found` and `quote-fuzzy-match` are check 2 (quote
  * containment) — kept as two kinds rather than one so a near-miss is diagnostically distinct from a
  * citation with no relationship to the chunk at all, even though both drop the claim identically;
  * `numeric-claim-unsupported` is check 3.
  */
 export type GroundingViolationKind =
-  | 'chunk-not-retrieved'
-  | 'citation-provenance-mismatch'
-  | 'quote-not-found'
-  | 'quote-fuzzy-match'
-  | 'numeric-claim-unsupported';
+  'chunk-not-retrieved' | 'quote-not-found' | 'quote-fuzzy-match' | 'numeric-claim-unsupported';
 
 export interface GroundingViolation {
   readonly kind: GroundingViolationKind;

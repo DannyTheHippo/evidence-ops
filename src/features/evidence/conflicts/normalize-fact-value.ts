@@ -1,30 +1,21 @@
 import type { FactValue } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import type { MetricDefinition } from '../facts/metric-ontology';
 
-/**
- * Every `ExtractedFact` persisted by either extractor already carries a unit the ontology
- * recognizes for its metric — both `xlsx-fact-extractor.ts` and `prose-fact-extractor.ts` validate
- * that before persisting, dropping the candidate otherwise. A fact reaching this function with an
- * unknown unit means that upstream guarantee was bypassed (a schema/ontology drift, a document
- * written by a different code path, hand-edited test data) — a real bug, not a normal input, so
- * this fails loud rather than silently skipping the fact from conflict detection.
- */
-export class UnknownMetricUnitError extends Error {
-  constructor(metricId: string, unit: string) {
-    super(`Metric '${metricId}' does not define a conversion for unit '${unit}'`);
-  }
-}
-
 /** `5.25%`, `0.0525`, and `5.25` (unit `percent`) are the same cap rate expressed three ways;
  * `$12.0M` and `12000000` are the same sale price. This is the one place that reconciles any of
  * them: a metric's `canonicalUnit` is what conflict detection actually compares, and every other
- * unit the ontology lists for that metric converts to it by a pure multiplicative factor. */
-export function normalizeFactValue(metric: MetricDefinition, value: FactValue): number {
+ * unit the ontology lists for that metric converts to it by a pure multiplicative factor.
+ *
+ * Returns `undefined`, mirroring `parseDisplayValue`'s sibling parsers in `xlsx-fact-extractor.ts`,
+ * rather than throwing. An `ExtractedFact`'s unit is model/extractor output the application has not
+ * fully verified by the time it reaches this function — the prose path validates unit-per-metric
+ * before persisting, but the xlsx path's currency parser does not, so an unrecognized unit is a
+ * reachable, expected input here, not a corrupted-invariant bug. Conflict detection is a
+ * measurement, not a permission gate, so it must fail open: the caller drops the one fact it cannot
+ * normalize and keeps comparing the rest, rather than a bad unit aborting the whole scan. */
+export function normalizeFactValue(metric: MetricDefinition, value: FactValue): number | undefined {
   const unit = metric.units.find((candidate) => candidate.id === value.unit);
-  if (!unit) {
-    throw new UnknownMetricUnitError(metric.id, value.unit);
-  }
-  return value.amount * unit.toCanonicalFactor;
+  return unit ? value.amount * unit.toCanonicalFactor : undefined;
 }
 
 /**

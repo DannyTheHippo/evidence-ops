@@ -10,7 +10,6 @@ import {
 } from '../../../../src/features/evidence/qa/verify-claim';
 
 const SHA256_A = 'a'.repeat(64);
-const SHA256_B = 'b'.repeat(64);
 
 const PDF_LOCATOR: EvidenceLocator = { kind: 'pdf-page', extractorVersion: 'v1', page: 2 };
 const XLSX_REGION_LOCATOR: EvidenceLocator = {
@@ -87,25 +86,12 @@ describe('verifyClaim', () => {
     expect(result.dropped.reason).toContain('chunk-fabricated');
   });
 
-  it('should drop a claim whose citation has the right chunkId but a fabricated sha256', () => {
-    const claim = buildClaim({ citations: [buildCitation({ sha256: SHA256_B })] });
-
-    const result = verifyClaim({ claim, retrievedChunks: [PROSE_CHUNK], cellFacts: [] });
-
-    expect(result.kind).toBe('dropped');
-    if (result.kind !== 'dropped') throw new Error('unreachable');
-    expect(result.violations[0].kind).toBe('citation-provenance-mismatch');
-  });
-
-  it('should drop a claim whose citation has the right chunkId but a fabricated docVersionId', () => {
-    const claim = buildClaim({ citations: [buildCitation({ docVersionId: 'doc-fabricated' })] });
-
-    const result = verifyClaim({ claim, retrievedChunks: [PROSE_CHUNK], cellFacts: [] });
-
-    expect(result.kind).toBe('dropped');
-    if (result.kind !== 'dropped') throw new Error('unreachable');
-    expect(result.violations[0].kind).toBe('citation-provenance-mismatch');
-  });
+  // `citation-provenance-mismatch` (a right-chunkId-but-fabricated-sha256/docVersionId citation)
+  // no longer exists as a distinct failure mode: `docVersionId`/`sha256` are resolved server-side
+  // from the same retrieved chunk this function looks `chunkId` up against
+  // (`SynthesisService.resolveCitation`), so they can never disagree with it once the lookup
+  // succeeds — see the `chunk-not-retrieved` case's comment in `verify-claim.ts` for why the
+  // lookup alone is now the entire retrieval-containment check.
 
   it('should drop a claim whose quote does not appear in the cited chunk at all', () => {
     const claim = buildClaim({

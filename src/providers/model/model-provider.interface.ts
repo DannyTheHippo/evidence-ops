@@ -8,8 +8,9 @@ import type { z } from 'zod/v4';
  * exists to score against it. Scoped to `src/providers/**` and model contracts only.
  *
  * `zod/v4` specifically (not the bare `zod` import, which resolves to v3 in this package's
- * transitional 3.25.x release) — `@anthropic-ai/sdk`'s `zodOutputFormat()` helper requires a
- * v4 `ZodType` and v3/v4 schema instances are not interchangeable at runtime.
+ * transitional 3.25.x release) — `structured-output-format.util.ts`'s `toJSONSchema()` call and
+ * `cache-key.util.ts` both require a v4 `ZodType`, and v3/v4 schema instances are not
+ * interchangeable at runtime.
  */
 export type TaskClass = 'qa_answer' | 'fact_extraction';
 
