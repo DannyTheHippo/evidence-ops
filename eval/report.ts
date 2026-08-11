@@ -44,6 +44,11 @@ export interface EvalRunResult {
   readonly gitSha: string;
   readonly generatedAt: string;
   readonly cacheMode: EvalCacheMode;
+  /** sha256 over the tenant's sorted `evidence_chunks._id` values at run time — what a replay
+   * asserts against the value recorded in `eval/cache/manifest.json` (see `run.ts`). Carried in
+   * the JSON report as run provenance; not rendered into the markdown table, which is about case
+   * outcomes, not cache bookkeeping. */
+  readonly corpusFingerprint: string;
   readonly metrics: EvalMetrics;
   readonly perCase: readonly PerCaseReport[];
   readonly retrievalComparison: readonly RetrievalModeSummary[];

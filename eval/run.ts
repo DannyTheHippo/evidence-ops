@@ -1,12 +1,15 @@
-import { getConnectionToken } from '@nestjs/mongoose';
+import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
 import { execSync } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { Connection } from 'mongoose';
+import type { Connection, Model } from 'mongoose';
 import { bootstrapEvalApp, closeEvalApp, type EvalCacheMode } from './bootstrap';
+import { readCacheManifest, writeCacheManifest } from './cache-manifest';
+import { computeCorpusFingerprint } from './compute-corpus-fingerprint';
 import casesJson from './dataset/cases.json';
 import { EvalDatasetSchema, type EvalCase } from './dataset/schema';
-import { ingestFixtures } from './ingest-fixtures';
+import { ingestFixtures, type IngestedFixture } from './ingest-fixtures';
+import { loadExistingCorpus } from './load-existing-corpus';
 import { classifyCanaryLeak } from './metrics/classify-canary-leak';
 import { computeMetrics, type CaseOutcomeKind, type CaseResult } from './metrics/compute-metrics';
 import { chunkOverlapsAnyLocator } from './metrics/locator-overlap';
@@ -14,25 +17,35 @@ import {
   EMBEDDING_PROVIDER,
   type EmbeddingProvider,
 } from '../src/providers/embedding/embedding-provider.interface';
+import { assertAtlasSearchSupported } from '../src/providers/retrieval/atlas-search-capability.util';
 import { buildMarkdownReport, type EvalRunResult, type PerCaseReport } from './report';
 import { runRetrievalComparison } from './retrieval/retrieval-comparison';
 import manifest from '../fixtures/data-room/manifest.json';
+import {
+  EvidenceChunk,
+  EvidenceChunkDocument,
+} from '../src/database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
 import { ConflictsService } from '../src/features/evidence/conflicts/conflicts.service';
 import { createActivities } from '../src/worker/activities';
 
 const EVAL_TENANT_ID = 'eval';
-const MODEL_CACHE_DIR = path.join(__dirname, 'cache', 'model');
-const EMBEDDING_CACHE_DIR = path.join(__dirname, 'cache', 'embedding');
+const CACHE_DIR = path.join(__dirname, 'cache');
+const MODEL_CACHE_DIR = path.join(CACHE_DIR, 'model');
+const EMBEDDING_CACHE_DIR = path.join(CACHE_DIR, 'embedding');
 const RESULTS_DIR = path.join(__dirname, 'results');
 
 const CANARY_TOKENS: readonly string[] = manifest.canaries.map((canary) => canary.token);
 
 interface CliOptions {
   readonly cacheMode: EvalCacheMode;
+  readonly ingest: boolean;
 }
 
 function parseCliOptions(argv: readonly string[]): CliOptions {
-  return { cacheMode: argv.includes('--record') ? 'record' : 'replay' };
+  return {
+    cacheMode: argv.includes('--record') ? 'record' : 'replay',
+    ingest: argv.includes('--ingest'),
+  };
 }
 
 /**
@@ -96,17 +109,95 @@ async function main(): Promise<void> {
   });
 
   try {
-    console.log(`eval: ingesting fixtures into tenant '${EVAL_TENANT_ID}'`);
-    const { fixtures, filenameByDocVersionId } = await ingestFixtures(app, EVAL_TENANT_ID);
-    for (const fixture of fixtures) {
+    const evidenceChunkModel = app.get<Model<EvidenceChunkDocument>>(
+      getModelToken(EvidenceChunk.name),
+    );
+
+    const connection = app.get<Connection>(getConnectionToken());
+    if (!connection.db) {
+      throw new Error('Mongo connection has no active database handle');
+    }
+    const db = connection.db;
+    // Before `ingestFixtures`/`loadExistingCorpus` and therefore before any embedding or model
+    // call: `--ingest` is what spends real Voyage/Anthropic budget (and burns Voyage's 3 RPM
+    // cap), so a server that can't serve $search/$vectorSearch/$rankFusion must be caught here,
+    // not after a full corpus has already been paid for and embedded — see
+    // `AtlasSearchUnavailableError`'s doc comment for the incident this exists to prevent.
+    // Unconditional, not gated on RETRIEVAL_FUSION: see `MongoHybridRetrievalStore.search`'s
+    // identical guard for why both fusion modes need it.
+    await assertAtlasSearchSupported(db);
+
+    let fixtures: readonly IngestedFixture[];
+    let filenameByDocVersionId: ReadonlyMap<string, string>;
+
+    if (options.ingest) {
+      console.log(`eval: ingesting fixtures into tenant '${EVAL_TENANT_ID}'`);
+      const ingestResult = await ingestFixtures(app, EVAL_TENANT_ID);
+      fixtures = ingestResult.fixtures;
+      filenameByDocVersionId = ingestResult.filenameByDocVersionId;
+      for (const fixture of fixtures) {
+        console.log(
+          `eval:   ${fixture.filename} -> ${fixture.chunksCreated} chunk(s), ${fixture.factsCreated} fact(s)`,
+        );
+      }
+    } else {
+      const existingChunkCount = await evidenceChunkModel.countDocuments({
+        tenantId: EVAL_TENANT_ID,
+      });
+      if (existingChunkCount === 0) {
+        // Fails CLOSED: falling back to a silent ingest here would reintroduce the exact
+        // nondeterminism `--ingest` exists to make opt-in — Atlas Search is free to reorder a
+        // freshly-ingested corpus, which changes the assembled prompt, which breaks the replay
+        // cache key (see ADR-0007 / this change's motivation).
+        throw new Error(
+          `eval: no evidence_chunks found for tenant '${EVAL_TENANT_ID}' — reuse mode never ` +
+            `ingests. Run 'npm run eval -- --ingest --record' first.`,
+        );
+      }
       console.log(
-        `eval:   ${fixture.filename} -> ${fixture.chunksCreated} chunk(s), ${fixture.factsCreated} fact(s)`,
+        `eval: reusing existing corpus for tenant '${EVAL_TENANT_ID}' (pass --ingest to re-ingest)`,
       );
+      const reuseResult = await loadExistingCorpus(app, EVAL_TENANT_ID);
+      fixtures = reuseResult.fixtures;
+      filenameByDocVersionId = reuseResult.filenameByDocVersionId;
+      for (const fixture of fixtures) {
+        console.log(
+          `eval:   ${fixture.filename} -> ${fixture.chunksCreated} chunk(s), ${fixture.factsCreated} fact(s) (reused)`,
+        );
+      }
     }
 
     const conflictsService = app.get(ConflictsService);
     const scanResult = await conflictsService.scanForConflicts(EVAL_TENANT_ID);
     console.log(`eval: conflict scan created ${scanResult.conflictsCreated} conflict(s)`);
+
+    const chunkIds = await evidenceChunkModel.distinct('_id', { tenantId: EVAL_TENANT_ID });
+    const corpusFingerprint = computeCorpusFingerprint(chunkIds);
+    console.log(`eval: corpus fingerprint = ${corpusFingerprint}`);
+
+    if (options.cacheMode === 'record') {
+      await writeCacheManifest(CACHE_DIR, {
+        corpusFingerprint,
+        recordedAt: new Date().toISOString(),
+      });
+    } else {
+      const cacheManifest = await readCacheManifest(CACHE_DIR);
+      if (!cacheManifest) {
+        throw new Error(
+          `eval: no cache manifest at eval/cache/manifest.json — this cache has never been ` +
+            `recorded. Run 'npm run eval -- --ingest --record' first.`,
+        );
+      }
+      if (cacheManifest.corpusFingerprint !== corpusFingerprint) {
+        throw new Error(
+          `eval: corpus fingerprint mismatch — recorded '${cacheManifest.corpusFingerprint}', ` +
+            `current '${corpusFingerprint}'. The evidence corpus changed since this cache was ` +
+            `recorded (re-ingested, re-chunked, or a different fixture set), so a confusing ` +
+            `per-prompt replay-cache miss further down would misattribute the real cause. ` +
+            `Re-record with 'npm run eval -- --ingest --record' before replaying.`,
+        );
+      }
+    }
 
     const activities = createActivities(app);
     const perCase: PerCaseReport[] = [];
@@ -230,15 +321,11 @@ async function main(): Promise<void> {
       );
     }
 
-    const connection = app.get<Connection>(getConnectionToken());
-    if (!connection.db) {
-      throw new Error('Mongo connection has no active database handle');
-    }
     const embeddingProvider = app.get<EmbeddingProvider>(EMBEDDING_PROVIDER);
 
     console.log('eval: running retrieval-mode comparison (lexical / vector / hybrid)');
     const retrievalComparison = await runRetrievalComparison({
-      db: connection.db,
+      db,
       embeddingProvider,
       filenameByDocVersionId,
       cases,
@@ -250,6 +337,7 @@ async function main(): Promise<void> {
       gitSha: sha,
       generatedAt: new Date().toISOString(),
       cacheMode: options.cacheMode,
+      corpusFingerprint,
       metrics,
       perCase,
       retrievalComparison,

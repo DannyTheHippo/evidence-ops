@@ -5,6 +5,7 @@ function baseResult(overrides: Partial<EvalRunResult> = {}): EvalRunResult {
     gitSha: 'abc1234',
     generatedAt: '2026-08-10T00:00:00.000Z',
     cacheMode: 'replay',
+    corpusFingerprint: 'fp-0000000000000000000000000000000000000000000000000000000000000000',
     metrics: {
       retrieval: { recallAt5: 0.8, recallAt10: 0.9, mrr: 0.75, caseCount: 10 },
       citationPrecision: 0.95,

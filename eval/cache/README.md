@@ -8,6 +8,12 @@ zero API cost, byte-stable — see `docs/adr/0007-eval-replay-cache.md`).
 - `embedding/<sha256>.json` — one `EmbeddingResult` per distinct (provider, model, dimensions,
   inputType, inputs) request, written by `CachingEmbeddingProvider`
   (`eval/providers/caching-embedding.provider.ts`).
+- `manifest.json` — the corpus fingerprint (sha256 over the tenant's sorted `evidence_chunks._id`
+  values, `eval/compute-corpus-fingerprint.ts`) recorded alongside the prompt/embedding fixtures
+  above. `run.ts` asserts this on every replay, before touching a single case, because ingestion is
+  reuse-by-default (`--ingest` opts back in) and a corpus that drifted from what was recorded would
+  otherwise surface as a confusing per-prompt cache miss deep in the run instead of one clear
+  failure at the top.
 
 Populating these requires live `ANTHROPIC_API_KEY`/`VOYAGE_API_KEY` and a reachable Mongo
 (`npm run eval -- --record`) — neither is available inside a sandboxed implementation session, so
