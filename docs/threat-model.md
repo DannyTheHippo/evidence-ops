@@ -140,19 +140,26 @@ constant.
 no metrics backend. Events reach the process log and stop there. Nothing in this system is
 observable in production terms, so none of the controls above have alerting attached.
 
-### 7. No eval results exist yet
+### 7. The measured numbers, and what they do not cover
 
-The harness is real (`eval/run.ts`: recall@5/@10, MRR, citation precision, claim coverage,
-abstention accuracy, conflict recall, and a canary-leak rate that fails the run when nonzero). The
-replay cache is only **partially** recorded: 8 model entries and 3 embedding entries are committed,
-and all 8 model entries are fact-extraction responses from an ingestion pass — there is no
-`qa_answer` entry among them. There is no `eval/results/` directory.
+The harness has now run end to end (`eval/run.ts`: recall@5/@10, MRR, citation precision, claim
+coverage, abstention accuracy, conflict recall, and a canary-leak rate that fails the run when
+nonzero), with results committed under `eval/results/`. The security-relevant result: the
+**own-voice canary leak rate is 0** — no planted injection marker reaches the caller in the model's
+own words — and abstention is 1.00 across every unanswerable case.
 
-A replay-mode `npm run eval` therefore stops at the first uncached request with a
-`ModelReplayCacheMissError`/`EmbeddingReplayCacheMissError`, which is the intended fail-loud
-behaviour (never a silent live call), not a bug. Until a full `--record` run happens, **there are no
-measured numbers for any claim in this document about answer quality**, including the canary-leak
-rate. `eval/cache/README.md` still describes both cache directories as empty; they are not.
+That rate is measured, not asserted, and it was **not** zero on the first full run. Two adversarial
+cases leaked markers through `insufficient_evidence.reason`, a model-authored free-text field that
+reached the caller with no deterministic check. It is now a closed enum with the server rendering
+the sentence, and `conflicting_evidence` was removed from the model-facing schema entirely. The
+leak-rate metric is also split: markers appearing inside a gate-verified quote are counted and
+reported separately from markers in the model's own voice, because the first is provenance working
+and only the second is contamination.
+
+What the numbers do not cover: conflict recall is weak (prose fact extraction varies between runs
+and sampling cannot be pinned on this model tier), so a conflict may be detected on one recording
+and missed on the next. Replay makes the measurement reproducible; it does not make the pipeline
+deterministic.
 
 ## Explicitly out of scope
 

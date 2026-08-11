@@ -178,10 +178,11 @@ Working end to end, live, with the four processes above:
 
 Not shown, and not claimed:
 
-- **No eval numbers.** The harness exists (`eval/run.ts`) and computes recall@5/@10, MRR, citation
-  precision, claim coverage, abstention accuracy, conflict recall, and a canary-leak rate that fails
-  the run when nonzero. But its replay cache is only partially recorded and there is no
-  `eval/results/` yet. See the eval gotcha below.
+- **Weak conflict recall.** The eval has run end to end and its results are committed under
+  `eval/results/`; abstention is perfect and the own-voice canary leak rate is 0. Conflict recall is
+  not: prose fact extraction varies between runs, and sampling cannot be pinned on this model tier
+  (`temperature` is deprecated for it), so a conflict can be found on one recording and missed on
+  the next. The replay cache makes the measurement reproducible, not the pipeline deterministic.
 - **No tenant isolation.** Authentication is enforced; authorization is not. See
   [`docs/threat-model.md`](docs/threat-model.md) §5.
 - **No OpenTelemetry.** `TELEMETRY` binds to a logger.
