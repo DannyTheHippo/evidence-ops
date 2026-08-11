@@ -42,3 +42,44 @@ export interface AnswerQuestionResult {
   readonly outcomeKind: 'answered' | 'insufficient_evidence' | 'conflicting_evidence';
   readonly claimCoverage?: number;
 }
+
+/**
+ * `winningFactId` is not chosen inside `resolve-conflict.workflow.ts` — it travels in on `input`
+ * from whichever caller started this workflow (D3, not built here), the same fields-not-imports
+ * escape hatch `answerId` above uses: this workflow's only job is gating that proposal behind a
+ * human, never inventing one. A plain string, not an ObjectId/mongoose import, for the same reason
+ * `answerId` stays a plain string.
+ */
+export interface ResolveConflictWorkflowInput {
+  readonly conflictId: string;
+  readonly winningFactId: string;
+  readonly requestedBy?: string;
+  readonly tenantId?: string;
+}
+
+export type ResolveConflictOutcome = 'resolved' | 'rejected' | 'timed_out';
+
+/**
+ * Deliberately a thin summary, matching `AnswerQuestionResult`'s own "thin summary, not a mirror"
+ * reasoning above — `winningFactId`/`winningValue`/`winningUnit` are only ever set alongside
+ * `outcome: 'resolved'`; a caller wanting the full record (including a `rejected`/`timed_out`
+ * attempt) reads the `Conflict` document by `conflictId`.
+ */
+export interface ResolveConflictWorkflowResult {
+  readonly conflictId: string;
+  readonly outcome: ResolveConflictOutcome;
+  readonly winningFactId?: string;
+  readonly winningValue?: number;
+  readonly winningUnit?: string;
+}
+
+/**
+ * Signal payload for `resolve-conflict.workflow.ts`'s wake-up signal. Deliberately inert: the
+ * workflow's signal handler flips a wake-up flag and never reads `claimedDecision` (see the
+ * workflow's own doc comment on why) — the field exists only so a caller can express intent to a
+ * dashboard, and so a test can prove a payload that claims approval is ignored whenever the
+ * persisted `Approval` row (read via `getApprovalDecision`) disagrees.
+ */
+export interface ResolveConflictApprovalSignal {
+  readonly claimedDecision?: 'approved' | 'rejected';
+}

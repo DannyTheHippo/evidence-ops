@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types, WithTimestamps } from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types, WithTimestamps } from 'mongoose';
 import { DEFAULT_TENANT_ID } from '../../../constants/tenant.constant';
 import { AuditableDocument } from '../../../global/auditable-document/auditable-document.schema';
 import { FactKey } from '../extracted-fact/extracted-fact.schema';
@@ -11,6 +11,39 @@ export const CONFLICT_STATUSES: readonly ConflictStatus[] = ['open', 'resolved',
 export type ConflictDocument = HydratedDocument<WithTimestamps<Conflict>>;
 
 const MIN_CONFLICTING_FACTS = 2;
+
+export type ConflictResolutionOutcome = 'resolved' | 'rejected' | 'timed_out';
+
+export const CONFLICT_RESOLUTION_OUTCOMES: readonly ConflictResolutionOutcome[] = [
+  'resolved',
+  'rejected',
+  'timed_out',
+];
+
+/** Set once by `ConflictsService.recordResolution` (`resolve-conflict.workflow.ts`'s
+ * `recordConflictResolution` activity) — the durable record of the human decision `resolveConflict`
+ * gated on. `winningFactId` is set only when `outcome === 'resolved'`; a `rejected`/`timed_out`
+ * attempt still gets a `resolution` (so the demo can show *why* a conflict is still `open`), just
+ * never a winner, since neither outcome named one. `_id: false` for the same value-object reasoning
+ * `FactKeySchema` documents on `ExtractedFact` — one attempt, no independent identity of its own. */
+export interface ConflictResolution {
+  outcome: ConflictResolutionOutcome;
+  winningFactId?: Types.ObjectId;
+  decidedBy?: string;
+  reason?: string;
+  resolvedAt: Date;
+}
+
+const ConflictResolutionSchema = new MongooseSchema<ConflictResolution>(
+  {
+    outcome: { type: String, required: true, enum: CONFLICT_RESOLUTION_OUTCOMES },
+    winningFactId: { type: Types.ObjectId, ref: 'ExtractedFact' },
+    decidedBy: { type: String },
+    reason: { type: String },
+    resolvedAt: { type: Date, required: true },
+  },
+  { _id: false },
+);
 
 @Schema({ timestamps: true, collection: 'conflicts' })
 export class Conflict extends AuditableDocument {
@@ -42,6 +75,12 @@ export class Conflict extends AuditableDocument {
 
   @Prop({ type: String, required: true, enum: CONFLICT_STATUSES, default: 'open' })
   status: ConflictStatus;
+
+  // Optional, no migration needed (`mongoose.md`: a migration is mandated only for an index or a
+  // backfill, and this field needs neither) — absent until `resolveConflict` runs once for this
+  // conflict.
+  @Prop({ type: ConflictResolutionSchema })
+  resolution?: ConflictResolution;
 
   @Prop({ type: String, required: true, default: DEFAULT_TENANT_ID })
   tenantId: string;

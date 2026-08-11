@@ -5,6 +5,7 @@ import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
 import {
   Conflict,
   ConflictDocument,
+  type ConflictResolutionOutcome,
 } from '../../../database/schemas/evidence/conflict/conflict.schema';
 import {
   ExtractedFact,
@@ -18,6 +19,10 @@ import type { DocumentResultWithCount } from '../../../shared/types/document-res
 import { METRIC_ONTOLOGY } from '../facts/metric-ontology';
 import { ConflictResponseDto } from './dtos/response/conflict.response.dto';
 import { detectConflicts, groupKey } from './detect-conflicts';
+import {
+  ConflictNotFoundException,
+  InvalidConflictResolutionException,
+} from './exceptions/conflicts.exception';
 
 export interface ConflictScanResult {
   readonly conflictsCreated: number;
@@ -48,6 +53,44 @@ export interface ConflictedFactGroup {
   readonly conflictId: string;
   readonly factKey: FactKey;
   readonly values: readonly ConflictedFactValue[];
+}
+
+/** One `ExtractedFact` side of a conflict being considered for resolution — `factId` is the field
+ * `ConflictedFactValue` deliberately omits (that type only ever needs to say *where* a value came
+ * from, not which `ExtractedFact._id` it is); resolution needs the id to validate and record a
+ * proposed winner. */
+export interface ConflictResolutionValue {
+  readonly factId: string;
+  readonly value: number;
+  readonly unit: string;
+  readonly sourceChunkId: string;
+}
+
+/** Everything `resolveConflict` (`resolve-conflict.workflow.ts`) needs to build a human-readable
+ * approval request and, later, record the winner — loaded and validated in one call by
+ * `loadConflictForResolution` so the workflow never requests approval for a proposal that can't be
+ * honored. */
+export interface ConflictResolutionCandidate {
+  readonly conflictId: string;
+  readonly factKey: FactKey;
+  readonly winningFactId: string;
+  readonly values: readonly ConflictResolutionValue[];
+}
+
+export interface RecordConflictResolutionInput {
+  readonly conflictId: string;
+  readonly outcome: ConflictResolutionOutcome;
+  /** Present only when `outcome === 'resolved'` — the `ExtractedFact._id` a human approved as the
+   * correct value. */
+  readonly winningFactId?: string;
+  readonly decidedBy?: string;
+  readonly reason?: string;
+  readonly tenantId?: string;
+}
+
+export interface RecordConflictResolutionResult {
+  readonly conflictId: string;
+  readonly outcome: ConflictResolutionOutcome;
 }
 
 @Injectable()
@@ -233,6 +276,114 @@ export class ConflictsService {
         values,
       };
     });
+  }
+
+  /**
+   * Loads the `open` conflict `resolveConflict` (`resolve-conflict.workflow.ts`) is gating, and
+   * validates the caller's proposed `winningFactId` before any approval is requested — there is no
+   * point asking a human to approve a proposal that doesn't even reference one of this conflict's
+   * own facts. Fails closed on every invalid state: missing conflict, a conflict already decided
+   * by an earlier resolution attempt (`status !== 'open'`), an unknown/malformed `winningFactId`,
+   * or one that isn't among `conflict.factIds`. A `factIds` reference that no longer resolves to an
+   * `ExtractedFact` is a data-integrity fault, not a normal branch — same reasoning
+   * `findConflictedFactGroupsForChunks` applies to its own identical check above.
+   */
+  async loadConflictForResolution(
+    conflictId: string,
+    winningFactId: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<ConflictResolutionCandidate> {
+    if (!Types.ObjectId.isValid(conflictId)) {
+      throw new ConflictNotFoundException(`Conflict '${conflictId}' not found`);
+    }
+
+    const conflict = await this.conflictModel.findOne({ _id: conflictId, tenantId });
+    if (!conflict) {
+      throw new ConflictNotFoundException(`Conflict '${conflictId}' not found`);
+    }
+
+    if (conflict.status !== 'open') {
+      throw new InvalidConflictResolutionException(
+        `Conflict '${conflictId}' is '${conflict.status}', not 'open' — it cannot be resolved again`,
+      );
+    }
+
+    if (
+      !Types.ObjectId.isValid(winningFactId) ||
+      !conflict.factIds.some((factId) => factId.equals(winningFactId))
+    ) {
+      throw new InvalidConflictResolutionException(
+        `'${winningFactId}' is not one of conflict '${conflictId}''s disagreeing facts`,
+      );
+    }
+
+    const facts = await this.extractedFactModel.find({ _id: { $in: conflict.factIds } });
+    if (facts.length < conflict.factIds.length) {
+      throw new InternalServerErrorException(
+        `Conflict '${conflictId}' references ${conflict.factIds.length} fact(s), but only ${facts.length} still resolve to an ExtractedFact`,
+      );
+    }
+
+    return {
+      conflictId: conflict._id.toString(),
+      factKey: {
+        entity: conflict.factKey.entity,
+        metric: conflict.factKey.metric,
+        period: conflict.factKey.period,
+      },
+      winningFactId,
+      values: facts.map((fact) => ({
+        factId: fact._id.toString(),
+        value: fact.value.amount,
+        unit: fact.value.unit,
+        sourceChunkId: fact.chunkId,
+      })),
+    };
+  }
+
+  /**
+   * Persists the outcome `resolveConflict` reached after waking from its approval wait — called
+   * exactly once per workflow run, on every branch (`resolved`, `rejected`, `timed_out`), so a
+   * conflict that was gated on but never got a timely human answer still carries a durable record
+   * of the attempt. Only `outcome: 'resolved'` also flips `status` to `'resolved'`:
+   * `rejected`/`timed_out` leave the conflict `open` (a rejection or a timeout is not a
+   * resolution), but the attempt is still worth recording so a reviewer can see what already
+   * happened. Fails closed on a missing conflict — same reasoning as
+   * `AnswerPersistenceService.persist`: a missing row here means the id this activity was called
+   * with doesn't match a real conflict, and silently no-op-ing would hide that.
+   */
+  async recordResolution(
+    input: RecordConflictResolutionInput,
+  ): Promise<RecordConflictResolutionResult> {
+    const tenantId = input.tenantId ?? DEFAULT_TENANT_ID;
+    if (!Types.ObjectId.isValid(input.conflictId)) {
+      throw new ConflictNotFoundException(`Conflict '${input.conflictId}' not found`);
+    }
+
+    const conflict = await this.conflictModel.findOne({ _id: input.conflictId, tenantId });
+    if (!conflict) {
+      throw new ConflictNotFoundException(`Conflict '${input.conflictId}' not found`);
+    }
+
+    conflict.resolution = {
+      outcome: input.outcome,
+      winningFactId: input.winningFactId ? new Types.ObjectId(input.winningFactId) : undefined,
+      decidedBy: input.decidedBy,
+      reason: input.reason,
+      resolvedAt: new Date(),
+    };
+
+    if (input.outcome === 'resolved') {
+      conflict.status = 'resolved';
+    }
+
+    await conflict.save();
+
+    this.logger.debug(
+      `Recorded '${input.outcome}' resolution attempt for conflict '${input.conflictId}'`,
+    );
+
+    return { conflictId: input.conflictId, outcome: input.outcome };
   }
 
   private toConflictDto(conflict: ConflictDocument): ConflictResponseDto {

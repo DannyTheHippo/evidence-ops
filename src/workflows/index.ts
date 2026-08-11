@@ -5,3 +5,4 @@
  */
 export { answerQuestion } from './answer-question.workflow';
 export { ingestDocumentVersion } from './ingest-document-version.workflow';
+export { resolveConflict } from './resolve-conflict.workflow';

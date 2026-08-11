@@ -3,7 +3,10 @@ import { DEFAULT_TENANT_ID } from '../database/constants/tenant.constant';
 import {
   ConflictsService,
   type ConflictedFactGroup,
+  type ConflictResolutionCandidate,
   type ConflictScanResult,
+  type RecordConflictResolutionInput,
+  type RecordConflictResolutionResult,
 } from '../features/evidence/conflicts/conflicts.service';
 import { FactsService, type FactsExtractionResult } from '../features/evidence/facts/facts.service';
 import { extractNumericTokens } from '../features/evidence/qa/extract-numeric-tokens';
@@ -29,6 +32,13 @@ import {
 import { SynthesisService } from '../features/evidence/qa/synthesis.service';
 import type { RetrievedChunk } from '../features/evidence/qa/types/retrieved-chunk.type';
 import type { GroundingCellFact } from '../features/evidence/qa/verify-claim';
+import {
+  APPROVAL_CHANNEL,
+  type ApprovalChannel,
+  type ApprovalHandle,
+  type ApprovalRequest,
+  type ApprovalResult,
+} from '../providers/approval-channel/approval-channel.interface';
 import type { IngestDocumentVersionResult } from '../workflows/types';
 
 /**
@@ -64,6 +74,12 @@ function findEitherSideConflict(
     }
   }
   return undefined;
+}
+
+export interface LoadConflictActivityInput {
+  readonly conflictId: string;
+  readonly winningFactId: string;
+  readonly tenantId?: string;
 }
 
 export interface SynthesizeAnswerActivityInput {
@@ -109,6 +125,12 @@ export interface Activities {
   synthesizeAnswer(input: SynthesizeAnswerActivityInput): Promise<AnswerContract>;
   groundingCheck(input: GroundingCheckActivityInput): Promise<GroundingCheckActivityResult>;
   persistAnswer(input: PersistAnswerInput): Promise<PersistAnswerResult>;
+  loadConflict(input: LoadConflictActivityInput): Promise<ConflictResolutionCandidate>;
+  requestConflictApproval(request: ApprovalRequest): Promise<ApprovalHandle>;
+  getApprovalDecision(approvalId: string): Promise<ApprovalResult>;
+  recordConflictResolution(
+    input: RecordConflictResolutionInput,
+  ): Promise<RecordConflictResolutionResult>;
 }
 
 /**
@@ -125,6 +147,7 @@ export function createActivities(app: INestApplicationContext): Activities {
   const synthesisService = app.get(SynthesisService);
   const groundingGateService = app.get(GroundingGateService);
   const answerPersistenceService = app.get(AnswerPersistenceService);
+  const approvalChannel = app.get<ApprovalChannel>(APPROVAL_CHANNEL);
 
   return {
     ingestDocumentVersion: (documentVersionId) => ingestionService.ingestVersion(documentVersionId),
@@ -308,5 +331,18 @@ export function createActivities(app: INestApplicationContext): Activities {
     },
 
     persistAnswer: (input) => answerPersistenceService.persist(input),
+
+    loadConflict: (input) =>
+      conflictsService.loadConflictForResolution(
+        input.conflictId,
+        input.winningFactId,
+        input.tenantId,
+      ),
+
+    requestConflictApproval: (request) => approvalChannel.requestApproval(request),
+
+    getApprovalDecision: (approvalId) => approvalChannel.getDecision(approvalId),
+
+    recordConflictResolution: (input) => conflictsService.recordResolution(input),
   };
 }

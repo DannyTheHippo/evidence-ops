@@ -13,7 +13,7 @@ import { join } from 'node:path';
  * webpack, unlike `NativeConnection.connect` in `main.ts`.
  */
 describe('determinism fence — bundleWorkflowCode', () => {
-  it('bundles the real workflow tree (ingestDocumentVersion, answerQuestion) cleanly', async () => {
+  it('bundles the real workflow tree (ingestDocumentVersion, answerQuestion, resolveConflict) cleanly', async () => {
     const bundle = await bundleWorkflowCode({
       workflowsPath: join(__dirname, '..', '..', 'src', 'workflows', 'index.ts'),
     });

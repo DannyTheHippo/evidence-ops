@@ -7,6 +7,10 @@ import { DEFAULT_TENANT_ID } from '../../../../src/database/constants/tenant.con
 import { Conflict } from '../../../../src/database/schemas/evidence/conflict/conflict.schema';
 import { ExtractedFact } from '../../../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import { ConflictsService } from '../../../../src/features/evidence/conflicts/conflicts.service';
+import {
+  ConflictNotFoundException,
+  InvalidConflictResolutionException,
+} from '../../../../src/features/evidence/conflicts/exceptions/conflicts.exception';
 import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
@@ -324,6 +328,223 @@ describe('ConflictsService', () => {
         limit: 20,
       });
       expect(result).toEqual({ docs: [], count: 0 });
+    });
+  });
+
+  describe('loadConflictForResolution', () => {
+    const conflictId = new Types.ObjectId().toString();
+    const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+
+    it('should throw ConflictNotFoundException without querying when conflictId is not a valid ObjectId', async () => {
+      await expect(
+        service.loadConflictForResolution(
+          'not-an-id',
+          new Types.ObjectId().toString(),
+          'acme-corp',
+        ),
+      ).rejects.toThrow(ConflictNotFoundException);
+      expect(mockConflictModel.findOne).not.toHaveBeenCalled();
+    });
+
+    it('should throw ConflictNotFoundException when no conflict matches the tenant-scoped id', async () => {
+      mockConflictModel.findOne.mockResolvedValueOnce(null);
+
+      await expect(
+        service.loadConflictForResolution(conflictId, new Types.ObjectId().toString(), 'acme-corp'),
+      ).rejects.toThrow(ConflictNotFoundException);
+      expect(mockConflictModel.findOne).toHaveBeenCalledWith({
+        _id: conflictId,
+        tenantId: 'acme-corp',
+      });
+    });
+
+    it('should throw InvalidConflictResolutionException when the conflict is not open', async () => {
+      mockConflictModel.findOne.mockResolvedValueOnce({
+        _id: new Types.ObjectId(conflictId),
+        factKey,
+        factIds: [new Types.ObjectId(), new Types.ObjectId()],
+        status: 'resolved',
+      });
+
+      await expect(
+        service.loadConflictForResolution(conflictId, new Types.ObjectId().toString(), 'acme-corp'),
+      ).rejects.toThrow(InvalidConflictResolutionException);
+    });
+
+    it('should throw InvalidConflictResolutionException when winningFactId is not a valid ObjectId', async () => {
+      mockConflictModel.findOne.mockResolvedValueOnce({
+        _id: new Types.ObjectId(conflictId),
+        factKey,
+        factIds: [new Types.ObjectId(), new Types.ObjectId()],
+        status: 'open',
+      });
+
+      await expect(
+        service.loadConflictForResolution(conflictId, 'not-an-id', 'acme-corp'),
+      ).rejects.toThrow(InvalidConflictResolutionException);
+    });
+
+    it("should throw InvalidConflictResolutionException when winningFactId is not one of the conflict's factIds", async () => {
+      mockConflictModel.findOne.mockResolvedValueOnce({
+        _id: new Types.ObjectId(conflictId),
+        factKey,
+        factIds: [new Types.ObjectId(), new Types.ObjectId()],
+        status: 'open',
+      });
+
+      await expect(
+        service.loadConflictForResolution(conflictId, new Types.ObjectId().toString(), 'acme-corp'),
+      ).rejects.toThrow(InvalidConflictResolutionException);
+    });
+
+    it('should throw InternalServerErrorException when a factId no longer resolves to an ExtractedFact', async () => {
+      const factIdA = new Types.ObjectId();
+      const factIdB = new Types.ObjectId();
+      mockConflictModel.findOne.mockResolvedValueOnce({
+        _id: new Types.ObjectId(conflictId),
+        factKey,
+        factIds: [factIdA, factIdB],
+        status: 'open',
+      });
+      mockExtractedFactModel.find.mockResolvedValueOnce([
+        { _id: factIdA, value: { amount: 5.25, unit: 'percent' }, chunkId: 'chunk-a' },
+      ]);
+
+      await expect(
+        service.loadConflictForResolution(conflictId, factIdA.toString(), 'acme-corp'),
+      ).rejects.toThrow(InternalServerErrorException);
+    });
+
+    it('should default tenantId to the shared tenant constant and return the resolution candidate for a valid, open conflict', async () => {
+      const factIdA = new Types.ObjectId();
+      const factIdB = new Types.ObjectId();
+      mockConflictModel.findOne.mockResolvedValueOnce({
+        _id: new Types.ObjectId(conflictId),
+        factKey,
+        factIds: [factIdA, factIdB],
+        status: 'open',
+      });
+      mockExtractedFactModel.find.mockResolvedValueOnce([
+        { _id: factIdA, value: { amount: 5.25, unit: 'percent' }, chunkId: 'chunk-xlsx' },
+        { _id: factIdB, value: { amount: 6.1, unit: 'percent' }, chunkId: 'chunk-prose' },
+      ]);
+
+      const result = await service.loadConflictForResolution(conflictId, factIdA.toString());
+
+      expect(mockConflictModel.findOne).toHaveBeenCalledWith({
+        _id: conflictId,
+        tenantId: DEFAULT_TENANT_ID,
+      });
+      expect(mockExtractedFactModel.find).toHaveBeenCalledWith({
+        _id: { $in: [factIdA, factIdB] },
+      });
+      expect(result).toEqual({
+        conflictId,
+        factKey,
+        winningFactId: factIdA.toString(),
+        values: [
+          { factId: factIdA.toString(), value: 5.25, unit: 'percent', sourceChunkId: 'chunk-xlsx' },
+          { factId: factIdB.toString(), value: 6.1, unit: 'percent', sourceChunkId: 'chunk-prose' },
+        ],
+      });
+    });
+  });
+
+  describe('recordResolution', () => {
+    const conflictId = new Types.ObjectId().toString();
+
+    // Typed explicitly (not inferred from a `resolution: undefined` initializer, which would
+    // narrow the field's type to the literal `undefined`) so `conflict.resolution?.resolvedAt`
+    // below type-checks after the service mutates it in place.
+    interface MockConflictDoc {
+      status: string;
+      resolution?: {
+        outcome: string;
+        winningFactId?: Types.ObjectId;
+        decidedBy?: string;
+        reason?: string;
+        resolvedAt: Date;
+      };
+      save: jest.Mock;
+    }
+
+    it('should throw ConflictNotFoundException without querying when conflictId is not a valid ObjectId', async () => {
+      await expect(
+        service.recordResolution({ conflictId: 'not-an-id', outcome: 'timed_out' }),
+      ).rejects.toThrow(ConflictNotFoundException);
+      expect(mockConflictModel.findOne).not.toHaveBeenCalled();
+    });
+
+    it('should throw ConflictNotFoundException, defaulting tenantId, when no conflict matches', async () => {
+      mockConflictModel.findOne.mockResolvedValueOnce(null);
+
+      await expect(service.recordResolution({ conflictId, outcome: 'timed_out' })).rejects.toThrow(
+        ConflictNotFoundException,
+      );
+      expect(mockConflictModel.findOne).toHaveBeenCalledWith({
+        _id: conflictId,
+        tenantId: DEFAULT_TENANT_ID,
+      });
+    });
+
+    it('should record an approved resolution, set the winner, and flip status to resolved', async () => {
+      const winningFactId = new Types.ObjectId().toString();
+      const mockSave = jest.fn().mockResolvedValueOnce(undefined);
+      const conflict: MockConflictDoc = { status: 'open', resolution: undefined, save: mockSave };
+      mockConflictModel.findOne.mockResolvedValueOnce(conflict);
+
+      const result = await service.recordResolution({
+        conflictId,
+        outcome: 'resolved',
+        winningFactId,
+        decidedBy: 'reviewer@example.com',
+        reason: 'Spreadsheet is the current underwriting figure.',
+        tenantId: 'acme-corp',
+      });
+
+      expect(mockConflictModel.findOne).toHaveBeenCalledWith({
+        _id: conflictId,
+        tenantId: 'acme-corp',
+      });
+      expect(conflict.status).toBe('resolved');
+      // `resolvedAt` asserted separately, not via `expect.any(Date)` inside the object literal —
+      // `expect.any(...)`'s `any`-typed return trips `no-unsafe-assignment` wherever it lands
+      // inside an object (same reasoning `ingestion.service.spec.ts` documents for its own
+      // `getFindOneAndUpdateCall` helper).
+      expect(conflict.resolution?.resolvedAt).toBeInstanceOf(Date);
+      expect(conflict.resolution).toMatchObject({
+        outcome: 'resolved',
+        winningFactId: new Types.ObjectId(winningFactId),
+        decidedBy: 'reviewer@example.com',
+        reason: 'Spreadsheet is the current underwriting figure.',
+      });
+      expect(mockSave).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ conflictId, outcome: 'resolved' });
+    });
+
+    it('should record a rejected resolution with no winner and leave status untouched', async () => {
+      const mockSave = jest.fn().mockResolvedValueOnce(undefined);
+      const conflict: MockConflictDoc = { status: 'open', resolution: undefined, save: mockSave };
+      mockConflictModel.findOne.mockResolvedValueOnce(conflict);
+
+      const result = await service.recordResolution({
+        conflictId,
+        outcome: 'rejected',
+        decidedBy: 'reviewer@example.com',
+        reason: 'Not enough context to confirm.',
+        tenantId: 'acme-corp',
+      });
+
+      expect(conflict.status).toBe('open');
+      expect(conflict.resolution?.resolvedAt).toBeInstanceOf(Date);
+      expect(conflict.resolution).toMatchObject({
+        outcome: 'rejected',
+        winningFactId: undefined,
+        decidedBy: 'reviewer@example.com',
+        reason: 'Not enough context to confirm.',
+      });
+      expect(mockSave).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ conflictId, outcome: 'rejected' });
     });
   });
 });

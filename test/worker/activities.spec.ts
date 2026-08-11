@@ -9,6 +9,7 @@ import { EvidenceRetrievalService } from '../../src/features/evidence/qa/evidenc
 import { GroundingGateService } from '../../src/features/evidence/qa/grounding-gate.service';
 import { SynthesisService } from '../../src/features/evidence/qa/synthesis.service';
 import type { RetrievedChunk } from '../../src/features/evidence/qa/types/retrieved-chunk.type';
+import { APPROVAL_CHANNEL } from '../../src/providers/approval-channel/approval-channel.interface';
 import { createActivities } from '../../src/worker/activities';
 
 /**
@@ -29,6 +30,10 @@ function buildApp(overrides: {
   verify?: jest.Mock;
   findConflictedFactGroupsForChunks?: jest.Mock;
   persist?: jest.Mock;
+  loadConflictForResolution?: jest.Mock;
+  recordResolution?: jest.Mock;
+  requestApproval?: jest.Mock;
+  getDecision?: jest.Mock;
 }): INestApplicationContext {
   const services = new Map<unknown, unknown>([
     [IngestionService, { ingestVersion: overrides.ingestVersion ?? jest.fn() }],
@@ -45,12 +50,21 @@ function buildApp(overrides: {
         scanForConflicts: overrides.scanForConflicts ?? jest.fn(),
         findConflictedFactGroupsForChunks:
           overrides.findConflictedFactGroupsForChunks ?? jest.fn().mockResolvedValue([]),
+        loadConflictForResolution: overrides.loadConflictForResolution ?? jest.fn(),
+        recordResolution: overrides.recordResolution ?? jest.fn(),
       },
     ],
     [EvidenceRetrievalService, { retrieve: overrides.retrieve ?? jest.fn() }],
     [SynthesisService, { synthesizeAnswer: overrides.synthesizeAnswer ?? jest.fn() }],
     [GroundingGateService, { verify: overrides.verify ?? jest.fn() }],
     [AnswerPersistenceService, { persist: overrides.persist ?? jest.fn() }],
+    [
+      APPROVAL_CHANNEL,
+      {
+        requestApproval: overrides.requestApproval ?? jest.fn(),
+        getDecision: overrides.getDecision ?? jest.fn(),
+      },
+    ],
   ]);
 
   return {
@@ -650,5 +664,82 @@ describe('createActivities', () => {
 
     expect(mockPersist).toHaveBeenCalledWith(input);
     expect(result).toBe(persistResult);
+  });
+
+  it('should delegate loadConflict to ConflictsService.loadConflictForResolution, positionally', async () => {
+    const candidate = {
+      conflictId: 'conflict-1',
+      factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+      winningFactId: 'fact-xlsx',
+      values: [
+        { factId: 'fact-xlsx', value: 5.25, unit: 'percent', sourceChunkId: 'chunk-xlsx' },
+        { factId: 'fact-pdf', value: 6.1, unit: 'percent', sourceChunkId: 'chunk-pdf' },
+      ],
+    };
+    const mockLoadConflictForResolution = jest.fn().mockResolvedValue(candidate);
+    const app = buildApp({ loadConflictForResolution: mockLoadConflictForResolution });
+
+    const activities = createActivities(app);
+    const result = await activities.loadConflict({
+      conflictId: 'conflict-1',
+      winningFactId: 'fact-xlsx',
+      tenantId: 'acme-corp',
+    });
+
+    expect(mockLoadConflictForResolution).toHaveBeenCalledWith(
+      'conflict-1',
+      'fact-xlsx',
+      'acme-corp',
+    );
+    expect(result).toBe(candidate);
+  });
+
+  it('should delegate requestConflictApproval to ApprovalChannel.requestApproval', async () => {
+    const handle = { id: 'approval-1' };
+    const mockRequestApproval = jest.fn().mockResolvedValue(handle);
+    const app = buildApp({ requestApproval: mockRequestApproval });
+    const request = {
+      action: 'resolve_conflict',
+      summary: 'Resolve cap_rate in favor of 5.25%',
+      subject: { entityType: 'Conflict', entityId: 'conflict-1' },
+      tenantId: 'acme-corp',
+    };
+
+    const activities = createActivities(app);
+    const result = await activities.requestConflictApproval(request);
+
+    expect(mockRequestApproval).toHaveBeenCalledWith(request);
+    expect(result).toBe(handle);
+  });
+
+  it('should delegate getApprovalDecision to ApprovalChannel.getDecision', async () => {
+    const decision = { decision: 'approved' as const, decidedBy: 'reviewer@example.com' };
+    const mockGetDecision = jest.fn().mockResolvedValue(decision);
+    const app = buildApp({ getDecision: mockGetDecision });
+
+    const activities = createActivities(app);
+    const result = await activities.getApprovalDecision('approval-1');
+
+    expect(mockGetDecision).toHaveBeenCalledWith('approval-1');
+    expect(result).toBe(decision);
+  });
+
+  it('should delegate recordConflictResolution to ConflictsService.recordResolution', async () => {
+    const resolutionResult = { conflictId: 'conflict-1', outcome: 'resolved' as const };
+    const mockRecordResolution = jest.fn().mockResolvedValue(resolutionResult);
+    const app = buildApp({ recordResolution: mockRecordResolution });
+    const input = {
+      conflictId: 'conflict-1',
+      outcome: 'resolved' as const,
+      winningFactId: 'fact-xlsx',
+      decidedBy: 'reviewer@example.com',
+      tenantId: 'acme-corp',
+    };
+
+    const activities = createActivities(app);
+    const result = await activities.recordConflictResolution(input);
+
+    expect(mockRecordResolution).toHaveBeenCalledWith(input);
+    expect(result).toBe(resolutionResult);
   });
 });
