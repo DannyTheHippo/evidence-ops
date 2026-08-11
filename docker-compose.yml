@@ -41,6 +41,21 @@ services:
       retries: 12
       start_period: 15s
 
+  jaeger:
+    image: jaegertracing/all-in-one:1.65.0
+    container_name: evidence-ops-jaeger
+    restart: always
+    ports:
+      # UI
+      - "16686:16686"
+      # OTLP HTTP receiver. Exposed to the host because `OTEL_EXPORTER_OTLP_ENDPOINT`'s
+      # `.env.example` default (http://localhost:4318) targets this port for anything running
+      # outside the network — start:dev, worker:dev, temporal:dev. In-network callers (the `app`/
+      # `web` containers under the `full` profile) use http://jaeger:4318 instead.
+      - "4318:4318"
+    networks:
+      - evidence_ops_net
+
   migrate:
     build:
       context: .

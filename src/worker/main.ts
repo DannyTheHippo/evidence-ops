@@ -4,6 +4,7 @@ import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NativeConnection, Worker } from '@temporalio/worker';
 import { TypedConfigService } from '../config/environment/typed-config.service';
+import { createTemporalOtelPlugin } from '../providers/telemetry/otel-temporal-plugin.factory';
 import { createActivities } from './activities';
 import { WorkerModule } from './worker.module';
 
@@ -27,6 +28,10 @@ async function run(): Promise<void> {
       taskQueue: config.temporal.taskQueue,
       workflowsPath: require.resolve('../workflows'),
       activities: createActivities(app),
+      // 'evidence-ops-worker' mirrors the OTEL_SERVICE_NAME this process's own `instrumentation.ts`
+      // resolves via the `worker:dev` script, so worker-process spans and this plugin's
+      // client/activity/workflow-sandbox interceptor spans report the same service.name.
+      plugins: [createTemporalOtelPlugin('evidence-ops-worker', config.telemetry.otlpEndpoint)],
     });
 
     Logger.log(

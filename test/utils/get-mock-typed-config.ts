@@ -23,5 +23,6 @@ export const getMockTypedConfig = (
     voyage: config.voyage,
     temporal: config.temporal,
     retrieval: config.retrieval,
+    telemetry: config.telemetry,
   } as unknown as TypedConfigService;
 };

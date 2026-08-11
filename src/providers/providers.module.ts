@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { TypedConfigService } from '../config/environment/typed-config.service';
 import { APPROVAL_CHANNEL } from './approval-channel/approval-channel.interface';
 import { FakeApprovalChannel } from './approval-channel/fake-approval.channel';
 import { EMBEDDING_PROVIDER } from './embedding/embedding-provider.interface';
@@ -44,13 +45,18 @@ const MODEL_CACHE_DEFAULT_OPTIONS: CachingModelProviderOptions = {
     { provide: MODEL_CACHE_OPTIONS, useValue: MODEL_CACHE_DEFAULT_OPTIONS },
     {
       provide: MODEL_PROVIDER,
-      inject: [AnthropicModelProvider, MODEL_CACHE_OPTIONS, TELEMETRY],
+      inject: [AnthropicModelProvider, MODEL_CACHE_OPTIONS, TELEMETRY, TypedConfigService],
       useFactory: (
         anthropic: AnthropicModelProvider,
         cacheOptions: CachingModelProviderOptions,
         telemetry: Telemetry,
+        config: TypedConfigService,
       ): ModelProvider =>
-        new TracingModelProvider(new CachingModelProvider(anthropic, cacheOptions), telemetry),
+        new TracingModelProvider(
+          new CachingModelProvider(anthropic, cacheOptions),
+          telemetry,
+          config.telemetry.captureModelContent,
+        ),
     },
     { provide: EMBEDDING_PROVIDER, useClass: VoyageEmbeddingProvider },
 

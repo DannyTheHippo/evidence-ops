@@ -51,4 +51,9 @@ export const getMockConfig = (): EnvironmentConfig => ({
   retrieval: {
     fusion: 'server',
   },
+
+  telemetry: {
+    otlpEndpoint: 'http://localhost:4318',
+    captureModelContent: false,
+  },
 });

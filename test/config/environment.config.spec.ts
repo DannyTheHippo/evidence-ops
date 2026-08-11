@@ -24,7 +24,7 @@ describe('validateEnvironment', () => {
       expect(result.app.port).toBe(3000);
       expect(result.app.logLevel).toBe('info');
       expect(result.app.url).toBe('http://localhost:3000');
-      expect(result.mongo.uri).toBe('mongodb://localhost:27017/evidence-ops');
+      expect(result.mongo.uri).toBe('mongodb://localhost:27018/evidence-ops?directConnection=true');
       expect(result.auth.jwtSecret).toBe('dev-only-insecure-jwt-secret');
       expect(result.throttle.ttlMs).toBe(60000);
       expect(result.throttle.limit).toBe(100);
@@ -72,7 +72,7 @@ describe('validateEnvironment', () => {
       });
 
       expect(result.auth.jwtSecret).toBe('dev-only-insecure-jwt-secret');
-      expect(result.mongo.uri).toBe('mongodb://localhost:27017/evidence-ops');
+      expect(result.mongo.uri).toBe('mongodb://localhost:27018/evidence-ops?directConnection=true');
     });
 
     it('rejects a whitespace-only JWT_SECRET in a prod-like environment', () => {
@@ -152,6 +152,7 @@ describe('validateEnvironment', () => {
           'voyage',
           'temporal',
           'retrieval',
+          'telemetry',
         ].sort(),
       );
     });

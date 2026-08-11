@@ -59,7 +59,7 @@ describe('TemporalWorkflowEngine', () => {
     expect(handle).toEqual({ id: 'wf-1', status: 'running' });
   });
 
-  it('should reuse the same connection across multiple calls', async () => {
+  it('should reuse the same connection and client across multiple calls', async () => {
     mockStart.mockResolvedValue({ workflowId: 'wf-1' });
     const engine = new TemporalWorkflowEngine(config);
 
@@ -67,6 +67,9 @@ describe('TemporalWorkflowEngine', () => {
     await engine.start('b', {});
 
     expect(mockConnectionConnect).toHaveBeenCalledTimes(1);
+    // Regression: a `Client` built fresh per call also builds a fresh OTel plugin (span
+    // processor + exporter) per call, none of them ever shut down.
+    expect(mockClient).toHaveBeenCalledTimes(1);
   });
 
   it.each<[string, 'running' | 'completed' | 'failed']>([

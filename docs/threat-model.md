@@ -134,11 +134,28 @@ data migration — but it is not an enforced control. Retrieval does fail closed
 `filter.tenantId` (`mongo-hybrid.store.ts:154-163`), which is real; it just always receives the same
 constant.
 
-### 6. Telemetry is a logger behind an interface
+### 6. Tracing exists; alerting does not, and one flag can widen the blast radius
 
-`TELEMETRY` binds to `LoggerTelemetry`. There is no OpenTelemetry, no exporter, no trace context,
-no metrics backend. Events reach the process log and stop there. Nothing in this system is
-observable in production terms, so none of the controls above have alerting attached.
+OpenTelemetry is wired: `src/instrumentation.ts` registers explicit http/express/mongoose
+instrumentations, the Temporal OTel plugin propagates context across the determinism boundary on
+both the client and worker sides, and `TracingModelProvider` attaches `gen_ai.*` plus `evidence.*`
+attributes (cost, tokens) to every model call. Traces export to Jaeger and to
+`artifacts/traces/`. `TELEMETRY` still binds to `LoggerTelemetry` for structured events — the two
+are complementary, not alternatives.
+
+Two residual risks follow, and neither is closed:
+
+- **`OTEL_CAPTURE_MODEL_CONTENT` is an opt-in exfiltration path.** It defaults to `false`, and when
+  enabled it attaches prompts and completions as span **events**, never as span attributes (an
+  attribute is far more likely to be indexed, sampled, and retained by a backend than an event
+  body). But evidence text in a trace backend is document content outside this system's trust
+  boundary, subject to that backend's retention and access rules rather than to any control listed
+  above. It is a development affordance. Enabling it in an environment holding real documents is a
+  disclosure decision, not a debugging one — and nothing in the code stops that, because a flag
+  that refuses to work where it is most needed just gets patched out locally.
+- **There is still no alerting.** Spans and events are emitted and stored; nothing watches them.
+  None of the controls in the table above raises anything when it fires, so a canary leak, a
+  fail-closed refusal, or a budget cap being hit is visible only to someone already looking.
 
 ### 7. The measured numbers, and what they do not cover
 

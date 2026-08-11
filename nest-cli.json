@@ -4,7 +4,7 @@
   "sourceRoot": "src",
   "compilerOptions": {
     "deleteOutDir": true,
-    "exec": "node --enable-source-maps",
+    "exec": "node --enable-source-maps --import ./dist/instrumentation.js",
     "plugins": [
       {
         "name": "@nestjs/swagger/plugin",

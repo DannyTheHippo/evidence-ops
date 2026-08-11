@@ -2,6 +2,7 @@ import { Injectable, type OnModuleDestroy } from '@nestjs/common';
 import { Client, Connection, type WorkflowExecutionStatusName } from '@temporalio/client';
 import { randomUUID } from 'node:crypto';
 import { TypedConfigService } from '../../config/environment/typed-config.service';
+import { createTemporalOtelPlugin } from '../telemetry/otel-temporal-plugin.factory';
 import type { WorkflowEngine, WorkflowHandle, WorkflowStatus } from './workflow-engine.interface';
 
 function toWorkflowStatus(name: WorkflowExecutionStatusName): WorkflowStatus {
@@ -32,6 +33,7 @@ function toWorkflowStatus(name: WorkflowExecutionStatusName): WorkflowStatus {
 @Injectable()
 export class TemporalWorkflowEngine implements WorkflowEngine, OnModuleDestroy {
   private connectionPromise: Promise<Connection> | undefined;
+  private clientPromise: Promise<Client> | undefined;
 
   constructor(private readonly config: TypedConfigService) {}
 
@@ -63,9 +65,21 @@ export class TemporalWorkflowEngine implements WorkflowEngine, OnModuleDestroy {
     await connection.close();
   }
 
+  // Cached alongside the connection: a fresh `Client` per call would also mean a fresh
+  // `OpenTelemetryPlugin` (and its `BatchSpanProcessor`/`OTLPTraceExporter`) per call, none of
+  // them ever shut down — this method is on the `start`/`status` hot path.
   private async getClient(): Promise<Client> {
     this.connectionPromise ??= Connection.connect({ address: this.config.temporal.address });
     const connection = await this.connectionPromise;
-    return new Client({ connection, namespace: this.config.temporal.namespace });
+    this.clientPromise ??= Promise.resolve(
+      new Client({
+        connection,
+        namespace: this.config.temporal.namespace,
+        // 'evidence-ops-api' mirrors the OTEL_SERVICE_NAME this process's own `instrumentation.ts`
+        // resolves via the api start scripts — same reasoning as `worker/main.ts`'s plugin wiring.
+        plugins: [createTemporalOtelPlugin('evidence-ops-api', this.config.telemetry.otlpEndpoint)],
+      }),
+    );
+    return this.clientPromise;
   }
 }

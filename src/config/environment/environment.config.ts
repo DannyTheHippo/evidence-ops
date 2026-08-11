@@ -86,6 +86,13 @@ export const environmentSchema = z
     TEMPORAL_TASK_QUEUE: z.string().default('evidence-ops'),
 
     RETRIEVAL_FUSION: z.enum(['server', 'app']).default('server'),
+
+    OTEL_EXPORTER_OTLP_ENDPOINT: z.string().default('http://localhost:4318'),
+    // Dev-only, OFF by default: attaches prompt/completion text as span *events* (never
+    // attributes — see `docs/threat-model.md` residual risks). Evidence text reaching a trace
+    // backend is document content leaving the trust boundary; only turn this on locally against
+    // a trace backend you control.
+    OTEL_CAPTURE_MODEL_CONTENT: zBool(false),
   })
   .superRefine((e, ctx) => {
     if (!isProdLike(e.NODE_ENV)) {
@@ -112,7 +119,8 @@ export const environmentSchema = z
     // Falls back to dev-only defaults below prod-like; superRefine already guarantees
     // both are present once NODE_ENV is production/staging. Blanks became `undefined`
     // upstream (zOptionalString), so `??` is sufficient here.
-    const mongoUri = e.MONGO_DB_URI ?? 'mongodb://localhost:27017/evidence-ops';
+    const mongoUri =
+      e.MONGO_DB_URI ?? 'mongodb://localhost:27018/evidence-ops?directConnection=true';
     const jwtSecret = e.JWT_SECRET ?? 'dev-only-insecure-jwt-secret';
 
     return {
@@ -157,6 +165,10 @@ export const environmentSchema = z
       retrieval: {
         fusion: e.RETRIEVAL_FUSION,
       },
+      telemetry: {
+        otlpEndpoint: e.OTEL_EXPORTER_OTLP_ENDPOINT,
+        captureModelContent: e.OTEL_CAPTURE_MODEL_CONTENT,
+      },
     };
   });
 
@@ -170,6 +182,7 @@ export type AnthropicConfig = EnvironmentConfig['anthropic'];
 export type VoyageConfig = EnvironmentConfig['voyage'];
 export type TemporalConfig = EnvironmentConfig['temporal'];
 export type RetrievalConfig = EnvironmentConfig['retrieval'];
+export type TelemetryConfig = EnvironmentConfig['telemetry'];
 
 /**
  * `validate` hook for `ConfigModule.forRoot`. Throws a flattened, readable error
