@@ -41,6 +41,25 @@ describe('chunkOverlapsLocator', () => {
     expect(matches.some(Boolean)).toBe(true);
   });
 
+  it('should match every row-window chunk a multi-row locator range straddles, not only the first', async () => {
+    // comps.xlsx has 10 data rows (manifest usedRange 'A1:H11') and `chunkSheet` closes a window
+    // every 4 rows (`SHEET_ROWS_PER_WINDOW`), so rows 2-5/6-9/10-11 become three non-overlapping
+    // windows. A locator spanning rows 4-7 straddles the row-5/row-6 window boundary and must
+    // overlap both the row-2..5 window and the row-6..9 window — a single point-in-range
+    // containment check against only the locator's start cell would silently report just one.
+    const chunks = await chunksFor('comps.xlsx');
+    const locator: Locator = {
+      kind: 'xlsx-cell',
+      file: 'comps.xlsx',
+      sheet: 'Comps',
+      cell: 'E4:E7',
+    };
+
+    const matches = await Promise.all(chunks.map((chunk) => chunkOverlapsLocator(chunk, locator)));
+
+    expect(matches.filter(Boolean).length).toBeGreaterThanOrEqual(2);
+  });
+
   it('should not match an xlsx chunk from a different sheet', async () => {
     const chunks = await chunksFor('comps.xlsx');
     const locator: Locator = {

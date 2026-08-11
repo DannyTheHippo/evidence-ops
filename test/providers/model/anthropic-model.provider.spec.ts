@@ -98,6 +98,22 @@ describe('AnthropicModelProvider', () => {
     expect(mockCreate).toHaveBeenCalledTimes(1);
   });
 
+  it('should pin temperature to 0 for both qa_answer and fact_extraction task classes', async () => {
+    mockCreate
+      .mockResolvedValueOnce(buildMessage('Paris'))
+      .mockResolvedValueOnce(buildMessage('extracted'));
+    const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+    await provider.generate({ ...baseRequest, taskClass: 'qa_answer' });
+    await provider.generate({ ...baseRequest, taskClass: 'fact_extraction' });
+
+    const [qaCall, factCall] = mockCreate.mock.calls.map(
+      (call) => call[0] as { temperature?: number },
+    );
+    expect(qaCall.temperature).toBe(0);
+    expect(factCall.temperature).toBe(0);
+  });
+
   it('should price costUsd from the pricing table including cache-write and cache-read multipliers', async () => {
     mockCreate.mockResolvedValueOnce(
       buildMessage('Paris', {
@@ -168,6 +184,21 @@ describe('AnthropicModelProvider', () => {
       const retryMessage = retryCall.messages.at(-1);
       expect(retryMessage?.role).toBe('user');
       expect(retryMessage?.content).toContain('failed schema validation');
+    });
+
+    it('should carry the same pinned temperature into the retry call', async () => {
+      mockCreate
+        .mockResolvedValueOnce(buildMessage('not json'))
+        .mockResolvedValueOnce(buildMessage('{"answer":"Paris"}'));
+      const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+      await provider.generate(requestWithSchema);
+
+      const [firstCall, retryCall] = mockCreate.mock.calls.map(
+        (call) => call[0] as { temperature?: number },
+      );
+      expect(firstCall.temperature).toBe(0);
+      expect(retryCall.temperature).toBe(0);
     });
 
     it('should send a structured-output schema with no $defs/$ref for a discriminated union that reuses a branch-nested schema', async () => {

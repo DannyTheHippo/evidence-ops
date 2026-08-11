@@ -43,8 +43,31 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
   return { cacheMode: argv.includes('--record') ? 'record' : 'replay' };
 }
 
+/**
+ * A results file is only useful if its label identifies the code that produced it. A bare
+ * `rev-parse HEAD` does not: a run against a dirty working tree gets stamped with the last commit's
+ * sha while executing something else entirely. That already caused a real misattribution — a run
+ * labelled with a pre-chunking sha was used to blame a retrieval change on chunking, when the
+ * chunking commit was not yet made.
+ *
+ * Appending `-dirty` (and listing what was modified alongside it) makes the ambiguity visible in
+ * the filename and the JSON rather than silently plausible. Fails OPEN: this is a labelling aid,
+ * not a gate, so a repo with no git available still runs and reports `unknown` rather than blocking
+ * an eval on provenance metadata.
+ */
 function gitSha(): string {
-  return execSync('git rev-parse HEAD').toString().trim();
+  try {
+    const sha = execSync('git rev-parse HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString()
+      .trim();
+    const dirty =
+      execSync('git status --porcelain', { stdio: ['ignore', 'pipe', 'ignore'] })
+        .toString()
+        .trim().length > 0;
+    return dirty ? `${sha}-dirty` : sha;
+  } catch {
+    return 'unknown';
+  }
 }
 
 function outcomeMatchesExpectation(

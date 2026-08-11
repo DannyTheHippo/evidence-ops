@@ -18,6 +18,7 @@ import type {
   ModelResult,
   ModelUsage,
 } from './model-provider.interface';
+import { resolveSamplingTemperature } from './sampling-params';
 import { toStructuredOutputFormat } from './structured-output-format.util';
 
 /**
@@ -106,6 +107,9 @@ export class AnthropicModelProvider implements ModelProvider {
       system: request.system,
       messages: toAnthropicMessages(request.messages),
       output_config: schema ? { format: toStructuredOutputFormat(schema) } : undefined,
+      // Pinned per `taskClass`, not left at the API default — see `sampling-params.ts` for why
+      // (unpinned sampling let a seeded conflict silently stop being detected).
+      temperature: resolveSamplingTemperature(request.taskClass),
     };
 
     const first = await this.client.messages.create(baseParams);
