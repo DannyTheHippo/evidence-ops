@@ -19,6 +19,7 @@ import {
 } from '../../../providers/storage/document-store.interface';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import { chunkElements } from './chunker';
+import { computeChunkId } from './compute-chunk-id';
 import { DocumentVersionNotFoundException } from './exceptions/ingestion.exception';
 import { ParserRegistry } from './parser.registry';
 import { screenInstructionInjection } from './screen-instruction-injection';
@@ -68,12 +69,18 @@ export class IngestionService {
    * recently is the only one whose eventual `finalizeCompletion` can succeed. A lost claim (this
    * version is already `completed`) skips straight to a no-op — fails CLOSED toward "someone else
    * owns this", never toward re-deleting. A lost finalize (a newer attempt claimed the lease while
-   * this one was mid-embed) rolls back only the chunks *this* attempt inserted, by pre-assigned
-   * `_id`, never the whole version's chunks — a newer attempt's own rows must survive.
+   * this one was mid-embed) rolls back only the chunks *this* attempt inserted — by
+   * `ingestionAttemptToken`, not by `_id` — never the whole version's chunks, and never a
+   * concurrent winning attempt's rows.
    *
-   * A failed `insertMany` is rolled back the same way (by the same pre-assigned ids), because
-   * without it a transient write error would leave a half-ingested, undetectable state for the
-   * next retry to walk into.
+   * Each chunk's `_id` is computed deterministically (`computeChunkId`), not pre-assigned at
+   * random, so replaying the same version's bytes reproduces the same ids (see that function's
+   * doc comment — this is what makes the eval replay cache, ADR-0007, able to hit at all). That
+   * also means two concurrent attempts over the *same* version's bytes compute the *same* ids, so
+   * a losing attempt's `insertMany` can fail on a duplicate key rather than a generic write error
+   * — `rollbackChunks` scopes its delete to `{ documentVersionId, ingestionAttemptToken }`
+   * specifically so that case (and a failed `insertMany` generally) never deletes rows a
+   * concurrent, winning attempt already committed under a different token.
    */
   async ingestVersion(documentVersionId: string): Promise<IngestionResult> {
     if (!Types.ObjectId.isValid(documentVersionId)) {
@@ -166,10 +173,12 @@ export class IngestionService {
       inputType: 'document',
     });
 
-    // Pre-assigned so a rollback (insert failure below, or a lost finalize race further down)
-    // can delete exactly the rows this attempt wrote, never a concurrent attempt's.
     const chunkDocs = chunks.map((chunk, index) => ({
-      _id: new Types.ObjectId(),
+      _id: computeChunkId({
+        documentVersionSha256: version.sha256,
+        ordinal: index,
+        locator: chunk.locator,
+      }),
       documentId: version.documentId,
       documentVersionId: version._id,
       text: chunk.text,
@@ -177,13 +186,13 @@ export class IngestionService {
       embedding: embeddingResult.embeddings[index],
       locator: chunk.locator,
       tenantId: version.tenantId,
+      ingestionAttemptToken: leaseToken,
     }));
-    const chunkIds = chunkDocs.map((doc) => doc._id);
 
     try {
       await this.evidenceChunkModel.insertMany(chunkDocs);
     } catch (error) {
-      await this.rollbackChunks(chunkIds);
+      await this.rollbackChunks(version._id, leaseToken);
       throw error;
     }
 
@@ -193,9 +202,9 @@ export class IngestionService {
       // are stale. Temporal already discards a superseded attempt's return value in favor of the
       // retry that actually finalizes, so the exact result shape here is inert; `alreadyIngested:
       // true` just avoids implying this attempt itself finished the job.
-      await this.rollbackChunks(chunkIds);
+      await this.rollbackChunks(version._id, leaseToken);
       this.logger.debug(
-        `Document version '${documentVersionId}' ingest superseded by a newer attempt; rolled back ${chunkIds.length} chunk(s)`,
+        `Document version '${documentVersionId}' ingest superseded by a newer attempt; rolled back up to ${chunkDocs.length} chunk(s)`,
       );
       return { chunksCreated: 0, alreadyIngested: true };
     }
@@ -235,7 +244,18 @@ export class IngestionService {
     return finalized !== null;
   }
 
-  private async rollbackChunks(chunkIds: readonly Types.ObjectId[]): Promise<void> {
-    await this.evidenceChunkModel.deleteMany({ _id: { $in: chunkIds } });
+  /** Scoped by `(documentVersionId, ingestionAttemptToken)`, not by `_id`: a deterministic chunk
+   * id (`computeChunkId`) means two concurrent attempts over the same version's bytes compute the
+   * *same* ids, so an id-scoped delete here would remove a concurrent winning attempt's rows the
+   * instant this attempt's own write lost that race. Scoping by this attempt's own lease token
+   * instead guarantees the delete only ever touches rows this attempt wrote. */
+  private async rollbackChunks(
+    versionId: Types.ObjectId,
+    leaseToken: Types.ObjectId,
+  ): Promise<void> {
+    await this.evidenceChunkModel.deleteMany({
+      documentVersionId: versionId,
+      ingestionAttemptToken: leaseToken,
+    });
   }
 }

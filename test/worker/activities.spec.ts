@@ -228,7 +228,7 @@ describe('createActivities', () => {
     const claim = buildClaim();
     const chunk = buildRetrievedChunk({ chunkId: 'chunk-xlsx' });
     const cellFactDoc = {
-      chunkId: { toString: () => 'chunk-xlsx' },
+      chunkId: 'chunk-xlsx',
       factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
       value: { amount: 5.25, unit: 'percent' },
       locator: { kind: 'xlsx-cell', sheetName: 'Comps', cell: 'F2', extractorVersion: 'v1' },

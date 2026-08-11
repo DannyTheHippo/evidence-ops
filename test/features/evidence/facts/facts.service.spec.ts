@@ -162,7 +162,7 @@ describe('FactsService', () => {
       );
       mockExtractedFactModel.countDocuments.mockResolvedValueOnce(0);
       mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser(xlsxElements));
-      const chunkId = new Types.ObjectId();
+      const chunkId = 'chunk-xlsx-region-1';
       mockEvidenceChunkModel.find.mockResolvedValueOnce([
         {
           _id: chunkId,
@@ -181,7 +181,7 @@ describe('FactsService', () => {
           {
             factKey: { entity: string; metric: string; period: string };
             value: { amount: number; unit: string };
-            chunkId: Types.ObjectId;
+            chunkId: string;
             documentVersionId: Types.ObjectId;
             tenantId: string;
           }[],
@@ -268,7 +268,7 @@ describe('FactsService', () => {
       );
       mockExtractedFactModel.countDocuments.mockResolvedValueOnce(0);
       mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser([buildProseElement()]));
-      const chunkId = new Types.ObjectId();
+      const chunkId = 'chunk-prose-1';
       const chunkText = 'The cap rate is 5.25% per the offering memo.';
       mockEvidenceChunkModel.find.mockResolvedValueOnce([
         { _id: chunkId, text: chunkText, locator: { kind: 'pdf-page', page: 1 } },
@@ -311,7 +311,7 @@ describe('FactsService', () => {
             factKey: { entity: string; metric: string; period: string };
             value: { amount: number; unit: string };
             rawText: string;
-            chunkId: Types.ObjectId;
+            chunkId: string;
             documentVersionId: Types.ObjectId;
           }[],
         ]
@@ -324,7 +324,7 @@ describe('FactsService', () => {
       // Confirms the ungrounded candidate's rejection reached the service's own logging, not just
       // `extractProseFacts`'s internal bookkeeping.
       expect(mockLogger.debug).toHaveBeenCalledWith(
-        expect.stringContaining(`Dropped fact candidate for chunk '${chunkId.toString()}'`),
+        expect.stringContaining(`Dropped fact candidate for chunk '${chunkId}'`),
       );
       expect(result).toEqual({ factsCreated: 1, alreadyExtracted: false });
     });
@@ -366,32 +366,24 @@ describe('FactsService', () => {
       expect(mockExtractedFactModel.find).not.toHaveBeenCalled();
     });
 
-    it('should drop an invalid ObjectId and query only the valid ones', async () => {
-      const chunkId = new Types.ObjectId();
+    it('should query every given chunk id verbatim, scoped to tenant and xlsx-cell locators', async () => {
+      // `chunkId` is now a content-addressed string (`computeChunkId`), not an ObjectId, so there
+      // is no "invalid ObjectId" shape to filter out any more — every id a caller supplies is
+      // passed straight through to the query.
       mockExtractedFactModel.find.mockResolvedValueOnce([]);
 
-      const result = await service.findCellFacts(
-        ['not-an-object-id', chunkId.toString()],
-        'acme-corp',
-      );
+      const result = await service.findCellFacts(['chunk-a', 'chunk-b'], 'acme-corp');
 
       expect(mockExtractedFactModel.find).toHaveBeenCalledWith({
-        chunkId: { $in: [chunkId] },
+        chunkId: { $in: ['chunk-a', 'chunk-b'] },
         tenantId: 'acme-corp',
         'locator.kind': 'xlsx-cell',
       });
       expect(result).toEqual([]);
     });
 
-    it('should return an empty array without querying the model when every id is invalid', async () => {
-      const result = await service.findCellFacts(['not-an-object-id'], 'acme-corp');
-
-      expect(result).toEqual([]);
-      expect(mockExtractedFactModel.find).not.toHaveBeenCalled();
-    });
-
     it('should return the xlsx-cell facts scoped to the given chunks and tenant', async () => {
-      const chunkId = new Types.ObjectId();
+      const chunkId = 'chunk-xlsx-cell-1';
       const facts = [
         {
           _id: new Types.ObjectId(),
@@ -403,7 +395,7 @@ describe('FactsService', () => {
       ];
       mockExtractedFactModel.find.mockResolvedValueOnce(facts);
 
-      const result = await service.findCellFacts([chunkId.toString()], 'acme-corp');
+      const result = await service.findCellFacts([chunkId], 'acme-corp');
 
       expect(result).toEqual(facts);
     });

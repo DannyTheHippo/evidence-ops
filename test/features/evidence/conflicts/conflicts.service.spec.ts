@@ -159,27 +159,18 @@ describe('ConflictsService', () => {
       expect(mockExtractedFactModel.find).not.toHaveBeenCalled();
     });
 
-    it('should return an empty array without querying the model when every id is invalid', async () => {
-      const result = await service.findConflictedFactGroupsForChunks(
-        ['not-an-object-id'],
-        'acme-corp',
-      );
-
-      expect(result).toEqual([]);
-      expect(mockExtractedFactModel.find).not.toHaveBeenCalled();
-    });
-
-    it('should return an empty array without querying conflicts when no fact touches the given chunks', async () => {
-      const chunkId = new Types.ObjectId();
+    it('should query every given chunk id verbatim, scoped to tenant', async () => {
+      // `chunkId` is now a content-addressed string (`computeChunkId`), not an ObjectId, so there
+      // is no "invalid ObjectId" shape to filter out any more.
       mockExtractedFactModel.find.mockResolvedValueOnce([]);
 
       const result = await service.findConflictedFactGroupsForChunks(
-        [chunkId.toString()],
+        ['chunk-a', 'chunk-b'],
         'acme-corp',
       );
 
       expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
-        { chunkId: { $in: [chunkId] }, tenantId: 'acme-corp' },
+        { chunkId: { $in: ['chunk-a', 'chunk-b'] }, tenantId: 'acme-corp' },
         { _id: 1 },
       );
       expect(mockConflictModel.find).not.toHaveBeenCalled();
@@ -187,15 +178,12 @@ describe('ConflictsService', () => {
     });
 
     it('should return an empty array when the touched fact has no open conflict', async () => {
-      const chunkId = new Types.ObjectId();
+      const chunkId = 'chunk-a';
       const touchedFactId = new Types.ObjectId();
       mockExtractedFactModel.find.mockResolvedValueOnce([{ _id: touchedFactId }]);
       mockConflictModel.find.mockResolvedValueOnce([]);
 
-      const result = await service.findConflictedFactGroupsForChunks(
-        [chunkId.toString()],
-        'acme-corp',
-      );
+      const result = await service.findConflictedFactGroupsForChunks([chunkId], 'acme-corp');
 
       expect(mockConflictModel.find).toHaveBeenCalledWith({
         tenantId: 'acme-corp',
@@ -206,9 +194,9 @@ describe('ConflictsService', () => {
     });
 
     it('should return every value of an open conflict touched by the given chunks', async () => {
-      const chunkId = new Types.ObjectId();
+      const chunkId = 'chunk-a';
       const touchedFactId = new Types.ObjectId();
-      const otherChunkId = new Types.ObjectId();
+      const otherChunkId = 'chunk-b';
       const otherFactId = new Types.ObjectId();
       const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
       const touchedFact = {
@@ -231,17 +219,14 @@ describe('ConflictsService', () => {
       };
       mockConflictModel.find.mockResolvedValueOnce([conflict]);
 
-      const result = await service.findConflictedFactGroupsForChunks(
-        [chunkId.toString()],
-        'acme-corp',
-      );
+      const result = await service.findConflictedFactGroupsForChunks([chunkId], 'acme-corp');
 
       expect(result).toEqual([
         {
           factKey,
           values: [
-            { value: 5.25, unit: 'percent', sourceChunkId: chunkId.toString() },
-            { value: 6.1, unit: 'percent', sourceChunkId: otherChunkId.toString() },
+            { value: 5.25, unit: 'percent', sourceChunkId: chunkId },
+            { value: 6.1, unit: 'percent', sourceChunkId: otherChunkId },
           ],
         },
       ]);

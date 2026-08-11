@@ -5,6 +5,7 @@ import { Test } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { DocumentVersion } from '../../../../src/database/schemas/evidence/document-version/document-version.schema';
 import { EvidenceChunk } from '../../../../src/database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
+import { computeChunkId } from '../../../../src/features/evidence/ingestion/compute-chunk-id';
 import { DocumentVersionNotFoundException } from '../../../../src/features/evidence/ingestion/exceptions/ingestion.exception';
 import { IngestionService } from '../../../../src/features/evidence/ingestion/ingestion.service';
 import { ParserRegistry } from '../../../../src/features/evidence/ingestion/parser.registry';
@@ -42,6 +43,7 @@ describe('IngestionService', () => {
     storageKey: 'not-set',
     tenantId: 'default',
     ingestionStatus: 'pending',
+    sha256: 'a'.repeat(64),
     ...overrides,
   });
 
@@ -194,12 +196,14 @@ describe('IngestionService', () => {
       Promise<unknown[]>,
       [
         {
+          _id: string;
           documentId: Types.ObjectId;
           documentVersionId: Types.ObjectId;
           text: string;
           tenantId: string;
           locator: { kind: string; page: number };
           embedding: number[];
+          ingestionAttemptToken: Types.ObjectId;
         }[],
       ]
     >;
@@ -213,6 +217,23 @@ describe('IngestionService', () => {
       expect.objectContaining({ kind: 'pdf-page', page: 1 }),
     );
     expect(insertedChunks[0].embedding).toHaveLength(fakeEmbeddingProvider.info.dimensions);
+    // Content-addressed, not a random ObjectId: matches `computeChunkId` applied to this same
+    // version's sha256, ordinal, and locator — the property replay depends on (ADR-0007).
+    // Built from the locator this spec fed the stub parser, not read back off the mock: asserting
+    // against the expected inputs is what makes this a check rather than a tautology.
+    expect(insertedChunks[0]._id).toBe(
+      computeChunkId({
+        documentVersionSha256: version.sha256,
+        ordinal: 0,
+        locator: {
+          kind: 'pdf-page',
+          page: 1,
+          boundingBox: { x: 0, y: 0, width: 10, height: 10 },
+          extractorVersion: 'pdf-pdfjs-1',
+        },
+      }),
+    );
+    expect(insertedChunks[0].ingestionAttemptToken).toBeInstanceOf(Types.ObjectId);
     expect(result).toEqual({ chunksCreated: 1, alreadyIngested: false });
 
     const [finalizeFilter, finalizeUpdate] = getFindOneAndUpdateCall(2);
@@ -222,6 +243,52 @@ describe('IngestionService', () => {
       $set: { ingestionStatus: 'completed' },
       $unset: { ingestionLeaseToken: '' },
     });
+  });
+
+  it('should compute identical chunk ids across two ingests of the same version bytes, and distinct ids across ordinals within one ingest', async () => {
+    // The property that makes the eval replay cache able to hit at all (ADR-0007): re-ingesting
+    // identical bytes must reproduce identical chunk ids, or the synthesis prompt those ids are
+    // embedded into (`assemble-answer-messages.ts`) differs on every run.
+    const stored = await fakeDocumentStore.put({
+      content: Buffer.from('%PDF-1.4 fixture bytes'),
+      contentType: PDF_MIME,
+      metadata: {},
+    });
+    const version = buildVersion({ storageKey: stored.id });
+    // Distinct `headingPath`s, because that is what actually yields two chunks: `chunkProse` groups
+    // consecutive elements sharing a heading run (`chunker.ts`'s `headingRunKey`), so two short
+    // same-heading elements would merge into one chunk and this test would assert nothing about
+    // ordinal collision.
+    const elements: ParsedDocument['elements'] = [
+      {
+        text: 'Page one text.',
+        locator: { kind: 'pdf-page', page: 1, extractorVersion: 'pdf-pdfjs-1' },
+        headingPath: ['Section One'],
+      },
+      {
+        text: 'Page two text.',
+        locator: { kind: 'pdf-page', page: 2, extractorVersion: 'pdf-pdfjs-1' },
+        headingPath: ['Section Two'],
+      },
+    ];
+    mockDocumentVersionModel.findById.mockResolvedValueOnce(version).mockResolvedValueOnce(version);
+    mockParserRegistry.resolve.mockReturnValue(buildStubParser(elements));
+
+    await service.ingestVersion(versionId.toString());
+    await service.ingestVersion(versionId.toString());
+
+    const insertManyMock = mockEvidenceChunkModel.insertMany as jest.Mock<
+      Promise<unknown[]>,
+      [{ _id: string }[]]
+    >;
+    expect(insertManyMock).toHaveBeenCalledTimes(2);
+    const firstRunIds = insertManyMock.mock.calls[0][0].map((doc) => doc._id);
+    const secondRunIds = insertManyMock.mock.calls[1][0].map((doc) => doc._id);
+
+    expect(firstRunIds).toHaveLength(2);
+    expect(firstRunIds).toEqual(secondRunIds);
+    // Two chunks from the same ingest, differing only by ordinal/locator, must never collide.
+    expect(new Set(firstRunIds).size).toBe(2);
   });
 
   it('should skip re-ingestion without deleting chunks when a concurrent attempt already completed the version between the read and the claim', async () => {
@@ -267,7 +334,11 @@ describe('IngestionService', () => {
     expect(mockEvidenceChunkModel.deleteMany).toHaveBeenCalledTimes(1);
   });
 
-  it("should roll back only its own newly inserted chunks, by id, when a newer attempt claims the lease before this attempt's chunks finalize", async () => {
+  it("should roll back only its own newly inserted chunks, by ingestion attempt token, when a newer attempt claims the lease before this attempt's chunks finalize", async () => {
+    // Regression: `_id` is now content-addressed (`computeChunkId`), so a concurrent attempt over
+    // the *same* version's bytes computes the *same* `_id`s as this one. An `_id`-scoped rollback
+    // would therefore be able to delete a winning concurrent attempt's rows; scoping by this
+    // attempt's own `ingestionAttemptToken` instead is what keeps the two attempts' rows distinct.
     const stored = await fakeDocumentStore.put({
       content: Buffer.from('%PDF-1.4 fixture bytes'),
       contentType: PDF_MIME,
@@ -294,22 +365,26 @@ describe('IngestionService', () => {
     expect(mockEvidenceChunkModel.insertMany).toHaveBeenCalledTimes(1);
     expect(mockEvidenceChunkModel.deleteMany).toHaveBeenCalledTimes(2);
 
+    const [, claimUpdate] = getFindOneAndUpdateCall(1);
+    const leaseToken = (claimUpdate.$set as Record<string, unknown>).ingestionLeaseToken;
+
     const insertManyMock = mockEvidenceChunkModel.insertMany as jest.Mock<
       Promise<unknown[]>,
-      [{ _id: Types.ObjectId }[]]
+      [{ _id: string; ingestionAttemptToken: Types.ObjectId }[]]
     >;
-    const insertedId = insertManyMock.mock.calls[0][0][0]._id;
+    expect(insertManyMock.mock.calls[0][0][0].ingestionAttemptToken).toBe(leaseToken);
 
     const deleteManyMock = mockEvidenceChunkModel.deleteMany as jest.Mock<
       Promise<unknown>,
-      [{ documentVersionId?: Types.ObjectId; _id?: { $in: Types.ObjectId[] } }]
+      [{ documentVersionId?: Types.ObjectId; ingestionAttemptToken?: Types.ObjectId }]
     >;
     expect(deleteManyMock.mock.calls[0][0]).toEqual({ documentVersionId: versionId });
-    // Rolled back by the exact id this attempt inserted, not the whole version's chunks — a
-    // concurrent, winning attempt's own rows must survive this call.
-    const rollbackFilter = deleteManyMock.mock.calls[1][0];
-    expect(rollbackFilter._id?.$in).toHaveLength(1);
-    expect(rollbackFilter._id?.$in[0].equals(insertedId)).toBe(true);
+    // Rolled back by this attempt's own lease token, not by id — a concurrent, winning attempt's
+    // own rows (tagged with a different token) must survive this call even if they share an `_id`.
+    expect(deleteManyMock.mock.calls[1][0]).toEqual({
+      documentVersionId: versionId,
+      ingestionAttemptToken: leaseToken,
+    });
   });
 
   it('should quarantine an instruction-injection-flagged element before chunking, embedding only the surviving elements', async () => {
@@ -406,15 +481,22 @@ describe('IngestionService', () => {
     await expect(service.ingestVersion(versionId.toString())).rejects.toBe(writeFailure);
 
     // Called twice for this version: once as the pre-ingest recovery cleanup (scoped to the whole
-    // version), once as the post-failure rollback (scoped to the ids this attempt tried to
-    // insert — see the lease-race tests above for why the two must differ).
+    // version), once as the post-failure rollback (scoped to this attempt's own
+    // `ingestionAttemptToken` — see the lease-race test above for why an id-scoped rollback would
+    // be unsafe now that `_id` is deterministic).
     expect(mockEvidenceChunkModel.deleteMany).toHaveBeenCalledTimes(2);
+    expect(mockDocumentVersionModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    const [, claimUpdate] = getFindOneAndUpdateCall(1);
+    const leaseToken = (claimUpdate.$set as Record<string, unknown>).ingestionLeaseToken;
+
     const deleteManyMock = mockEvidenceChunkModel.deleteMany as jest.Mock<
       Promise<unknown>,
-      [{ documentVersionId?: Types.ObjectId; _id?: { $in: Types.ObjectId[] } }]
+      [{ documentVersionId?: Types.ObjectId; ingestionAttemptToken?: Types.ObjectId }]
     >;
     expect(deleteManyMock.mock.calls[0][0]).toEqual({ documentVersionId: versionId });
-    expect(deleteManyMock.mock.calls[1][0]._id?.$in).toHaveLength(1);
-    expect(mockDocumentVersionModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    expect(deleteManyMock.mock.calls[1][0]).toEqual({
+      documentVersionId: versionId,
+      ingestionAttemptToken: leaseToken,
+    });
   });
 });

@@ -159,18 +159,12 @@ export class FactsService {
     chunkIds: readonly string[],
     tenantId: string,
   ): Promise<ExtractedFactDocument[]> {
-    // An id that isn't a valid ObjectId can't match a real chunk — dropped rather than thrown, per
-    // this method's role as an input to a veto-only measurement (a broken lookup for one id must
-    // not block verification of every other retrieved chunk).
-    const objectIds = chunkIds
-      .filter((id) => Types.ObjectId.isValid(id))
-      .map((id) => new Types.ObjectId(id));
-    if (objectIds.length === 0) {
+    if (chunkIds.length === 0) {
       return [];
     }
 
     return this.extractedFactModel.find({
-      chunkId: { $in: objectIds },
+      chunkId: { $in: [...chunkIds] },
       tenantId,
       'locator.kind': 'xlsx-cell',
     });
@@ -179,7 +173,7 @@ export class FactsService {
   private async buildXlsxCandidates(
     versionId: Types.ObjectId,
     elements: readonly ParsedElement[],
-  ): Promise<(FactCandidate & { chunkId: Types.ObjectId })[]> {
+  ): Promise<(FactCandidate & { chunkId: string })[]> {
     const chunks = await this.evidenceChunkModel.find({ documentVersionId: versionId });
     if (chunks.length === 0) {
       throw new InternalServerErrorException(
@@ -195,7 +189,7 @@ export class FactsService {
     // deliberately misconfigured ontology) is where that branch is exercised.
     const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
 
-    const candidates: (FactCandidate & { chunkId: Types.ObjectId })[] = [];
+    const candidates: (FactCandidate & { chunkId: string })[] = [];
     for (const candidate of accepted) {
       const cellLocator = candidate.locator as XlsxCellLocator;
       const containingChunk = findXlsxRegionChunk(
@@ -221,7 +215,7 @@ export class FactsService {
   private async buildProseCandidates(
     versionId: Types.ObjectId,
     elements: readonly ParsedElement[],
-  ): Promise<(FactCandidate & { chunkId: Types.ObjectId })[]> {
+  ): Promise<(FactCandidate & { chunkId: string })[]> {
     const chunks = await this.evidenceChunkModel.find({ documentVersionId: versionId });
     if (chunks.length === 0) {
       throw new InternalServerErrorException(
@@ -229,7 +223,7 @@ export class FactsService {
       );
     }
 
-    const candidates: (FactCandidate & { chunkId: Types.ObjectId })[] = [];
+    const candidates: (FactCandidate & { chunkId: string })[] = [];
     for (const chunk of chunks) {
       const { accepted, rejected } = await extractProseFacts({
         chunkText: chunk.text,

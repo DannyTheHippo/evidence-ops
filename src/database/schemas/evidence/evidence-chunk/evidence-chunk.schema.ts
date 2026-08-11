@@ -7,7 +7,25 @@ import { EvidenceLocator } from './evidence-locator.type';
 export type EvidenceChunkDocument = HydratedDocument<WithTimestamps<EvidenceChunk>>;
 
 @Schema({ timestamps: true, collection: 'evidence_chunks' })
-export class EvidenceChunk extends AuditableDocument {
+export class EvidenceChunk extends AuditableDocument<string> {
+  // Content-addressed, not auto-generated: `computeChunkId`
+  // (`../../../../features/evidence/ingestion/compute-chunk-id.ts`) derives this from the owning
+  // `DocumentVersion.sha256`, the chunk's ordinal, and its locator, so re-ingesting identical
+  // bytes reproduces the identical id — see that function's doc comment for why this is the fix
+  // for the eval replay cache's per-run `chunkId` drift (ADR-0007). Overriding the inherited
+  // `_id` type to `String` disables Mongoose's default ObjectId auto-generation, so `required:
+  // true` fails CLOSED on a document written without one — every writer
+  // (`IngestionService.ingestVersion`) always computes and assigns one explicitly, so a chunk
+  // reaching Mongo with no `_id` is a construction bug, not a normal path, and letting Mongo mint
+  // a fallback would silently produce an id no future ingest run could ever reproduce.
+  //
+  // `declare` rather than a plain redeclaration: this narrows the inherited `_id`'s *type* for
+  // TypeScript without emitting a field initializer that would shadow what Mongoose hydrates onto
+  // the document at runtime (TS2612). The `@Prop` decorator still registers the String `_id` on the
+  // schema — only the emitted class field is suppressed.
+  @Prop({ type: String, required: true })
+  declare _id: string;
+
   @Prop({ type: Types.ObjectId, ref: 'Document', required: true })
   documentId: Types.ObjectId;
 
@@ -44,6 +62,15 @@ export class EvidenceChunk extends AuditableDocument {
 
   @Prop({ type: String, required: true, default: DEFAULT_TENANT_ID })
   tenantId: string;
+
+  // Tags which `IngestionService.ingestVersion` attempt wrote this row. Required because a
+  // deterministic `_id` means two concurrent attempts over the *same* version's bytes compute the
+  // *same* chunk ids — a losing attempt's post-failure rollback must be scoped to `{
+  // documentVersionId, ingestionAttemptToken }`, never to `_id`, or it would delete the winning
+  // attempt's rows out from under it. See `IngestionService.ingestVersion`'s doc comment for the
+  // race this closes.
+  @Prop({ type: Types.ObjectId, required: true })
+  ingestionAttemptToken: Types.ObjectId;
 }
 
 export const EvidenceChunkSchema = SchemaFactory.createForClass(EvidenceChunk);

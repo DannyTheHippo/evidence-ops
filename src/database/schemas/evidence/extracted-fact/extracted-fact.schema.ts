@@ -61,8 +61,10 @@ export class ExtractedFact extends AuditableDocument {
   @Prop({ type: String, required: true, enum: EXTRACTION_METHODS })
   extractionMethod: ExtractionMethod;
 
-  @Prop({ type: Types.ObjectId, ref: 'EvidenceChunk', required: true })
-  chunkId: Types.ObjectId;
+  // `EvidenceChunk._id` is a content-addressed string (`computeChunkId`), not an ObjectId — see
+  // that schema's own doc comment.
+  @Prop({ type: String, ref: 'EvidenceChunk', required: true })
+  chunkId: string;
 
   // Scopes `FactsService.extractFacts`'s idempotency check and partial-insert rollback to exactly
   // this version's facts — the same role `EvidenceChunk.documentVersionId` plays for

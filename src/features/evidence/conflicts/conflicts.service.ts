@@ -165,17 +165,12 @@ export class ConflictsService {
     chunkIds: readonly string[],
     tenantId: string,
   ): Promise<ConflictedFactGroup[]> {
-    // Mirrors `FactsService.findCellFacts`: an id that isn't a valid ObjectId can't match a real
-    // chunk, dropped rather than thrown for the same veto-only-measurement reason.
-    const objectIds = chunkIds
-      .filter((id) => Types.ObjectId.isValid(id))
-      .map((id) => new Types.ObjectId(id));
-    if (objectIds.length === 0) {
+    if (chunkIds.length === 0) {
       return [];
     }
 
     const touchedFacts = await this.extractedFactModel.find(
-      { chunkId: { $in: objectIds }, tenantId },
+      { chunkId: { $in: [...chunkIds] }, tenantId },
       { _id: 1 },
     );
     if (touchedFacts.length === 0) {
@@ -207,7 +202,7 @@ export class ConflictsService {
         values.push({
           value: fact.value.amount,
           unit: fact.value.unit,
-          sourceChunkId: fact.chunkId.toString(),
+          sourceChunkId: fact.chunkId,
         });
       }
 

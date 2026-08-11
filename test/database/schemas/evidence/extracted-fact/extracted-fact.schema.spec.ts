@@ -14,7 +14,8 @@ const buildFactInput = () => ({
   rawText: 'Revenue for Q3 2025 was $12.0M',
   confidence: 0.92,
   extractionMethod: 'llm' as const,
-  chunkId: new mongoose.Types.ObjectId(),
+  // Content-addressed (`computeChunkId`), not an ObjectId — see `EvidenceChunk._id`'s doc comment.
+  chunkId: 'chunk-b7',
   documentVersionId: new mongoose.Types.ObjectId(),
   locator: {
     kind: 'xlsx-cell' as const,

@@ -31,13 +31,15 @@ const locatorFixtures: Record<EvidenceLocator['kind'], EvidenceLocator> = {
   },
 };
 
-const buildChunkInput = (locator: EvidenceLocator) => ({
+const buildChunkInput = (locator: EvidenceLocator, id = `chunk-${locator.kind}`) => ({
+  _id: id,
   documentId: new mongoose.Types.ObjectId(),
   documentVersionId: new mongoose.Types.ObjectId(),
   text: 'Revenue grew 12% year over year.',
   tokenCount: 8,
   embedding: [0.1, 0.2, 0.3],
   locator,
+  ingestionAttemptToken: new mongoose.Types.ObjectId(),
 });
 
 describe('EvidenceChunk schema', () => {
@@ -57,17 +59,19 @@ describe('EvidenceChunk schema', () => {
       },
     );
 
-    it('requires documentId, documentVersionId, text, tokenCount, embedding, and locator', () => {
+    it('requires _id, documentId, documentVersionId, text, tokenCount, embedding, locator, and ingestionAttemptToken', () => {
       const chunk = new EvidenceChunkModel({});
 
       const error = chunk.validateSync();
 
+      expect(error?.errors._id).toBeDefined();
       expect(error?.errors.documentId).toBeDefined();
       expect(error?.errors.documentVersionId).toBeDefined();
       expect(error?.errors.text).toBeDefined();
       expect(error?.errors.tokenCount).toBeDefined();
       expect(error?.errors.embedding).toBeDefined();
       expect(error?.errors.locator).toBeDefined();
+      expect(error?.errors.ingestionAttemptToken).toBeDefined();
     });
 
     it('defaults tenantId to DEFAULT_TENANT_ID', () => {

@@ -66,7 +66,9 @@ export interface HybridRetrievalHitMetadata {
 }
 
 interface RawEvidenceChunkDoc {
-  readonly _id: mongo.ObjectId;
+  // Content-addressed (`computeChunkId`), not a Mongo-generated ObjectId — see
+  // `EvidenceChunk._id`'s own doc comment.
+  readonly _id: string;
   readonly documentId: mongo.ObjectId;
   readonly documentVersionId: mongo.ObjectId;
   readonly text: string;

@@ -40,7 +40,9 @@ export interface ModeRetrievalHit {
 }
 
 interface RawEvidenceChunkDoc {
-  readonly _id: mongo.ObjectId;
+  // Content-addressed (`computeChunkId`), not a Mongo-generated ObjectId — mirrors
+  // `mongo-hybrid.store.ts`'s `RawEvidenceChunkDoc._id`.
+  readonly _id: string;
   readonly documentVersionId: mongo.ObjectId;
   readonly text: string;
   readonly locator: EvidenceLocator;

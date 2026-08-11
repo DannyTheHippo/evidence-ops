@@ -127,7 +127,7 @@ export function createActivities(app: INestApplicationContext): Activities {
       ]);
 
       const cellFacts: GroundingCellFact[] = cellFactDocs.map((fact) => ({
-        chunkId: fact.chunkId.toString(),
+        chunkId: fact.chunkId,
         factKey: {
           entity: fact.factKey.entity,
           metric: fact.factKey.metric,
