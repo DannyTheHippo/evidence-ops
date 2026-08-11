@@ -33,6 +33,7 @@ import {
 } from '../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import { ConflictsService } from '../../src/features/evidence/conflicts/conflicts.service';
 import { FactsService } from '../../src/features/evidence/facts/facts.service';
+import { PASS_COUNT } from '../../src/features/evidence/facts/prose-fact-extractor';
 import { IngestionService } from '../../src/features/evidence/ingestion/ingestion.service';
 import { ParserRegistry } from '../../src/features/evidence/ingestion/parser.registry';
 import { PdfParser } from '../../src/features/evidence/ingestion/parsers/pdf.parser';
@@ -237,29 +238,38 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
     for (const chunk of memoChunks) {
       const idx = chunk.text.indexOf('6.10');
       if (idx === -1) {
-        modelProvider.enqueueResult({ output: { facts: [] } });
+        // `PASS_COUNT` results per chunk, not one: `extractProseFacts` runs that many independent
+        // passes and `agreeFacts` keeps only groups at least two of them agree on. Enqueueing a
+        // single result leaves passes 2..N with an empty queue, so the majority is never reached
+        // and the chunk is skipped — which surfaces as `factsCreated: 0`, not as a queue error.
+        // Imported rather than hardcoded so this cannot drift from the extractor again.
+        for (let pass = 0; pass < PASS_COUNT; pass++) {
+          modelProvider.enqueueResult({ output: { facts: [] } });
+        }
         continue;
       }
       queuedCapRateFact = true;
       const quote = chunk.text.slice(Math.max(0, idx - 20), Math.min(chunk.text.length, idx + 10));
-      modelProvider.enqueueResult({
-        output: {
-          facts: [
-            {
-              entity: 'Northgate Business Park',
-              metric: 'cap_rate',
-              // Derives to '2025-03' via `derivePeriodFromDateText` — must match the period the
-              // xlsx extractor derives from comps.xlsx's Sale Date column for this same row, or
-              // the two facts never share a `FactKey` and no conflict groups them together.
-              periodText: 'March 2025',
-              amount: 6.1,
-              unit: 'percent',
-              quote,
-              confidence: 0.9,
-            },
-          ],
-        },
-      });
+      for (let pass = 0; pass < PASS_COUNT; pass++) {
+        modelProvider.enqueueResult({
+          output: {
+            facts: [
+              {
+                entity: 'Northgate Business Park',
+                metric: 'cap_rate',
+                // Derives to '2025-03' via `derivePeriodFromDateText` — must match the period the
+                // xlsx extractor derives from comps.xlsx's Sale Date column for this same row, or
+                // the two facts never share a `FactKey` and no conflict groups them together.
+                periodText: 'March 2025',
+                amount: 6.1,
+                unit: 'percent',
+                quote,
+                confidence: 0.9,
+              },
+            ],
+          },
+        });
+      }
     }
     // A test whose chunker output changed enough that no chunk contains the seeded figure would
     // otherwise pass vacuously (zero facts, zero conflicts) — fail loudly instead.

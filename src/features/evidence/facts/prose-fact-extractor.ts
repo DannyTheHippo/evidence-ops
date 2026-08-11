@@ -60,7 +60,12 @@ const MAX_COST_USD = 1;
 // A single call to this model tier has measurably produced 8, 2, and 0 facts for byte-identical
 // input across live runs — the model is not stable enough to trust one sample. Three independent
 // passes is the smallest N for which "at least 2 agree" is a majority rather than a tie.
-const PASS_COUNT = 3;
+// Exported so callers that must supply one model response per pass — notably the integration
+// spec's `FakeModelProvider` queue — cannot silently drift from it. They did: this value moved
+// from 1 to 3 and the spec kept enqueueing a single result per chunk, so passes 2 and 3 starved,
+// fewer than `MIN_SUCCESSFUL_PASSES` voted, and the chunk was skipped. The suite reported zero
+// facts rather than a queue error, and nothing caught it because that lane is not run by CI.
+export const PASS_COUNT = 3;
 const MIN_SUCCESSFUL_PASSES = 2;
 
 function buildSystemPrompt(ontology: readonly MetricDefinition[]): string {
