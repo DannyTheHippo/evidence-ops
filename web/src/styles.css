@@ -564,6 +564,49 @@ h2 {
   min-width: 140px;
 }
 
+/* ── Approvals ───────────────────────────────────────────────────────────── */
+
+.approval-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Timeline ────────────────────────────────────────────────────────────── */
+
+.timeline {
+  list-style: none;
+  margin: 0.85rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.timeline-step {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.65rem 0.85rem;
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  opacity: 0.55;
+}
+.timeline-step.is-done {
+  opacity: 1;
+}
+.timeline-step.is-active {
+  opacity: 1;
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+.timeline-step-label {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
 /* ── Responsive ──────────────────────────────────────────────────────────── */
 
 @media (max-width: 560px) {

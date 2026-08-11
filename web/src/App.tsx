@@ -2,11 +2,13 @@ import type { ReactNode } from 'react';
 import { NavLink, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { logout } from './api/client';
 import { getToken } from './lib/auth';
+import ApprovalsPage from './pages/ApprovalsPage';
 import AskPage from './pages/AskPage';
 import ConflictsPage from './pages/ConflictsPage';
 import DataRoomPage from './pages/DataRoomPage';
 import HomePage from './pages/HomePage';
 import LoginPage from './pages/LoginPage';
+import WorkflowRunPage from './pages/WorkflowRunPage';
 
 function navLinkClassName({ isActive }: { isActive: boolean }): string {
   return isActive ? 'topnav-link is-active' : 'topnav-link';
@@ -49,6 +51,9 @@ export default function App() {
             </NavLink>
             <NavLink to="/conflicts" className={navLinkClassName}>
               Conflicts
+            </NavLink>
+            <NavLink to="/approvals" className={navLinkClassName}>
+              Approvals
             </NavLink>
           </nav>
           <span className="topbar-spacer" />
@@ -97,6 +102,22 @@ export default function App() {
             element={
               <RequireAuth>
                 <ConflictsPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/approvals"
+            element={
+              <RequireAuth>
+                <ApprovalsPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/workflow-runs/:id"
+            element={
+              <RequireAuth>
+                <WorkflowRunPage />
               </RequireAuth>
             }
           />

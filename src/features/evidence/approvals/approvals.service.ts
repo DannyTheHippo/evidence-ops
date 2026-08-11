@@ -171,6 +171,7 @@ export class ApprovalsService {
       action: approval.action,
       summary: approval.summary,
       requestedBy: approval.requestedBy,
+      workflowId: approval.workflowId,
       state: approval.state,
       decidedBy: approval.decidedBy,
       decidedAt: approval.decidedAt,

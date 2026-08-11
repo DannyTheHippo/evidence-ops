@@ -252,3 +252,61 @@ export interface Conflict {
 export function listConflicts(): Promise<WithCount<Conflict>> {
   return request<WithCount<Conflict>>('/conflicts');
 }
+
+// ── Approvals ────────────────────────────────────────────────────────────
+
+export type ApprovalState = 'pending' | 'approved' | 'rejected';
+export type ApprovalDecision = 'approved' | 'rejected';
+
+export interface ApprovalSubject {
+  entityType: string;
+  entityId: string;
+}
+
+export interface Approval {
+  id: string;
+  subject: ApprovalSubject;
+  action: string;
+  summary: string;
+  requestedBy?: string;
+  // Underlying Temporal workflow id, present when this approval gates a workflow (matches
+  // WorkflowRun.workflowId) — absent for an approval created outside one.
+  workflowId?: string;
+  state: ApprovalState;
+  decidedBy?: string;
+  decidedAt?: string;
+  decisionReason?: string;
+  createdAt: string;
+}
+
+export function listApprovals(): Promise<WithCount<Approval>> {
+  return request<WithCount<Approval>>('/approvals');
+}
+
+export function decideApproval(
+  id: string,
+  decision: ApprovalDecision,
+  reason?: string,
+): Promise<Approval> {
+  return request<Approval>(`/approvals/${id}/decision`, {
+    method: 'POST',
+    ...jsonBody(reason ? { decision, reason } : { decision }),
+  });
+}
+
+// ── Workflow runs ────────────────────────────────────────────────────────
+
+export type WorkflowRunStatus = 'queued' | 'running' | 'completed' | 'failed';
+
+export interface WorkflowRun {
+  id: string;
+  workflowId: string;
+  status: WorkflowRunStatus;
+  currentStep?: string;
+  errorMessage?: string;
+  createdAt: string;
+}
+
+export function getWorkflowRunById(id: string): Promise<WorkflowRun> {
+  return request<WorkflowRun>(`/workflow-runs/${id}`);
+}

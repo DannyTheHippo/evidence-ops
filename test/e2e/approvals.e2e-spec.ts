@@ -34,6 +34,7 @@ interface ApprovalBody {
   action: string;
   summary: string;
   requestedBy?: string;
+  workflowId?: string;
   state: string;
   decidedBy?: string;
   decidedAt?: string;
@@ -189,6 +190,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
         action: 'resolve_conflict',
         summary: 'Resolve Northgate Business Park cap_rate (2025-03).',
         requestedBy: 'analyst@example.com',
+        workflowId: 'wf-list-1',
         state: 'pending',
       });
       await approvalModel.create({
@@ -208,11 +210,21 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       expect(response.status).toBe(200);
       const listed = body.docs.find((doc) => doc.id === pending._id.toString());
       expect(listed).toBeDefined();
+      expect(listed?.workflowId).toBe('wf-list-1');
       expect(body.docs.every((doc) => doc.state === 'pending')).toBe(true);
       // A fresh pending row has no decision yet — decidedBy/decidedAt/decisionReason must be
       // entirely absent (not present-but-null), which `toEqual`-on-key-set below proves.
       expect(Object.keys(listed as object).sort()).toEqual(
-        ['id', 'subject', 'action', 'summary', 'requestedBy', 'state', 'createdAt'].sort(),
+        [
+          'id',
+          'subject',
+          'action',
+          'summary',
+          'requestedBy',
+          'workflowId',
+          'state',
+          'createdAt',
+        ].sort(),
       );
 
       const events = await auditEventModel.find({ action: 'approvals.listed' });
@@ -332,6 +344,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
 
       expect(response.status).toBe(200);
       expect(body.state).toBe('approved');
+      expect(body.workflowId).toBe(handle.id);
 
       const signal = fakeWorkflowEngine.signals.find((s) => s.id === handle.id);
       expect(signal).toBeDefined();

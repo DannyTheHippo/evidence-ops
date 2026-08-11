@@ -108,6 +108,7 @@ describe('ApprovalsService', () => {
             action: 'resolve_conflict',
             summary: approval.summary,
             requestedBy: 'analyst@example.com',
+            workflowId: undefined,
             state: 'pending',
             decidedBy: undefined,
             decidedAt: undefined,

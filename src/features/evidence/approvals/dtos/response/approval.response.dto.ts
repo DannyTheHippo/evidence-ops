@@ -45,6 +45,16 @@ export class ApprovalResponseDto {
   requestedBy?: string;
 
   @Expose()
+  @ApiProperty({
+    example: 'a3f1b2c4-5678-4d9e-9abc-1234567890ab',
+    description:
+      'Underlying Temporal workflow id this approval gates, present when requested via a ' +
+      'workflow (matches WorkflowRun.workflowId) — absent for an approval created outside one.',
+    required: false,
+  })
+  workflowId?: string;
+
+  @Expose()
   @ApiProperty({ example: 'pending', enum: APPROVAL_STATES, description: 'Approval state.' })
   state: ApprovalState;
 

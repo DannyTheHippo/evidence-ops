@@ -7,6 +7,7 @@ const examplePendingApproval = {
   action: 'resolve_conflict',
   summary: 'Resolve Northgate Business Park cap_rate (2025-03) in favor of 5.25% over 6.10%.',
   requestedBy: 'analyst@example.com',
+  workflowId: 'a3f1b2c4-5678-4d9e-9abc-1234567890ab',
   state: 'pending',
   createdAt: '2026-07-01T00:00:00.000Z',
 };
