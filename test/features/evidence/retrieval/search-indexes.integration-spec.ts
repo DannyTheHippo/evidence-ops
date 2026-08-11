@@ -19,7 +19,7 @@ import { waitForSearchIndexReady } from '../../../../src/features/evidence/retri
  * runs outside Nest's DI, same as a migration, so `TypedConfigService` is unavailable.
  */
 const MONGO_DB_URI =
-  process.env.MONGO_DB_URI ?? 'mongodb://localhost:27017/evidence-ops?directConnection=true';
+  process.env.MONGO_DB_URI ?? 'mongodb://localhost:27018/evidence-ops?directConnection=true';
 
 // Short relative to the migration's own 120s budget — by the time this spec runs, `migrate:up`
 // has already waited for READY+queryable once. This just confirms it from a fresh connection.

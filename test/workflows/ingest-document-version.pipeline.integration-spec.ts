@@ -69,7 +69,7 @@ import { getMockLogger } from '../utils/get-mock-logger';
  * same way `ProvidersModule`'s single `DOCUMENT_STORE` binding is shared in production.
  */
 const MONGO_DB_URI =
-  process.env.MONGO_DB_URI ?? 'mongodb://localhost:27017/evidence-ops?directConnection=true';
+  process.env.MONGO_DB_URI ?? 'mongodb://localhost:27018/evidence-ops?directConnection=true';
 
 const FIXTURES = path.join(__dirname, '../../fixtures/data-room');
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';

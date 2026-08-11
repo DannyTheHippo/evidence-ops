@@ -30,7 +30,7 @@ import { getMockTypedConfig } from '../../utils/get-mock-typed-config';
  * `GridFsDocumentStore`), so a hand-built `{ db }` satisfies it without the extra machinery.
  */
 const MONGO_DB_URI =
-  process.env.MONGO_DB_URI ?? 'mongodb://localhost:27017/evidence-ops?directConnection=true';
+  process.env.MONGO_DB_URI ?? 'mongodb://localhost:27018/evidence-ops?directConnection=true';
 
 const READINESS_TIMEOUT_MS = 15_000;
 const TENANT_ID = `hybrid-retrieval-it-${randomUUID()}`;

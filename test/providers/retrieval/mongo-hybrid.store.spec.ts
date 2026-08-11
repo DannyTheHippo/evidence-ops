@@ -6,6 +6,7 @@ import { TypedConfigService } from '../../../src/config/environment/typed-config
 import type { EvidenceLocator } from '../../../src/database/schemas/evidence/evidence-chunk/evidence-locator.type';
 import { EMBEDDING_PROVIDER } from '../../../src/providers/embedding/embedding-provider.interface';
 import { FakeEmbeddingProvider } from '../../../src/providers/embedding/fake-embedding.provider';
+import { AtlasSearchUnavailableError } from '../../../src/providers/retrieval/errors/atlas-search-unavailable.error';
 import { MongoHybridRetrievalStore } from '../../../src/providers/retrieval/mongo-hybrid.store';
 import type { RetrievalHit } from '../../../src/providers/retrieval/retrieval-store.interface';
 import { getMockTypedConfig } from '../../utils/get-mock-typed-config';
@@ -75,6 +76,19 @@ function createAggregateMock() {
   return jest.fn();
 }
 
+/**
+ * Every `search()` call now runs `assertAtlasSearchSupported` before touching `aggregate` (see
+ * `mongo-hybrid.store.ts`'s `ensureSearchCapability`), so every collection mock in this file
+ * needs a `listSearchIndexes` stub too — defaults to a healthy, mongot-backed server so the
+ * existing behavioural tests below stay about fusion/RRF, not the capability guard.
+ */
+function buildCollectionMock(aggregate: ReturnType<typeof createAggregateMock>) {
+  return {
+    aggregate,
+    listSearchIndexes: jest.fn().mockReturnValue({ toArray: jest.fn().mockResolvedValue([]) }),
+  };
+}
+
 /** Reads the pipeline argument passed to the `callIndex`-th `.aggregate(...)` call. */
 function pipelineArg<T>(aggregate: ReturnType<typeof createAggregateMock>, callIndex: number): T {
   const typed = aggregate as jest.Mock<{ toArray: jest.Mock<Promise<unknown[]>> }, [unknown[]]>;
@@ -124,7 +138,7 @@ describe('MongoHybridRetrievalStore', () => {
   });
 
   it('should throw when filter.tenantId is missing', async () => {
-    const collection = jest.fn().mockReturnValue({ aggregate: createAggregateMock() });
+    const collection = jest.fn().mockReturnValue(buildCollectionMock(createAggregateMock()));
     const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider);
 
     await expect(store.search({ text: 'cap rate', limit: 5 })).rejects.toThrow(
@@ -133,7 +147,7 @@ describe('MongoHybridRetrievalStore', () => {
   });
 
   it('should throw when filter.tenantId is an empty string', async () => {
-    const collection = jest.fn().mockReturnValue({ aggregate: createAggregateMock() });
+    const collection = jest.fn().mockReturnValue(buildCollectionMock(createAggregateMock()));
     const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider);
 
     await expect(
@@ -144,7 +158,7 @@ describe('MongoHybridRetrievalStore', () => {
   it('should embed the query text with input_type "query" when no vector is supplied', async () => {
     const aggregate = createAggregateMock();
     aggregate.mockReturnValue({ toArray: jest.fn().mockResolvedValue([]) });
-    const collection = jest.fn().mockReturnValue({ aggregate });
+    const collection = jest.fn().mockReturnValue(buildCollectionMock(aggregate));
     const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider);
 
     await store.search({ text: 'cap rate', limit: 5, filter: { tenantId: 'tenant-a' } });
@@ -155,7 +169,7 @@ describe('MongoHybridRetrievalStore', () => {
   it('should skip embedding and use the supplied vector when the query already carries one', async () => {
     const aggregate = createAggregateMock();
     aggregate.mockReturnValue({ toArray: jest.fn().mockResolvedValue([]) });
-    const collection = jest.fn().mockReturnValue({ aggregate });
+    const collection = jest.fn().mockReturnValue(buildCollectionMock(aggregate));
     const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider);
     const suppliedVector = [0.1, 0.2, 0.3];
 
@@ -191,7 +205,7 @@ describe('MongoHybridRetrievalStore', () => {
         },
       ]),
     });
-    const collection = jest.fn().mockReturnValue({ aggregate });
+    const collection = jest.fn().mockReturnValue(buildCollectionMock(aggregate));
     const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider, 'server');
 
     const hits = await store.search({
@@ -248,7 +262,7 @@ describe('MongoHybridRetrievalStore', () => {
     aggregate.mockReturnValue({
       toArray: jest.fn().mockResolvedValue([{ ...doc, fusionScore: 0.02 }]),
     });
-    const collection = jest.fn().mockReturnValue({ aggregate });
+    const collection = jest.fn().mockReturnValue(buildCollectionMock(aggregate));
     const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider, 'server');
 
     const hits = await store.search({ text: 'q', limit: 5, filter: { tenantId: 'tenant-a' } });
@@ -270,7 +284,7 @@ describe('MongoHybridRetrievalStore', () => {
     aggregate.mockReturnValueOnce({
       toArray: jest.fn().mockResolvedValue([vectorOnlyDoc, bothDoc]),
     });
-    const collection = jest.fn().mockReturnValue({ aggregate });
+    const collection = jest.fn().mockReturnValue(buildCollectionMock(aggregate));
     const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider, 'app');
 
     const hits = await store.search({
@@ -321,7 +335,7 @@ describe('MongoHybridRetrievalStore', () => {
     const aggregate = createAggregateMock();
     aggregate.mockReturnValueOnce({ toArray: jest.fn().mockResolvedValue(docs) });
     aggregate.mockReturnValueOnce({ toArray: jest.fn().mockResolvedValue([]) });
-    const collection = jest.fn().mockReturnValue({ aggregate });
+    const collection = jest.fn().mockReturnValue(buildCollectionMock(aggregate));
     const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider, 'app');
 
     const hits = await store.search({
@@ -332,5 +346,58 @@ describe('MongoHybridRetrievalStore', () => {
     });
 
     expect(hits).toHaveLength(2);
+  });
+
+  it('should throw AtlasSearchUnavailableError, not a raw driver error, when listSearchIndexes rejects', async () => {
+    const rawError = new Error("Unrecognized pipeline stage name: '$listSearchIndexes'");
+    const listSearchIndexes = jest
+      .fn()
+      .mockReturnValue({ toArray: jest.fn().mockRejectedValue(rawError) });
+    const aggregate = createAggregateMock();
+    const collection = jest.fn().mockReturnValue({ aggregate, listSearchIndexes });
+    const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider, 'server');
+
+    await expect(
+      store.search({ text: 'cap rate', limit: 5, filter: { tenantId: 'tenant-a' } }),
+    ).rejects.toThrow(AtlasSearchUnavailableError);
+
+    // The property this check exists for: a server that fails the probe must never reach the
+    // embedding call (real spend) or an aggregate call (the confusing raw error from the
+    // motivating incident).
+    expect(fakeEmbeddingProvider.calls).toHaveLength(0);
+    expect(aggregate).not.toHaveBeenCalled();
+  });
+
+  it('should verify search capability in app mode too, not only server mode', async () => {
+    const rawError = new Error("Unrecognized pipeline stage name: '$listSearchIndexes'");
+    const listSearchIndexes = jest
+      .fn()
+      .mockReturnValue({ toArray: jest.fn().mockRejectedValue(rawError) });
+    const aggregate = createAggregateMock();
+    const collection = jest.fn().mockReturnValue({ aggregate, listSearchIndexes });
+    const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider, 'app');
+
+    // `app` mode still runs `$search`/`$vectorSearch` directly (`searchAppSide`) against the
+    // same mongot-backed indexes `server` mode's `$rankFusion` composes — a plain Mongo server
+    // fails both modes identically confusingly, so the guard is not gated on the fusion mode.
+    await expect(
+      store.search({ text: 'cap rate', limit: 5, filter: { tenantId: 'tenant-a' } }),
+    ).rejects.toThrow(AtlasSearchUnavailableError);
+    expect(listSearchIndexes).toHaveBeenCalledTimes(1);
+  });
+
+  it('should probe search capability at most once per process across repeated searches', async () => {
+    const aggregate = createAggregateMock();
+    aggregate.mockReturnValue({ toArray: jest.fn().mockResolvedValue([]) });
+    const listSearchIndexes = jest
+      .fn()
+      .mockReturnValue({ toArray: jest.fn().mockResolvedValue([]) });
+    const collection = jest.fn().mockReturnValue({ aggregate, listSearchIndexes });
+    const store = await buildStore({ db: { collection } }, fakeEmbeddingProvider, 'server');
+
+    await store.search({ text: 'first', limit: 5, filter: { tenantId: 'tenant-a' } });
+    await store.search({ text: 'second', limit: 5, filter: { tenantId: 'tenant-a' } });
+
+    expect(listSearchIndexes).toHaveBeenCalledTimes(1);
   });
 });

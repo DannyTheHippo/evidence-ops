@@ -7,6 +7,7 @@ import {
   EMBEDDING_PROVIDER,
   type EmbeddingProvider,
 } from '../embedding/embedding-provider.interface';
+import { assertAtlasSearchSupported } from './atlas-search-capability.util';
 import type { RetrievalHit, RetrievalQuery, RetrievalStore } from './retrieval-store.interface';
 
 // Duplicated from `migrations/0003-search-indexes.ts` rather than imported: `tsconfig.build.json`
@@ -117,6 +118,11 @@ interface RawFusionResultDoc extends RawEvidenceChunkDoc {
 export class MongoHybridRetrievalStore implements RetrievalStore {
   private readonly db: mongo.Db;
 
+  // Memoizes `assertAtlasSearchSupported` across calls to `search()` — this store is a Nest
+  // singleton (`ProvidersModule` binds it once to `RETRIEVAL_STORE`), so one resolved/rejected
+  // field is one round trip for the lifetime of the process, not one per query.
+  private searchCapabilityVerified: Promise<void> | undefined;
+
   constructor(
     @InjectConnection() connection: Connection,
     @Inject(EMBEDDING_PROVIDER) private readonly embeddingProvider: EmbeddingProvider,
@@ -137,6 +143,13 @@ export class MongoHybridRetrievalStore implements RetrievalStore {
     query: RetrievalQuery,
   ): Promise<RetrievalHit<TMetadata>[]> {
     const tenantId = this.extractTenantId(query.filter);
+    // Not gated on `config.retrieval.fusion`: `app` mode's `searchAppSide` runs `$search` and
+    // `$vectorSearch` directly (see `buildSearchStages`/`buildVectorStages`), the same
+    // mongot-only stages `server` mode's `$rankFusion` composes internally — a plain Mongo
+    // server fails both modes identically confusingly, so both need the same upfront guard.
+    // Before `embedQuery`, deliberately: an embedding call costs real API spend, and this check
+    // exists specifically to stop that spend from reaching a server that can't serve the query.
+    await this.ensureSearchCapability();
     const vector = query.vector ?? (await this.embedQuery(query.text));
     const pipelineLimit = Math.max(
       query.limit * PIPELINE_CANDIDATE_MULTIPLIER,
@@ -151,6 +164,13 @@ export class MongoHybridRetrievalStore implements RetrievalStore {
     // This store only ever produces `HybridRetrievalHitMetadata`; the interface stays generic so
     // a caller can narrow to its own shape, same as `FakeRetrievalStore.search`.
     return hits as RetrievalHit<TMetadata>[];
+  }
+
+  private async ensureSearchCapability(): Promise<void> {
+    if (!this.searchCapabilityVerified) {
+      this.searchCapabilityVerified = assertAtlasSearchSupported(this.db);
+    }
+    return this.searchCapabilityVerified;
   }
 
   private extractTenantId(filter: RetrievalQuery['filter']): string {

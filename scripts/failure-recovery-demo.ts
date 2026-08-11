@@ -71,7 +71,8 @@ async function main(): Promise<void> {
   // sampling an activity mid-flight — the kill landed on an already-COMPLETED workflow and proved
   // nothing. Ingestion embeds through a provider throttled to the account's 3 requests/minute, so
   // there is a wide, deterministic window in which to kill the process.
-  const mongoUri = process.env.MONGO_DB_URI ?? 'mongodb://localhost:27017/evidence_ops';
+  const mongoUri =
+    process.env.MONGO_DB_URI ?? 'mongodb://localhost:27018/evidence-ops?directConnection=true';
   const mongo = await MongoClient.connect(mongoUri);
   const db = mongo.db();
   const version = await db
