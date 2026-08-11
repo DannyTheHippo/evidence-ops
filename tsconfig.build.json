@@ -4,7 +4,15 @@
     "rootDir": "./src",
     // The base config sets `noEmit` so a stray `tsc` cannot litter the source tree; this is the one
     // place that is supposed to produce output, so it opts back in. `nest build` reads this file.
-    "noEmit": false
+    "noEmit": false,
+    // `nest-cli.json` sets `deleteOutDir: true`, which wipes `dist/` before every build but leaves
+    // the root `tsconfig.build.tsbuildinfo` untouched. With the base config's `incremental: true`
+    // inherited here, a second `npm run build` reads that buildinfo, decides nothing changed since
+    // last time, and skips emit entirely — exit 0, no errors, an empty `dist/`. tsc's incremental
+    // mode trusts the buildinfo over the filesystem; it never checks whether the output it thinks
+    // exists actually does. `deleteOutDir` and `incremental` cannot coexist correctly, so this is
+    // the one place that turns it back off.
+    "incremental": false
   },
   // Must exclude every `include` entry of the base config that lives outside `rootDir: ./src`, or
   // `nest build` fails with TS6059 ("not under rootDir") and emits nothing. `scripts`, `eval` and
