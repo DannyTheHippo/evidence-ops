@@ -21,6 +21,17 @@ const page2: ParsedElement = {
 
 const CHUNK_TEXT = `${page1.text}\n\n${page2.text}`;
 
+// The PDF parser preserves the source's hard line wraps; the model returns the same sentence with
+// wraps rendered as spaces. `page3Wrapped` reproduces the proven Northgate defect (a newline inside
+// "at a\ncap rate") on its own page, distinct from `page1`/`page2`, so a locator resolved to it
+// (rather than falling back to `CHUNK_LOCATOR`, anchored at page 1) proves the wrapped quote was
+// actually matched against this element and not merely accepted at the whole-chunk level.
+const page3Wrapped: ParsedElement = {
+  text: 'Northgate Business Park traded in March 2025 at a\ncap rate of approximately 6.10%.',
+  locator: { kind: 'pdf-page', page: 3, extractorVersion: 'v1' },
+  headingPath: [],
+};
+
 function buildProvider(): FakeModelProvider {
   return new FakeModelProvider();
 }
@@ -114,6 +125,87 @@ describe('extractProseFacts', () => {
 
     expect(result.accepted[0].locator).toEqual(page2.locator);
     expect(result.accepted[0].locator).not.toEqual(CHUNK_LOCATOR);
+  });
+
+  it('should accept a candidate whose source text spans a hard line wrap the model rendered as a space', async () => {
+    enqueueUnanimous(modelProvider, [
+      {
+        entity: 'Northgate Business Park',
+        metric: 'cap_rate',
+        periodText: 'March 2025',
+        amount: 6.1,
+        unit: 'percent',
+        // The model's returned quote, wraps rendered as spaces — the source element's own text
+        // (page3Wrapped) has a literal "\n" in this exact span.
+        quote: 'at a cap rate of approximately 6.10%',
+        confidence: 0.9,
+      },
+    ]);
+
+    const result = await extractProseFacts({
+      chunkText: `${page1.text}\n\n${page3Wrapped.text}`,
+      chunkLocator: CHUNK_LOCATOR,
+      sourceElements: [page1, page3Wrapped],
+      modelProvider,
+      ontology: METRIC_ONTOLOGY,
+    });
+
+    expect(result.rejected).toEqual([]);
+    expect(result.accepted).toHaveLength(1);
+  });
+
+  it('should resolve a wrapped quote to the element it actually came from, not the chunk fallback', async () => {
+    enqueueUnanimous(modelProvider, [
+      {
+        entity: 'Northgate Business Park',
+        metric: 'cap_rate',
+        periodText: 'March 2025',
+        amount: 6.1,
+        unit: 'percent',
+        quote: 'at a cap rate of approximately 6.10%',
+        confidence: 0.9,
+      },
+    ]);
+
+    const result = await extractProseFacts({
+      chunkText: `${page1.text}\n\n${page3Wrapped.text}`,
+      chunkLocator: CHUNK_LOCATOR, // anchored at page 1 — the wrong page for this fact
+      sourceElements: [page1, page3Wrapped],
+      modelProvider,
+      ontology: METRIC_ONTOLOGY,
+    });
+
+    expect(result.accepted[0].locator).toEqual(page3Wrapped.locator);
+    expect(result.accepted[0].locator).not.toEqual(CHUNK_LOCATOR);
+  });
+
+  it('should still reject a paraphrase of a real sentence as not verbatim', async () => {
+    enqueueUnanimous(modelProvider, [
+      {
+        entity: 'Northgate Business Park',
+        metric: 'cap_rate',
+        periodText: 'March 2025',
+        amount: 6.1,
+        unit: 'percent',
+        // A paraphrase, not a reflow — normalizes to a different string from anything in the
+        // chunk, so it must still fail closed even though the check now tolerates whitespace and
+        // unicode-quote variants.
+        quote: 'the property changed hands at roughly a six percent yield',
+        confidence: 0.9,
+      },
+    ]);
+
+    const result = await extractProseFacts({
+      chunkText: CHUNK_TEXT,
+      chunkLocator: CHUNK_LOCATOR,
+      sourceElements: [page1, page2],
+      modelProvider,
+      ontology: METRIC_ONTOLOGY,
+    });
+
+    expect(result.accepted).toEqual([]);
+    expect(result.rejected).toHaveLength(3);
+    expect(result.rejected.every((r) => r.reason.includes('quote not found verbatim'))).toBe(true);
   });
 
   it('should reject and drop a candidate whose quote does not appear verbatim in the chunk', async () => {

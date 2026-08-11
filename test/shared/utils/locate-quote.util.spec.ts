@@ -1,4 +1,4 @@
-import { locateQuote } from '../../../../src/features/evidence/qa/locate-quote';
+import { locateQuote } from '../../../src/shared/utils/locate-quote.util';
 
 const CHUNK_TEXT =
   'Northgate Business Park traded in March 2025 at a cap rate of approximately 6.10%.';

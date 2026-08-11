@@ -1,4 +1,4 @@
-import { normalizeQuoteText } from './normalize-quote-text';
+import { normalizeQuoteText } from './normalize-quote-text.util';
 
 export type QuoteMatchKind = 'exact' | 'fuzzy' | 'none';
 

@@ -3,9 +3,9 @@ import type {
   FactKey,
   FactValue,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import { locateQuote } from '../../../shared/utils/locate-quote.util';
 import type { Citation, Claim, DroppedClaim } from './contracts/answer.contract';
 import { extractNumericTokens } from './extract-numeric-tokens';
-import { locateQuote } from './locate-quote';
 import type { RetrievedChunk } from './types/retrieved-chunk.type';
 import type { GroundingViolation } from './types/grounding-report.type';
 

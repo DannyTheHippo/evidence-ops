@@ -5,6 +5,7 @@ import type {
   FactValue,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import type { ModelProvider } from '../../../providers/model/model-provider.interface';
+import { locateQuote } from '../../../shared/utils/locate-quote.util';
 import type { ParsedElement } from '../ingestion/parsers/parsed-element.type';
 import { agreeFacts, type AgreementReport } from './agree-facts';
 import {
@@ -96,7 +97,16 @@ function resolveFactLocator(
   sourceElements: readonly ParsedElement[],
   fallback: EvidenceLocator,
 ): EvidenceLocator {
-  const matches = sourceElements.filter((element) => element.text.includes(quote));
+  // Same normalized-containment check the answer boundary verifies citations with (`locateQuote`,
+  // `shared/utils/locate-quote.util.ts`): a wrapped quote's raw source element text differs from
+  // the model's returned quote only by a reflowed line break, which `element.text.includes(quote)`
+  // treated as zero matches — falling back to the chunk's own anchor locator, which can point at
+  // the wrong page for a fact that actually came from a later element merged into the chunk. This
+  // relaxes whitespace/unicode-variant strictness only; a paraphrase still fails `'exact'` and is
+  // still treated as no match. The `matches.length === 1` fallback semantics are unchanged.
+  const matches = sourceElements.filter(
+    (element) => locateQuote(quote, element.text).kind === 'exact',
+  );
   return matches.length === 1 ? matches[0].locator : fallback;
 }
 
@@ -118,7 +128,14 @@ function evaluateCandidates(
   const rejected: RejectedFactCandidate[] = [];
 
   for (const candidate of candidates) {
-    if (!chunkText.includes(candidate.quote)) {
+    // Same verifier the answer boundary uses for citation quotes (`locateQuote`,
+    // `shared/utils/locate-quote.util.ts`), not a stricter one: PDF chunk text preserves the
+    // source's hard line wraps, but the model returns quotes with wraps rendered as spaces, so raw
+    // `chunkText.includes` rejected every quote spanning a line break. Normalized containment
+    // (`kind === 'exact'`) relaxes whitespace-run and unicode-quote/dash-variant strictness only —
+    // a paraphrase still normalizes to a different string and still fails closed as `'fuzzy'` or
+    // `'none'`.
+    if (locateQuote(candidate.quote, chunkText).kind !== 'exact') {
       rejected.push({ candidate, reason: 'quote not found verbatim in source chunk' });
       continue;
     }

@@ -1,5 +1,5 @@
 import type { EvidenceLocator } from '../../src/database/schemas/evidence/evidence-chunk/evidence-locator.type';
-import { locateQuote } from '../../src/features/evidence/qa/locate-quote';
+import { locateQuote } from '../../src/shared/utils/locate-quote.util';
 import type { Locator } from '../dataset/schema';
 import { resolveLocatorText } from '../resolve-locator';
 

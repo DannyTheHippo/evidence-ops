@@ -1,4 +1,4 @@
-import { normalizeQuoteText } from '../../../../src/features/evidence/qa/normalize-quote-text';
+import { normalizeQuoteText } from '../../../src/shared/utils/normalize-quote-text.util';
 
 describe('normalizeQuoteText', () => {
   it('should collapse a reflowed line break into a single space', () => {
