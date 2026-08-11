@@ -25,6 +25,15 @@ services:
     volumes:
       - evidence_ops_data:/data/db
       - evidence_ops_config:/data/configdb
+      # `/data/mongot` holds mongot's Lucene index files, and — unlike the two above — the image
+      # does NOT declare it as a VOLUME. Without this mount it lives in the container's writable
+      # layer and is destroyed on every recreate, while the migration changelog that records
+      # "search indexes created" persists in /data/db. The result is a stack that comes up
+      # healthy, a `migrate:up` that correctly reports nothing to do, and retrieval that silently
+      # returns zero rows — measured: 12 chunks present, 0 search indexes, every eval question
+      # answering `insufficient_evidence`. Index state is infrastructure, but the changelog models
+      # it as schema, and only one of the two survived.
+      - evidence_ops_mongot:/data/mongot
     networks:
       - evidence_ops_net
     healthcheck:
@@ -323,4 +332,5 @@ networks:
 volumes:
   evidence_ops_data:
   evidence_ops_config:
+  evidence_ops_mongot:
   evidence_ops_temporal_postgres:
