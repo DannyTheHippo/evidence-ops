@@ -12,6 +12,7 @@ services:
     # volume. Pinning the hostname keeps the name stable across recreates.
     hostname: evidence-ops-mongo
     restart: always
+    mem_limit: 1536m
     ports:
       # Host port is overridable because 27017 is the default for every Mongo project on a
       # machine — a second one simply fails to start with "port is already allocated". Set
@@ -45,16 +46,95 @@ services:
     image: jaegertracing/all-in-one:1.65.0
     container_name: evidence-ops-jaeger
     restart: always
+    mem_limit: 512m
     ports:
       # UI
       - "16686:16686"
       # OTLP HTTP receiver. Exposed to the host because `OTEL_EXPORTER_OTLP_ENDPOINT`'s
       # `.env.example` default (http://localhost:4318) targets this port for anything running
-      # outside the network — start:dev, worker:dev, temporal:dev. In-network callers (the `app`/
-      # `web` containers under the `full` profile) use http://jaeger:4318 instead.
+      # outside the network — start:dev, worker:dev, temporal:dev. In-network callers (the `api`/
+      # `worker`/`web` containers under the `full` profile) use http://jaeger:4318 instead.
       - "4318:4318"
     networks:
       - evidence_ops_net
+
+  temporal-postgres:
+    image: postgres:16-alpine
+    container_name: evidence-ops-temporal-postgres
+    restart: always
+    mem_limit: 256m
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+    volumes:
+      - evidence_ops_temporal_postgres:/var/lib/postgresql/data
+    networks:
+      - evidence_ops_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    profiles:
+      - full
+
+  temporal:
+    image: temporalio/auto-setup:1.27.2
+    container_name: evidence-ops-temporal
+    restart: always
+    mem_limit: 512m
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=temporal-postgres
+      # No DYNAMIC_CONFIG_FILE_PATH override: the official temporalio/docker-compose reference sets
+      # this to a path it bind-mounts from the host repo (`./dynamicconfig`). This file has no such
+      # mount, and the path's presence baked into the `auto-setup` image is unverified — omitting
+      # it lets the image fall back to its own built-in default rather than pointing at a file that
+      # may not exist, which would leave the container running with no dynamic config at all.
+    ports:
+      # gRPC, published so a host-run `worker:dev`/`start:dev` (the primary dev loop, see README)
+      # can point TEMPORAL_ADDRESS at this container instead of `temporal server start-dev`.
+      - "7233:7233"
+    depends_on:
+      temporal-postgres:
+        condition: service_healthy
+    networks:
+      - evidence_ops_net
+    healthcheck:
+      # `auto-setup`'s own entrypoint drives schema setup with `tctl`, so the CLI ships in the
+      # image; unverified here beyond `docker compose config` — this repo's sandbox cannot pull or
+      # run the image, so the exact command has not been exercised against a live container.
+      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    profiles:
+      - full
+
+  temporal-ui:
+    image: temporalio/ui:2.34.0
+    container_name: evidence-ops-temporal-ui
+    restart: always
+    mem_limit: 256m
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:8233
+    ports:
+      # Host port matches the Web UI port `temporal server start-dev` binds in the host dev loop
+      # (README "What runs where" / step 5), so http://localhost:8233 is correct either way.
+      - "8233:8080"
+    depends_on:
+      temporal:
+        condition: service_healthy
+    networks:
+      - evidence_ops_net
+    profiles:
+      - full
 
   migrate:
     build:
@@ -62,6 +142,8 @@ services:
       target: tasks
     command: npm run migrate:up
     environment:
+      # Hyphen, `evidence-ops` — the underscore spelling (`evidence_ops`) previously produced a
+      # stray orphan database and must not reappear.
       MONGO_DB_URI: mongodb://mongo:27017/evidence-ops?directConnection=true
     depends_on:
       mongo:
@@ -70,17 +152,81 @@ services:
       - evidence_ops_net
     restart: "no"
 
-  app:
+  api:
     build:
       context: .
       target: runtime
+    env_file:
+      # `required: false` — README step 1 (`cp .env.example .env`) creates this before a `full`
+      # bring-up, but a missing file must not hard-fail `up`; it only means the secrets below
+      # (ANTHROPIC_API_KEY, VOYAGE_API_KEY, JWT_SECRET) stay unset, which boots fine below prod-like
+      # NODE_ENV (see environment.config.ts) — ingestion/answering just won't work without them.
+      - path: .env
+        required: false
     environment:
+      # In-network addresses only — never in `.env`, which stays host-loop-relative
+      # (localhost:*) so the same file works for `start:dev`/`worker:dev`/`temporal:dev` too.
       MONGO_DB_URI: mongodb://mongo:27017/evidence-ops?directConnection=true
+      TEMPORAL_ADDRESS: temporal:7233
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    mem_limit: 512m
     depends_on:
       mongo:
         condition: service_healthy
+      temporal:
+        condition: service_healthy
+      # `0003-search-indexes.ts` blocks until `$search`/`$vectorSearch` report READY (tens of
+      # seconds on a fresh volume) — without this, api/worker would go healthy and accept traffic
+      # against a store with no indexes yet, the exact "silently matches nothing" failure the
+      # migration was written to prevent.
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "3000:3000"
+    networks:
+      - evidence_ops_net
+    healthcheck:
+      # No curl/wget on node:26-slim; Node itself makes the request instead of adding a package.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:3000/api/v1/health',(r)=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    profiles:
+      - full
+
+  worker:
+    build:
+      context: .
+      # `build`, not `runtime` — the worker runs source TS under `ts-node`, never `tsx`: esbuild
+      # (what `tsx` uses) drops `emitDecoratorMetadata`, so every Nest constructor injection
+      # arrives `undefined` and the worker dies on boot looking like a config error, not a DI one
+      # (cost a full day once, commit d9a17ce). The `build` stage already carries `src/`,
+      # `node_modules` (with `ts-node`/`typescript`, both devDependencies), and both tsconfigs —
+      # everything `npm run worker:dev` needs, unlike the stripped-down `runtime` stage.
+      target: build
+    command: npm run worker:dev
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MONGO_DB_URI: mongodb://mongo:27017/evidence-ops?directConnection=true
+      TEMPORAL_ADDRESS: temporal:7233
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    mem_limit: 512m
+    depends_on:
+      mongo:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
       - evidence_ops_net
     profiles:
@@ -89,10 +235,12 @@ services:
   web:
     build:
       context: ./web
+    mem_limit: 64m
     ports:
       - "80:80"
     depends_on:
-      - app
+      api:
+        condition: service_healthy
     networks:
       - evidence_ops_net
     profiles:
@@ -104,3 +252,4 @@ networks:
 volumes:
   evidence_ops_data:
   evidence_ops_config:
+  evidence_ops_temporal_postgres:
