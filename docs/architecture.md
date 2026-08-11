@@ -59,7 +59,7 @@ flowchart TB
     Docs["DOCUMENT_STORE = GridFS"]
     Engine["WORKFLOW_ENGINE = TemporalWorkflowEngine"]
     Tel["TELEMETRY = LoggerTelemetry (fake: process log only)"]
-    Appr["APPROVAL_CHANNEL = FakeApprovalChannel (fake: no consumer)"]
+    Appr["APPROVAL_CHANNEL = MongoApprovalChannel (real: no consumer yet)"]
   end
 
   Mongo[("MongoDB Atlas Local 8.3.4<br/>$search · $vectorSearch · $rankFusion · GridFS")]
@@ -160,7 +160,7 @@ Two things this diagram is making explicit:
 | `DOCUMENT_STORE`    | `GridFsDocumentStore`                     | Real. |
 | `WORKFLOW_ENGINE`   | `TemporalWorkflowEngine`                  | Real. Overridden back to `FakeWorkflowEngine` in `test/utils/create-test-app.ts` so no e2e dials a live server. |
 | `TELEMETRY`         | `LoggerTelemetry`                         | **Fake-ish.** Events go to the process log and nowhere else. No OpenTelemetry, no exporter, no trace context. |
-| `APPROVAL_CHANNEL`  | `FakeApprovalChannel`                     | **Fake.** Placeholder binding with no consumer in `src/` today. |
+| `APPROVAL_CHANNEL`  | `MongoApprovalChannel`                    | Real. Persistence only (D1 of the approvals milestone) — no workflow waits on it yet, so there is still no consumer in `src/`. |
 
 `FakeModelProvider`, `FakeEmbeddingProvider`, `FakeRetrievalStore`, and `FakeDocumentStore` also
 exist, but they are bound directly by unit tests, not through this module.

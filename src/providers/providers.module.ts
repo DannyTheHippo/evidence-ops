@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
+import { MongooseModule } from '@nestjs/mongoose';
 import { TypedConfigService } from '../config/environment/typed-config.service';
+import { Approval, ApprovalSchema } from '../database/schemas/workflow/approval/approval.schema';
 import { APPROVAL_CHANNEL } from './approval-channel/approval-channel.interface';
-import { FakeApprovalChannel } from './approval-channel/fake-approval.channel';
+import { MongoApprovalChannel } from './approval-channel/mongo-approval.channel';
 import { EMBEDDING_PROVIDER } from './embedding/embedding-provider.interface';
 import { VoyageEmbeddingProvider } from './embedding/voyage-embedding.provider';
 import { AnthropicModelProvider } from './model/anthropic-model.provider';
@@ -39,6 +41,7 @@ const MODEL_CACHE_DEFAULT_OPTIONS: CachingModelProviderOptions = {
  * class provider and is only referenced here via its `inject` token.
  */
 @Module({
+  imports: [MongooseModule.forFeature([{ name: Approval.name, schema: ApprovalSchema }])],
   providers: [
     AnthropicModelProvider,
     { provide: TELEMETRY, useClass: LoggerTelemetry },
@@ -60,22 +63,19 @@ const MODEL_CACHE_DEFAULT_OPTIONS: CachingModelProviderOptions = {
     },
     { provide: EMBEDDING_PROVIDER, useClass: VoyageEmbeddingProvider },
 
-    // Placeholder binding: only a fake exists (see the interface file in the same directory for
-    // why). A later milestone swaps it in for a real channel without touching any consumer of
-    // the token.
-    { provide: APPROVAL_CHANNEL, useClass: FakeApprovalChannel },
-
-    // RETRIEVAL_STORE, DOCUMENT_STORE, and now WORKFLOW_ENGINE bind their real implementations
-    // here — their fakes stay in the tree because unit tests still bind them directly, not
-    // through this module. WORKFLOW_ENGINE is the one exception that needs an e2e-level override
-    // rather than just a unit-level one: TemporalWorkflowEngine only dials a server when
-    // start()/status() is actually called, and QaService.startQuestion does call start() on the
-    // real answer workflow — so `test/utils/create-test-app.ts` overrides the token back to
-    // FakeWorkflowEngine, so no e2e spec accidentally reaches a live Temporal server just by
-    // booting AppModule.
+    // RETRIEVAL_STORE, DOCUMENT_STORE, WORKFLOW_ENGINE, and now APPROVAL_CHANNEL bind their real
+    // implementations here — their fakes stay in the tree because unit tests still bind them
+    // directly, not through this module. WORKFLOW_ENGINE is the one exception that needs an
+    // e2e-level override rather than just a unit-level one: TemporalWorkflowEngine only dials a
+    // server when start()/status() is actually called, and QaService.startQuestion does call
+    // start() on the real answer workflow — so `test/utils/create-test-app.ts` overrides the
+    // token back to FakeWorkflowEngine, so no e2e spec accidentally reaches a live Temporal
+    // server just by booting AppModule. MongoApprovalChannel dials nothing at construction or at
+    // module boot (same as RETRIEVAL_STORE/DOCUMENT_STORE) — no e2e override needed.
     { provide: RETRIEVAL_STORE, useClass: MongoHybridRetrievalStore },
     { provide: DOCUMENT_STORE, useClass: GridFsDocumentStore },
     { provide: WORKFLOW_ENGINE, useClass: TemporalWorkflowEngine },
+    { provide: APPROVAL_CHANNEL, useClass: MongoApprovalChannel },
   ],
   exports: [
     MODEL_PROVIDER,
