@@ -35,6 +35,7 @@ const MIN_VECTOR_NUM_CANDIDATES = 100;
 export interface ModeRetrievalHit {
   readonly chunkId: string;
   readonly documentVersionId: string;
+  readonly text: string;
   readonly locator: EvidenceLocator;
 }
 
@@ -93,6 +94,10 @@ function toHit(doc: RawEvidenceChunkDoc): ModeRetrievalHit {
   return {
     chunkId: doc._id.toString(),
     documentVersionId: doc.documentVersionId.toString(),
+    // Same aggregation the doc was already fetched by (no `$project` stage strips it) — the
+    // production store's equivalent mapping (`mongo-hybrid.store.ts`'s `toHit`) already surfaces
+    // this field for the same reason; there is no second query to make here.
+    text: doc.text,
     locator: doc.locator,
   };
 }

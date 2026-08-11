@@ -30,7 +30,14 @@ export interface RetrievalModeSummary {
   readonly recallAt5: number;
   readonly recallAt10: number;
   readonly mrr: number;
+  /** How many locator-bearing cases actually contributed to the metrics above — a case this mode
+   * returned zero hits for has an empty overlap array and is excluded here (see
+   * `computeRecallMetrics`'s doc comment), so this can be less than `totalCases`. */
   readonly caseCount: number;
+  /** Every locator-bearing case the comparison attempted to score in this mode, regardless of
+   * whether it ended up counted in `caseCount`. Rendered as `caseCount/totalCases` so a reader can
+   * tell a shrunken denominator from a genuinely small dataset. */
+  readonly totalCases: number;
 }
 
 export interface EvalRunResult {
@@ -63,7 +70,7 @@ function metricsTable(metrics: EvalMetrics): string {
 function retrievalComparisonTable(comparison: readonly RetrievalModeSummary[]): string {
   const rows = comparison.map(
     (row) =>
-      `| ${row.mode} | ${pct(row.recallAt5)} | ${pct(row.recallAt10)} | ${row.mrr.toFixed(3)} | ${row.caseCount} |`,
+      `| ${row.mode} | ${pct(row.recallAt5)} | ${pct(row.recallAt10)} | ${row.mrr.toFixed(3)} | ${row.caseCount}/${row.totalCases} |`,
   );
   return [
     '| Mode | Recall@5 | Recall@10 | MRR | Cases |',

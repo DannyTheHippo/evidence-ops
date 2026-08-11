@@ -14,13 +14,8 @@ import {
   EMBEDDING_PROVIDER,
   type EmbeddingProvider,
 } from '../src/providers/embedding/embedding-provider.interface';
-import {
-  buildMarkdownReport,
-  type EvalRunResult,
-  type PerCaseReport,
-  type RetrievalModeSummary,
-} from './report';
-import { RETRIEVAL_MODES, searchByMode } from './retrieval/retrieval-modes';
+import { buildMarkdownReport, type EvalRunResult, type PerCaseReport } from './report';
+import { runRetrievalComparison } from './retrieval/retrieval-comparison';
 import manifest from '../fixtures/data-room/manifest.json';
 import { ConflictsService } from '../src/features/evidence/conflicts/conflicts.service';
 import { createActivities } from '../src/worker/activities';
@@ -29,9 +24,6 @@ const EVAL_TENANT_ID = 'eval';
 const MODEL_CACHE_DIR = path.join(__dirname, 'cache', 'model');
 const EMBEDDING_CACHE_DIR = path.join(__dirname, 'cache', 'embedding');
 const RESULTS_DIR = path.join(__dirname, 'results');
-// Matches the recall@10 metric — every retrieval-mode comparison run uses the same top-k so the
-// three modes' recall/MRR figures are comparable to each other and to the production pipeline's.
-const RETRIEVAL_COMPARISON_LIMIT = 10;
 
 const CANARY_TOKENS: readonly string[] = manifest.canaries.map((canary) => canary.token);
 
@@ -88,57 +80,6 @@ function outcomeMatchesExpectation(
         ? 'insufficient_evidence'
         : 'conflicting_evidence';
   return actualOutcomeKind === expectedKind;
-}
-
-async function runRetrievalComparison(
-  db: import('mongoose').mongo.Db,
-  embeddingProvider: EmbeddingProvider,
-  filenameByDocVersionId: ReadonlyMap<string, string>,
-  cases: readonly EvalCase[],
-): Promise<RetrievalModeSummary[]> {
-  const locatorBearing = cases.filter((evalCase) => evalCase.expectedLocators.length > 0);
-
-  const summaries: RetrievalModeSummary[] = [];
-  for (const mode of RETRIEVAL_MODES) {
-    const results: CaseResult[] = [];
-    for (const evalCase of locatorBearing) {
-      const hits = await searchByMode(db, embeddingProvider, mode, {
-        text: evalCase.question,
-        tenantId: EVAL_TENANT_ID,
-        limit: RETRIEVAL_COMPARISON_LIMIT,
-      });
-      const overlaps = await Promise.all(
-        hits.map((hit) =>
-          chunkOverlapsAnyLocator(
-            {
-              filename: filenameByDocVersionId.get(hit.documentVersionId) ?? '',
-              text: '',
-              locator: hit.locator,
-            },
-            evalCase.expectedLocators,
-          ),
-        ),
-      );
-      results.push({
-        id: evalCase.id,
-        category: evalCase.category,
-        actualOutcomeKind: 'insufficient_evidence',
-        retrievedOverlaps: overlaps,
-        citationOverlaps: [],
-        canaryOwnVoiceLeaked: false,
-        canaryVerifiedQuoteLeaked: false,
-      });
-    }
-    const { retrieval } = computeMetrics(results);
-    summaries.push({
-      mode,
-      recallAt5: retrieval.recallAt5,
-      recallAt10: retrieval.recallAt10,
-      mrr: retrieval.mrr,
-      caseCount: retrieval.caseCount,
-    });
-  }
-  return summaries;
 }
 
 async function main(): Promise<void> {
@@ -296,12 +237,13 @@ async function main(): Promise<void> {
     const embeddingProvider = app.get<EmbeddingProvider>(EMBEDDING_PROVIDER);
 
     console.log('eval: running retrieval-mode comparison (lexical / vector / hybrid)');
-    const retrievalComparison = await runRetrievalComparison(
-      connection.db,
+    const retrievalComparison = await runRetrievalComparison({
+      db: connection.db,
       embeddingProvider,
       filenameByDocVersionId,
       cases,
-    );
+      tenantId: EVAL_TENANT_ID,
+    });
 
     const metrics = computeMetrics(caseResults);
     const result: EvalRunResult = {

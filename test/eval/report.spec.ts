@@ -33,9 +33,9 @@ function baseResult(overrides: Partial<EvalRunResult> = {}): EvalRunResult {
       },
     ],
     retrievalComparison: [
-      { mode: 'lexical', recallAt5: 0.6, recallAt10: 0.7, mrr: 0.5, caseCount: 10 },
-      { mode: 'vector', recallAt5: 0.7, recallAt10: 0.8, mrr: 0.6, caseCount: 10 },
-      { mode: 'hybrid', recallAt5: 0.8, recallAt10: 0.9, mrr: 0.75, caseCount: 10 },
+      { mode: 'lexical', recallAt5: 0.6, recallAt10: 0.7, mrr: 0.5, caseCount: 10, totalCases: 10 },
+      { mode: 'vector', recallAt5: 0.7, recallAt10: 0.8, mrr: 0.6, caseCount: 10, totalCases: 10 },
+      { mode: 'hybrid', recallAt5: 0.8, recallAt10: 0.9, mrr: 0.75, caseCount: 10, totalCases: 10 },
     ],
     ...overrides,
   };
@@ -78,6 +78,25 @@ describe('buildMarkdownReport', () => {
     expect(markdown).toContain('| lexical |');
     expect(markdown).toContain('| vector |');
     expect(markdown).toContain('| hybrid |');
+  });
+
+  it('should render a retrieval mode row as scored/total so a shrunken denominator is visible', () => {
+    const result = baseResult({
+      retrievalComparison: [
+        {
+          mode: 'lexical',
+          recallAt5: 0.6,
+          recallAt10: 0.7,
+          mrr: 0.5,
+          caseCount: 9,
+          totalCases: 10,
+        },
+      ],
+    });
+
+    const markdown = buildMarkdownReport(result);
+
+    expect(markdown).toContain('| lexical | 60.0% | 70.0% | 0.500 | 9/10 |');
   });
 
   it('should render a per-case row with a FAIL marker for a failing case', () => {
