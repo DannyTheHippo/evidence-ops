@@ -1,4 +1,4 @@
-import type { Db } from 'mongodb';
+import { Db, ObjectId } from 'mongodb';
 
 /**
  * `$listSearchIndexes` document shape. The driver's public `ListSearchIndexesCursor` type only
@@ -82,4 +82,174 @@ export async function waitForSearchIndexReady(
 
     await sleep(pollIntervalMs);
   }
+}
+
+/**
+ * `true` once a known-just-written document is actually returned by the index; `false` while it
+ * still isn't. `waitForIndexConvergence` treats a probe throw as a real error (not "not yet") —
+ * a malformed query should fail loudly, not be indistinguishable from eventual-consistency lag.
+ */
+export type ConvergenceProbe = () => Promise<boolean>;
+
+export interface IndexConvergenceOptions {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  /**
+   * FAILURE DIRECTION — per caller, not global; see `waitForIndexConvergence`'s doc comment for
+   * which caller gets which and why.
+   *
+   * - `'throw'` (default): an unconverged probe past the timeout raises `SearchIndexNotReadyError`.
+   *   The unsafe-by-omission direction is deliberate — a caller that treats "converged" as a
+   *   precondition for a measurement or decision must not silently get a `converged: false` it
+   *   never checks.
+   * - `'degrade'`: returns `{ converged: false }` instead of throwing. Opt-in only.
+   */
+  onTimeout?: 'throw' | 'degrade';
+}
+
+export interface IndexConvergenceResult {
+  readonly converged: boolean;
+}
+
+/**
+ * `waitForSearchIndexReady` closes the gap this brief opened: Atlas reports `status: 'READY'` +
+ * `queryable: true` before the index has finished absorbing a just-written corpus, so a caller
+ * that stops at status alone can query a technically-queryable index that still doesn't return
+ * the document it was just handed. This function closes that second gap — it waits for status
+ * readiness first (cheap, usually already true), then polls `probe` until it reports the
+ * known-ingested document is actually returned, bounded by its own `timeoutMs` budget (separate
+ * from the status-wait budget, so a slow status build doesn't eat into the convergence budget).
+ *
+ * The status-readiness phase always throws on `FAILED`/timeout regardless of `options.onTimeout`
+ * — a build the driver itself calls broken or never-ready is not the "don't block the user"
+ * case `onTimeout: 'degrade'` exists for, it is a build failure. `onTimeout` only governs what
+ * happens when the index is queryable by status but the probe still hasn't converged.
+ *
+ * Per-caller direction (declared here, not left for the caller to guess — see
+ * `IndexConvergenceOptions.onTimeout`'s doc comment):
+ * - `eval/ingest-fixtures.ts` passes `'throw'` (the default): an eval run that measures retrieval
+ *   quality against an unconverged corpus records a wrong number silently — recall@5 measured a
+ *   minute too early versus a minute later, per the defect this function exists to close. A loud
+ *   stop is strictly better than a quietly wrong metric.
+ * - `IngestionService.ingestVersion` passes `'degrade'`: a user who uploads a document must not
+ *   have the request hang, or the whole ingest fail, just because Atlas hasn't finished absorbing
+ *   the last few chunks. The ingest itself already succeeded; a not-yet-converged index degrades
+ *   to "briefly stale search results", not a broken upload.
+ */
+export async function waitForIndexConvergence(
+  db: Db,
+  collectionName: string,
+  indexName: string,
+  probe: ConvergenceProbe,
+  options: IndexConvergenceOptions = {},
+): Promise<IndexConvergenceResult> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  const onTimeout = options.onTimeout ?? 'throw';
+
+  await waitForSearchIndexReady(db, collectionName, indexName, { timeoutMs, pollIntervalMs });
+
+  const deadline = Date.now() + timeoutMs;
+
+  for (;;) {
+    if (await probe()) {
+      return { converged: true };
+    }
+
+    if (Date.now() >= deadline) {
+      if (onTimeout === 'throw') {
+        throw new SearchIndexNotReadyError(
+          indexName,
+          `reported queryable but did not converge on the expected document(s) within ${timeoutMs}ms`,
+        );
+      }
+      return { converged: false };
+    }
+
+    await sleep(pollIntervalMs);
+  }
+}
+
+// Small and fixed rather than derived from the store's own candidate-pool sizing
+// (`PIPELINE_CANDIDATE_MULTIPLIER`/`VECTOR_NUM_CANDIDATES_MULTIPLIER` in `mongo-hybrid.store.ts`):
+// this probe only needs one specific chunk to be visible at all, not a realistic ranked pool, so
+// it stays cheap to poll every `pollIntervalMs` for up to a couple of minutes.
+const VECTOR_PROBE_LIMIT = 5;
+const VECTOR_PROBE_NUM_CANDIDATES = 50;
+
+/**
+ * Builds a `ConvergenceProbe` for the lexical (`$search`) index: counts chunks the index actually
+ * returns for `documentVersionId`, converged once that count reaches `expectedChunkCount`. Filters
+ * on `documentVersionId` alone (mapped as `objectId` — see `migrations/0003-search-indexes.ts`)
+ * rather than a specific chunk id, because the search index mapping never indexes Mongo's `_id`
+ * field — there is nothing to filter a single known chunk by.
+ *
+ * `>=`, not `===`: a rollback race (`IngestionService.rollbackChunks`) can leave a stale chunk
+ * momentarily still indexed under an old attempt token, which would make an exact-equality check
+ * flap between "converged" and "not converged" for a version that already has the right chunks.
+ */
+export function createSearchChunkCountProbe(
+  db: Db,
+  collectionName: string,
+  indexName: string,
+  documentVersionId: string,
+  expectedChunkCount: number,
+): ConvergenceProbe {
+  return async () => {
+    const results = await db
+      .collection(collectionName)
+      .aggregate<{ count?: number }>([
+        {
+          $search: {
+            index: indexName,
+            compound: {
+              filter: [
+                { equals: { path: 'documentVersionId', value: new ObjectId(documentVersionId) } },
+              ],
+            },
+          },
+        },
+        { $count: 'count' },
+      ])
+      .toArray();
+
+    return (results[0]?.count ?? 0) >= expectedChunkCount;
+  };
+}
+
+/**
+ * Builds a `ConvergenceProbe` for the vector index: runs `$vectorSearch` with a chunk's own
+ * embedding (self-similarity is ~1.0 cosine, so it is reliably its own nearest neighbour) and
+ * checks that chunk's id comes back. Only `tenantId` is declared a `filter` field on the vector
+ * index (see the migration), so — unlike the search probe — this cannot filter by
+ * `documentVersionId`; a single known chunk id is the only handle available.
+ */
+export function createVectorChunkProbe(
+  db: Db,
+  collectionName: string,
+  indexName: string,
+  tenantId: string,
+  knownChunkId: string,
+  knownChunkEmbedding: readonly number[],
+): ConvergenceProbe {
+  return async () => {
+    const results = await db
+      .collection(collectionName)
+      .aggregate<{ _id: unknown }>([
+        {
+          $vectorSearch: {
+            index: indexName,
+            path: 'embedding',
+            queryVector: knownChunkEmbedding,
+            numCandidates: VECTOR_PROBE_NUM_CANDIDATES,
+            limit: VECTOR_PROBE_LIMIT,
+            filter: { tenantId: { $eq: tenantId } },
+          },
+        },
+        { $project: { _id: 1 } },
+      ])
+      .toArray();
+
+    return results.some((doc) => doc._id === knownChunkId);
+  };
 }

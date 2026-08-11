@@ -9,14 +9,7 @@ import {
 } from '../embedding/embedding-provider.interface';
 import { assertAtlasSearchSupported } from './atlas-search-capability.util';
 import type { RetrievalHit, RetrievalQuery, RetrievalStore } from './retrieval-store.interface';
-
-// Duplicated from `migrations/0003-search-indexes.ts` rather than imported: `tsconfig.build.json`
-// scopes `rootDir` to `src`, so `src` importing from `migrations/` would break `nest build`.
-// `search-indexes.integration-spec.ts` is what keeps these two definitions honest against a live
-// server — see that file rather than an import for the cross-check.
-const COLLECTION = 'evidence_chunks';
-const SEARCH_INDEX = 'evidence_chunks_search';
-const VECTOR_INDEX = 'evidence_chunks_vector';
+import { COLLECTION, SEARCH_INDEX, VECTOR_INDEX } from './retrieval.constant';
 
 type PipelineName = 'search' | 'vector';
 const PIPELINE_NAMES: readonly PipelineName[] = ['search', 'vector'];

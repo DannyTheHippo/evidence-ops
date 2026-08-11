@@ -1,6 +1,6 @@
 import { Inject, Injectable, InternalServerErrorException } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { InjectConnection, InjectModel } from '@nestjs/mongoose';
+import { Connection, mongo, Model, Types } from 'mongoose';
 import {
   DocumentVersion,
   DocumentVersionDocument,
@@ -14,15 +14,44 @@ import {
   type EmbeddingProvider,
 } from '../../../providers/embedding/embedding-provider.interface';
 import {
+  COLLECTION as EVIDENCE_CHUNKS_COLLECTION,
+  SEARCH_INDEX,
+  VECTOR_INDEX,
+} from '../../../providers/retrieval/retrieval.constant';
+import {
   DOCUMENT_STORE,
   type DocumentStore,
 } from '../../../providers/storage/document-store.interface';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
+import {
+  createSearchChunkCountProbe,
+  createVectorChunkProbe,
+  waitForIndexConvergence,
+} from '../retrieval/search-index-readiness.util';
 import { chunkElements } from './chunker';
 import { computeChunkId } from './compute-chunk-id';
 import { DocumentVersionNotFoundException } from './exceptions/ingestion.exception';
 import { ParserRegistry } from './parser.registry';
 import { screenInstructionInjection } from './screen-instruction-injection';
+
+// Each `waitForIndexConvergence` call below spends up to this budget *twice* — once polling
+// index status readiness, once polling the probe for convergence (see that function's own doc
+// comment) — so one call's worst case is ~40s, not 20s. The search and vector waits run
+// concurrently (`Promise.allSettled` below), so that ~40s is also the method's overall worst
+// case, leaving ~80s of the `ingestDocumentVersion` activity's `startToCloseTimeout: '2 minutes'`
+// (`src/workflows/ingest-document-version.workflow.ts`) for parse + embed, which run before this.
+// `onTimeout: 'degrade'` below means a miss here never fails the activity; it only decides how
+// long a slow-to-converge upload logs a stale-index warning before giving up and letting the
+// (already-successful) ingest return.
+const CONVERGENCE_TIMEOUT_MS = 20_000;
+const CONVERGENCE_POLL_INTERVAL_MS = 1_000;
+
+/** Shared by every place `awaitSearchIndexConvergence` reports a swallowed failure (a settled
+ *  rejection on either wait, or a synchronous throw from a probe builder) — one formatting rule,
+ *  not three copies of the same ternary to keep in sync. */
+function describeConvergenceFailure(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason);
+}
 
 export interface IngestionResult {
   readonly chunksCreated: number;
@@ -32,6 +61,8 @@ export interface IngestionResult {
 
 @Injectable()
 export class IngestionService {
+  private readonly db: mongo.Db;
+
   constructor(
     @InjectModel(DocumentVersion.name)
     private readonly documentVersionModel: Model<DocumentVersionDocument>,
@@ -47,9 +78,20 @@ export class IngestionService {
 
     private readonly parserRegistry: ParserRegistry,
 
+    @InjectConnection()
+    connection: Connection,
+
     private readonly logger: AppLogger,
   ) {
     this.logger.init(IngestionService.name);
+    // Same invariant as `MongoHybridRetrievalStore`'s constructor: by the time any consumer of
+    // `@InjectConnection()` is constructed, `connection.db` is always set in practice, but a
+    // service that can't reach its database for the post-ingest convergence probe must refuse to
+    // construct rather than fail confusingly mid-ingest.
+    if (!connection.db) {
+      throw new Error('Mongo connection has no active database handle');
+    }
+    this.db = connection.db;
   }
 
   /**
@@ -214,7 +256,123 @@ export class IngestionService {
       `Document version '${documentVersionId}' ingested into ${chunkDocs.length} chunks`,
     );
 
+    // FAILURE DIRECTION: degrades, never blocks. Unlike the eval harness (`eval/ingest-fixtures.ts`,
+    // `onTimeout: 'throw'`), a user who just uploaded a document must not have this request hang,
+    // or an otherwise-successful ingest turn into a failure, because Atlas hasn't finished
+    // absorbing the last few chunks yet — see `awaitSearchIndexConvergence`'s own doc comment.
+    await this.awaitSearchIndexConvergence(
+      documentVersionId,
+      version.tenantId,
+      chunkDocs.length,
+      chunkDocs[0],
+    );
+
     return { chunksCreated: chunkDocs.length, alreadyIngested: false };
+  }
+
+  /**
+   * Best-effort post-ingest nudge, not a correctness gate — by the time this runs, the chunks are
+   * already durably committed (`finalizeCompletion` above already succeeded). `knownChunk` is
+   * `ingestVersion`'s own `chunkDocs[0]`: that array is a 1:1 `.map()` over `chunks`, and the
+   * caller only reaches this method after the `chunks.length === 0` branch above has already
+   * returned, so the type states what was previously an unreachable runtime guard — a caller
+   * cannot pass an empty set here.
+   *
+   * Swallows every failure, not only a convergence timeout. The two waits run under
+   * `Promise.allSettled`, not `Promise.all`, specifically so a rejection on one side never
+   * abandons the other mid-poll — both results are inspected regardless of outcome, so there is
+   * no correctness reason to let one side's failure short-circuit the other's still-useful wait.
+   * `waitForIndexConvergence`'s own `onTimeout: 'degrade'` covers "index reports queryable but
+   * hasn't absorbed these chunks yet" by resolving rather than rejecting, so a settled rejection
+   * here means something else went wrong (a dropped index, a transient connectivity blip). The
+   * surrounding try/catch covers the one thing `allSettled` cannot: `createSearchChunkCountProbe`/
+   * `createVectorChunkProbe` build their probes synchronously, before either wait starts, so a
+   * throw from either builder never reaches `allSettled` at all. Either path — a settled rejection
+   * or a builder throw — degrades the same way: a user who already got a successful upload must
+   * never see it turn into a failure because a *read-side* readiness check hiccuped after the
+   * write succeeded.
+   */
+  private async awaitSearchIndexConvergence(
+    documentVersionId: string,
+    tenantId: string,
+    chunkCount: number,
+    knownChunk: { _id: string; embedding: readonly number[] },
+  ): Promise<void> {
+    try {
+      const [searchOutcome, vectorOutcome] = await Promise.allSettled([
+        waitForIndexConvergence(
+          this.db,
+          EVIDENCE_CHUNKS_COLLECTION,
+          SEARCH_INDEX,
+          createSearchChunkCountProbe(
+            this.db,
+            EVIDENCE_CHUNKS_COLLECTION,
+            SEARCH_INDEX,
+            documentVersionId,
+            chunkCount,
+          ),
+          {
+            timeoutMs: CONVERGENCE_TIMEOUT_MS,
+            pollIntervalMs: CONVERGENCE_POLL_INTERVAL_MS,
+            onTimeout: 'degrade',
+          },
+        ),
+        waitForIndexConvergence(
+          this.db,
+          EVIDENCE_CHUNKS_COLLECTION,
+          VECTOR_INDEX,
+          createVectorChunkProbe(
+            this.db,
+            EVIDENCE_CHUNKS_COLLECTION,
+            VECTOR_INDEX,
+            tenantId,
+            knownChunk._id,
+            knownChunk.embedding,
+          ),
+          {
+            timeoutMs: CONVERGENCE_TIMEOUT_MS,
+            pollIntervalMs: CONVERGENCE_POLL_INTERVAL_MS,
+            onTimeout: 'degrade',
+          },
+        ),
+      ]);
+
+      // Checked individually (search, then vector) rather than combined, so each `if` narrows its
+      // own outcome to `fulfilled` for the `.value` reads below without a cast. Reports only the
+      // first rejection found — a single warning is enough signal for a best-effort nudge, and the
+      // common case (the convergence helper itself throwing) rejects both sides with the same
+      // reason anyway.
+      if (searchOutcome.status === 'rejected') {
+        this.logger.warn(
+          `Document version '${documentVersionId}' search index convergence check failed: ` +
+            describeConvergenceFailure(searchOutcome.reason),
+        );
+        return;
+      }
+      if (vectorOutcome.status === 'rejected') {
+        this.logger.warn(
+          `Document version '${documentVersionId}' search index convergence check failed: ` +
+            describeConvergenceFailure(vectorOutcome.reason),
+        );
+        return;
+      }
+
+      const searchResult = searchOutcome.value;
+      const vectorResult = vectorOutcome.value;
+
+      if (!searchResult.converged || !vectorResult.converged) {
+        this.logger.warn(
+          `Document version '${documentVersionId}' search index convergence timed out after ` +
+            `${CONVERGENCE_TIMEOUT_MS}ms (search converged: ${searchResult.converged}, vector ` +
+            `converged: ${vectorResult.converged}); serving stale search results until Atlas catches up`,
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Document version '${documentVersionId}' search index convergence check failed: ` +
+          describeConvergenceFailure(error),
+      );
+    }
   }
 
   /** Fails CLOSED: only succeeds (and overwrites the lease) while the version is not yet

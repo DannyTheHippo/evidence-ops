@@ -1,11 +1,6 @@
 import { mongo } from 'mongoose';
 import { AtlasSearchUnavailableError } from './errors/atlas-search-unavailable.error';
-
-// Duplicated from `mongo-hybrid.store.ts`'s own `COLLECTION` constant rather than imported —
-// that file already documents (see its own comment) why these small constants are hand-kept
-// per-file instead of centralized; this probe follows the same practice rather than introducing
-// a cross-import between the two.
-const COLLECTION = 'evidence_chunks';
+import { COLLECTION } from './retrieval.constant';
 
 /**
  * Probes whether the connected Mongo server is actually backed by `mongot` (Atlas Search),

@@ -1,5 +1,5 @@
 import { InternalServerErrorException } from '@nestjs/common';
-import { getModelToken } from '@nestjs/mongoose';
+import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { Types } from 'mongoose';
@@ -7,7 +7,6 @@ import { DocumentVersion } from '../../../../src/database/schemas/evidence/docum
 import { EvidenceChunk } from '../../../../src/database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
 import { computeChunkId } from '../../../../src/features/evidence/ingestion/compute-chunk-id';
 import { DocumentVersionNotFoundException } from '../../../../src/features/evidence/ingestion/exceptions/ingestion.exception';
-import { IngestionService } from '../../../../src/features/evidence/ingestion/ingestion.service';
 import { ParserRegistry } from '../../../../src/features/evidence/ingestion/parser.registry';
 import type {
   DocumentParser,
@@ -18,13 +17,36 @@ import { FakeEmbeddingProvider } from '../../../../src/providers/embedding/fake-
 import { DOCUMENT_STORE } from '../../../../src/providers/storage/document-store.interface';
 import { FakeDocumentStore } from '../../../../src/providers/storage/fake-document.store';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
-import { getMockLogger } from '../../../utils/get-mock-logger';
+import { getMockLogger, type MockLogger } from '../../../utils/get-mock-logger';
 import { getMockModel } from '../../../utils/get-mock-model';
+
+// `IngestionService` builds its own probes from `waitForIndexConvergence`/
+// `createSearchChunkCountProbe`/`createVectorChunkProbe` but never gets to inject the result of
+// calling them, so — same reasoning as `temporal-workflow.engine.spec.ts`'s module mock — the
+// convergence check is faked at the module boundary rather than by hand-rolling a native `Db`
+// mock with a working `aggregate`/`listSearchIndexes` chain purely to satisfy an inert dependency.
+// `waitForIndexConvergence`'s own timeout/degrade/throw behaviour is unit-tested directly in
+// `search-index-readiness.util.spec.ts`; this file only needs to prove `IngestionService` calls it
+// with the right inputs and reacts correctly to its result. Mock names start with `mock` — Jest's
+// hoisting past `jest.mock` requires it.
+const mockWaitForIndexConvergence = jest.fn();
+const mockCreateSearchChunkCountProbe = jest.fn();
+const mockCreateVectorChunkProbe = jest.fn();
+
+jest.mock('../../../../src/features/evidence/retrieval/search-index-readiness.util', () => ({
+  __esModule: true,
+  waitForIndexConvergence: mockWaitForIndexConvergence,
+  createSearchChunkCountProbe: mockCreateSearchChunkCountProbe,
+  createVectorChunkProbe: mockCreateVectorChunkProbe,
+}));
+
+import { IngestionService } from '../../../../src/features/evidence/ingestion/ingestion.service';
 
 describe('IngestionService', () => {
   let service: IngestionService;
   let fakeDocumentStore: FakeDocumentStore;
   let fakeEmbeddingProvider: FakeEmbeddingProvider;
+  let mockLogger: MockLogger;
 
   const mockDocumentVersionModel = getMockModel();
   const mockEvidenceChunkModel = getMockModel();
@@ -73,6 +95,14 @@ describe('IngestionService', () => {
   beforeEach(async () => {
     fakeDocumentStore = new FakeDocumentStore();
     fakeEmbeddingProvider = new FakeEmbeddingProvider();
+    mockLogger = getMockLogger();
+    // Converges immediately by default — every pre-existing test below exercises the fresh-ingest
+    // path without caring about convergence, so a silently-succeeding default keeps them about
+    // what they were already about. The dedicated convergence tests further down override this
+    // per-call.
+    mockWaitForIndexConvergence.mockResolvedValue({ converged: true });
+    mockCreateSearchChunkCountProbe.mockReturnValue(jest.fn());
+    mockCreateVectorChunkProbe.mockReturnValue(jest.fn());
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -82,7 +112,12 @@ describe('IngestionService', () => {
         { provide: DOCUMENT_STORE, useValue: fakeDocumentStore },
         { provide: EMBEDDING_PROVIDER, useValue: fakeEmbeddingProvider },
         { provide: ParserRegistry, useValue: mockParserRegistry },
-        { provide: AppLogger, useValue: getMockLogger() },
+        // `IngestionService`'s constructor only ever reads `connection.db` (same invariant as
+        // `MongoHybridRetrievalStore`'s) to hand to the (mocked) convergence probes above — a
+        // placeholder object satisfies the constructor's "has a db handle" guard without needing a
+        // working native driver mock.
+        { provide: getConnectionToken(), useValue: { db: {} } },
+        { provide: AppLogger, useValue: mockLogger },
       ],
     }).compile();
 
@@ -91,6 +126,26 @@ describe('IngestionService', () => {
 
   afterEach(() => {
     jest.resetAllMocks();
+  });
+
+  it('should throw when the connection has no active database handle', async () => {
+    // Same invariant as `MongoHybridRetrievalStore`'s constructor (see that class's spec for the
+    // identical pattern): a service that can't reach its database for the post-ingest convergence
+    // probe must refuse to construct rather than fail confusingly mid-ingest.
+    const module = Test.createTestingModule({
+      providers: [
+        IngestionService,
+        { provide: getModelToken(DocumentVersion.name), useValue: mockDocumentVersionModel },
+        { provide: getModelToken(EvidenceChunk.name), useValue: mockEvidenceChunkModel },
+        { provide: DOCUMENT_STORE, useValue: fakeDocumentStore },
+        { provide: EMBEDDING_PROVIDER, useValue: fakeEmbeddingProvider },
+        { provide: ParserRegistry, useValue: mockParserRegistry },
+        { provide: getConnectionToken(), useValue: { db: undefined } },
+        { provide: AppLogger, useValue: mockLogger },
+      ],
+    }).compile();
+
+    await expect(module).rejects.toThrow('Mongo connection has no active database handle');
   });
 
   it('should throw DocumentVersionNotFoundException for a malformed id, without querying the model', async () => {
@@ -247,6 +302,142 @@ describe('IngestionService', () => {
     expect(finalizeUpdate).toEqual({
       $set: { ingestionStatus: 'completed' },
       $unset: { ingestionLeaseToken: '' },
+    });
+  });
+
+  describe('post-ingest search index convergence', () => {
+    const seedFreshVersion = async (): Promise<void> => {
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('%PDF-1.4 fixture bytes'),
+        contentType: PDF_MIME,
+        metadata: {},
+      });
+      mockDocumentVersionModel.findById.mockResolvedValueOnce(
+        buildVersion({ storageKey: stored.id }),
+      );
+      mockParserRegistry.resolve.mockReturnValueOnce(
+        buildStubParser([
+          {
+            text: 'Some extracted page text.',
+            locator: { kind: 'pdf-page', page: 1, extractorVersion: 'pdf-pdfjs-1' },
+            headingPath: [],
+          },
+        ]),
+      );
+    };
+
+    // FAILURE DIRECTION: this is the API ingest path, which must degrade rather than block — see
+    // `IngestionService.awaitSearchIndexConvergence`'s doc comment. `waitForIndexConvergence`
+    // itself already implements `onTimeout: 'degrade'` (unit-tested in
+    // `search-index-readiness.util.spec.ts`); this only proves the service passes that option and
+    // reacts to a `converged: false` result without throwing.
+    it('should log a warning but still report a successful ingest when the search or vector index has not converged yet', async () => {
+      await seedFreshVersion();
+      mockWaitForIndexConvergence
+        .mockResolvedValueOnce({ converged: false }) // search
+        .mockResolvedValueOnce({ converged: true }); // vector
+
+      const result = await service.ingestVersion(versionId.toString());
+
+      expect(result).toEqual({ chunksCreated: 1, alreadyIngested: false });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('convergence timed out'),
+      );
+    });
+
+    it('should log a warning but still report a successful ingest when the search wait settles rejected', async () => {
+      await seedFreshVersion();
+      mockWaitForIndexConvergence.mockRejectedValue(new Error('Mongo connection reset'));
+
+      const result = await service.ingestVersion(versionId.toString());
+
+      expect(result).toEqual({ chunksCreated: 1, alreadyIngested: false });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('convergence check failed: Mongo connection reset'),
+      );
+    });
+
+    it('should log a warning built from String(error) when a settled rejection is not an Error instance', async () => {
+      // Covers `describeConvergenceFailure`'s fallback branch: `waitForIndexConvergence` is not
+      // contractually guaranteed to reject with an `Error` instance (a thrown string, for
+      // instance), so the fallback `String(error)` formatting needs its own case.
+      await seedFreshVersion();
+      mockWaitForIndexConvergence.mockRejectedValue('boom');
+
+      const result = await service.ingestVersion(versionId.toString());
+
+      expect(result).toEqual({ chunksCreated: 1, alreadyIngested: false });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('convergence check failed: boom'),
+      );
+    });
+
+    // Regression for `Promise.allSettled` replacing `Promise.all` in `awaitSearchIndexConvergence`:
+    // each wait is now checked individually (that method's own doc comment), so a rejection on
+    // only the vector side must still surface a warning rather than getting silently dropped
+    // behind a fulfilled search outcome.
+    it('should log a warning when only the vector wait settles rejected after the search wait already converged', async () => {
+      await seedFreshVersion();
+      mockWaitForIndexConvergence
+        .mockResolvedValueOnce({ converged: true }) // search
+        .mockRejectedValueOnce(new Error('vector probe socket reset')); // vector
+
+      const result = await service.ingestVersion(versionId.toString());
+
+      expect(result).toEqual({ chunksCreated: 1, alreadyIngested: false });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('convergence check failed: vector probe socket reset'),
+      );
+    });
+
+    // `createSearchChunkCountProbe`/`createVectorChunkProbe` build their probe *before*
+    // `waitForIndexConvergence` starts polling, so a synchronous throw from either builder never
+    // reaches `Promise.allSettled` at all — this is what the surrounding try/catch in
+    // `awaitSearchIndexConvergence` still exists for, and the only way to reach it now that the
+    // two waits themselves are checked via settled outcomes rather than a rejected `Promise.all`.
+    it('should log a warning and still report a successful ingest when a probe builder throws synchronously', async () => {
+      await seedFreshVersion();
+      mockCreateVectorChunkProbe.mockImplementation(() => {
+        throw new Error('failed to build vector probe');
+      });
+
+      const result = await service.ingestVersion(versionId.toString());
+
+      expect(result).toEqual({ chunksCreated: 1, alreadyIngested: false });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('convergence check failed: failed to build vector probe'),
+      );
+    });
+
+    it('should probe the search and vector indexes with the ingested chunk count, tenant, and known chunk id/embedding', async () => {
+      await seedFreshVersion();
+
+      await service.ingestVersion(versionId.toString());
+
+      expect(mockCreateSearchChunkCountProbe).toHaveBeenCalledWith(
+        expect.anything(),
+        'evidence_chunks',
+        'evidence_chunks_search',
+        versionId.toString(),
+        1,
+      );
+      // Exact expected id, not a shape check: built from the same tenant/sha256/ordinal/locator
+      // `seedFreshVersion` fed the stub parser, mirroring the fresh-ingest test above rather than
+      // asserting a weaker `typeof`/`Array.isArray` that any string/array would satisfy.
+      const expectedChunkId = computeChunkId({
+        tenantId: 'tenant-a',
+        documentVersionSha256: 'a'.repeat(64),
+        ordinal: 0,
+        locator: { kind: 'pdf-page', page: 1, extractorVersion: 'pdf-pdfjs-1' },
+      });
+      expect(mockCreateVectorChunkProbe).toHaveBeenCalledWith(
+        expect.anything(),
+        'evidence_chunks',
+        'evidence_chunks_vector',
+        'tenant-a',
+        expectedChunkId,
+        [0, 0, 0, 0], // FakeEmbeddingProvider's deterministic zero vector at its default 4 dimensions
+      );
     });
   });
 

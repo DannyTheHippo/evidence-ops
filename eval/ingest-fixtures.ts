@@ -3,6 +3,7 @@ import { getModelToken } from '@nestjs/mongoose';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { Db } from 'mongodb';
 import type { Model } from 'mongoose';
 import {
   Conflict,
@@ -27,6 +28,16 @@ import {
 import { MIME_TYPE_TO_SOURCE_KIND } from '../src/features/evidence/documents/documents.constant';
 import { FactsService } from '../src/features/evidence/facts/facts.service';
 import { IngestionService } from '../src/features/evidence/ingestion/ingestion.service';
+import {
+  createSearchChunkCountProbe,
+  createVectorChunkProbe,
+  waitForIndexConvergence,
+} from '../src/features/evidence/retrieval/search-index-readiness.util';
+import {
+  COLLECTION as EVIDENCE_CHUNKS_COLLECTION,
+  SEARCH_INDEX,
+  VECTOR_INDEX,
+} from '../src/providers/retrieval/retrieval.constant';
 import {
   DOCUMENT_STORE,
   type DocumentStore,
@@ -68,10 +79,21 @@ export interface IngestFixturesResult {
  * otherwise duplicate every chunk and fact under the eval tenant and silently inflate retrieval
  * recall with duplicate hits. Scoped to `tenantId` alone — never touches `DEFAULT_TENANT_ID`'s
  * rows, since the eval harness may run against a shared dev Mongo instance.
+ *
+ * FAILURE DIRECTION: fails CLOSED on index convergence, unlike `IngestionService.ingestVersion`'s
+ * own best-effort (`onTimeout: 'degrade'`) check on the same write. `waitForIndexConvergence` here
+ * uses its `'throw'` default deliberately — this is the exact defect the convergence probe exists
+ * to close (see `search-index-readiness.util.ts`'s module doc): Atlas can report the search index
+ * `queryable` before it has actually absorbed this fixture's chunks, and an eval run that queries
+ * an unconverged corpus records a silently wrong `recall@k` rather than a loud failure. `--ingest`
+ * already accepts a `db` handle from `run.ts` (`assertAtlasSearchSupported`'s same precondition
+ * check runs there before any fixture is ingested), so this reuses it rather than re-resolving the
+ * connection.
  */
 export async function ingestFixtures(
   app: INestApplicationContext,
   tenantId: string,
+  db: Db,
 ): Promise<IngestFixturesResult> {
   const documentModel = app.get<Model<DocumentDocument>>(getModelToken(Document.name));
   const documentVersionModel = app.get<Model<DocumentVersionDocument>>(
@@ -140,6 +162,55 @@ export async function ingestFixtures(
 
     const documentVersionId = version._id.toString();
     const ingestionResult = await ingestionService.ingestVersion(documentVersionId);
+
+    if (ingestionResult.chunksCreated > 0) {
+      // Any one of this version's chunks works as the vector probe's known document — `.lean()`
+      // reads only `_id`/`embedding` back off the write this loop iteration just made, rather than
+      // hydrating a full Mongoose document for values nothing here uses.
+      const knownChunk = await evidenceChunkModel
+        .findOne({ documentVersionId: version._id, tenantId })
+        .select({ embedding: 1 })
+        .lean();
+      if (!knownChunk) {
+        // Invariant guard, not a normal input-validation branch: `ingestVersion` just reported
+        // `chunksCreated > 0` for this exact `documentVersionId`/`tenantId`, so a miss here means
+        // the write this function just awaited is not yet visible to a plain (non-`$search`) read
+        // on the same connection — a correctness bug that has nothing to do with index
+        // convergence and must not be swallowed by the probe timeout below.
+        throw new Error(
+          `IngestionService reported ${ingestionResult.chunksCreated} chunk(s) created for ` +
+            `document version '${documentVersionId}' but none are readable back from ` +
+            `evidence_chunks immediately afterward`,
+        );
+      }
+
+      await waitForIndexConvergence(
+        db,
+        EVIDENCE_CHUNKS_COLLECTION,
+        SEARCH_INDEX,
+        createSearchChunkCountProbe(
+          db,
+          EVIDENCE_CHUNKS_COLLECTION,
+          SEARCH_INDEX,
+          documentVersionId,
+          ingestionResult.chunksCreated,
+        ),
+      );
+      await waitForIndexConvergence(
+        db,
+        EVIDENCE_CHUNKS_COLLECTION,
+        VECTOR_INDEX,
+        createVectorChunkProbe(
+          db,
+          EVIDENCE_CHUNKS_COLLECTION,
+          VECTOR_INDEX,
+          tenantId,
+          knownChunk._id,
+          knownChunk.embedding,
+        ),
+      );
+    }
+
     const factsResult = await factsService.extractFacts(documentVersionId);
 
     fixtures.push({

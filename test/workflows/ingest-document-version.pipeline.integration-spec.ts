@@ -140,6 +140,7 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
       documentStore,
       embeddingProvider,
       parserRegistry,
+      connection,
       logger,
     );
     const factsService = new FactsService(
