@@ -18,7 +18,6 @@ import type {
   ModelResult,
   ModelUsage,
 } from './model-provider.interface';
-import { resolveSamplingTemperature } from './sampling-params';
 import { toStructuredOutputFormat } from './structured-output-format.util';
 
 /**
@@ -107,9 +106,9 @@ export class AnthropicModelProvider implements ModelProvider {
       system: request.system,
       messages: toAnthropicMessages(request.messages),
       output_config: schema ? { format: toStructuredOutputFormat(schema) } : undefined,
-      // Pinned per `taskClass`, not left at the API default — see `sampling-params.ts` for why
-      // (unpinned sampling let a seeded conflict silently stop being detected).
-      temperature: resolveSamplingTemperature(request.taskClass),
+      // No `temperature` — this model tier rejects it outright (`400 invalid_request_error:
+      // \`temperature\` is deprecated for this model`), so sampling cannot be pinned. See
+      // ADR-0006 for what that means for run-to-run reproducibility.
     };
 
     const first = await this.client.messages.create(baseParams);

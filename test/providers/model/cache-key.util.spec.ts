@@ -6,7 +6,6 @@ describe('computeCacheKey', () => {
     provider: 'anthropic',
     model: 'claude-sonnet-5',
     maxTokens: 512,
-    temperature: 0,
     system: 'You are a helpful assistant.',
     messages: [{ role: 'user', content: 'hello' }],
   };
@@ -16,7 +15,6 @@ describe('computeCacheKey', () => {
     const b = computeCacheKey({
       messages: baseInput.messages,
       system: baseInput.system,
-      temperature: baseInput.temperature,
       maxTokens: baseInput.maxTokens,
       model: baseInput.model,
       provider: baseInput.provider,
@@ -45,13 +43,6 @@ describe('computeCacheKey', () => {
   it('should differ when a param (maxTokens) changes', () => {
     const a = computeCacheKey(baseInput);
     const b = computeCacheKey({ ...baseInput, maxTokens: 1024 });
-
-    expect(a).not.toBe(b);
-  });
-
-  it('should differ when only temperature changes — a fixture recorded at one temperature is a different fixture', () => {
-    const a = computeCacheKey(baseInput);
-    const b = computeCacheKey({ ...baseInput, temperature: 1 });
 
     expect(a).not.toBe(b);
   });

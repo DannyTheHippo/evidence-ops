@@ -6,13 +6,6 @@ export interface CacheKeyInput {
   readonly provider: string;
   readonly model: string;
   readonly maxTokens: number;
-  /**
-   * The resolved sampling temperature actually sent on the request — not the `taskClass` label
-   * it was derived from (`sampling-params.ts`). Keying on the resolved value means a later change
-   * to the class→temperature table invalidates old fixtures automatically; keying on the label
-   * would silently serve a fixture recorded at a different temperature for the same class.
-   */
-  readonly temperature: number;
   readonly system?: string;
   readonly messages: readonly ModelMessage[];
   readonly outputSchema?: z.ZodType;
@@ -46,7 +39,7 @@ export function computeCacheKey(input: CacheKeyInput): string {
   const canonical = sortKeysDeep({
     provider: input.provider,
     model: input.model,
-    params: { maxTokens: input.maxTokens, temperature: input.temperature },
+    params: { maxTokens: input.maxTokens },
     prompt: { system: input.system ?? null, messages: input.messages },
     schema: input.outputSchema ? toJSONSchema(input.outputSchema) : null,
   });

@@ -10,7 +10,6 @@ import type {
   ModelRequest,
   ModelResult,
 } from './model-provider.interface';
-import { resolveSamplingTemperature } from './sampling-params';
 
 export type ModelCacheMode = 'off' | 'record' | 'replay';
 
@@ -65,10 +64,6 @@ export class CachingModelProvider implements ModelProvider {
       provider: this.info.provider,
       model: this.info.model,
       maxTokens: request.maxTokens,
-      // Resolved the same way `AnthropicModelProvider` resolves it for the actual request, so a
-      // fixture recorded at one temperature is never replayed for a request that would now be
-      // sent at another (see `CacheKeyInput.temperature`'s doc comment).
-      temperature: resolveSamplingTemperature(request.taskClass),
       system: request.system,
       messages: request.messages,
       outputSchema: request.outputSchema,

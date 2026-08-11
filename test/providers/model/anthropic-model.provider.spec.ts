@@ -98,7 +98,10 @@ describe('AnthropicModelProvider', () => {
     expect(mockCreate).toHaveBeenCalledTimes(1);
   });
 
-  it('should pin temperature to 0 for both qa_answer and fact_extraction task classes', async () => {
+  it('should not send a temperature param, for either task class — this model tier rejects it with a 400', async () => {
+    // Regression test: a live call once returned `400 invalid_request_error: \`temperature\` is
+    // deprecated for this model`. Every request built by this provider must omit the key
+    // entirely, not just leave it undefined.
     mockCreate
       .mockResolvedValueOnce(buildMessage('Paris'))
       .mockResolvedValueOnce(buildMessage('extracted'));
@@ -107,11 +110,9 @@ describe('AnthropicModelProvider', () => {
     await provider.generate({ ...baseRequest, taskClass: 'qa_answer' });
     await provider.generate({ ...baseRequest, taskClass: 'fact_extraction' });
 
-    const [qaCall, factCall] = mockCreate.mock.calls.map(
-      (call) => call[0] as { temperature?: number },
-    );
-    expect(qaCall.temperature).toBe(0);
-    expect(factCall.temperature).toBe(0);
+    const [qaCall, factCall] = mockCreate.mock.calls.map((call) => call[0]);
+    expect(qaCall).not.toHaveProperty('temperature');
+    expect(factCall).not.toHaveProperty('temperature');
   });
 
   it('should price costUsd from the pricing table including cache-write and cache-read multipliers', async () => {
@@ -186,7 +187,7 @@ describe('AnthropicModelProvider', () => {
       expect(retryMessage?.content).toContain('failed schema validation');
     });
 
-    it('should carry the same pinned temperature into the retry call', async () => {
+    it('should not send a temperature param on the retry call either', async () => {
       mockCreate
         .mockResolvedValueOnce(buildMessage('not json'))
         .mockResolvedValueOnce(buildMessage('{"answer":"Paris"}'));
@@ -194,11 +195,9 @@ describe('AnthropicModelProvider', () => {
 
       await provider.generate(requestWithSchema);
 
-      const [firstCall, retryCall] = mockCreate.mock.calls.map(
-        (call) => call[0] as { temperature?: number },
-      );
-      expect(firstCall.temperature).toBe(0);
-      expect(retryCall.temperature).toBe(0);
+      const [firstCall, retryCall] = mockCreate.mock.calls.map((call) => call[0]);
+      expect(firstCall).not.toHaveProperty('temperature');
+      expect(retryCall).not.toHaveProperty('temperature');
     });
 
     it('should send a structured-output schema with no $defs/$ref for a discriminated union that reuses a branch-nested schema', async () => {

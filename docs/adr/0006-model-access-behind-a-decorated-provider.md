@@ -56,6 +56,28 @@ errors back to the model. That is a different failure class, and after one attem
 typed error rather than returning unvalidated output. The unit test asserts the retry count is
 exactly one, because "one retry" is the invariant, not an implementation detail.
 
+### Sampling cannot be pinned — reproducibility moves to the replay cache
+
+The plan pinned `temperature: 0` per `taskClass` to narrow the run-to-run variance in prose fact
+extraction, measured on a live eval run at 8 facts from `valuation-memo.pdf` on one call, 2 on the
+next, from byte-identical input. A later live call rejected that: `400 invalid_request_error:
+\`temperature\` is deprecated for this model` — the configured model tier does not accept the
+parameter at all, in either direction. Removed from the request entirely, along with the
+now-dead `sampling-params.ts` table, its resolver, and its inclusion in the cache key
+(`cache-key.util.ts`, `caching-model.provider.ts`): a cache key field for a parameter the request
+never carries no longer discriminates fixtures, it only misleadingly implies it might.
+
+The consequence is real and stays real: prose fact extraction still varies run to run, and with
+temperature unavailable there is no provider-level lever left to suppress that. What this decision
+changes is where reproducibility has to come from — not from constraining sampling at call time,
+but from the record/replay cache (`CachingModelProvider`) already in the decorator stack for the
+eval harness. That is the whole reason the decorator earns its place here: it is the only
+determinism lever this model tier leaves available. To be precise about what it buys — replaying a
+recorded response makes a given **eval run** reproducible byte-for-byte, because the same fixture
+is served every time. It does not make the **system** deterministic: a live call still returns a
+different fact set on different runs, same as before. Replay sidesteps that variance for
+evaluation; it does not eliminate it as a live behaviour.
+
 ### Budget caps fail closed
 
 A request carrying `maxCostUsd` is refused **before** the call when the worst-case estimate exceeds
@@ -94,4 +116,8 @@ measured, before adding a routing decision to defend.
 > strictly for schema-validation failure — stacking retries on a rate-limited paid API is a spend
 > bug that looks like resilience. Second, the cost table prices five-minute and one-hour cache
 > writes separately. Lumping them is the obvious shortcut and it under-reports every cached run,
-> which is the worst direction for a number you're using to make routing decisions later.
+> which is the worst direction for a number you're using to make routing decisions later. Third,
+> this model tier rejects `temperature` outright, so sampling can't be pinned — reproducibility for
+> the eval has to come from the replay cache, not from constraining generation. That's a narrower
+> claim than "the system is deterministic": replay makes a recorded eval run reproducible; the live
+> model call underneath it still varies.
