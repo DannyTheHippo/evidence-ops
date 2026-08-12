@@ -13,6 +13,7 @@ const config: Config = {
   testPathIgnorePatterns: ['node_modules', 'dist'],
   collectCoverageFrom: [
     'src/**/*.service.ts',
+    'src/shared/utils/**/*.ts',
     '!**/*.(config|constant|module|schema|dto|exception|error|type|enum|response|api-examples).ts',
     '!src/main.ts',
     '!src/config/**',

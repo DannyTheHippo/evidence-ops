@@ -88,4 +88,8 @@ describe('parseCookieHeader', () => {
   it('should skip a segment with an empty name', () => {
     expect(parseCookieHeader('=novalue; ok=1')).toEqual({ ok: '1' });
   });
+
+  it('should skip an empty segment produced by a doubled or trailing `;`', () => {
+    expect(parseCookieHeader('a=1;;ok=1;')).toEqual({ a: '1', ok: '1' });
+  });
 });

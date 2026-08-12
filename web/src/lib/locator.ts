@@ -14,5 +14,11 @@ export function formatLocator(locator: Locator): string {
       return locator.headingPath.length > 0
         ? locator.headingPath.join(' > ')
         : `¶${locator.paragraphIndex}`;
+    case 'text-block':
+      return locator.headingPath.length > 0
+        ? locator.headingPath.join(' > ')
+        : `¶${locator.blockIndex}`;
+    case 'pptx-slide':
+      return `slide ${locator.slide}`;
   }
 }

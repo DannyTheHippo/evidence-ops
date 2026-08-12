@@ -46,8 +46,19 @@ export default function App() {
   const location = useLocation();
 
   async function handleLogout() {
-    await logout();
-    navigate('/login');
+    // Client-side logout must not depend on the server's answer: logout() already clears the
+    // local session cache unconditionally (its own try/finally), so a rejected request (a CSRF
+    // 403, a 500, a dropped connection) has nothing left to do here but not crash the click
+    // handler — onClick={() => void handleLogout()} discards this function's return value, so an
+    // uncaught rejection would otherwise surface as an unhandled promise rejection instead of
+    // just navigating the user out.
+    try {
+      await logout();
+    } catch {
+      // Already handled: logout()'s own finally cleared the session regardless of this failure.
+    } finally {
+      navigate('/login');
+    }
   }
 
   // Chrome visibility only, not an authorization check — RequireAuth on each route is the actual

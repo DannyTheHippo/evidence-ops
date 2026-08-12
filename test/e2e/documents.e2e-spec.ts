@@ -237,11 +237,56 @@ describe('Documents (e2e)', () => {
   });
 
   it('refuses a content type outside the allowlist', async () => {
-    const response = await upload(Buffer.from('plain text'), 'notes.txt', 'text/plain', {
+    const response = await upload(Buffer.from('binary junk'), 'photo.png', 'image/png', {
       title: 'Rejected',
     });
 
     expect(response.status).toBe(415);
+  });
+
+  // Windows reports a .csv as this exact MIME — the same string a legacy .xls binary reports —
+  // so the resolver must fall through to the extension allowlist rather than trusting either MIME
+  // directly. `resolveUploadKind`'s ambiguous-set comment (`documents.constant.ts`) is the design
+  // rationale; these three cases are its acceptance test at the HTTP boundary.
+  it('accepts application/vnd.ms-excel when the extension resolves it to csv — the Windows-reported .csv case', async () => {
+    const response = await upload(
+      Buffer.from('name,cap_rate\nNorthgate,5.25'),
+      'comps.csv',
+      'application/vnd.ms-excel',
+      { title: 'Windows CSV' },
+    );
+    const body = response.body as DocumentBody;
+
+    expect(response.status).toBe(201);
+    expect(body.sourceKind).toBe('csv');
+    // The canonical MIME, not the browser's raw 'application/vnd.ms-excel' — the parser registry's
+    // exact-match lookup (`ParserRegistry.resolve`) depends on the stored contentType already being
+    // disambiguated.
+    expect(body.mimeType).toBe('text/csv');
+  });
+
+  it('rejects application/vnd.ms-excel with a .xls extension — the legacy binary this project does not support, not guessed as a spreadsheet', async () => {
+    const response = await upload(
+      Buffer.from('xls bytes'),
+      'legacy.xls',
+      'application/vnd.ms-excel',
+      {
+        title: 'Legacy XLS',
+      },
+    );
+
+    expect(response.status).toBe(400);
+  });
+
+  it('rejects application/octet-stream with an extension outside the allowlist', async () => {
+    const response = await upload(
+      Buffer.from('zip bytes'),
+      'archive.zip',
+      'application/octet-stream',
+      { title: 'Unknown Octet Stream' },
+    );
+
+    expect(response.status).toBe(400);
   });
 
   it('lists uploaded documents with a count', async () => {
@@ -533,6 +578,10 @@ describe('Documents (e2e)', () => {
       const resolvedConflict = await conflictModel.findById(conflict._id);
       expect(resolvedConflict?.status).toBe('resolved');
       expect(resolvedConflict?.resolution?.outcome).toBe('superseded');
+      // The pull removed the deleted document's own fact — only the survivor's id remains.
+      expect(resolvedConflict?.factIds.map((id) => id.toString())).toEqual([
+        survivingFact._id.toString(),
+      ]);
 
       // The conflict's surviving fact — untouched, on a document that was never deleted — proves
       // the cascade only reached the deleted document's own rows.
@@ -541,6 +590,105 @@ describe('Documents (e2e)', () => {
 
       const events = await auditEventModel.find({ action: 'documents.deleted' });
       expect(events.length).toBeGreaterThan(0);
+
+      // The bug this cascade fixes lived here: `ConflictsService.list()` filters only by
+      // `{ tenantId }` — no status filter — and `toConflictDto` throws a 500 whenever any
+      // `factIds` entry no longer resolves to an `ExtractedFact`. A test that only checks
+      // `conflictModel.findById` never exercises that path; this call to the live endpoint does.
+      const conflictsList = await request(getTestServer(app))
+        .get('/api/v1/conflicts')
+        .set('Authorization', `Bearer ${token}`);
+      expect(conflictsList.status).toBe(200);
+      const listedConflict = (
+        conflictsList.body as { docs: Array<{ id: string; status: string; factIds: string[] }> }
+      ).docs.find((doc) => doc.id === conflict._id.toString());
+      expect(listedConflict?.status).toBe('resolved');
+      expect(listedConflict?.factIds).toEqual([survivingFact._id.toString()]);
+    });
+
+    it("keeps a 3-fact conflict 'open' with the two surviving factIds when only one of its facts' documents is deleted — the old behaviour resolved the whole conflict on one deletion, silently dropping a still-live disagreement between the two survivors", async () => {
+      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, {
+        title: 'Delete Cascade — 3-Fact Conflict',
+      });
+      const documentBody = uploaded.body as DocumentBody;
+      const documentId = documentBody.id;
+      const versionId = documentBody.currentVersion.id;
+
+      // Three documents disagreeing about one cap rate: ONE conflict with THREE `factIds` —
+      // `Conflict.factIds` is unbounded, and grouping is by `(entity, metric, period)`, not by
+      // document pair. Only `deletedFact` belongs to the document this test deletes.
+      const factKey = {
+        entity: 'Northgate Business Park',
+        metric: 'cap_rate',
+        period: '2025-06',
+      };
+      const deletedFact = await extractedFactModel.create({
+        factKey,
+        value: { amount: 5.25, unit: 'percent' },
+        rawText: 'cap rate of 5.25%',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-xlsx-3fact',
+        documentVersionId: new Types.ObjectId(versionId),
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F3' },
+      });
+      const survivingFactA = await extractedFactModel.create({
+        factKey,
+        value: { amount: 6.1, unit: 'percent' },
+        rawText: 'cap rate of 6.10%',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-prose-a',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+      });
+      const survivingFactB = await extractedFactModel.create({
+        factKey,
+        value: { amount: 5.8, unit: 'percent' },
+        rawText: 'cap rate of 5.80%',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-prose-b',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 4 },
+      });
+      const conflict = await conflictModel.create({
+        factKey,
+        factIds: [deletedFact._id, survivingFactA._id, survivingFactB._id],
+        magnitude: 0.011,
+        status: 'open',
+      });
+
+      const response = await request(getTestServer(app))
+        .delete(`/api/v1/documents/${documentId}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(response.status).toBe(204);
+
+      const conflictAfterCascade = await conflictModel.findById(conflict._id);
+      expect(conflictAfterCascade?.status).toBe('open');
+      expect(conflictAfterCascade?.resolution).toBeUndefined();
+      expect(conflictAfterCascade?.factIds.map((id) => id.toString()).sort()).toEqual(
+        [survivingFactA._id.toString(), survivingFactB._id.toString()].sort(),
+      );
+
+      // Same trap as the 2-fact case above: only the live `GET /conflicts` endpoint exercises
+      // `toConflictDto`'s `values.length < factIds.length` throw and `list()`'s missing status
+      // filter — a still-open conflict with two facts must render, not 500.
+      const conflictsList = await request(getTestServer(app))
+        .get('/api/v1/conflicts')
+        .set('Authorization', `Bearer ${token}`);
+      expect(conflictsList.status).toBe(200);
+      const listedConflict = (
+        conflictsList.body as {
+          docs: Array<{ id: string; status: string; factIds: string[]; values: unknown[] }>;
+        }
+      ).docs.find((doc) => doc.id === conflict._id.toString());
+      expect(listedConflict?.status).toBe('open');
+      expect(listedConflict?.factIds?.sort()).toEqual(
+        [survivingFactA._id.toString(), survivingFactB._id.toString()].sort(),
+      );
+      expect(listedConflict?.values).toHaveLength(2);
     });
   });
 });

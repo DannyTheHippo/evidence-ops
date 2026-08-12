@@ -8,11 +8,12 @@ import {
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { TypedConfigService } from '../../../../config/environment/typed-config.service';
 import { IS_PUBLIC_ROUTE } from '../../../../shared/decorators/public-route.decorator';
 import { AlsContext } from '../../../../shared/types/als-context.type';
 import { AuthenticatedRequest } from '../../../../shared/types/authenticated-request.type';
 import { parseCookieHeader } from '../../../../shared/utils/parse-cookie.util';
-import { AUTH_COOKIE_NAME, AUTH_COOKIE_NAME_SECURE } from '../auth.constant';
+import { resolveSessionCookieName } from '../auth.constant';
 import { JwtPayload } from '../types/jwt-payload.type';
 
 @Injectable()
@@ -20,6 +21,7 @@ export class JwtAuthGuard implements CanActivate {
   constructor(
     private readonly jwtService: JwtService,
     private readonly reflector: Reflector,
+    private readonly config: TypedConfigService,
 
     @Inject(AsyncLocalStorage)
     private readonly als: AsyncLocalStorage<AlsContext>,
@@ -36,14 +38,14 @@ export class JwtAuthGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
 
-    // `__Host-eo_session` (prod-like) and `eo_session` (dev, plain HTTP) never both apply to the
-    // same environment, but the guard accepts either name so it does not need to know which one
-    // login chose.
+    // Exactly one cookie name is valid per environment (`resolveSessionCookieName`, same
+    // predicate the controller uses to set it) — accepting the other name too would let a cookie
+    // planted under the dev-only plain name authenticate a request in a prod-like environment
+    // that never issues it.
     const cookies = parseCookieHeader(request.headers.cookie);
     const token =
       JwtAuthGuard.extractToken(request.headers.authorization) ??
-      cookies[AUTH_COOKIE_NAME_SECURE] ??
-      cookies[AUTH_COOKIE_NAME];
+      cookies[resolveSessionCookieName(this.config.app.env)];
     if (!token) {
       throw new UnauthorizedException('No token provided');
     }

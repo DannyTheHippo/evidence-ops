@@ -10,7 +10,10 @@ import { WorkflowRunNotFoundException } from '../../../../src/features/evidence/
 import { WORKFLOW_RUN_STREAM_INTERVAL_MS } from '../../../../src/features/evidence/workflow-runs/workflow-runs.constant';
 import { WorkflowRunsService } from '../../../../src/features/evidence/workflow-runs/workflow-runs.service';
 import { WORKFLOW_ENGINE } from '../../../../src/providers/workflow-engine/workflow-engine.interface';
-import { SSE_HEARTBEAT_INTERVAL_MS } from '../../../../src/shared/constants/sse.constant';
+import {
+  SSE_HEARTBEAT_INTERVAL_MS,
+  SSE_STREAM_ERROR_MESSAGE,
+} from '../../../../src/shared/constants/sse.constant';
 import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
@@ -433,12 +436,13 @@ describe('WorkflowRunsService', () => {
       expect(events.some((event) => event.type === 'heartbeat')).toBe(false);
     });
 
-    it('should emit a terminal error event and complete when the initial peek fails, recording no audit row', async () => {
+    it('should emit a terminal error event carrying a fixed client-facing message, never the raw internal error, and log the real error server-side, recording no audit row', async () => {
       mockWorkflowRunModel.findOne.mockResolvedValueOnce(null);
+      const id = new Types.ObjectId().toString();
       const events: MessageEvent[] = [];
       let completed = false;
 
-      service.streamRun(new Types.ObjectId().toString(), 'actor-1', 'tenant-a').subscribe({
+      service.streamRun(id, 'actor-1', 'tenant-a').subscribe({
         next: (event) => events.push(event),
         complete: () => {
           completed = true;
@@ -449,8 +453,26 @@ describe('WorkflowRunsService', () => {
       expect(completed).toBe(true);
       expect(events).toHaveLength(1);
       expect(events[0].type).toBe('error');
-      expect((events[0].data as { message: string }).message).toContain('not found');
+      expect((events[0].data as { message: string }).message).toBe(SSE_STREAM_ERROR_MESSAGE);
+      expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('not found'));
       expect(mockAuditService.record).not.toHaveBeenCalled();
+    });
+
+    it('should stringify a non-Error rejection rather than reading a `.message` that does not exist', async () => {
+      // rxjs/Mongoose never guarantee the rejection is an `Error` instance — this covers the
+      // `String(error)` branch of `error instanceof Error ? error.message : String(error)`.
+      mockWorkflowRunModel.findOne.mockRejectedValueOnce('a plain string rejection');
+      const id = new Types.ObjectId().toString();
+      const events: MessageEvent[] = [];
+
+      service.streamRun(id, 'actor-1', 'tenant-a').subscribe((event) => events.push(event));
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(events[0].type).toBe('error');
+      expect((events[0].data as { message: string }).message).toBe(SSE_STREAM_ERROR_MESSAGE);
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.stringContaining('a plain string rejection'),
+      );
     });
   });
 });

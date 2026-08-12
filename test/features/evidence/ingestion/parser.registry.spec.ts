@@ -1,4 +1,6 @@
+import { SOURCE_KIND_TO_MIME_TYPE } from '../../../../src/features/evidence/documents/documents.constant';
 import { UnsupportedMimeTypeException } from '../../../../src/features/evidence/ingestion/exceptions/ingestion.exception';
+import { buildDocumentParsers } from '../../../../src/features/evidence/ingestion/ingestion.module';
 import { ParserRegistry } from '../../../../src/features/evidence/ingestion/parser.registry';
 import type {
   DocumentParser,
@@ -49,5 +51,30 @@ describe('ParserRegistry', () => {
     const registry = new ParserRegistry([firstParser, secondParser]);
 
     expect(registry.resolve('application/pdf')).toBe(secondParser);
+  });
+
+  describe('the real registration', () => {
+    /**
+     * The cases above use stubs, so none of them can catch the failure that actually matters: an
+     * upload kind the MIME gate accepts whose canonical type no registered parser declares. That
+     * combination is silent — `resolveUploadKind` returns a kind, the upload succeeds, and
+     * ingestion throws `UnsupportedMimeTypeException` later, out of band. These two cases run
+     * against `buildDocumentParsers()`, the same list `IngestionModule` provides.
+     */
+    const registry = new ParserRegistry(buildDocumentParsers());
+
+    it.each(Object.entries(SOURCE_KIND_TO_MIME_TYPE))(
+      'should route the canonical MIME for source kind %s to a registered parser',
+      (_kind, mimeType) => {
+        expect(() => registry.resolve(mimeType)).not.toThrow();
+      },
+    );
+
+    it('should register no MIME type that no upload kind can produce', () => {
+      const canonical = new Set(Object.values(SOURCE_KIND_TO_MIME_TYPE));
+      const registered = buildDocumentParsers().flatMap((parser) => [...parser.supports]);
+
+      expect(registered.filter((mimeType) => !canonical.has(mimeType))).toEqual([]);
+    });
   });
 });

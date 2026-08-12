@@ -10,7 +10,10 @@ export const CONFLICT_STATUSES: readonly ConflictStatus[] = ['open', 'resolved',
 
 export type ConflictDocument = HydratedDocument<WithTimestamps<Conflict>>;
 
-const MIN_CONFLICTING_FACTS = 2;
+// Exported so `DocumentsService.remove`'s deletion cascade can gate its own cardinality flip
+// (resolve-as-superseded only once a conflict's `factIds` drops below this) against the same
+// number this schema's own validator enforces, rather than a second hardcoded `2`.
+export const MIN_CONFLICTING_FACTS = 2;
 
 // 'superseded' is reachable ONLY from `DocumentsService.remove`'s deletion cascade — never from
 // `ConflictsService.recordResolution`'s human-decision path (`resolveConflict`'s three branches

@@ -155,13 +155,20 @@ describe('Auth (e2e)', () => {
       expect(response.status).toBe(403);
     });
 
-    it('leaves a Bearer-authenticated mutating request untouched by the same hostile Origin', async () => {
+    // Inverted from the original design, which exempted a Bearer-authenticated request from this
+    // check entirely on the theory that it carries no ambient cookie for a cross-site page to
+    // ride. That exemption was only ever reachable from a browser, where CORS already governs
+    // cross-origin responses — so it bought nothing and created a bypass class once the
+    // cookie/path scoping around it was found to be broken (see the trailing-slash and
+    // case-change cases below). The rule is now unconditional: any mutating request with a
+    // foreign Origin is refused, Bearer or not.
+    it('rejects a Bearer-authenticated mutating request carrying a hostile Origin', async () => {
       const response = await request(getTestServer(app))
         .post('/api/v1/auth/logout')
         .set('Authorization', `Bearer ${logoutCredentials.accessToken}`)
         .set('Origin', 'https://hostile.example.com');
 
-      expect(response.status).toBe(204);
+      expect(response.status).toBe(403);
     });
 
     // Pins the documented fail-open: a non-browser client that omits Origin is not rejected, so
@@ -175,9 +182,9 @@ describe('Auth (e2e)', () => {
     });
 
     // Login-CSRF hole: /auth/login is @PublicRoute() and its side effect *sets* the session
-    // cookie, so a forced cross-site top-level form navigation to it has no cookie yet — the
-    // general cookie-absent exemption above would otherwise pass it through unconditionally. See
-    // csrf-origin.middleware.ts, COOKIE_SETTING_PATHS.
+    // cookie, so a forced cross-site top-level form navigation to it has no cookie yet. The rule
+    // is unconditional now (no cookie check, no path allowlist), so login is covered by the same
+    // check as every other mutating route — see csrf-origin.middleware.ts.
     describe('the login route', () => {
       it('rejects a cross-origin login carrying a hostile Origin and no session cookie', async () => {
         const response = await request(getTestServer(app))
@@ -205,6 +212,31 @@ describe('Auth (e2e)', () => {
           .send({ email, password });
 
         expect(response.status).toBe(200);
+      });
+
+      // Bypass regression: the prior middleware matched an exact-string Set against
+      // `req.originalUrl.split('?')[0]`. Nest's underlying express() runs with `strict: false`
+      // and `caseSensitive: false` (measured on express 5.2.1), so a trailing slash or a case
+      // change reached this handler while matching nothing in that Set, taking the
+      // cookie-absent fail-open path unconditionally. The new rule has no path check at all, so
+      // both variants are covered automatically — asserted here so a future reintroduction of
+      // path matching reds this test.
+      it('rejects a cross-origin login with a trailing slash in the path', async () => {
+        const response = await request(getTestServer(app))
+          .post('/api/v1/auth/login/')
+          .set('Origin', 'https://hostile.example.com')
+          .send({ email, password });
+
+        expect(response.status).toBe(403);
+      });
+
+      it('rejects a cross-origin login with the path cased differently', async () => {
+        const response = await request(getTestServer(app))
+          .post('/api/v1/auth/LOGIN')
+          .set('Origin', 'https://hostile.example.com')
+          .send({ email, password });
+
+        expect(response.status).toBe(403);
       });
     });
   });

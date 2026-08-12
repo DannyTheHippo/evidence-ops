@@ -5,11 +5,14 @@ import { JwtService } from '@nestjs/jwt';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { TypedConfigService } from '../../../../../src/config/environment/typed-config.service';
 import { JwtAuthGuard } from '../../../../../src/features/common/auth/guards/jwt-auth.guard';
 import { JwtPayload } from '../../../../../src/features/common/auth/types/jwt-payload.type';
+import { NodeEnv } from '../../../../../src/shared/enums/global/node-env.enum';
 import { UserRole } from '../../../../../src/shared/enums/user-role.enum';
 import { AlsContext } from '../../../../../src/shared/types/als-context.type';
 import { AuthenticatedRequest } from '../../../../../src/shared/types/authenticated-request.type';
+import { getMockTypedConfig } from '../../../../utils/get-mock-typed-config';
 
 describe('JwtAuthGuard', () => {
   let guard: JwtAuthGuard;
@@ -36,21 +39,33 @@ describe('JwtAuthGuard', () => {
     return { context, request };
   };
 
-  beforeEach(async () => {
-    alsStore = { 'correlation-id': 'test-correlation-id' };
-    mockAls.getStore.mockReturnValue(alsStore);
+  // `getMockTypedConfig` merges overrides per-namespace, so `app` has to carry its full shape,
+  // not just `env` — a partial override would drop the rest of the namespace.
+  const buildGuard = async (
+    env: NodeEnv,
+  ): Promise<{ guard: JwtAuthGuard; reflector: Reflector }> => {
+    const config = getMockTypedConfig({
+      app: { env, port: 3000, logLevel: 'debug', url: 'http://localhost:3000' },
+    });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         JwtAuthGuard,
         { provide: JwtService, useValue: mockJwtService },
         { provide: Reflector, useValue: { getAllAndOverride: jest.fn().mockReturnValue(false) } },
+        { provide: TypedConfigService, useValue: config },
         { provide: AsyncLocalStorage, useValue: mockAls },
       ],
     }).compile();
 
-    guard = module.get(JwtAuthGuard);
-    reflector = module.get(Reflector);
+    return { guard: module.get(JwtAuthGuard), reflector: module.get(Reflector) };
+  };
+
+  beforeEach(async () => {
+    alsStore = { 'correlation-id': 'test-correlation-id' };
+    mockAls.getStore.mockReturnValue(alsStore);
+
+    ({ guard, reflector } = await buildGuard(NodeEnv.TEST));
   });
 
   afterEach(() => {
@@ -119,7 +134,7 @@ describe('JwtAuthGuard', () => {
     expect(alsStore.tenant).toBe('default');
   });
 
-  it('should accept a token carried only by the eo_session cookie', async () => {
+  it('should accept a token carried only by the eo_session cookie in a non-prod-like environment', async () => {
     const payload: JwtPayload = {
       sub: 'user-id',
       email: 'user@example.com',
@@ -133,20 +148,55 @@ describe('JwtAuthGuard', () => {
     expect(mockJwtService.verifyAsync).toHaveBeenCalledWith('cookie-token');
   });
 
-  // Prod-like login sets `__Host-eo_session` instead of `eo_session` (see auth.controller.ts);
-  // the guard must accept either name without knowing which environment issued the cookie.
-  it('should accept a token carried only by the __Host-eo_session cookie', async () => {
-    const payload: JwtPayload = {
-      sub: 'user-id',
-      email: 'user@example.com',
-      tenantId: 'default',
-      role: UserRole.Admin,
-    };
-    mockJwtService.verifyAsync.mockResolvedValueOnce(payload);
-    const { context } = buildContext({ cookie: '__Host-eo_session=secure-cookie-token' });
+  // Single-name resolution regression: the guard used to accept both `eo_session` and
+  // `__Host-eo_session` unconditionally, in every environment. That let an attacker who could
+  // plant a plain `eo_session` cookie (XSS or a network position on a plain-HTTP sibling
+  // subdomain) authenticate as themselves against a victim who held no `__Host-` cookie at all —
+  // the guard would fall through to the plain name regardless of environment. The guard now
+  // resolves exactly one accepted name per environment via `resolveSessionCookieName`, the same
+  // predicate the controller uses to set the cookie.
+  describe('single-name resolution', () => {
+    it('should reject the plain eo_session cookie and accept __Host-eo_session in a prod-like environment', async () => {
+      const payload: JwtPayload = {
+        sub: 'user-id',
+        email: 'user@example.com',
+        tenantId: 'default',
+        role: UserRole.Admin,
+      };
+      const { guard: prodGuard } = await buildGuard(NodeEnv.PRODUCTION);
 
-    await expect(guard.canActivate(context)).resolves.toBe(true);
-    expect(mockJwtService.verifyAsync).toHaveBeenCalledWith('secure-cookie-token');
+      const { context: plainContext } = buildContext({ cookie: 'eo_session=cookie-token' });
+      await expect(prodGuard.canActivate(plainContext)).rejects.toThrow(UnauthorizedException);
+      expect(mockJwtService.verifyAsync).not.toHaveBeenCalled();
+
+      mockJwtService.verifyAsync.mockResolvedValueOnce(payload);
+      const { context: secureContext } = buildContext({
+        cookie: '__Host-eo_session=secure-cookie-token',
+      });
+      await expect(prodGuard.canActivate(secureContext)).resolves.toBe(true);
+      expect(mockJwtService.verifyAsync).toHaveBeenCalledWith('secure-cookie-token');
+    });
+
+    it('should reject the __Host-eo_session cookie and accept the plain eo_session in a dev environment', async () => {
+      const payload: JwtPayload = {
+        sub: 'user-id',
+        email: 'user@example.com',
+        tenantId: 'default',
+        role: UserRole.Admin,
+      };
+      const { guard: devGuard } = await buildGuard(NodeEnv.DEVELOPMENT);
+
+      const { context: secureContext } = buildContext({
+        cookie: '__Host-eo_session=secure-cookie-token',
+      });
+      await expect(devGuard.canActivate(secureContext)).rejects.toThrow(UnauthorizedException);
+      expect(mockJwtService.verifyAsync).not.toHaveBeenCalled();
+
+      mockJwtService.verifyAsync.mockResolvedValueOnce(payload);
+      const { context: plainContext } = buildContext({ cookie: 'eo_session=cookie-token' });
+      await expect(devGuard.canActivate(plainContext)).resolves.toBe(true);
+      expect(mockJwtService.verifyAsync).toHaveBeenCalledWith('cookie-token');
+    });
   });
 
   // Dual-accept precedence: a scripted client sending both should not be able to shadow the

@@ -43,11 +43,26 @@ const xlsxCellLocatorSchema = z.object({
   cell: z.string().min(1), // A1 cell, e.g. "B7"
 });
 
+const textBlockLocatorSchema = z.object({
+  kind: z.literal('text-block'),
+  extractorVersion: z.string().min(1),
+  blockIndex: z.number().int().nonnegative(),
+  headingPath: z.array(z.string()),
+});
+
+const pptxSlideLocatorSchema = z.object({
+  kind: z.literal('pptx-slide'),
+  extractorVersion: z.string().min(1),
+  slide: z.number().int().positive(),
+});
+
 export const locatorSchema = z.discriminatedUnion('kind', [
   pdfPageLocatorSchema,
   docxParagraphLocatorSchema,
   xlsxRegionLocatorSchema,
   xlsxCellLocatorSchema,
+  textBlockLocatorSchema,
+  pptxSlideLocatorSchema,
 ]);
 
 export type Locator = z.infer<typeof locatorSchema>;

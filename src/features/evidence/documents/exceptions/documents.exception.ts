@@ -19,6 +19,17 @@ export class UnsupportedContentTypeException extends BaseException {
   }
 }
 
+// Distinct from `UnsupportedContentTypeException`: that one is for a MIME type the server does
+// not recognize at all (415, the media type itself is the problem). This is for a MIME type
+// `resolveUploadKind` *does* recognize as ambiguous (`AMBIGUOUS_UPLOAD_MIME_TYPES`) but could not
+// resolve because the filename's extension is not on the allowlist — the request itself is
+// malformed (a filename/content-type combination the client should not have sent), which is a 400.
+export class UnresolvableContentTypeException extends BaseException {
+  constructor(message: string, cause?: unknown) {
+    super(message, HttpStatus.BAD_REQUEST, cause);
+  }
+}
+
 export class MissingFileException extends BaseException {
   constructor(message: string, cause?: unknown) {
     super(message, HttpStatus.BAD_REQUEST, cause);

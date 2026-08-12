@@ -64,4 +64,16 @@ describe('auth session cache', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  // Pre-cookie-switch clients stored the bearer token under this key (see git history, the
+  // `web/src/lib/auth.ts` shape before commit a7d7ea9). Nothing in the SPA reads or writes it
+  // anymore, so it would otherwise sit in localStorage, readable by any XSS, until it expires on
+  // its own — the module has to clear it itself.
+  it('removes the legacy eo_token key from localStorage on load', async () => {
+    localStorage.setItem('eo_token', 'stale-bearer-token');
+
+    await import('./auth');
+
+    expect(localStorage.getItem('eo_token')).toBeNull();
+  });
 });

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
@@ -70,5 +70,43 @@ describe('App / RequireAuth', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'Evidence Ops' })).toBeInTheDocument();
+  });
+
+  // Regression: logout() used to await the POST and only then clear the local session and
+  // navigate, so a rejected request (e.g. a CSRF 403) left the user looking logged in with a
+  // button that appeared to do nothing. The local clear and the navigation must both happen
+  // regardless of the server's answer.
+  it('clears the local session and navigates to /login even when the logout request fails', async () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue({
+      id: 'user-1',
+      email: 'user@example.com',
+      role: 'member',
+      createdAt: new Date().toISOString(),
+    });
+    const clearSessionSpy = vi.spyOn(auth, 'clearSession');
+    const fetchMock = vi.fn((url: string) =>
+      url === '/api/v1/auth/logout'
+        ? Promise.resolve(jsonResponse({ message: 'Forbidden' }, 403))
+        : Promise.resolve(
+            jsonResponse({
+              id: 'user-1',
+              email: 'user@example.com',
+              role: 'member',
+              createdAt: new Date().toISOString(),
+            }),
+          ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Logout' }));
+
+    expect(await screen.findByRole('heading', { name: 'Evidence Ops' })).toBeInTheDocument();
+    expect(clearSessionSpy).toHaveBeenCalled();
   });
 });

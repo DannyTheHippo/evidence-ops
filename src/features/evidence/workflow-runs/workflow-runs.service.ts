@@ -30,7 +30,10 @@ import {
   DEFAULT_PAGINATION_LIMIT,
   DEFAULT_PAGINATION_SKIP,
 } from '../../../shared/constants/pagination-defaults.constant';
-import { SSE_HEARTBEAT_INTERVAL_MS } from '../../../shared/constants/sse.constant';
+import {
+  SSE_HEARTBEAT_INTERVAL_MS,
+  SSE_STREAM_ERROR_MESSAGE,
+} from '../../../shared/constants/sse.constant';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
@@ -234,10 +237,14 @@ export class WorkflowRunsService {
       ),
       map((event): MessageEvent => event),
       // FAIL OPEN TO POLLING — see `QaService.streamAnswer`'s identical reasoning: the SPA's
-      // retained `getWorkflowRunById`/`listApprovals()` polling is the fallback.
-      catchError((error) =>
-        of<MessageEvent>({ type: 'error', data: { message: (error as Error).message } }),
-      ),
+      // retained `getWorkflowRunById`/`listApprovals()` polling is the fallback. The event carries
+      // a fixed client-facing message, not `(error as Error).message` — see
+      // `SSE_STREAM_ERROR_MESSAGE`'s doc comment; the real error is logged here instead.
+      catchError((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(`streamRun failed for run '${id}': ${message}`);
+        return of<MessageEvent>({ type: 'error', data: { message: SSE_STREAM_ERROR_MESSAGE } });
+      }),
     );
   }
 

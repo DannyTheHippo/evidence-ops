@@ -1,13 +1,20 @@
-/*
- * Hand-rolled `Cookie:` header parser (no `cookie-parser` dependency). Parses attacker-controlled
- * input on every request, so it fails OPEN on a malformed segment — skip it, never throw — and
- * lets the auth guard's own rejection handle a request that ends up with no usable cookie.
+/**
+ * Parses a `Cookie:` request header into a name/value map, without a `cookie-parser` dependency.
+ *
+ * The input is attacker-controlled on every request, so a malformed segment fails OPEN: it is
+ * skipped and parsing continues, never throwing. A request that ends up with no usable cookie is
+ * rejected by the auth guard, which is the component that owns that decision.
+ *
+ * @param header Raw `Cookie:` header value; `undefined` yields an empty map.
+ * @returns Decoded cookie values by name. A name appearing more than once is absent entirely.
  */
 export const parseCookieHeader = (header?: string): Record<string, string> => {
   const cookies: Record<string, string> = {};
-  // Names seen so far, tracked independently of `cookies` (which only holds successfully decoded
-  // values) — a name that appeared once with a malformed value still counts as "seen" for
-  // duplicate detection below.
+  /**
+   * Names encountered so far, tracked separately from `cookies` because `cookies` holds only
+   * successfully decoded values. A name whose value failed to decode still counts as seen, so it
+   * cannot be reintroduced by a later duplicate.
+   */
   const seen = new Set<string>();
   if (!header) {
     return cookies;
@@ -19,25 +26,30 @@ export const parseCookieHeader = (header?: string): Record<string, string> => {
       continue;
     }
 
+    /** A separator at index 0 means an empty name, which is not a usable cookie. */
     const separatorIndex = trimmed.indexOf('=');
     if (separatorIndex <= 0) {
       continue;
     }
 
+    /**
+     * Non-empty by construction: `trimmed` has no leading whitespace, and `separatorIndex > 0`
+     * means this slice retains `trimmed[0]`, which trimming cannot remove. No emptiness check
+     * follows because no input can reach one.
+     */
     const name = trimmed.slice(0, separatorIndex).trim();
     const rawValue = trimmed.slice(separatorIndex + 1).trim();
-    if (!name) {
-      continue;
-    }
 
     if (seen.has(name)) {
-      // Fail CLOSED on a duplicate name: RFC 6265 §5.4 sorts a longer-`Path` cookie first, so
-      // e.g. a subdomain-planted `Domain=.example.com; Path=/api/v1` copy of the session cookie
-      // arrives before the legitimate `Path=/` one. Picking either value would be a confident
-      // accept of a possibly-attacker identity, so an ambiguous name is excluded entirely rather
-      // than resolved by position. Honest trade: this converts a session-fixation vector into an
-      // availability one — someone who can plant a duplicate can deny the session — which is the
-      // correct direction for an integrity gate.
+      /**
+       * A duplicate name fails CLOSED. RFC 6265 §5.4 orders a longer-`Path` cookie first, so a
+       * subdomain-planted `Domain=.example.com; Path=/api/v1` copy of the session cookie arrives
+       * ahead of the legitimate `Path=/` one. Choosing either value would accept a possibly
+       * attacker-supplied identity, so an ambiguous name is dropped rather than resolved by
+       * position. This trades a session-fixation vector for an availability one — anyone able to
+       * plant a duplicate can deny the session — which is the correct direction for an integrity
+       * gate.
+       */
       delete cookies[name];
       continue;
     }

@@ -39,12 +39,36 @@ export interface XlsxCellLocator extends LocatorBase {
   cell: string;
 }
 
+// ADR-0008 rejected reusing `docx-paragraph` for plain-text and Markdown: a locator names how the
+// evidence was found, and a `.md` block is not a Word paragraph — collapsing the two would be a
+// provenance lie the moment either extractor changes independently.
+export interface TextBlockLocator extends LocatorBase {
+  kind: 'text-block';
+  blockIndex: number;
+  headingPath: string[];
+}
+
+// Deliberately no shape index: OOXML shape ordering within a slide is not stable enough to cite,
+// and a locator that silently drifts under a re-export is worse than a coarser one that does not.
+// `slide` is 1-based, matching how a person names a slide.
+export interface PptxSlideLocator extends LocatorBase {
+  kind: 'pptx-slide';
+  slide: number;
+}
+
 export type EvidenceLocator =
-  PdfPageLocator | DocxParagraphLocator | XlsxRegionLocator | XlsxCellLocator;
+  | PdfPageLocator
+  | DocxParagraphLocator
+  | XlsxRegionLocator
+  | XlsxCellLocator
+  | TextBlockLocator
+  | PptxSlideLocator;
 
 export const EVIDENCE_LOCATOR_KINDS = [
   'pdf-page',
   'docx-paragraph',
   'xlsx-region',
   'xlsx-cell',
+  'text-block',
+  'pptx-slide',
 ] as const;

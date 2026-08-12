@@ -1,34 +1,33 @@
 import { Injectable, NestMiddleware } from '@nestjs/common';
 import { NextFunction, Request, Response } from 'express';
 import { TypedConfigService } from '../../../../config/environment/typed-config.service';
-import { parseCookieHeader } from '../../../../shared/utils/parse-cookie.util';
-import { AUTH_COOKIE_NAME, AUTH_COOKIE_NAME_SECURE } from '../auth.constant';
 import { CsrfOriginMismatchException } from '../exceptions/auth.exception';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-// Matched against `req.originalUrl`, NOT `req.path`. Express strips a middleware's own mount
-// prefix from `req.url` (and therefore from `req.path`) before the handler runs — measured against
-// the installed express 5.2.1: inside middleware mounted for these routes, `req.path` is `/` while
-// `req.originalUrl` is the full `/api/v1/auth/login`. Only `originalUrl` survives mounting, so it
-// is the only value an absolute route match can rely on here.
-//
-// Exact-match, not a prefix test: a route added under this path later that is not itself
-// cookie-setting must be added explicitly, not swept in.
-//
-// Login is the only member today. It is `@PublicRoute()`, so the cookie-absent exemption below
-// would otherwise pass it through unconditionally — but login is the one route whose side effect
-// *sets* the session cookie, so "no cookie yet" is not evidence of "no browser-state risk" for
-// this one path the way it is everywhere else. A forced cross-site top-level form POST here has
-// no cookie to check and no CORS preflight to block it.
-const COOKIE_SETTING_PATHS = new Set(['/api/v1/auth/login']);
-
 /**
- * Rejects a mutating request whose `Origin` names a site other than the one CORS already allows,
- * when the request either carries a session cookie or targets a route that sets one. A
- * Bearer-authenticated request to any other route carries no ambient credential a cross-site page
- * could ride on, so it is never in scope here — the guard, not this middleware, is the auth
- * boundary for those.
+ * Rejects any mutating request whose `Origin` header names a site other than the one CORS already
+ * allows — unconditionally, regardless of path and regardless of whether the request carries a
+ * session cookie.
+ *
+ * An earlier version scoped this check to requests carrying a session cookie, or targeting an
+ * exact-string `COOKIE_SETTING_PATHS` allowlist matched against `req.originalUrl`. Nest builds a
+ * bare `express()`, so `strict: false` and `caseSensitive: false` apply — measured on the
+ * installed express 5.2.1, `/api/v1/auth/login/`, `/api/v1/auth/LOGIN`, and
+ * `/API/V1/AUTH/LOGIN` all reach the login handler while matching nothing in that Set. A
+ * cross-site form POST to any of those variants planted an attacker's session in the victim's
+ * browser — the exact hole this middleware exists to close. Matching every mutating request
+ * deletes the whole bypass class: no path string has to stay in sync with the router, and no
+ * normalization can be got wrong.
+ *
+ * This does not break legitimate clients:
+ * - A non-browser client (curl, scripts, server-to-server) omits `Origin` and is unaffected —
+ *   see the fail-open branch below.
+ * - A legitimate browser client is same-origin, so its `Origin` matches and it passes.
+ * - A cross-origin browser client cannot read the response anyway under the configured CORS
+ *   policy, so refusing the request here costs it nothing it could act on.
+ * The previously-exempted case — a Bearer-authenticated request carrying a foreign `Origin` — was
+ * only ever reachable from a browser, where CORS already governs it.
  */
 @Injectable()
 export class CsrfOriginMiddleware implements NestMiddleware {
@@ -36,16 +35,6 @@ export class CsrfOriginMiddleware implements NestMiddleware {
 
   use(req: Request, _: Response, next: NextFunction): void {
     if (SAFE_METHODS.has(req.method)) {
-      next();
-      return;
-    }
-
-    const cookies = parseCookieHeader(req.headers.cookie);
-    const hasSessionCookie = AUTH_COOKIE_NAME in cookies || AUTH_COOKIE_NAME_SECURE in cookies;
-    const setsSessionCookie = COOKIE_SETTING_PATHS.has(req.originalUrl.split('?')[0]);
-    if (!hasSessionCookie && !setsSessionCookie) {
-      // Fail OPEN: a Bearer-only or unauthenticated client hitting a non-cookie-setting route is
-      // not a CSRF target — nothing here rides along ambiently the way a cookie does.
       next();
       return;
     }
@@ -60,9 +49,8 @@ export class CsrfOriginMiddleware implements NestMiddleware {
     }
 
     if (origin !== this.config.cors.origin) {
-      // Fail CLOSED: this is the only branch that can veto a request carrying a session cookie
-      // or targeting a route that creates one, so it has to actually refuse rather than
-      // warn-and-continue.
+      // Fail CLOSED: this is the only branch that can veto a mutating request, so it has to
+      // actually refuse rather than warn-and-continue.
       throw new CsrfOriginMismatchException(`Origin '${origin}' is not the configured origin`);
     }
 

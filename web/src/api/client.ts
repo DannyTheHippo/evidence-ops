@@ -90,8 +90,14 @@ export async function login(email: string, password: string): Promise<AuthToken>
 }
 
 export async function logout(): Promise<void> {
-  await request<void>('/auth/logout', { method: 'POST' });
-  clearSession();
+  // Client-side logout must not depend on the server's answer: a CSRF rejection, a 500, or a
+  // dropped connection must not leave the local session cache believing the user is still
+  // authenticated just because the request that says otherwise never arrived.
+  try {
+    await request<void>('/auth/logout', { method: 'POST' });
+  } finally {
+    clearSession();
+  }
 }
 
 export function getMe(): Promise<Me> {
@@ -195,7 +201,9 @@ export type Locator =
       headingPath: string[];
     }
   | { kind: 'xlsx-region'; extractorVersion: string; sheetName: string; range: string }
-  | { kind: 'xlsx-cell'; extractorVersion: string; sheetName: string; cell: string };
+  | { kind: 'xlsx-cell'; extractorVersion: string; sheetName: string; cell: string }
+  | { kind: 'text-block'; extractorVersion: string; blockIndex: number; headingPath: string[] }
+  | { kind: 'pptx-slide'; extractorVersion: string; slide: number };
 
 export interface Citation {
   docVersionId: string;

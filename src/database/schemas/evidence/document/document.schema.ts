@@ -3,9 +3,18 @@ import { HydratedDocument, Types, WithTimestamps } from 'mongoose';
 import { DEFAULT_TENANT_ID } from '../../../constants/tenant.constant';
 import { AuditableDocument } from '../../../global/auditable-document/auditable-document.schema';
 
-export type DocumentSourceKind = 'pdf' | 'docx' | 'xlsx';
+export type DocumentSourceKind = 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv' | 'tsv' | 'txt' | 'md';
 
-export const DOCUMENT_SOURCE_KINDS: readonly DocumentSourceKind[] = ['pdf', 'docx', 'xlsx'];
+export const DOCUMENT_SOURCE_KINDS: readonly DocumentSourceKind[] = [
+  'pdf',
+  'docx',
+  'xlsx',
+  'pptx',
+  'csv',
+  'tsv',
+  'txt',
+  'md',
+];
 
 export type DocumentDocument = HydratedDocument<WithTimestamps<Document>>;
 

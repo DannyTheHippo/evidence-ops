@@ -27,11 +27,15 @@ describe('Document schema', () => {
       expect(error?.errors.mimeType).toBeDefined();
     });
 
-    it('rejects a sourceKind outside pdf/docx/xlsx', () => {
+    it('rejects a sourceKind outside the eight supported kinds', () => {
+      // 'xls' rather than an arbitrary string: the legacy binary format this project deliberately
+      // does not support (see `resolveUploadKind`'s `AMBIGUOUS_UPLOAD_MIME_TYPES` comment), so this
+      // also documents that widening `DOCUMENT_SOURCE_KINDS` to eight kinds did not accidentally
+      // include it.
       const doc = new DocumentModel({
         title: 'Q3 Report',
-        sourceKind: 'csv',
-        mimeType: 'text/csv',
+        sourceKind: 'xls',
+        mimeType: 'application/vnd.ms-excel',
       });
 
       const error = doc.validateSync();

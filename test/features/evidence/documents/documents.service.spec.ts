@@ -5,7 +5,10 @@ import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { createHash } from 'node:crypto';
 import { Types } from 'mongoose';
-import { Conflict } from '../../../../src/database/schemas/evidence/conflict/conflict.schema';
+import {
+  Conflict,
+  MIN_CONFLICTING_FACTS,
+} from '../../../../src/database/schemas/evidence/conflict/conflict.schema';
 import { Document } from '../../../../src/database/schemas/evidence/document/document.schema';
 import { DocumentVersion } from '../../../../src/database/schemas/evidence/document-version/document-version.schema';
 import { EvidenceChunk } from '../../../../src/database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
@@ -16,6 +19,7 @@ import {
   DocumentNotFoundException,
   DocumentVersionNotFoundException,
   MissingFileException,
+  UnresolvableContentTypeException,
   UnsupportedContentTypeException,
 } from '../../../../src/features/evidence/documents/exceptions/documents.exception';
 import type { UploadedFileLike } from '../../../../src/features/evidence/documents/types/uploaded-file.type';
@@ -27,7 +31,10 @@ import {
   WORKFLOW_ENGINE,
   type WorkflowEngine,
 } from '../../../../src/providers/workflow-engine/workflow-engine.interface';
-import { SSE_HEARTBEAT_INTERVAL_MS } from '../../../../src/shared/constants/sse.constant';
+import {
+  SSE_HEARTBEAT_INTERVAL_MS,
+  SSE_STREAM_ERROR_MESSAGE,
+} from '../../../../src/shared/constants/sse.constant';
 import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
@@ -56,6 +63,7 @@ describe('DocumentsService', () => {
     signal: jest.fn(),
   } satisfies Record<keyof WorkflowEngine, jest.Mock>;
   const mockAuditService = { record: jest.fn() };
+  const mockLogger = getMockLogger();
 
   const documentId = new Types.ObjectId();
   const versionId = new Types.ObjectId();
@@ -104,7 +112,7 @@ describe('DocumentsService', () => {
         { provide: DOCUMENT_STORE, useValue: mockDocumentStore },
         { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
         { provide: AuditService, useValue: mockAuditService },
-        { provide: AppLogger, useValue: getMockLogger() },
+        { provide: AppLogger, useValue: mockLogger },
       ],
     }).compile();
 
@@ -121,10 +129,28 @@ describe('DocumentsService', () => {
     });
 
     it('should throw UnsupportedContentTypeException for a disallowed content type', async () => {
-      const file = buildFile({ mimetype: 'text/csv' });
+      const file = buildFile({ mimetype: 'image/png', originalname: 'comps.png' });
 
       await expect(service.upload(file, {})).rejects.toBeInstanceOf(
         UnsupportedContentTypeException,
+      );
+      expect(mockDocumentStore.put).not.toHaveBeenCalled();
+    });
+
+    it('should throw UnresolvableContentTypeException — a 400, not a 415 — for an ambiguous MIME type with a disallowed extension: the browser-lied .xls case', async () => {
+      const file = buildFile({ mimetype: 'application/vnd.ms-excel', originalname: 'legacy.xls' });
+
+      await expect(service.upload(file, {})).rejects.toBeInstanceOf(
+        UnresolvableContentTypeException,
+      );
+      expect(mockDocumentStore.put).not.toHaveBeenCalled();
+    });
+
+    it('should throw UnresolvableContentTypeException for an ambiguous MIME type with no usable extension at all', async () => {
+      const file = buildFile({ mimetype: 'application/octet-stream', originalname: 'archive.zip' });
+
+      await expect(service.upload(file, {})).rejects.toBeInstanceOf(
+        UnresolvableContentTypeException,
       );
       expect(mockDocumentStore.put).not.toHaveBeenCalled();
     });
@@ -197,6 +223,39 @@ describe('DocumentsService', () => {
         // through the now tenant-scoped `MongoApprovalChannel.getDecision`, which fails closed on a
         // mismatch — so a default here would deny every gated ingest for the wrong reason.
         tenantId: 'tenant-a',
+      });
+    });
+
+    it('should store the resolved canonical MIME, not the browser-reported one, for an ambiguous upload', async () => {
+      // Windows reports a .csv as this exact MIME — the load-bearing ambiguous case `resolveUploadKind`
+      // exists for (see `documents.constant.ts`). The document row and the stored bytes must both
+      // carry 'text/csv', never the raw 'application/vnd.ms-excel', or the parser registry's
+      // exact-match lookup (`ParserRegistry.resolve`) would have to learn about the browser's lie too.
+      const file = buildFile({
+        mimetype: 'application/vnd.ms-excel',
+        originalname: 'comps.csv',
+        buffer: Buffer.from('csv-bytes'),
+      });
+      const mockDocument = buildMockDocument({ sourceKind: 'csv', mimeType: 'text/csv' });
+      mockDocumentModel.create.mockResolvedValueOnce(mockDocument);
+      mockDocumentStore.put.mockResolvedValueOnce({
+        id: 'gridfs-id-csv',
+        content: file.buffer,
+        contentType: 'text/csv',
+        metadata: {},
+      });
+      const version = buildMockVersion();
+      mockDocumentVersionModel.create.mockResolvedValueOnce(version);
+
+      await service.upload(file, { title: 'Comps CSV' }, 'tenant-a');
+
+      expect(mockDocumentModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceKind: 'csv', mimeType: 'text/csv' }),
+      );
+      expect(mockDocumentStore.put).toHaveBeenCalledWith({
+        content: file.buffer,
+        contentType: 'text/csv',
+        metadata: { tenantId: 'tenant-a' },
       });
     });
 
@@ -642,13 +701,23 @@ describe('DocumentsService', () => {
           range: 'A1:B2',
         },
       });
+      const textBlockChunk = buildMockChunk({
+        _id: 'chunk-text-block',
+        locator: { kind: 'text-block', extractorVersion: 'v1', blockIndex: 3, headingPath: [] },
+      });
+      const pptxSlideChunk = buildMockChunk({
+        _id: 'chunk-pptx-slide',
+        locator: { kind: 'pptx-slide', extractorVersion: 'v1', slide: 4 },
+      });
       // Deliberately scrambled, and deliberately unsorted within the pdf-page pair (10 before 2) —
       // a naive string sort on the raw page number would place '10' before '2'.
       mockEvidenceChunkModel.find.mockResolvedValueOnce([
         xlsxRegionChunk,
         pdfChunkPage10,
+        textBlockChunk,
         docChunk,
         xlsxCellChunk,
+        pptxSlideChunk,
         pdfChunkPage2,
       ]);
 
@@ -658,11 +727,13 @@ describe('DocumentsService', () => {
         { documentVersionId: versionId, tenantId: 'tenant-a' },
         { embedding: 0 },
       );
-      expect(result.count).toBe(5);
+      expect(result.count).toBe(7);
       expect(result.docs.map((doc) => doc.id)).toEqual([
         'chunk-docx',
         'chunk-pdf-2',
         'chunk-pdf-10',
+        'chunk-pptx-slide',
+        'chunk-text-block',
         'chunk-xlsx-cell',
         'chunk-xlsx-region',
       ]);
@@ -724,11 +795,23 @@ describe('DocumentsService', () => {
       await service.remove(documentId.toString(), actorId, 'tenant-a');
 
       expect(mockConflictModel.updateMany).not.toHaveBeenCalled();
-      expect(mockExtractedFactModel.deleteMany).toHaveBeenCalledWith({
+      // Twice each — the first pass, and the post-version-deletion sweep (see the "re-runs the
+      // fact and chunk deletes" test below for what the sweep itself is for).
+      expect(mockExtractedFactModel.deleteMany).toHaveBeenCalledTimes(2);
+      expect(mockExtractedFactModel.deleteMany).toHaveBeenNthCalledWith(1, {
         documentVersionId: { $in: [] },
         tenantId: 'tenant-a',
       });
-      expect(mockEvidenceChunkModel.deleteMany).toHaveBeenCalledWith({
+      expect(mockExtractedFactModel.deleteMany).toHaveBeenNthCalledWith(2, {
+        documentVersionId: { $in: [] },
+        tenantId: 'tenant-a',
+      });
+      expect(mockEvidenceChunkModel.deleteMany).toHaveBeenCalledTimes(2);
+      expect(mockEvidenceChunkModel.deleteMany).toHaveBeenNthCalledWith(1, {
+        documentId,
+        tenantId: 'tenant-a',
+      });
+      expect(mockEvidenceChunkModel.deleteMany).toHaveBeenNthCalledWith(2, {
         documentId,
         tenantId: 'tenant-a',
       });
@@ -749,6 +832,33 @@ describe('DocumentsService', () => {
       });
     });
 
+    it('should re-run the fact and chunk deletes after the version rows are gone — a deliberate sweep against a concurrent ingest, not accidental duplication', async () => {
+      const mockDocument = buildMockDocument();
+      mockDocumentModel.findOne.mockResolvedValueOnce(mockDocument);
+      mockDocumentVersionModel.find.mockResolvedValueOnce([buildMockVersion()]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+
+      const callOrder: string[] = [];
+      mockExtractedFactModel.deleteMany.mockImplementation(() => {
+        callOrder.push('facts');
+        return Promise.resolve(undefined);
+      });
+      mockEvidenceChunkModel.deleteMany.mockImplementation(() => {
+        callOrder.push('chunks');
+        return Promise.resolve(undefined);
+      });
+      mockDocumentVersionModel.deleteMany.mockImplementation(() => {
+        callOrder.push('versions');
+        return Promise.resolve(undefined);
+      });
+
+      await service.remove(documentId.toString(), actorId, 'tenant-a');
+
+      // First pass runs before the version rows are deleted, the sweep runs after — a race that
+      // inserts new chunks/facts between the two only ever lands inside the sweep's window.
+      expect(callOrder).toEqual(['facts', 'chunks', 'versions', 'facts', 'chunks']);
+    });
+
     it('should delete the stored GridFS bytes for every version in the cascade', async () => {
       const mockDocument = buildMockDocument();
       mockDocumentModel.findOne.mockResolvedValueOnce(mockDocument);
@@ -764,7 +874,7 @@ describe('DocumentsService', () => {
       expect(mockDocumentStore.delete).toHaveBeenNthCalledWith(2, 'gridfs-id-b');
     });
 
-    it("should resolve open conflicts referencing the deleted facts as 'superseded', riding the {tenantId, status, factIds} index", async () => {
+    it("should $pull the deleted fact ids out of every open conflict's factIds, then resolve as 'superseded' only what that pull left short of MIN_CONFLICTING_FACTS", async () => {
       const mockDocument = buildMockDocument();
       mockDocumentModel.findOne.mockResolvedValueOnce(mockDocument);
       mockDocumentVersionModel.find.mockResolvedValueOnce([buildMockVersion()]);
@@ -773,24 +883,49 @@ describe('DocumentsService', () => {
 
       await service.remove(documentId.toString(), actorId, 'tenant-a');
 
-      expect(mockConflictModel.updateMany).toHaveBeenCalledTimes(1);
-      // Recast rather than `expect.any(Date)` inside an object literal — its `any`-typed return
-      // trips `no-unsafe-assignment`, same reasoning `ingestion.service.spec.ts`'s
-      // `getFindOneAndUpdateCall` documents for its own identical case.
-      const [filterArg, updateArg] = (
+      expect(mockConflictModel.updateMany).toHaveBeenCalledTimes(2);
+
+      // Call 1: pulls this document's fact ids out of every open conflict that referenced one —
+      // rides the `{tenantId, status, factIds}` compound index from migration 0006.
+      const [pullFilter, pullUpdate, pullOptions] = (
         mockConflictModel.updateMany as jest.Mock<
           Promise<unknown>,
-          [Record<string, unknown>, { status: string; resolution: Record<string, unknown> }]
+          [Record<string, unknown>, unknown, Record<string, unknown> | undefined]
         >
       ).mock.calls[0];
-      expect(filterArg).toEqual({
+      expect(pullFilter).toEqual({
         tenantId: 'tenant-a',
         status: 'open',
         factIds: { $in: [factId] },
       });
-      expect(updateArg.status).toBe('resolved');
-      expect(updateArg.resolution.outcome).toBe('superseded');
-      expect(updateArg.resolution.resolvedAt).toBeInstanceOf(Date);
+      expect(pullUpdate).toEqual([
+        { $set: { factIds: { $setDifference: ['$factIds', [factId]] } } },
+      ]);
+      // Asserted because a mocked model cannot: Mongoose 9 rejects an array update without
+      // `updatePipeline`, so omitting it 500s the real DELETE endpoint while every unit test here
+      // still passes. Caught by e2e once; pinned here so it cannot regress silently again.
+      expect(pullOptions).toEqual({ updatePipeline: true });
+
+      // Call 2: only a conflict the pull left with fewer than `MIN_CONFLICTING_FACTS` references
+      // is resolved-as-superseded — a conflict left with two or more surviving facts still matches
+      // `status: 'open'` and is untouched by this call's `$expr` predicate.
+      // Recast rather than `expect.any(Date)` inside an object literal — its `any`-typed return
+      // trips `no-unsafe-assignment`, same reasoning `ingestion.service.spec.ts`'s
+      // `getFindOneAndUpdateCall` documents for its own identical case.
+      const [flipFilter, flipUpdate] = (
+        mockConflictModel.updateMany as jest.Mock<
+          Promise<unknown>,
+          [Record<string, unknown>, { status: string; resolution: Record<string, unknown> }]
+        >
+      ).mock.calls[1];
+      expect(flipFilter).toEqual({
+        tenantId: 'tenant-a',
+        status: 'open',
+        $expr: { $lt: [{ $size: '$factIds' }, MIN_CONFLICTING_FACTS] },
+      });
+      expect(flipUpdate.status).toBe('resolved');
+      expect(flipUpdate.resolution.outcome).toBe('superseded');
+      expect(flipUpdate.resolution.resolvedAt).toBeInstanceOf(Date);
     });
 
     it('should skip conflict resolution when the document has no extracted facts', async () => {
@@ -894,7 +1029,7 @@ describe('DocumentsService', () => {
       subscription.unsubscribe();
     });
 
-    it('should emit a terminal error event and complete when the read fails, never re-throwing', async () => {
+    it('should emit a terminal error event carrying a fixed client-facing message, never the raw driver error, and log the real error server-side', async () => {
       mockDocumentModel.find.mockRejectedValueOnce(new Error('mongo unreachable'));
       const events: MessageEvent[] = [];
       let completed = false;
@@ -910,7 +1045,24 @@ describe('DocumentsService', () => {
       expect(completed).toBe(true);
       expect(events).toHaveLength(1);
       expect(events[0].type).toBe('error');
-      expect((events[0].data as { message: string }).message).toBe('mongo unreachable');
+      expect((events[0].data as { message: string }).message).toBe(SSE_STREAM_ERROR_MESSAGE);
+      expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('mongo unreachable'));
+    });
+
+    it('should stringify a non-Error rejection rather than reading a `.message` that does not exist', async () => {
+      // rxjs/Mongoose never guarantee the rejection is an `Error` instance — this covers the
+      // `String(error)` branch of `error instanceof Error ? error.message : String(error)`.
+      mockDocumentModel.find.mockRejectedValueOnce('a plain string rejection');
+      const events: MessageEvent[] = [];
+
+      service.streamList('tenant-a').subscribe((event) => events.push(event));
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(events[0].type).toBe('error');
+      expect((events[0].data as { message: string }).message).toBe(SSE_STREAM_ERROR_MESSAGE);
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.stringContaining('a plain string rejection'),
+      );
     });
   });
 });

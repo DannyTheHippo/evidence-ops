@@ -62,6 +62,10 @@ export class QaController {
   // status and streaming headers itself. No `@Header()` for Cache-Control/X-Accel-Buffering
   // either — `@nestjs/core`'s `SseStream` already sends both, unconditionally, on every SSE
   // response (see `WorkflowRunsController.streamRun`'s identical note for the source location).
+  // `@SkipThrottle()` exempts this route from the global throttler entirely — an unbounded,
+  // unthrottled, long-lived connection with an `ANSWER_STREAM_INTERVAL_MS` DB tick. Per-connection
+  // and per-tenant stream caps are deliberately not implemented yet; owned by the observability/ops
+  // phase, not this change.
   @Sse('answers/:id/events')
   @Version('1')
   @SkipThrottle()

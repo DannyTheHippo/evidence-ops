@@ -51,4 +51,32 @@ describe('formatLocator', () => {
 
     expect(formatLocator(locator)).toBe("XLSX sheet 'Rent Roll' cell B7");
   });
+
+  it('should format a text-block locator with a heading path', () => {
+    const locator: EvidenceLocator = {
+      kind: 'text-block',
+      blockIndex: 2,
+      headingPath: ['Overview'],
+      extractorVersion: 'v1',
+    };
+
+    expect(formatLocator(locator)).toBe('Text block 2 (Overview)');
+  });
+
+  it('should format a text-block locator with an empty heading path', () => {
+    const locator: EvidenceLocator = {
+      kind: 'text-block',
+      blockIndex: 0,
+      headingPath: [],
+      extractorVersion: 'v1',
+    };
+
+    expect(formatLocator(locator)).toBe('Text block 0 ()');
+  });
+
+  it('should format a pptx-slide locator', () => {
+    const locator: EvidenceLocator = { kind: 'pptx-slide', slide: 4, extractorVersion: 'v1' };
+
+    expect(formatLocator(locator)).toBe('PPTX slide 4');
+  });
 });

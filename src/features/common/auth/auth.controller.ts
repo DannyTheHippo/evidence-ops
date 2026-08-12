@@ -23,7 +23,7 @@ import {
   meApiExamples,
   registerApiExamples,
 } from './api-examples/auth.api-examples';
-import { AUTH_COOKIE_NAME, AUTH_COOKIE_NAME_SECURE } from './auth.constant';
+import { resolveSessionCookieName } from './auth.constant';
 import { AuthService } from './auth.service';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { LoginRequestDto } from './dtos/request/login.request.dto';
@@ -105,9 +105,11 @@ export class AuthController {
     return toResponseDto(MeResponseDto, await this.authService.me(user.userId));
   }
 
-  // `__Host-` requires Secure — same predicate, so the name and the flag can never disagree.
+  // `__Host-` requires Secure — same predicate, so the name and the flag can never disagree. The
+  // guard resolves the same name via the same function, so the cookie this controller sets and
+  // the cookie the guard will accept can never diverge.
   private cookieName(): string {
-    return isProdLike(this.config.app.env) ? AUTH_COOKIE_NAME_SECURE : AUTH_COOKIE_NAME;
+    return resolveSessionCookieName(this.config.app.env);
   }
 
   private cookieOptions(maxAge: number): CookieOptions {

@@ -29,6 +29,17 @@ const locatorFixtures: Record<EvidenceLocator['kind'], EvidenceLocator> = {
     sheetName: 'Q3 Revenue',
     cell: 'B7',
   },
+  'text-block': {
+    kind: 'text-block',
+    extractorVersion: 'text-extractor@1.0.0',
+    blockIndex: 2,
+    headingPath: ['Overview'],
+  },
+  'pptx-slide': {
+    kind: 'pptx-slide',
+    extractorVersion: 'pptx-extractor@1.0.0',
+    slide: 4,
+  },
 };
 
 const buildChunkInput = (locator: EvidenceLocator, id = `chunk-${locator.kind}`) => ({

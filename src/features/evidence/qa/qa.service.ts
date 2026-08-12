@@ -23,7 +23,10 @@ import type {
 } from '../../../database/schemas/evidence/answer/answer.schema';
 import type { WorkflowEngine } from '../../../providers/workflow-engine/workflow-engine.interface';
 import { WORKFLOW_ENGINE } from '../../../providers/workflow-engine/workflow-engine.interface';
-import { SSE_HEARTBEAT_INTERVAL_MS } from '../../../shared/constants/sse.constant';
+import {
+  SSE_HEARTBEAT_INTERVAL_MS,
+  SSE_STREAM_ERROR_MESSAGE,
+} from '../../../shared/constants/sse.constant';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
@@ -209,10 +212,15 @@ export class QaService {
       // FAIL OPEN TO POLLING: an unknown id, a Mongo hiccup, or any other read failure becomes a
       // terminal `error` event rather than a 5xx tearing down the connection — the SPA's retained
       // GET /answers/:id polling path is the fallback, and it must still be able to run after this
-      // stream ends rather than race a half-closed connection.
-      catchError((error) =>
-        of<MessageEvent>({ type: 'error', data: { message: (error as Error).message } }),
-      ),
+      // stream ends rather than race a half-closed connection. The event carries a fixed
+      // client-facing message, not `(error as Error).message` — this `catchError` sits outside
+      // `GlobalExceptionFilter`, so the raw message would otherwise leak internals to the browser
+      // (see `SSE_STREAM_ERROR_MESSAGE`'s doc comment); the real error is logged here instead.
+      catchError((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(`streamAnswer failed for answer '${id}': ${message}`);
+        return of<MessageEvent>({ type: 'error', data: { message: SSE_STREAM_ERROR_MESSAGE } });
+      }),
     );
   }
 

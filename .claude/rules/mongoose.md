@@ -24,6 +24,12 @@ Migrations, seeds, and background jobs run with no ALS store at all. That is a d
 
 `tenantScopePlugin` reads the same ALS store, at the same lazy-query moment, and shares this exact caveat — but not its consequence. A missed audit stamp on `auditablePlugin` is a gap (`createdBy`/`updatedBy` stay blank). A missed tenant predicate on `tenantScopePlugin` is a leak (the query runs against every tenant, not none).
 
+## Aggregation-pipeline updates need an explicit opt-in
+
+Mongoose 9 rejects an array update — `updateMany(filter, [{ $set: … }])` — with `Cannot pass an array to query updates unless the 'updatePipeline' option is set`. Pass `{ updatePipeline: true }` as the third argument whenever the update is a pipeline (`$setDifference`, `$cond`, any `$expr`-style computation over the document's own fields).
+
+This one bites twice over. It is a **runtime** throw, not a type error, so `tsc` is green; and every unit spec here mocks the model, so a `jest.fn()` accepts the two-argument call and passes. The failure surfaces only as a 500 from the real endpoint under e2e. When you write a pipeline update, **assert the options argument in the unit spec** (`DocumentsService.remove`'s conflict pull does) — otherwise the mock is agreeing with you rather than checking you.
+
 ## Migrations
 
 - Tool: `migrate-mongo`, configured in `migrate-mongo-config.js`, run through `tsx`. Commands: `npm run migrate:up` / `npm run migrate:down`.

@@ -40,6 +40,19 @@ const xlsxCellLocator: Locator = {
   cell: 'B7',
 };
 
+const textBlockLocator: Locator = {
+  kind: 'text-block',
+  extractorVersion: 'text-extractor@1.0.0',
+  blockIndex: 2,
+  headingPath: [],
+};
+
+const pptxSlideLocator: Locator = {
+  kind: 'pptx-slide',
+  extractorVersion: 'pptx-extractor@1.0.0',
+  slide: 4,
+};
+
 const buildCitation = (locator: Locator) => ({
   docVersionId: 'doc-version-1',
   sha256: SHA256_FIXTURE,
@@ -54,6 +67,8 @@ describe('locatorSchema', () => {
     ['docx-paragraph', docxParagraphLocator],
     ['xlsx-region', xlsxRegionLocator],
     ['xlsx-cell', xlsxCellLocator],
+    ['text-block', textBlockLocator],
+    ['pptx-slide', pptxSlideLocator],
   ] as const)('accepts a valid %s locator', (_kind, locator) => {
     expect(locatorSchema.safeParse(locator).success).toBe(true);
   });

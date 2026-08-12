@@ -60,6 +60,10 @@ export class WorkflowRunsController {
   // response unconditionally (see `@nestjs/core`'s `sse-stream.js`), so no `@Header()` decorator is
   // needed to get those two headers onto the wire — one would be silently overridden anyway, since
   // Nest applies its own values after any caller-set ones.
+  // `@SkipThrottle()` exempts this route from the global throttler entirely — an unbounded,
+  // unthrottled, long-lived connection with a `WORKFLOW_RUN_STREAM_INTERVAL_MS` DB tick.
+  // Per-connection and per-tenant stream caps are deliberately not implemented yet; owned by the
+  // observability/ops phase, not this change.
   @Sse(':id/events')
   @Version('1')
   @SkipThrottle()

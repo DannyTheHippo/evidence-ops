@@ -14,6 +14,7 @@ import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
 import {
   Conflict,
   ConflictDocument,
+  MIN_CONFLICTING_FACTS,
 } from '../../../database/schemas/evidence/conflict/conflict.schema';
 import type { DocumentSourceKind } from '../../../database/schemas/evidence/document/document.schema';
 import {
@@ -45,13 +46,22 @@ import {
   DEFAULT_PAGINATION_LIMIT,
   DEFAULT_PAGINATION_SKIP,
 } from '../../../shared/constants/pagination-defaults.constant';
-import { SSE_HEARTBEAT_INTERVAL_MS } from '../../../shared/constants/sse.constant';
+import {
+  SSE_HEARTBEAT_INTERVAL_MS,
+  SSE_STREAM_ERROR_MESSAGE,
+} from '../../../shared/constants/sse.constant';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import type { IngestDocumentVersionInput } from '../../../workflows/types';
-import { DOCUMENTS_STREAM_INTERVAL_MS, MIME_TYPE_TO_SOURCE_KIND } from './documents.constant';
+import {
+  AMBIGUOUS_UPLOAD_MIME_TYPES,
+  DOCUMENTS_STREAM_INTERVAL_MS,
+  MIME_TYPE_TO_SOURCE_KIND,
+  resolveUploadKind,
+  SOURCE_KIND_TO_MIME_TYPE,
+} from './documents.constant';
 import type { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import { UploadDocumentRequestDto } from './dtos/request/upload-document.request.dto';
 import { DocumentResponseDto } from './dtos/response/document.response.dto';
@@ -62,6 +72,7 @@ import {
   DocumentNotFoundException,
   DocumentVersionNotFoundException,
   MissingFileException,
+  UnresolvableContentTypeException,
   UnsupportedContentTypeException,
 } from './exceptions/documents.exception';
 import { sanitizeDownloadFilename } from './sanitize-download-filename.util';
@@ -139,20 +150,34 @@ export class DocumentsService {
       throw new MissingFileException('A file is required');
     }
 
-    // Input gate, fails CLOSED: anything outside the allowlist is rejected before any I/O
-    // (hashing, storage write) happens, regardless of new-document vs new-version.
-    const sourceKind = MIME_TYPE_TO_SOURCE_KIND[file.mimetype];
+    // Input gate, fails CLOSED before any I/O (hashing, storage write), regardless of
+    // new-document vs new-version. Two distinct rejections, both `resolveUploadKind` returning
+    // `undefined`, get two distinct statuses: a MIME `resolveUploadKind` doesn't recognize at all
+    // is a 415 (the media type itself is the problem); a MIME it recognizes as ambiguous
+    // (`AMBIGUOUS_UPLOAD_MIME_TYPES`) but couldn't resolve via the extension allowlist — e.g.
+    // `application/vnd.ms-excel` + `.xls`, the Windows-.csv-lookalike case — is a 400 (the
+    // filename/content-type combination itself is malformed, not merely unsupported).
+    const sourceKind = resolveUploadKind(file.mimetype, file.originalname);
     if (!sourceKind) {
+      if (AMBIGUOUS_UPLOAD_MIME_TYPES.has(file.mimetype.toLowerCase())) {
+        throw new UnresolvableContentTypeException(
+          `Could not resolve a document type for '${file.originalname}' with ambiguous content type '${file.mimetype}'`,
+        );
+      }
       throw new UnsupportedContentTypeException(
-        `Unsupported content type '${file.mimetype}'; expected one of pdf, docx, xlsx`,
+        `Unsupported content type '${file.mimetype}' for file '${file.originalname}'`,
       );
     }
+    // The canonical MIME for the resolved kind, not the browser's raw `file.mimetype` — this is
+    // what gets persisted and stored, so the parser registry's exact-match lookup
+    // (`ParserRegistry.resolve`) never has to learn about a browser's lie either.
+    const canonicalMimeType = SOURCE_KIND_TO_MIME_TYPE[sourceKind];
 
     const sha256 = createHash('sha256').update(file.buffer).digest('hex');
 
     const { document, currentVersion, isNewVersion } = dto.documentId
-      ? await this.addVersion(dto.documentId, sha256, file, tenantId)
-      : await this.createDocument(dto, sourceKind, sha256, file, tenantId);
+      ? await this.addVersion(dto.documentId, sha256, file, canonicalMimeType, tenantId)
+      : await this.createDocument(dto, sourceKind, sha256, file, canonicalMimeType, tenantId);
 
     // Fire-and-forget, mirroring `QaService.startQuestion`: a slow parse/embed must never block
     // the upload response, which is the entire point of running ingestion as a durable workflow
@@ -257,10 +282,14 @@ export class DocumentsService {
     return merge(documents$, heartbeat$).pipe(
       map((event): MessageEvent => event),
       // FAIL OPEN TO POLLING — see `QaService.streamAnswer`'s identical reasoning: the SPA's
-      // retained `listDocuments()` polling is the fallback.
-      catchError((error) =>
-        of<MessageEvent>({ type: 'error', data: { message: (error as Error).message } }),
-      ),
+      // retained `listDocuments()` polling is the fallback. The event carries a fixed client-facing
+      // message, not `(error as Error).message` — see `SSE_STREAM_ERROR_MESSAGE`'s doc comment; the
+      // real error is logged here instead.
+      catchError((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error(`streamList failed for tenant '${tenantId}': ${message}`);
+        return of<MessageEvent>({ type: 'error', data: { message: SSE_STREAM_ERROR_MESSAGE } });
+      }),
     );
   }
 
@@ -443,14 +472,38 @@ export class DocumentsService {
     );
     const factIds = facts.map((fact) => fact._id);
 
-    // Only conflicts whose disagreement actually involved one of this document's facts are
-    // touched — resolved-as-superseded, never deleted, so a reviewer who later opens the
-    // conflicts list still sees why it stopped being open. Rides the `conflicts_tenantId_status_
+    // A conflict's `factIds` is unbounded and grouping is by `(entity, metric, period)`, so three
+    // documents disagreeing about one cap rate produce ONE conflict with three facts — resolving
+    // the whole conflict just because one of its facts got deleted would silently drop a
+    // disagreement that is still live between the surviving facts. Instead: pull this document's
+    // fact ids out of `factIds` first, then only resolve a conflict the pull left with fewer than
+    // `MIN_CONFLICTING_FACTS` remaining references. Aggregation-pipeline update (`$setDifference`)
+    // because a plain `$pull` cannot subtract a fixed array from `factIds` in one query the way
+    // `$setDifference` can. Both stay tenant-scoped and rides the `conflicts_tenantId_status_
     // factIds` compound index from migration 0006 (same `{ tenantId, status, factIds }` shape
     // `findConflictedFactGroupsForChunks` already queries).
     if (factIds.length > 0) {
+      // `updatePipeline: true` is REQUIRED, not decorative: Mongoose 9 refuses an array update
+      // without it (`Cannot pass an array to query updates unless the 'updatePipeline' option is
+      // set`), which surfaces as a 500 on DELETE, not a type error. A mocked model accepts the
+      // two-argument call happily, so the unit spec below asserts this third argument explicitly —
+      // that assertion is the only thing standing between a passing suite and a broken endpoint.
       await this.conflictModel.updateMany(
         { tenantId, status: 'open', factIds: { $in: factIds } },
+        [{ $set: { factIds: { $setDifference: ['$factIds', factIds] } } }],
+        { updatePipeline: true },
+      );
+
+      // Resolved-as-superseded, never deleted, so a reviewer who later opens the conflicts list
+      // still sees why it stopped being open. A conflict the pull above left with
+      // `>= MIN_CONFLICTING_FACTS` references stays `open` — two or more facts still disagree, so
+      // there is still something for a reviewer to decide.
+      await this.conflictModel.updateMany(
+        {
+          tenantId,
+          status: 'open',
+          $expr: { $lt: [{ $size: '$factIds' }, MIN_CONFLICTING_FACTS] },
+        },
         { status: 'resolved', resolution: { outcome: 'superseded', resolvedAt: new Date() } },
       );
     }
@@ -469,6 +522,20 @@ export class DocumentsService {
     }
 
     await this.documentVersionModel.deleteMany({ documentId: document._id, tenantId });
+
+    // Deliberate second pass, not accidental duplication — `remove()` takes no lease and does not
+    // cancel an in-flight ingest workflow, so `IngestionService.ingestVersion`'s `insertMany` can
+    // land new chunks (and `FactsService`'s extraction can land new facts) for this same
+    // `documentVersionId` between the first deleteMany above and here. Re-running both deletes
+    // after the version rows are gone closes that race window: anything a concurrent writer
+    // inserted is still `tenantId`+`documentId`/`documentVersionId`-scoped and gets swept too, so a
+    // deleted document's evidence never stays retrievable by the QA `$search`/`$vectorSearch` path.
+    await this.extractedFactModel.deleteMany({
+      documentVersionId: { $in: versionIds },
+      tenantId,
+    });
+    await this.evidenceChunkModel.deleteMany({ documentId: document._id, tenantId });
+
     await this.documentModel.deleteOne({ _id: document._id, tenantId });
 
     await this.auditService.record({
@@ -485,6 +552,7 @@ export class DocumentsService {
     documentId: string,
     sha256: string,
     file: UploadedFileLike,
+    canonicalMimeType: string,
     tenantId: string,
   ): Promise<UploadResult> {
     if (!Types.ObjectId.isValid(documentId)) {
@@ -520,9 +588,12 @@ export class DocumentsService {
     // GridFS is a driver-level bucket, not a Mongoose model, so the tenant-scope plugin
     // structurally cannot reach it — the storage key is only discoverable through the
     // now-scoped `document_versions` row, and this metadata is the defence-in-depth marker.
+    // `canonicalMimeType`, not `file.mimetype`: the store's content type is what
+    // `ParserRegistry.resolve` exact-matches against downstream, so it must already be
+    // disambiguated the same way `resolveUploadKind` disambiguated it for `sourceKind`.
     const stored = await this.documentStore.put({
       content: file.buffer,
-      contentType: file.mimetype,
+      contentType: canonicalMimeType,
       metadata: { tenantId },
     });
 
@@ -546,6 +617,7 @@ export class DocumentsService {
     sourceKind: DocumentSourceKind,
     sha256: string,
     file: UploadedFileLike,
+    canonicalMimeType: string,
     tenantId: string,
   ): Promise<UploadResult> {
     // Guards the type only: `UploadDocumentRequestDto.title` is required by `@ValidateIf`
@@ -555,17 +627,20 @@ export class DocumentsService {
       throw new BadRequestException('title is required when creating a new document');
     }
 
+    // `canonicalMimeType`, not `file.mimetype` — see the identical `contentType` comment on the
+    // `documentStore.put` call below; the document row and the stored bytes must agree on the
+    // disambiguated MIME, not the browser's raw (possibly ambiguous) one.
     const document = await this.documentModel.create({
       title: dto.title,
       sourceKind,
-      mimeType: file.mimetype,
+      mimeType: canonicalMimeType,
       tenantId,
     });
 
     // See the identical GridFS metadata comment in `addVersion` above.
     const stored = await this.documentStore.put({
       content: file.buffer,
-      contentType: file.mimetype,
+      contentType: canonicalMimeType,
       metadata: { tenantId },
     });
 
@@ -652,6 +727,10 @@ export class DocumentsService {
         return `${locator.kind}:${locator.range}`;
       case 'xlsx-cell':
         return `${locator.kind}:${locator.cell}`;
+      case 'text-block':
+        return `${locator.kind}:${locator.blockIndex.toString().padStart(10, '0')}`;
+      case 'pptx-slide':
+        return `${locator.kind}:${locator.slide.toString().padStart(10, '0')}`;
     }
   }
 }

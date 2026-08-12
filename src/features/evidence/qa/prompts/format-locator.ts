@@ -18,5 +18,9 @@ export function formatLocator(locator: EvidenceLocator): string {
       return `XLSX sheet '${locator.sheetName}' range ${locator.range}`;
     case 'xlsx-cell':
       return `XLSX sheet '${locator.sheetName}' cell ${locator.cell}`;
+    case 'text-block':
+      return `Text block ${locator.blockIndex} (${locator.headingPath.join(' > ')})`;
+    case 'pptx-slide':
+      return `PPTX slide ${locator.slide}`;
   }
 }
