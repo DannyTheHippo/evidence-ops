@@ -682,7 +682,10 @@ describe('IngestionService', () => {
     // `ingestionAttemptToken` — see the lease-race test above for why an id-scoped rollback would
     // be unsafe now that `_id` is deterministic).
     expect(mockEvidenceChunkModel.deleteMany).toHaveBeenCalledTimes(2);
-    expect(mockDocumentVersionModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    // Called twice on `documentVersionModel` too: the claim, then `recordIngestionFailure`'s
+    // `finalizeFailure` — a Mongo write failure is exactly the class of non-`BaseException` error
+    // that used to escape `ingestVersion` leaving the version stuck at `'pending'`.
+    expect(mockDocumentVersionModel.findOneAndUpdate).toHaveBeenCalledTimes(2);
     const [, claimUpdate] = getFindOneAndUpdateCall(1);
     const leaseToken = (claimUpdate.$set as Record<string, unknown>).ingestionLeaseToken;
 
@@ -695,9 +698,17 @@ describe('IngestionService', () => {
       documentVersionId: versionId,
       ingestionAttemptToken: leaseToken,
     });
+
+    const [failureFilter, failureUpdate] = getFindOneAndUpdateCall(2);
+    expect(failureFilter._id).toBe(versionId);
+    expect(failureFilter.ingestionLeaseToken).toBe(leaseToken);
+    expect(failureUpdate).toEqual({
+      $set: { ingestionStatus: 'failed', ingestionFailureReason: writeFailure.message },
+      $unset: { ingestionLeaseToken: '' },
+    });
   });
 
-  describe('parse-failure recording', () => {
+  describe('ingestion failure recording', () => {
     const buildFailingParser = (error: unknown): DocumentParser => ({
       supports: [PDF_MIME],
       parse: jest.fn().mockRejectedValue(error),
@@ -728,7 +739,42 @@ describe('IngestionService', () => {
       });
     });
 
-    it('should rethrow without recording a failure when the parser throws something other than a BaseException', async () => {
+    // Regression: `ingestVersion` used to record a failure only for a `BaseException` thrown by
+    // the parser — every other throw (a plain `Error`, a `RangeError`, an embedding-provider
+    // failure) escaped unrecorded, leaving the version at `ingestionStatus: 'pending'` with a live
+    // lease token forever, because the sha256 dedupe means a byte-identical re-upload never starts
+    // a fresh attempt.
+    it.each([
+      ['a plain Error', new Error('unexpected parser crash')],
+      ['a RangeError', new RangeError('Invalid array length')],
+    ])(
+      'should record a failed status and reason, and still rethrow the original error, when the parser throws %s',
+      async (_description, genericFailure) => {
+        const stored = await fakeDocumentStore.put({
+          content: Buffer.from('%PDF-corrupt'),
+          contentType: PDF_MIME,
+          metadata: {},
+        });
+        const version = buildVersion({ storageKey: stored.id });
+        mockDocumentVersionModel.findById.mockResolvedValueOnce(version);
+        mockParserRegistry.resolve.mockReturnValueOnce(buildFailingParser(genericFailure));
+
+        await expect(service.ingestVersion(versionId.toString())).rejects.toBe(genericFailure);
+
+        expect(mockEvidenceChunkModel.insertMany).not.toHaveBeenCalled();
+        const [failureFilter, failureUpdate] = getFindOneAndUpdateCall(2);
+        expect(failureFilter._id).toBe(versionId);
+        expect(failureFilter.ingestionLeaseToken).toBeInstanceOf(Types.ObjectId);
+        expect(failureUpdate).toEqual({
+          $set: { ingestionStatus: 'failed', ingestionFailureReason: genericFailure.message },
+          $unset: { ingestionLeaseToken: '' },
+        });
+      },
+    );
+
+    it('should log a warning naming the swallowed error but still rethrow the original error when finalizeFailure itself throws', async () => {
+      // Covers `recordIngestionFailure`'s FAIL OPEN direction: bookkeeping around a failure must
+      // never mask the failure itself, even when the bookkeeping write is what breaks.
       const stored = await fakeDocumentStore.put({
         content: Buffer.from('%PDF-corrupt'),
         contentType: PDF_MIME,
@@ -736,13 +782,17 @@ describe('IngestionService', () => {
       });
       const version = buildVersion({ storageKey: stored.id });
       mockDocumentVersionModel.findById.mockResolvedValueOnce(version);
+      mockDocumentVersionModel.findOneAndUpdate
+        .mockResolvedValueOnce(version) // claim succeeds
+        .mockRejectedValueOnce(new Error('Mongo connection reset')); // failure-recording write itself throws
       const genericFailure = new Error('unexpected parser crash');
       mockParserRegistry.resolve.mockReturnValueOnce(buildFailingParser(genericFailure));
 
       await expect(service.ingestVersion(versionId.toString())).rejects.toBe(genericFailure);
 
-      // Only the claim CAS ran — a non-`BaseException` failure never reaches `finalizeFailure`.
-      expect(mockDocumentVersionModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('failed to record ingestion failure: Mongo connection reset'),
+      );
     });
 
     it('should log a debug message but still rethrow the original parse error when a newer attempt claims the lease before the failure write finalizes', async () => {
@@ -762,7 +812,7 @@ describe('IngestionService', () => {
       await expect(service.ingestVersion(versionId.toString())).rejects.toBe(parseFailure);
 
       expect(mockLogger.debug).toHaveBeenCalledWith(
-        expect.stringContaining('parse-failure recording superseded by a newer attempt'),
+        expect.stringContaining('failure recording superseded by a newer attempt'),
       );
     });
   });

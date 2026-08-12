@@ -184,6 +184,28 @@ describe('DocxParser', () => {
     });
   });
 
+  describe('parse — heading style edge cases', () => {
+    it('should parse a paragraph styled Heading0 as a plain paragraph rather than throwing', async () => {
+      // Regression: `Heading0` matches `HEADING_STYLE_PATTERN` and yields `level = 0`, which used
+      // to feed `headingTrail.length = Math.min(headingTrail.length, level - 1)` — `Math.min(n,
+      // -1)` is `-1`, and assigning a negative `.length` throws a native `RangeError`.
+      const zip = new JSZip();
+      zip.file(
+        'word/document.xml',
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+          '<w:body><w:p><w:pPr><w:pStyle w:val="Heading0"/></w:pPr>' +
+          '<w:r><w:t>Not a real heading</w:t></w:r></w:p></w:body></w:document>',
+      );
+      const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+
+      const result = await parser.parse(buffer);
+
+      expect(result.elements).toHaveLength(1);
+      expect(result.elements[0].text).toBe('Not a real heading');
+      expect(result.elements[0].headingPath).toEqual([]);
+    });
+  });
+
   describe('parse — malformed input', () => {
     it('should reject an archive missing word/document.xml', async () => {
       const zip = new JSZip();

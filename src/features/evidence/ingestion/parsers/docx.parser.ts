@@ -130,9 +130,13 @@ export class DocxParser implements DocumentParser {
       const text = collectParagraphText(paragraph);
       const style = getParagraphStyle(paragraph);
       const headingLevel = style ? HEADING_STYLE_PATTERN.exec(style) : null;
+      const level = headingLevel ? Number(headingLevel[1]) : null;
 
-      if (headingLevel) {
-        const level = Number(headingLevel[1]);
+      // A style name of `Heading0` matches the pattern but names no real outline level (Word's
+      // own levels start at 1); treating it as a heading would collapse `headingTrail.length` to
+      // a negative number below. Falling through to the plain-paragraph branch keeps the trail
+      // untouched instead.
+      if (level !== null && level >= 1) {
         headingTrail.length = Math.min(headingTrail.length, level - 1);
         headingTrail.push(sanitizeEvidenceText(text));
       }
