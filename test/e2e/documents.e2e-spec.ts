@@ -35,6 +35,7 @@ import { FakeWorkflowEngine } from '../../src/providers/workflow-engine/fake-wor
 import { WORKFLOW_ENGINE } from '../../src/providers/workflow-engine/workflow-engine.interface';
 import { UserRole } from '../../src/shared/enums/user-role.enum';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
+import { readSseEvent } from '../utils/read-sse-event';
 
 const FIXTURES = path.join(__dirname, '../../fixtures/data-room');
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -252,6 +253,34 @@ describe('Documents (e2e)', () => {
     expect(response.status).toBe(200);
     expect(body.count).toBeGreaterThan(0);
     expect(body.docs.length).toBeGreaterThan(0);
+  });
+
+  describe('GET /documents/events', () => {
+    it('rejects an unauthenticated request', async () => {
+      const response = await request(getTestServer(app)).get('/api/v1/documents/events');
+
+      expect(response.status).toBe(401);
+    });
+
+    // Bounded read: `readSseEvent` destroys the connection itself the moment the first
+    // `documents` frame arrives, BEFORE its promise resolves — this stream never ends on its own
+    // (no terminal state, see `DocumentsService.streamList`'s doc comment), so this test never
+    // waits for it to.
+    it('streams the same list shape the polled GET returns, with SSE headers', async () => {
+      const polled = await request(getTestServer(app))
+        .get('/api/v1/documents')
+        .set('Authorization', `Bearer ${token}`);
+
+      const frame = await readSseEvent(app, '/api/v1/documents/events', 'documents', {
+        Authorization: `Bearer ${token}`,
+      });
+
+      expect(frame.statusCode).toBe(200);
+      expect(frame.headers['content-type']).toContain('text/event-stream');
+      expect(frame.headers['cache-control']).toContain('no-cache');
+      expect(frame.headers['x-accel-buffering']).toBe('no');
+      expect(frame.data).toEqual(polled.body);
+    });
   });
 
   describe('GET /documents/versions/:versionId/content', () => {

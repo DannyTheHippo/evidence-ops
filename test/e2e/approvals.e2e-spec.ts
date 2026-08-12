@@ -29,6 +29,7 @@ import { FakeWorkflowEngine } from '../../src/providers/workflow-engine/fake-wor
 import { WORKFLOW_ENGINE } from '../../src/providers/workflow-engine/workflow-engine.interface';
 import { UserRole } from '../../src/shared/enums/user-role.enum';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
+import { readSseEvent } from '../utils/read-sse-event';
 
 interface ApprovalBody {
   id: string;
@@ -446,6 +447,39 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
 
       expect(response.status).toBe(200);
       expect(body.status).toBe('running');
+    });
+  });
+
+  describe('GET /workflow-runs/:id/events', () => {
+    // Bounded read: `readSseEvent` destroys the connection itself the moment the first matching
+    // frame arrives, BEFORE its promise resolves — this test never waits for the stream to end
+    // naturally (`streamRun` only ends once status reaches a terminal value, which a `running`
+    // row never does on its own). Waits specifically for the `run` frame, not "whatever arrives
+    // first": `run$` and `approvals$` tick on independent timers that both fire at t=0, so which
+    // one's frame lands first on the wire is not guaranteed — `readSseEvent` reads past an
+    // `approvals` frame if it happens to arrive first, so this stays deterministic either way.
+    it('streams the same run shape the polled GET returns, with SSE headers', async () => {
+      const run = await workflowRunModel.create({
+        workflowId: 'unregistered-workflow-id',
+        status: 'running',
+      });
+
+      const polled = await request(getTestServer(app))
+        .get(`/api/v1/workflow-runs/${run._id.toString()}`)
+        .set('Authorization', `Bearer ${token}`);
+
+      const frame = await readSseEvent(
+        app,
+        `/api/v1/workflow-runs/${run._id.toString()}/events`,
+        'run',
+        { Authorization: `Bearer ${token}` },
+      );
+
+      expect(frame.statusCode).toBe(200);
+      expect(frame.headers['content-type']).toContain('text/event-stream');
+      expect(frame.headers['cache-control']).toContain('no-cache');
+      expect(frame.headers['x-accel-buffering']).toBe('no');
+      expect(frame.data).toEqual(polled.body);
     });
   });
 

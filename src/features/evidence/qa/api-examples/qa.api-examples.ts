@@ -76,4 +76,12 @@ export const qaApiExamples: Record<string, ApiResponseOptions> = {
       },
     },
   },
+  answerStream: {
+    status: HttpStatus.OK,
+    description:
+      'text/event-stream. Polls every 1.5s until runStatus reaches a terminal state, emitting the ' +
+      'final state before closing. `answer` events carry the exact shape GET /answers/:id returns; ' +
+      'a `heartbeat` event fires every 15s; a terminal `error` event means the client should fall ' +
+      'back to polling GET /answers/:id.',
+  },
 };

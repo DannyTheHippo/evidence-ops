@@ -1,6 +1,21 @@
 import { Inject, Injectable } from '@nestjs/common';
+import type { MessageEvent } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import type { Observable } from 'rxjs';
+import {
+  catchError,
+  concat,
+  concatMap,
+  defer,
+  distinctUntilChanged,
+  ignoreElements,
+  map,
+  merge,
+  of,
+  takeWhile,
+  timer,
+} from 'rxjs';
 import { Answer, AnswerDocument } from '../../../database/schemas/evidence/answer/answer.schema';
 import type {
   AnswerRunStatus,
@@ -8,11 +23,15 @@ import type {
 } from '../../../database/schemas/evidence/answer/answer.schema';
 import type { WorkflowEngine } from '../../../providers/workflow-engine/workflow-engine.interface';
 import { WORKFLOW_ENGINE } from '../../../providers/workflow-engine/workflow-engine.interface';
+import { SSE_HEARTBEAT_INTERVAL_MS } from '../../../shared/constants/sse.constant';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
+import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import type { AnswerQuestionInput } from '../../../workflows/types';
 import type { AnswerContract, Citation } from './contracts/answer.contract';
+import { AnswerResponseDto } from './dtos/response/answer.response.dto';
 import { AnswerNotFoundException } from './exceptions/qa.exception';
+import { ANSWER_STREAM_INTERVAL_MS } from './qa.constant';
 
 export interface StartQuestionInput {
   readonly questionText: string;
@@ -45,6 +64,17 @@ export interface AnswerEnvelope {
  * `src/workflows/**` for anything but types.
  */
 const ANSWER_QUESTION_WORKFLOW_TYPE = 'answerQuestion';
+
+// `AnswerContract`'s outcome is what a *completed* run reports; runStatus is the coarser workflow
+// lifecycle `streamAnswer`'s terminal check actually gates on — see `Answer.schema.ts`'s
+// pre('validate') hook for why the two axes are kept separate.
+const isTerminalAnswerRunStatus = (status: AnswerRunStatus): boolean =>
+  status === 'completed' || status === 'failed';
+
+// Internal to `streamAnswer` only — `heartbeat`'s payload is always `{}`, so `Record<string,
+// never>` documents that at the type level rather than widening to `object`.
+type AnswerStreamEvent =
+  { type: 'answer'; data: AnswerResponseDto } | { type: 'heartbeat'; data: Record<string, never> };
 
 @Injectable()
 export class QaService {
@@ -93,6 +123,26 @@ export class QaService {
   }
 
   async getAnswerById(id: string, actorId: string, tenantId: string): Promise<AnswerEnvelope> {
+    const answer = await this.peekAnswer(id, tenantId);
+
+    await this.auditService.record({
+      action: 'qa.answer.viewed',
+      actorId,
+      subject: { entityType: 'Answer', entityId: answer.id },
+      tenantId,
+    });
+
+    return answer;
+  }
+
+  /**
+   * The audit-free half of `getAnswerById` — reused by `streamAnswer`'s per-tick poll below, where
+   * an audit row per tick (every 1.5s for the life of an open connection) would flood the audit
+   * log for what is still, from the caller's perspective, one "viewing an answer" action.
+   * `getAnswerById` delegates here so the two paths cannot drift; only it, and `streamAnswer`'s
+   * one-per-open record, ever write the audit row.
+   */
+  async peekAnswer(id: string, tenantId: string): Promise<AnswerEnvelope> {
     if (!Types.ObjectId.isValid(id)) {
       throw new AnswerNotFoundException(`Answer '${id}' not found`);
     }
@@ -105,14 +155,65 @@ export class QaService {
       throw new AnswerNotFoundException(`Answer '${id}' not found`);
     }
 
-    await this.auditService.record({
-      action: 'qa.answer.viewed',
-      actorId,
-      subject: { entityType: 'Answer', entityId: answer._id.toString() },
-      tenantId,
-    });
-
     return this.toAnswerEnvelope(answer);
+  }
+
+  /**
+   * Polling-on-the-server, deliberately not a MongoDB change stream: change streams would need a
+   * per-connection cursor and behave differently between Atlas-Local and mongodb-memory-server,
+   * buying sub-second latency nobody needs over `ANSWER_STREAM_INTERVAL_MS`. Upgrade path if that
+   * ever changes: swap `timer`'s tick source for a change-stream `Observable` feeding the same
+   * `concatMap(peekAnswer)` step below — everything downstream of that point stays the same.
+   */
+  streamAnswer(id: string, actorId: string, tenantId: string): Observable<MessageEvent> {
+    // One audit row per stream OPEN, not per tick. The initial peek here also gates the audit on
+    // existence — matching `getAnswerById`'s own audit-after-confirmation order — so a stream
+    // opened against an unknown id is never recorded as a view.
+    const opened$ = defer(() => this.peekAnswer(id, tenantId)).pipe(
+      concatMap((answer) =>
+        this.auditService.record({
+          action: 'qa.answer.viewed',
+          actorId,
+          subject: { entityType: 'Answer', entityId: answer.id },
+          tenantId,
+        }),
+      ),
+      ignoreElements(),
+    );
+
+    const answer$: Observable<AnswerStreamEvent> = timer(0, ANSWER_STREAM_INTERVAL_MS).pipe(
+      concatMap(() => this.peekAnswer(id, tenantId)),
+      map((answer) => toResponseDto(AnswerResponseDto, answer)),
+      // Fresh DTO instance every tick, so comparing serialized JSON (not object identity) is what
+      // actually suppresses a re-emit when nothing changed between polls.
+      distinctUntilChanged((a, b) => JSON.stringify(a) === JSON.stringify(b)),
+      map((data): AnswerStreamEvent => ({ type: 'answer', data })),
+    );
+
+    const heartbeat$: Observable<AnswerStreamEvent> = timer(
+      SSE_HEARTBEAT_INTERVAL_MS,
+      SSE_HEARTBEAT_INTERVAL_MS,
+    ).pipe(map((): AnswerStreamEvent => ({ type: 'heartbeat', data: {} })));
+
+    return concat(opened$, merge(answer$, heartbeat$)).pipe(
+      // Inclusive: the terminal answer event itself must reach the client before the stream ends —
+      // an exclusive takeWhile would close the connection without ever sending the state the
+      // caller most needs. Applied to the MERGED stream, not just `answer$`, so completing here
+      // also tears down the otherwise-infinite heartbeat timer; a per-branch takeWhile would leave
+      // heartbeat$ running forever, since `merge()` only completes once every source has.
+      takeWhile(
+        (event) => !(event.type === 'answer' && isTerminalAnswerRunStatus(event.data.runStatus)),
+        true,
+      ),
+      map((event): MessageEvent => event),
+      // FAIL OPEN TO POLLING: an unknown id, a Mongo hiccup, or any other read failure becomes a
+      // terminal `error` event rather than a 5xx tearing down the connection — the SPA's retained
+      // GET /answers/:id polling path is the fallback, and it must still be able to run after this
+      // stream ends rather than race a half-closed connection.
+      catchError((error) =>
+        of<MessageEvent>({ type: 'error', data: { message: (error as Error).message } }),
+      ),
+    );
   }
 
   private toAnswerEnvelope(answer: AnswerDocument): AnswerEnvelope {

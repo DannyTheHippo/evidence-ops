@@ -1,3 +1,4 @@
+import type { MessageEvent } from '@nestjs/common';
 import { BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
@@ -9,6 +10,7 @@ import { Document } from '../../../../src/database/schemas/evidence/document/doc
 import { DocumentVersion } from '../../../../src/database/schemas/evidence/document-version/document-version.schema';
 import { EvidenceChunk } from '../../../../src/database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
 import { ExtractedFact } from '../../../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import { DOCUMENTS_STREAM_INTERVAL_MS } from '../../../../src/features/evidence/documents/documents.constant';
 import { DocumentsService } from '../../../../src/features/evidence/documents/documents.service';
 import {
   DocumentNotFoundException,
@@ -25,6 +27,7 @@ import {
   WORKFLOW_ENGINE,
   type WorkflowEngine,
 } from '../../../../src/providers/workflow-engine/workflow-engine.interface';
+import { SSE_HEARTBEAT_INTERVAL_MS } from '../../../../src/shared/constants/sse.constant';
 import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
@@ -799,6 +802,115 @@ describe('DocumentsService', () => {
       await service.remove(documentId.toString(), actorId, 'tenant-a');
 
       expect(mockConflictModel.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('streamList', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    // `list()` resolves its docs' `currentVersion` via a second query — every tick needs both
+    // mocks primed, unlike the single-model peeks `qa`/`workflow-runs` stream from.
+    const primeOneDocumentTick = () => {
+      mockDocumentModel.find.mockResolvedValueOnce([buildMockDocument()]);
+      mockDocumentModel.countDocuments.mockResolvedValueOnce(1);
+      mockDocumentVersionModel.find.mockResolvedValueOnce([buildMockVersion()]);
+    };
+
+    it('should emit the first documents event immediately, recording no audit row', async () => {
+      primeOneDocumentTick();
+      const events: MessageEvent[] = [];
+
+      const subscription = service.streamList('tenant-a').subscribe((event) => events.push(event));
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(events).toEqual([
+        {
+          type: 'documents',
+          data: {
+            docs: [expect.objectContaining({ id: documentId.toString() })],
+            count: 1,
+          },
+        },
+      ]);
+      expect(mockDocumentModel.find).toHaveBeenCalledWith({ tenantId: 'tenant-a' }, null, {
+        sort: { createdAt: -1 },
+        skip: 0,
+        limit: 20,
+      });
+      expect(mockAuditService.record).not.toHaveBeenCalled();
+
+      subscription.unsubscribe();
+    });
+
+    it('should default to the default tenant when none is provided', async () => {
+      primeOneDocumentTick();
+      const subscription = service.streamList().subscribe();
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(mockDocumentModel.find).toHaveBeenCalledWith({ tenantId: 'default' }, null, {
+        sort: { createdAt: -1 },
+        skip: 0,
+        limit: 20,
+      });
+
+      subscription.unsubscribe();
+    });
+
+    it('should not re-emit an unchanged document list on the next tick', async () => {
+      primeOneDocumentTick();
+      primeOneDocumentTick();
+      const events: MessageEvent[] = [];
+
+      const subscription = service.streamList('tenant-a').subscribe((event) => events.push(event));
+      await jest.advanceTimersByTimeAsync(0);
+      const countAfterFirstTick = events.length;
+
+      await jest.advanceTimersByTimeAsync(DOCUMENTS_STREAM_INTERVAL_MS);
+
+      expect(events).toHaveLength(countAfterFirstTick);
+      subscription.unsubscribe();
+    });
+
+    it('should emit a heartbeat event on its own 15s interval', async () => {
+      // Every tick between t=0 and the 15s heartbeat needs a resolved read (documents$ ticks
+      // every 3s) — `mockResolvedValue`, not `Once`, so a tick past the first one doesn't hit an
+      // unmocked call and error the whole merged stream out before the heartbeat ever fires.
+      mockDocumentModel.find.mockResolvedValue([buildMockDocument()]);
+      mockDocumentModel.countDocuments.mockResolvedValue(1);
+      mockDocumentVersionModel.find.mockResolvedValue([buildMockVersion()]);
+      const events: MessageEvent[] = [];
+
+      const subscription = service.streamList('tenant-a').subscribe((event) => events.push(event));
+      await jest.advanceTimersByTimeAsync(0);
+      await jest.advanceTimersByTimeAsync(SSE_HEARTBEAT_INTERVAL_MS);
+
+      expect(events.some((event) => event.type === 'heartbeat')).toBe(true);
+      subscription.unsubscribe();
+    });
+
+    it('should emit a terminal error event and complete when the read fails, never re-throwing', async () => {
+      mockDocumentModel.find.mockRejectedValueOnce(new Error('mongo unreachable'));
+      const events: MessageEvent[] = [];
+      let completed = false;
+
+      service.streamList('tenant-a').subscribe({
+        next: (event) => events.push(event),
+        complete: () => {
+          completed = true;
+        },
+      });
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(completed).toBe(true);
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('error');
+      expect((events[0].data as { message: string }).message).toBe('mongo unreachable');
     });
   });
 });

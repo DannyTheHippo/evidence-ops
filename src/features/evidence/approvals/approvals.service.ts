@@ -69,6 +69,28 @@ export class ApprovalsService {
     actorId: string,
     tenantId: string = DEFAULT_TENANT_ID,
   ): Promise<DocumentResultWithCount<ApprovalResponseDto>> {
+    const result = await this.peekPending(pagination, tenantId);
+
+    await this.auditService.record({
+      action: 'approvals.listed',
+      actorId,
+      subject: { entityType: 'User', entityId: actorId },
+      tenantId,
+    });
+
+    return result;
+  }
+
+  /**
+   * The audit-free half of `listPending` — reused by `WorkflowRunsService.streamRun`'s approvals
+   * sub-stream, which ticks every 1.5s for the life of an open connection. `listPending` delegates
+   * here so the two paths cannot drift; only it, and `streamRun`'s own one-per-open record, ever
+   * write the `approvals.listed`/`workflow-runs.viewed` audit rows.
+   */
+  async peekPending(
+    pagination: PaginationRequestDto,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<DocumentResultWithCount<ApprovalResponseDto>> {
     const filter = { tenantId, state: 'pending' as const };
 
     const [approvals, count] = await Promise.all([
@@ -79,13 +101,6 @@ export class ApprovalsService {
       }),
       this.approvalModel.countDocuments(filter),
     ]);
-
-    await this.auditService.record({
-      action: 'approvals.listed',
-      actorId,
-      subject: { entityType: 'User', entityId: actorId },
-      tenantId,
-    });
 
     return { docs: approvals.map((approval) => this.toApprovalDto(approval)), count };
   }

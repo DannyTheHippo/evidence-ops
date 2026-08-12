@@ -137,6 +137,38 @@ describe('ApprovalsService', () => {
     });
   });
 
+  describe('peekPending', () => {
+    it('should page pending approvals for the default tenant without recording an audit event', async () => {
+      const approval = buildApproval();
+      mockApprovalModel.find.mockResolvedValueOnce([approval]);
+      mockApprovalModel.countDocuments.mockResolvedValueOnce(1);
+
+      const result = await service.peekPending({ skip: 0, limit: 20 });
+
+      expect(mockApprovalModel.find).toHaveBeenCalledWith(
+        { tenantId: DEFAULT_TENANT_ID, state: 'pending' },
+        null,
+        { sort: { createdAt: -1 }, skip: 0, limit: 20 },
+      );
+      expect(result.docs).toHaveLength(1);
+      expect(result.count).toBe(1);
+      expect(mockAuditService.record).not.toHaveBeenCalled();
+    });
+
+    it('should scope the query to an explicit tenantId when provided', async () => {
+      mockApprovalModel.find.mockResolvedValueOnce([]);
+      mockApprovalModel.countDocuments.mockResolvedValueOnce(0);
+
+      await service.peekPending({ skip: 0, limit: 20 }, 'acme-corp');
+
+      expect(mockApprovalModel.find).toHaveBeenCalledWith(
+        { tenantId: 'acme-corp', state: 'pending' },
+        null,
+        { sort: { createdAt: -1 }, skip: 0, limit: 20 },
+      );
+    });
+  });
+
   describe('decide', () => {
     const decideInput = {
       decision: 'approved' as const,

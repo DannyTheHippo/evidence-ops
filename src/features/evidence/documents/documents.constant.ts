@@ -12,3 +12,8 @@ export const MIME_TYPE_TO_SOURCE_KIND: Readonly<Record<string, DocumentSourceKin
 // Data-room artifacts observed so far are well under this; set generously above that rather
 // than tied to any single fixture size.
 export const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024;
+
+// Matches DataRoomPage's poll interval (`web/src/pages/DataRoomPage.tsx`'s POLL_INTERVAL_MS) —
+// see `qa.constant.ts`'s identical reasoning for why this backs `DocumentsService.streamList` at
+// the same cadence.
+export const DOCUMENTS_STREAM_INTERVAL_MS = 3000;

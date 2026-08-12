@@ -18,6 +18,7 @@ import {
 } from '../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import type { Citation } from '../../src/features/evidence/qa/contracts/answer.contract';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
+import { readSseEvent } from '../utils/read-sse-event';
 
 interface AnswerUsageBody {
   promptTokens: number;
@@ -268,6 +269,36 @@ describe('QA and Conflicts (e2e)', () => {
           'The retrieved evidence reports conflicting values for the same fact, so no single answer can be given with confidence.',
         reasonCode: 'retrieved_evidence_contradicts_itself',
       });
+    });
+  });
+
+  describe('GET /answers/:id/events', () => {
+    // Bounded read: `readSseEvent` destroys the connection itself the moment the first `answer`
+    // frame arrives, BEFORE its promise resolves — this test never waits for the stream to end
+    // naturally (`streamAnswer` only ends once the answer reaches a terminal status, which a
+    // `queued` answer never does on its own). The socket is already closed by the time any
+    // assertion below runs, so nothing here can leave a connection open for `closeTestApp`'s
+    // `afterAll` to hang on.
+    it('streams the same shape the polled GET returns, with SSE headers, for a queued answer', async () => {
+      const started = await request(getTestServer(app))
+        .post('/api/v1/questions')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ questionText: 'What is the cap rate?' });
+      const answerId = (started.body as AnswerBody).id;
+
+      const polled = await request(getTestServer(app))
+        .get(`/api/v1/answers/${answerId}`)
+        .set('Authorization', `Bearer ${token}`);
+
+      const frame = await readSseEvent(app, `/api/v1/answers/${answerId}/events`, 'answer', {
+        Authorization: `Bearer ${token}`,
+      });
+
+      expect(frame.statusCode).toBe(200);
+      expect(frame.headers['content-type']).toContain('text/event-stream');
+      expect(frame.headers['cache-control']).toContain('no-cache');
+      expect(frame.headers['x-accel-buffering']).toBe('no');
+      expect(frame.data).toEqual(polled.body);
     });
   });
 

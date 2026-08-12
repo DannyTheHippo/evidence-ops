@@ -1,6 +1,21 @@
 import { Inject, Injectable } from '@nestjs/common';
+import type { MessageEvent } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import type { Observable } from 'rxjs';
+import {
+  catchError,
+  concat,
+  concatMap,
+  defer,
+  distinctUntilChanged,
+  ignoreElements,
+  map,
+  merge,
+  of,
+  takeWhile,
+  timer,
+} from 'rxjs';
 import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
 import {
   WorkflowRun,
@@ -11,11 +26,21 @@ import {
   WORKFLOW_ENGINE,
   type WorkflowEngine,
 } from '../../../providers/workflow-engine/workflow-engine.interface';
+import {
+  DEFAULT_PAGINATION_LIMIT,
+  DEFAULT_PAGINATION_SKIP,
+} from '../../../shared/constants/pagination-defaults.constant';
+import { SSE_HEARTBEAT_INTERVAL_MS } from '../../../shared/constants/sse.constant';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
+import { ApprovalsService } from '../approvals/approvals.service';
+import { ApprovalResponseDto } from '../approvals/dtos/response/approval.response.dto';
 import type { ListWorkflowRunsRequestDto } from './dtos/request/list-workflow-runs.request.dto';
+import { WorkflowRunResponseDto } from './dtos/response/workflow-run.response.dto';
 import { WorkflowRunNotFoundException } from './exceptions/workflow-runs.exception';
+import { WORKFLOW_RUN_STREAM_INTERVAL_MS } from './workflow-runs.constant';
 
 export interface CreateWorkflowRunInput {
   readonly workflowId: string;
@@ -32,6 +57,17 @@ export interface WorkflowRunResult {
   readonly createdAt: Date;
 }
 
+const isTerminalWorkflowRunStatus = (status: WorkflowRunStatus): boolean =>
+  status === 'completed' || status === 'failed';
+
+// Internal to `streamRun` only. `approvals` carries the whole pending-approval inbox (the same
+// `{docs,count}` shape `GET /approvals` returns), not a single approval matched to this run — see
+// `streamRun`'s own doc comment for why.
+type WorkflowRunStreamEvent =
+  | { type: 'run'; data: WorkflowRunResponseDto }
+  | { type: 'approvals'; data: { docs: ApprovalResponseDto[]; count: number } }
+  | { type: 'heartbeat'; data: Record<string, never> };
+
 @Injectable()
 export class WorkflowRunsService {
   constructor(
@@ -41,6 +77,7 @@ export class WorkflowRunsService {
     @Inject(WORKFLOW_ENGINE)
     private readonly workflowEngine: WorkflowEngine,
 
+    private readonly approvalsService: ApprovalsService,
     private readonly auditService: AuditService,
     private readonly logger: AppLogger,
   ) {
@@ -78,6 +115,27 @@ export class WorkflowRunsService {
     actorId: string,
     tenantId: string = DEFAULT_TENANT_ID,
   ): Promise<WorkflowRunResult> {
+    const result = await this.peekRun(id, tenantId);
+
+    await this.auditService.record({
+      action: 'workflow-runs.viewed',
+      actorId,
+      subject: { entityType: 'WorkflowRun', entityId: result.id },
+      tenantId,
+    });
+
+    return result;
+  }
+
+  /**
+   * The audit-free half of `findById` — reused by `streamRun`'s per-tick poll below, where an
+   * audit row per tick (every 1.5s for the life of an open connection) would flood the audit log
+   * for what is still, from the caller's perspective, one "viewing a run" action. `findById`
+   * delegates here so the two paths cannot drift. Keeps the same live-engine-status fail-open
+   * refresh `findById` documented above — the SSE `run` event must match the polled GET
+   * byte-for-byte, so this cannot skip that step.
+   */
+  async peekRun(id: string, tenantId: string = DEFAULT_TENANT_ID): Promise<WorkflowRunResult> {
     if (!Types.ObjectId.isValid(id)) {
       throw new WorkflowRunNotFoundException(`WorkflowRun '${id}' not found`);
     }
@@ -97,14 +155,90 @@ export class WorkflowRunsService {
       );
     }
 
-    await this.auditService.record({
-      action: 'workflow-runs.viewed',
-      actorId,
-      subject: { entityType: 'WorkflowRun', entityId: id },
-      tenantId,
-    });
-
     return this.toResult(run, liveStatus);
+  }
+
+  /**
+   * Polling-on-the-server, deliberately not a MongoDB change stream — see `QaService.streamAnswer`'s
+   * identical rejected-alternative note.
+   *
+   * Two independent named events on one connection: `run` (this row) and `approvals` (the tenant's
+   * whole pending-approval inbox). The latter is NOT this run's single matched approval —
+   * `WorkflowRunPage` (`web/src/pages/WorkflowRunPage.tsx`) already fetches `getWorkflowRunById` +
+   * `listApprovals()` in parallel and matches the pending approval to this run by `workflowId`
+   * client-side; mirroring that exact request shape here (rather than pre-filtering server-side)
+   * keeps this stream's `approvals` payload byte-identical to what `GET /approvals` returns and
+   * lets the SPA's existing match logic keep working unmodified. `run$` and `approvals$` tick on
+   * independent timers — nothing here audits per tick (`peekRun`/`ApprovalsService.peekPending`
+   * don't), so there is no cost to reading them on separate schedules.
+   */
+  streamRun(
+    id: string,
+    actorId: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Observable<MessageEvent> {
+    // One audit row per stream OPEN, not per tick. The initial peek here also gates the audit on
+    // existence — matching `findById`'s own audit-after-confirmation order.
+    const opened$ = defer(() => this.peekRun(id, tenantId)).pipe(
+      concatMap((run) =>
+        this.auditService.record({
+          action: 'workflow-runs.viewed',
+          actorId,
+          subject: { entityType: 'WorkflowRun', entityId: run.id },
+          tenantId,
+        }),
+      ),
+      ignoreElements(),
+    );
+
+    const run$: Observable<WorkflowRunStreamEvent> = timer(0, WORKFLOW_RUN_STREAM_INTERVAL_MS).pipe(
+      concatMap(() => this.peekRun(id, tenantId)),
+      map((run) => toResponseDto(WorkflowRunResponseDto, run)),
+      // Fresh DTO instance every tick, so comparing serialized JSON (not object identity) is what
+      // actually suppresses a re-emit when nothing changed between polls.
+      distinctUntilChanged((a, b) => JSON.stringify(a) === JSON.stringify(b)),
+      map((data): WorkflowRunStreamEvent => ({ type: 'run', data })),
+    );
+
+    const approvals$: Observable<WorkflowRunStreamEvent> = timer(
+      0,
+      WORKFLOW_RUN_STREAM_INTERVAL_MS,
+    ).pipe(
+      concatMap(() =>
+        this.approvalsService.peekPending(
+          { skip: DEFAULT_PAGINATION_SKIP, limit: DEFAULT_PAGINATION_LIMIT },
+          tenantId,
+        ),
+      ),
+      map(({ docs, count }) => ({
+        docs: docs.map((doc) => toResponseDto(ApprovalResponseDto, doc)),
+        count,
+      })),
+      distinctUntilChanged((a, b) => JSON.stringify(a) === JSON.stringify(b)),
+      map((data): WorkflowRunStreamEvent => ({ type: 'approvals', data })),
+    );
+
+    const heartbeat$: Observable<WorkflowRunStreamEvent> = timer(
+      SSE_HEARTBEAT_INTERVAL_MS,
+      SSE_HEARTBEAT_INTERVAL_MS,
+    ).pipe(map((): WorkflowRunStreamEvent => ({ type: 'heartbeat', data: {} })));
+
+    return concat(opened$, merge(run$, approvals$, heartbeat$)).pipe(
+      // Inclusive, and evaluated on the MERGED stream (not just `run$`) so completing here also
+      // tears down the independent `approvals$` and heartbeat$ timers — see
+      // `QaService.streamAnswer`'s identical reasoning for why a per-branch takeWhile would leave
+      // them running forever.
+      takeWhile(
+        (event) => !(event.type === 'run' && isTerminalWorkflowRunStatus(event.data.status)),
+        true,
+      ),
+      map((event): MessageEvent => event),
+      // FAIL OPEN TO POLLING — see `QaService.streamAnswer`'s identical reasoning: the SPA's
+      // retained `getWorkflowRunById`/`listApprovals()` polling is the fallback.
+      catchError((error) =>
+        of<MessageEvent>({ type: 'error', data: { message: (error as Error).message } }),
+      ),
+    );
   }
 
   /**

@@ -5,17 +5,21 @@ import {
   WorkflowRunSchema,
 } from '../../../database/schemas/workflow/workflow-run/workflow-run.schema';
 import { ProvidersModule } from '../../../providers/providers.module';
+import { ApprovalsModule } from '../approvals/approvals.module';
 import { WorkflowRunsController } from './workflow-runs.controller';
 import { WorkflowRunsService } from './workflow-runs.service';
 
 // `ProvidersModule` import is for `WORKFLOW_ENGINE` — `WorkflowRunsService.findById` refreshes the
-// durable row against the live engine status (see its own doc comment). `WorkflowRunsService` is
-// exported so `ConflictsModule` can inject it (`ConflictsService.requestResolution` is this
-// collection's first writer).
+// durable row against the live engine status (see its own doc comment). `ApprovalsModule` import is
+// for `ApprovalsService`, which `streamRun`'s approvals sub-stream reads via `peekPending` — safe
+// to import here (no cycle back): `ApprovalsModule` only imports `ProvidersModule` and its own
+// Mongoose feature, never this module. `WorkflowRunsService` is exported so `ConflictsModule` can
+// inject it (`ConflictsService.requestResolution` is this collection's first writer).
 @Module({
   imports: [
     MongooseModule.forFeature([{ name: WorkflowRun.name, schema: WorkflowRunSchema }]),
     ProvidersModule,
+    ApprovalsModule,
   ],
   controllers: [WorkflowRunsController],
   providers: [WorkflowRunsService],

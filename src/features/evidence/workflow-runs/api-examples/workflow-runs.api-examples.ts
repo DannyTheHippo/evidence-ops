@@ -43,4 +43,13 @@ export const workflowRunsApiExamples: Record<string, ApiResponseOptions> = {
       },
     },
   },
+  stream: {
+    status: HttpStatus.OK,
+    description:
+      'text/event-stream. Polls every 1.5s until status reaches a terminal state, emitting the ' +
+      'final state before closing. `run` events carry the exact shape GET /workflow-runs/:id ' +
+      "returns; `approvals` events carry the exact shape GET /approvals returns (the tenant's " +
+      "whole pending inbox, not just this run's); a `heartbeat` event fires every 15s; a terminal " +
+      '`error` event means the client should fall back to polling both endpoints.',
+  },
 };

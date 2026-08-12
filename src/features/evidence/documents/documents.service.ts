@@ -4,9 +4,12 @@ import {
   Injectable,
   InternalServerErrorException,
 } from '@nestjs/common';
+import type { MessageEvent } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { createHash } from 'node:crypto';
 import { Model, Types } from 'mongoose';
+import type { Observable } from 'rxjs';
+import { catchError, concatMap, distinctUntilChanged, map, merge, of, timer } from 'rxjs';
 import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
 import {
   Conflict,
@@ -38,11 +41,17 @@ import {
   WORKFLOW_ENGINE,
   type WorkflowEngine,
 } from '../../../providers/workflow-engine/workflow-engine.interface';
+import {
+  DEFAULT_PAGINATION_LIMIT,
+  DEFAULT_PAGINATION_SKIP,
+} from '../../../shared/constants/pagination-defaults.constant';
+import { SSE_HEARTBEAT_INTERVAL_MS } from '../../../shared/constants/sse.constant';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import type { IngestDocumentVersionInput } from '../../../workflows/types';
-import { MIME_TYPE_TO_SOURCE_KIND } from './documents.constant';
+import { DOCUMENTS_STREAM_INTERVAL_MS, MIME_TYPE_TO_SOURCE_KIND } from './documents.constant';
 import type { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import { UploadDocumentRequestDto } from './dtos/request/upload-document.request.dto';
 import { DocumentResponseDto } from './dtos/response/document.response.dto';
@@ -84,6 +93,11 @@ interface UploadResult {
  * `src/workflows/**` for types only, never runtime exports.
  */
 const INGEST_DOCUMENT_VERSION_WORKFLOW_TYPE = 'ingestDocumentVersion';
+
+// Internal to `streamList` only.
+type DocumentsStreamEvent =
+  | { type: 'documents'; data: { docs: DocumentResponseDto[]; count: number } }
+  | { type: 'heartbeat'; data: Record<string, never> };
 
 @Injectable()
 export class DocumentsService {
@@ -202,6 +216,52 @@ export class DocumentsService {
     });
 
     return { docs, count };
+  }
+
+  /**
+   * Polling-on-the-server, deliberately not a MongoDB change stream — see
+   * `QaService.streamAnswer`'s identical rejected-alternative note.
+   *
+   * No `peekList`/`list` split, unlike `qa`/`workflow-runs`/`approvals`: `list` above never
+   * records an audit row to begin with (unlike `getAnswerById`/`findById`/`listPending`), so there
+   * is nothing this tick could over-record and nothing to gate an opening audit write on either —
+   * this is the one stream of the three with no audit story at all.
+   *
+   * No terminal `takeWhile` either: unlike the answer/run streams, a document list has no terminal
+   * state to close the connection on — it stays open until the client disconnects, which Nest's
+   * `SseStream` already tears down via its own socket-close handling.
+   */
+  streamList(tenantId: string = DEFAULT_TENANT_ID): Observable<MessageEvent> {
+    const documents$: Observable<DocumentsStreamEvent> = timer(
+      0,
+      DOCUMENTS_STREAM_INTERVAL_MS,
+    ).pipe(
+      concatMap(() =>
+        this.list({ skip: DEFAULT_PAGINATION_SKIP, limit: DEFAULT_PAGINATION_LIMIT }, tenantId),
+      ),
+      map(({ docs, count }) => ({
+        docs: docs.map((doc) => toResponseDto(DocumentResponseDto, doc)),
+        count,
+      })),
+      // Fresh mapped array every tick, so comparing serialized JSON (not object identity) is what
+      // actually suppresses a re-emit when nothing changed between polls.
+      distinctUntilChanged((a, b) => JSON.stringify(a) === JSON.stringify(b)),
+      map((data): DocumentsStreamEvent => ({ type: 'documents', data })),
+    );
+
+    const heartbeat$: Observable<DocumentsStreamEvent> = timer(
+      SSE_HEARTBEAT_INTERVAL_MS,
+      SSE_HEARTBEAT_INTERVAL_MS,
+    ).pipe(map((): DocumentsStreamEvent => ({ type: 'heartbeat', data: {} })));
+
+    return merge(documents$, heartbeat$).pipe(
+      map((event): MessageEvent => event),
+      // FAIL OPEN TO POLLING — see `QaService.streamAnswer`'s identical reasoning: the SPA's
+      // retained `listDocuments()` polling is the fallback.
+      catchError((error) =>
+        of<MessageEvent>({ type: 'error', data: { message: (error as Error).message } }),
+      ),
+    );
   }
 
   async getById(

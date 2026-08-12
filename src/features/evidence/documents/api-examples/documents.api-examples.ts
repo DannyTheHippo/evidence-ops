@@ -83,6 +83,14 @@ export const documentsApiExamples: Record<string, ApiResponseOptions> = {
       },
     },
   },
+  stream: {
+    status: HttpStatus.OK,
+    description:
+      'text/event-stream. Polls every 3s for the life of the connection — no terminal state to ' +
+      'close on. `documents` events carry the exact shape GET /documents returns; a `heartbeat` ' +
+      'event fires every 15s; a terminal `error` event means the client should fall back to ' +
+      'polling GET /documents.',
+  },
   versionContent: {
     status: HttpStatus.OK,
     description:

@@ -8,6 +8,7 @@ import {
   Param,
   Post,
   Query,
+  Sse,
   StreamableFile,
   UnauthorizedException,
   UploadedFile,
@@ -15,8 +16,11 @@ import {
   UseInterceptors,
   Version,
 } from '@nestjs/common';
+import type { MessageEvent } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
+import type { Observable } from 'rxjs';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
 import { RolesGuard } from '../../common/auth/guards/roles.guard';
 import { RequireRole } from '../../../shared/decorators/require-role.decorator';
@@ -96,6 +100,26 @@ export class DocumentsController {
     const { docs, count } = await this.documentsService.list(pagination, user.tenantId);
 
     return { docs: docs.map((doc) => toResponseDto(DocumentResponseDto, doc)), count };
+  }
+
+  // MUST be declared above `@Get(':id')` — `:id` matches a single path segment, and 'events' here
+  // is also a single segment, so a request to `/documents/events` would otherwise be captured by
+  // `:id` (id='events') and this route would be unreachable. `versions/:versionId/content` and
+  // `versions/:versionId/chunks` below never collide with `:id` regardless of order — both are
+  // multi-segment literal-prefixed patterns, not a bare `:id`. No `@HttpCode` here: `@Sse()` owns
+  // the response status and streaming headers itself. No `@Header()` for
+  // Cache-Control/X-Accel-Buffering either — see `WorkflowRunsController.streamRun`'s identical
+  // note: `@nestjs/core`'s `SseStream` already sends both, unconditionally, on every SSE response.
+  @Sse('events')
+  @Version('1')
+  @SkipThrottle()
+  @ApiResponse(documentsApiExamples.stream)
+  streamEvents(@CurrentUser() user: AuthenticatedRequest['user']): Observable<MessageEvent> {
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    return this.documentsService.streamList(user.tenantId);
   }
 
   @Get(':id')

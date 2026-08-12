@@ -5,10 +5,14 @@ import {
   HttpStatus,
   Param,
   Query,
+  Sse,
   UnauthorizedException,
   Version,
 } from '@nestjs/common';
+import type { MessageEvent } from '@nestjs/common';
 import { ApiBearerAuth, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
+import type { Observable } from 'rxjs';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
 import { AuthenticatedRequest } from '../../../shared/types/authenticated-request.type';
@@ -45,6 +49,30 @@ export class WorkflowRunsController {
     );
 
     return { docs: docs.map((doc) => toResponseDto(WorkflowRunResponseDto, doc)), count };
+  }
+
+  // MUST be declared above `@Get(':id')` — same-segment-count trap: a request to `:id/events` has
+  // one more path segment than `:id` matches, so this specific pair never actually collides.
+  // Documents' `events`-vs-`:id` pair does collide (both single-segment), so this is kept above
+  // regardless, matching that route and future-proofing against this route ever changing shape.
+  // No `@HttpCode` here: `@Sse()` owns the response status and streaming headers itself. Nest's
+  // `SseStream` also always sends `Cache-Control` and `X-Accel-Buffering: no` on every SSE
+  // response unconditionally (see `@nestjs/core`'s `sse-stream.js`), so no `@Header()` decorator is
+  // needed to get those two headers onto the wire — one would be silently overridden anyway, since
+  // Nest applies its own values after any caller-set ones.
+  @Sse(':id/events')
+  @Version('1')
+  @SkipThrottle()
+  @ApiResponse(workflowRunsApiExamples.stream)
+  streamRun(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedRequest['user'],
+  ): Observable<MessageEvent> {
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    return this.workflowRunsService.streamRun(id, user.userId, user.tenantId);
   }
 
   @Get(':id')
