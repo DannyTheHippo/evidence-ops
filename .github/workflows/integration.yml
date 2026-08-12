@@ -77,11 +77,5 @@ jobs:
       - name: Run integration tests
         run: npm run test:integration
 
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: integration-results-${{ github.run_id }}
-          path: coverage
-          retention-days: 7
-          if-no-files-found: warn
+      # No artifact upload here: `test:integration` runs without `--coverage` and writes nothing to
+      # `coverage/` — inventing output to satisfy an upload step would be backwards.

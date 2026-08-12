@@ -152,7 +152,10 @@ export class DocumentsService {
     const versionIds = documents
       .map((document) => document.currentVersionId)
       .filter((id): id is Types.ObjectId => id !== undefined);
-    const versions = await this.documentVersionModel.find({ _id: { $in: versionIds } });
+    const versions = await this.documentVersionModel.find({
+      _id: { $in: versionIds },
+      tenantId,
+    });
     const versionById = new Map(versions.map((version) => [version._id.toString(), version]));
 
     const docs = documents.map((document) => {

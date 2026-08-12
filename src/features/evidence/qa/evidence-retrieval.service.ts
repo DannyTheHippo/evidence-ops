@@ -60,8 +60,11 @@ export class EvidenceRetrievalService {
     }
 
     const versionIds = [...new Set(hits.map((hit) => hit.metadata.documentVersionId))];
+    // Explicit predicate is load-bearing here: this runs in worker context (Temporal activity),
+    // where the ALS-backed `tenantScopePlugin` never ran, so nothing else scopes this query.
     const versions = await this.documentVersionModel.find({
       _id: { $in: versionIds.map((id) => new Types.ObjectId(id)) },
+      tenantId,
     });
     const sha256ByVersionId = new Map(
       versions.map((version) => [version._id.toString(), version.sha256]),

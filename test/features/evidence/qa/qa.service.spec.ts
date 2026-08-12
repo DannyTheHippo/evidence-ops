@@ -148,11 +148,22 @@ describe('QaService', () => {
 
     it('should omit outcome for a non-completed answer even when one is present on the document', async () => {
       const answerId = new Types.ObjectId();
+      const citation = {
+        docVersionId: 'v1',
+        sha256: 'a'.repeat(64),
+        chunkId: 'chunk-1',
+        locator: { kind: 'pdf-page' as const, page: 1, extractorVersion: 'v1' },
+        quote: 'the cap rate is 6.10%',
+      };
+      const outcome = {
+        kind: 'answered' as const,
+        claims: [{ statement: 's', citations: [citation] }],
+      };
       mockAnswerModel.findOne.mockResolvedValueOnce({
         _id: answerId,
         questionText: 'What is the cap rate?',
         runStatus: 'queued',
-        outcome: undefined,
+        outcome,
         claimCoverage: undefined,
         claims: [],
         conflictIds: [],

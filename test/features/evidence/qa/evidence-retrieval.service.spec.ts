@@ -97,6 +97,25 @@ describe('EvidenceRetrievalService', () => {
         locator: hit.metadata.locator,
       },
     ]);
+    expect(mockDocumentVersionModel.find).toHaveBeenCalledWith({
+      _id: { $in: [versionId] },
+      tenantId: 'default',
+    });
+  });
+
+  it('should scope the document version lookup to an explicit tenant, distinct from another tenant', async () => {
+    const versionId = new Types.ObjectId();
+    fakeRetrievalStore.setHits([buildHit({ documentVersionId: versionId.toString() })]);
+    mockDocumentVersionModel.find.mockResolvedValueOnce([
+      { _id: versionId, sha256: 'a'.repeat(64) },
+    ]);
+
+    await service.retrieve({ questionText: 'What is the cap rate?', tenantId: 'acme' });
+
+    expect(mockDocumentVersionModel.find).toHaveBeenCalledWith({
+      _id: { $in: [versionId] },
+      tenantId: 'acme',
+    });
   });
 
   it('should throw InternalServerErrorException when a hit references a document version that no longer exists', async () => {

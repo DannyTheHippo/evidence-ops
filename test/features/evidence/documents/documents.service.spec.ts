@@ -316,10 +316,28 @@ describe('DocumentsService', () => {
         skip: 0,
         limit: 20,
       });
-      expect(mockDocumentVersionModel.find).toHaveBeenCalledWith({ _id: { $in: [versionId] } });
+      expect(mockDocumentVersionModel.find).toHaveBeenCalledWith({
+        _id: { $in: [versionId] },
+        tenantId: 'default',
+      });
       expect(result.count).toBe(1);
       expect(result.docs).toHaveLength(1);
       expect(result.docs[0].currentVersion.id).toBe(versionId.toString());
+    });
+
+    it('should scope the version lookup to the caller tenant, not the default', async () => {
+      const mockDocument = buildMockDocument();
+      mockDocumentModel.find.mockResolvedValueOnce([mockDocument]);
+      mockDocumentModel.countDocuments.mockResolvedValueOnce(1);
+      const version = buildMockVersion();
+      mockDocumentVersionModel.find.mockResolvedValueOnce([version]);
+
+      await service.list({ skip: 0, limit: 20 }, 'tenant-b');
+
+      expect(mockDocumentVersionModel.find).toHaveBeenCalledWith({
+        _id: { $in: [versionId] },
+        tenantId: 'tenant-b',
+      });
     });
 
     it('should throw when a document has no resolvable current version', async () => {
