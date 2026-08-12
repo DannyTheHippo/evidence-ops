@@ -13,6 +13,18 @@ web/dist
 logs
 *.log
 
+# OTLP span files — OTEL_CAPTURE_MODEL_CONTENT can attach document text to a span, so an
+# accidental commit here is a disclosure risk, not just noise (see otlp-file-span.exporter.ts).
+/artifacts/traces/
+
+# Eval results recorded against a dirty working tree. `eval/run.ts` names its output by git sha and
+# suffixes `-dirty` when the tree has uncommitted changes, so every run during development writes a
+# file into this otherwise-committed directory. Three such recordings had accumulated and one was
+# being cited by a walkthrough as if it were current — the suffix marks provenance as untrustworthy,
+# which is exactly what should never be committed. Clean-sha results stay tracked deliberately.
+/eval/results/*-dirty.json
+/eval/results/*-dirty.md
+
 # Environment
 .env
 .env.local
