@@ -1,7 +1,13 @@
 # Technical walkthrough — five minutes
 
-A script to say aloud. Numbers come from
-`eval/results/ee110642cc0b949a83e2da0a2dc712f602d4ab46-dirty.md`.
+A script to say aloud. The answer-quality numbers come from
+`eval/results/467691d0e69f6445c4f2cca27b6e6dba636bad50.md`, the newest recording made against a clean
+tree; the retrieval-mode comparison including the `qdrant-vector` row is in
+[`docs/adr/0010-retrieval-store-comparison.md`](adr/0010-retrieval-store-comparison.md). Both are
+tracked. A run against a dirty tree writes a `-dirty`-suffixed file, which `.gitignore` excludes
+precisely because the suffix marks provenance as untrustworthy — so nothing here should ever cite
+one, and an earlier draft of this document citing a since-deleted `-dirty` file is why that rule
+exists.
 
 ## 0:00–0:45 — The governing idea, and the three places it is enforced
 
@@ -19,7 +25,7 @@ this request, does the quote appear verbatim in it, is every number in the claim
 closed at claim granularity. A component whose only power is to drop cannot hallucinate, which is
 why I am willing to put it in that position.
 
-## 0:45–1:30 — Three design decisions, quickly
+## 0:45–1:45 — Four design decisions, quickly
 
 Retrieval is lexical and dense in one MongoDB store, fused by reciprocal rank fusion. Fusing ranks
 rather than scores matters because BM25 is unbounded and corpus-dependent while cosine similarity is
@@ -39,7 +45,13 @@ allowlist, the authorization hook, then strict argument validation — so access
 identity and step context before anything parses the untrusted arguments. A hook that throws is a
 refusal, and the decision must be the literal `true`, because `{ allowed: 'yes' }` is truthy.
 
-## 1:30–3:15 — What actually went wrong
+Fourth, human approval is a durable Temporal signal that only ever wakes the workflow, never decides
+for it — the handler flips one boolean, the workflow re-reads the durable approval row for the
+verdict, and a timeout writes `timed_out` without falling through to that read, so a spoofed signal
+can wake a workflow but never forge a decision. It's reachable end to end in the UI now too: request
+resolution from the Conflicts page, approve from the Approvals inbox.
+
+## 1:45–3:25 — What actually went wrong
 
 Several real defects were invisible to a green suite at a hundred percent branch coverage, and
 surfaced only when something real ran.
@@ -59,27 +71,38 @@ The honest lesson is the one I would lead with: coverage measured that lines exe
 not that the system worked. Every one of those defects lived exactly where a fake provider, a mocked
 DI graph, or a hand-made 24-character fixture id stood in for the real thing.
 
-## 3:15–4:15 — What it measures
+## 3:25–4:20 — What it measures
 
 Thirty-two cases: twelve answerable, eight unanswerable, five conflicting, seven adversarial. Recall
-at five is 82.6%, MRR 0.653, citation precision 85.7%, mean claim coverage 92.2%. Abstention accuracy
-is 100% — all eight unanswerable questions abstain rather than fabricate. The canary own-voice leak
-rate is a hard gate at zero and passes. Three cases fail, all of them conflict cases.
+at five is 82.6%, MRR 0.675, citation precision 81.0%, mean claim coverage 93.6%. Abstention accuracy
+is 100% — all eight unanswerable questions abstain rather than fabricate. Conflict recall is 100% on
+this recording — all five conflict cases pass. The canary own-voice leak rate is a hard gate at zero
+and passes. Zero cases fail.
 
-Two caveats before you ask. In the retrieval-mode comparison, pure vector beats hybrid at recall@10 —
-91.3% against 82.6% — so on this small synthetic set hybrid is not yet a win and I will not claim it
-is. And these numbers predate the tenant-scoping fix, which invalidated the cache; a re-record is
-pending, and the `-dirty` label exists so a results file cannot misidentify the code behind it.
+One retrieval-comparison result deserves a beat. Qdrant, run as a fourth mode, came back numerically
+identical to Mongo's own vector mode — 82.6% recall at five, 91.3% at ten, 0.648 MRR, to the metric.
+But the corpus is twelve chunks, small enough that both engines are doing exhaustive search, so
+Qdrant's approximate index never got a chance to approximate — identical here is not equivalent at
+scale; it says the embeddings and fusion strategy are the differentiator, not the engine. The same
+comparison carries a standing oddity: vector beats hybrid at recall@10 — 91.3% against 82.6% — while
+hybrid leads MRR — 0.667 against 0.648 — so which pipeline "wins" depends on which metric you read,
+and I won't claim hybrid is an unqualified win.
 
-## 4:15–5:00 — Where it is weak
+## 4:20–5:00 — Where it is weak
 
-Conflict recall is 40%, the weakest capability: prose fact extraction varies run to run, and sampling
-cannot be pinned on this model tier — the API rejects a temperature parameter outright — so what
-replay stabilises is the measurement, not the pipeline. Authorization is authentication plus a
-constant tenant; `tenantId` is threaded through schemas, retrieval pipelines and activities so
-enforcing it later is an index-and-filter change, but nothing derives a tenant from the authenticated
-user and answer reads carry no owner predicate. The tool chokepoint has no caller yet — it exists so
-that when one is wired, refusal is what it inherits. And telemetry is a logger behind an interface:
-no OpenTelemetry, no exporter, no trace context, so none of these controls have alerting.
+Conflict recall is 100% on this recording, but that number is not a guarantee: prose fact extraction
+varies run to run, and sampling cannot be pinned on this model tier — the API rejects a temperature
+parameter outright — so what replay stabilises is the measurement, not the pipeline, and a conflict
+can still be found on one recording and missed on the next. Tenant isolation is structural now, not
+just threaded through: `tenantId` is a required JWT claim — the guard fails closed if it's missing —
+and every evidence service still takes it as an explicit parameter, backstopped by a global Mongoose
+plugin that intersects the tenant into every scoped query. A negative control proved the two layers
+are genuinely independent: reverting one service's tenant predicate left the isolation suite green,
+because the plugin caught it; disabling the plugin too made it fail exactly where I expected, tenant
+B reading tenant A's answer. Still missing: role granularity beyond admin and member, per-user
+ownership inside a tenant, and any way to provision a second tenant at all. The tool chokepoint has
+no caller yet — it exists so that when one is wired, refusal is what it inherits. And tracing is real
+OpenTelemetry now — but alerting still does not exist, so none of these controls raise anything when
+they fire.
 
 I would rather state those four myself than have you find them.

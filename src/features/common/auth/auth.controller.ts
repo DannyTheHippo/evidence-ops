@@ -54,6 +54,7 @@ export class AuthController {
   @Version('1')
   @HttpCode(HttpStatus.OK)
   @ApiResponse(meApiExamples.success)
+  @ApiResponse(meApiExamples.unauthorized)
   async me(@CurrentUser() user: AuthenticatedRequest['user']): Promise<MeResponseDto> {
     // JwtAuthGuard always sets request.user before a non-public handler runs; this guards
     // the type only (request.user is optional because the same type covers public routes).

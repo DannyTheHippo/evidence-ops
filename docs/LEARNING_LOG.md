@@ -731,3 +731,108 @@ than something specific to the first workflow it was written for.
 crafted `subject`/`summary` can still put a plausible-looking entry in front of a human reviewer —
 the review step assumes the request reaching it is legitimate, and checking that is a different,
 unaddressed boundary.
+
+---
+
+## 012 — Structural enforcement versus discipline, and what a negative control actually proves
+
+**ADR:** [0011](./adr/0011-structural-tenant-isolation-and-minimal-roles.md) · **Code:**
+`src/database/plugins/tenant-scope.plugin.ts`
+
+**The concept.** A cross-cutting invariant — "every query for tenant-scoped data is filtered by the
+caller's tenant" — can be enforced two structurally different ways, and it's worth being precise
+about what each one actually guarantees. **Discipline** means every call site is individually
+responsible: each service method takes a `tenantId` parameter and threads it into its own query. It
+is precise — a method can reason about exactly the tenant it needs — but its correctness is the
+correctness of every call site, forever, including the one written by someone who hasn't read the
+convention. **Structural enforcement** means one piece of code, wired in globally, intercepts every
+operation of a given shape and applies the invariant without any call site opting in. It cannot be
+individually forgotten, because no individual call site is where the decision lives — but it can
+only enforce what it can actually see, and "globally wired in" is doing a lot of work in that
+sentence: global with respect to *what*, exactly, is the question that decides where the interceptor
+has no reach at all.
+
+These fail differently on purpose, not by accident. Discipline fails at the granularity of "one
+call site, one bug" — a single forgotten filter is a single leak, findable by reading that one
+method. Structural enforcement fails at the granularity of its own blind spots — a case entirely
+outside what it intercepts (a raw driver call, an operation type it doesn't hook, a context it
+can't observe) isn't a bug in the interceptor, it's a hole in its coverage, and coverage holes look
+identical to "everything's fine" until something drives a case through one. Neither failure mode
+dominates the other; they are different distributions of the same underlying risk.
+
+**The trade-off.** Combining both looks obviously better and mostly is, but it isn't free: two
+mechanisms enforcing the same invariant means two things that have to actually agree with each
+other, and disagreement between them is now itself a new failure mode. A structural layer that
+*overwrites* what a call site set is the sharpest version of this — it can silently discard a
+caller's real, intentional filter, replacing a bug that would have leaked data with a bug that
+corrupts an unrelated query. The safer combination doesn't overwrite; it narrows. Intersecting the
+structural predicate with whatever the call site already asked for means a call site that got it
+right is unaffected, and a call site that forgot gets the structural predicate anyway — disagreement
+between the two degrades to "returns less than expected," never "returns something wrong."
+
+**What we chose, and why here.** Keep the discipline (explicit `tenantId` parameters, threaded
+through every tenant-scoped service method) as the primary control, and add a structural layer — a
+global Mongoose plugin reading the request's tenant out of AsyncLocalStorage — as a backstop that
+intersects rather than overwrites. Neither replaces the other. The discipline is what makes a
+correct call site correct; the structural layer is what keeps an incorrect one from being a leak
+instead of a bug.
+
+**The fail-open/fail-closed split, and why the same mechanism goes both ways.** A structural
+interceptor reads context from *somewhere* — here, a per-request store. Two situations follow from
+that fact alone, and they demand opposite defaults. Inside the context it depends on, the
+interceptor has a real value to enforce and forgetting to apply it would be the failure — so it
+fails **closed**: it intersects, narrowing what a caller can retrieve, and a caller who tries to
+name a different tenant explicitly gets the empty set rather than a silent override. Outside that
+context — a background worker, a migration, anything that legitimately runs with no request in
+flight — the interceptor has *nothing to enforce*, and treating "no context" as "context says
+deny everything" would be enforcing a value that was never provided, breaking every legitimate
+context-free caller on every run. So it fails **open**: no context means no-op, not refusal. This
+isn't an inconsistency to resolve — a mechanism whose correctness depends on context correctly
+changes behavior when that context is absent versus wrong, and collapsing both into one default
+would get one of the two situations wrong on purpose.
+
+**In our code.** `tenantScopePlugin` (`src/database/plugins/tenant-scope.plugin.ts`) hooks every
+tenant-scoped Mongoose query and, when AsyncLocalStorage holds a tenant, rewrites the filter to
+`{ $and: [existingFilter, { tenantId }] }` — narrowing, never assigning over. When the store holds
+no tenant — the Temporal worker, the eval harness, migrations — the hook is a no-op, and those
+paths pass `tenantId` themselves, explicitly, the same discipline every request-driven service
+method already used. The plugin's own doc comment enumerates exactly where it has no reach at all:
+`aggregate()` (a different control covers that path, since a plugin-prepended stage would break
+`$rankFusion`), the GridFS bucket (constructed against the raw driver connection, not a Mongoose
+model), `insertMany` (nothing to filter — a passthrough of documents), and a query built inside a
+request but awaited after the async context has already unwound.
+
+**How we validated it — the negative control.** A test suite passing tells you the code behaved as
+asserted on the inputs it ran. It does not, by itself, tell you the assertion would have caught the
+bug it exists to catch — a suite that would pass regardless of whether the invariant holds is
+worthless as a check on that invariant, and looks identical to a working one right up until it
+matters. The distinguishing move is to break the thing on purpose and watch the suite fail at the
+place you predicted. Here: revert one service method to an unscoped query, leave the structural
+plugin in place — the isolation suite stayed green, because the backstop caught it. Read alone,
+that green run is ambiguous — it's consistent with "the backstop works" and also with "this suite
+never actually exercises this path." Then revert the same method *and* disable the plugin — the
+suite failed, at exactly the assertion the whole exercise was about, with the wrong status code
+returned. That second, failing run is what resolves the ambiguity: it proves the suite can fail on
+this exact bug, which means the first run's silence was informative rather than vacuous. A negative
+control isn't a nice-to-have around the real test — for a backstop mechanism specifically, it's the
+only way to know the backstop was ever really doing anything.
+
+**Interview answer.** I distinguish discipline from structural enforcement by what each one can
+actually see: discipline is correct per call site and wrong the moment one site is missed; a
+structural interceptor can't be individually forgotten, but it only covers what it's wired to
+intercept, and outside that it's not protecting anything, it's just absent. I keep both here on
+purpose, with the structural layer narrowing a caller's filter rather than overwriting it, so
+disagreement between the two degrades to "too little data" instead of "wrong data." The fail-open
+versus fail-closed split isn't an inconsistency — the same mechanism enforces a real value when it
+has one and correctly does nothing when it has none, and forcing one default onto both situations
+breaks whichever one you didn't design for. And I don't trust a backstop's test coverage until I've
+broken the backstop on purpose: a suite that passes with the mechanism removed too was never
+proving what I thought it was proving. Ours failed exactly where predicted, at the exact assertion,
+only when both layers came out together — that's what makes the passing run mean something.
+
+**Known limit.** A structural interceptor's coverage list is a claim about the present code, not an
+invariant the type system enforces — a new operation type, a new driver-level access path, or a new
+schema authored without the convention the interceptor depends on (here, a `default` on the scoped
+field) can silently fall outside it, and nothing fails loudly when that happens. The interceptor's
+doc comment has to be read and re-verified against the codebase it describes, not trusted as
+permanently accurate.

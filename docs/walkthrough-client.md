@@ -34,7 +34,9 @@ software, after the AI has finished, against the stored file. The AI does not ma
 **When two documents disagree, the system says so.** It does not pick one and present it as fact.
 Ask about that yield and you get both figures, each attached to the document it came from, and an
 explicit statement that the sources conflict. Surfacing the disagreement is the product; resolving it
-is a human judgement and we do not pretend otherwise.
+is a human judgement and we do not pretend otherwise. There is now a screen for exactly that: your
+team picks the winning figure, the run pauses for approval, and it only completes once someone signs
+off.
 
 **When the evidence does not support an answer, it says that.** Ask about a property that is not in
 the folder and you get "the documents provided do not contain this", not a plausible-sounding
@@ -65,12 +67,18 @@ Thirty-two questions across four categories, scored automatically.
 
 Every one of the eight questions with no answer in the documents was correctly declined — eight out
 of eight, no fabrication. Around nine in ten claims carried a citation that passed verification. Of
-the citations offered, roughly six in seven checked out; the rest were dropped before you saw them,
+the citations offered, about four in five checked out; the rest were dropped before you saw them,
 which is the mechanism working, not failing. And the hostile-text tests passed: no planted
 instruction reached the user in the system's own voice.
 
-Conflict detection is the weakest area. On seeded disagreements it found two in five — it works, and
-it is the least mature capability in the system.
+Conflict detection is the least mature capability in the system — it depends on the model reading
+prose consistently, which it does not always do run to run. On the most recent recording it caught
+every seeded disagreement, but that number moves: this is the one measurement I would not treat as
+stable yet.
+
+We also benchmarked a specialized vector database against the one we use, out of diligence rather
+than dissatisfaction, and it came back tied on our sample — a good example of measuring before you
+switch anything.
 
 ## 4:15–5:00 — What is real, and what is not
 
@@ -82,11 +90,14 @@ phase on your actual material is not a formality — document quality, scanned p
 terminology and the definitions your teams argue about are where the effort would go, and what
 counts as a "fact" would have to be defined with your subject-matter experts.
 
-Not yet built, plainly: access control is sign-in only. Anyone with a login can see everything, and
-scoping access by team, client or matter is a build item, not a configuration setting. The
-refusal-by-default rule for actions exists and is enforced, but nothing in the system takes actions
-yet — it answers questions. And there is no monitoring or alerting, so this is a working system, not
-an operable one.
+What changed since the last time I gave this walkthrough: one customer's data is now fully isolated
+from another's, enforced two different ways at once, and we proved it with a controlled test —
+turning off either enforcement on its own didn't create a leak, only turning off both did. Not yet
+built, plainly: within one customer's organization, anyone with a login can still see everything that
+organization uploaded — finer-grained access by team, client or matter is a build item, not a
+configuration setting. The refusal-by-default rule for actions exists and is enforced, but nothing in
+the system takes actions yet — it answers questions. And there is no monitoring or alerting, so this
+is a working system, not an operable one.
 
 For a prospective enterprise engagement, the honest framing is: the hard part — verifiable,
 checkable, declinable answers — is demonstrated. The surrounding work is known, scoped, and not done.

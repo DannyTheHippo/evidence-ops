@@ -34,6 +34,20 @@ export const qaApiExamples: Record<string, ApiResponseOptions> = {
       },
     },
   },
+  validationError: {
+    status: HttpStatus.BAD_REQUEST,
+    description: 'questionText is missing, empty, or not a string.',
+    examples: {
+      example: {
+        summary: 'Empty questionText',
+        value: {
+          statusCode: HttpStatus.BAD_REQUEST,
+          message: ['questionText should not be empty'],
+          error: 'Bad Request',
+        },
+      },
+    },
+  },
   answerDetail: {
     status: HttpStatus.OK,
     description:

@@ -58,8 +58,8 @@ flowchart TB
     Store["RETRIEVAL_STORE = MongoHybridRetrievalStore"]
     Docs["DOCUMENT_STORE = GridFS"]
     Engine["WORKFLOW_ENGINE = TemporalWorkflowEngine"]
-    Tel["TELEMETRY = LoggerTelemetry (fake: process log only)"]
-    Appr["APPROVAL_CHANNEL = MongoApprovalChannel (real: no consumer yet)"]
+    Tel["TELEMETRY = LoggerTelemetry (real OTel tracing is separate — src/instrumentation.ts)"]
+    Appr["APPROVAL_CHANNEL = MongoApprovalChannel (real: consumed by resolveConflict)"]
   end
 
   Mongo[("MongoDB Atlas Local 8.3.4<br/>$search · $vectorSearch · $rankFusion · GridFS")]
@@ -159,8 +159,8 @@ Two things this diagram is making explicit:
 | `RETRIEVAL_STORE`   | `MongoHybridRetrievalStore`               | Real. |
 | `DOCUMENT_STORE`    | `GridFsDocumentStore`                     | Real. |
 | `WORKFLOW_ENGINE`   | `TemporalWorkflowEngine`                  | Real. Overridden back to `FakeWorkflowEngine` in `test/utils/create-test-app.ts` so no e2e dials a live server. |
-| `TELEMETRY`         | `LoggerTelemetry`                         | **Fake-ish.** Events go to the process log and nowhere else. No OpenTelemetry, no exporter, no trace context. |
-| `APPROVAL_CHANNEL`  | `MongoApprovalChannel`                    | Real. Persistence only (D1 of the approvals milestone) — no workflow waits on it yet, so there is still no consumer in `src/`. |
+| `TELEMETRY`         | `LoggerTelemetry`                         | Real, for structured events — but separate from tracing. OpenTelemetry itself is wired independently in `src/instrumentation.ts` (http/express/mongoose instrumentations, spans to Jaeger and `artifacts/traces/`); `TELEMETRY` is not that pipeline, it is a logger the two coexist alongside. |
+| `APPROVAL_CHANNEL`  | `MongoApprovalChannel`                    | Real, and consumed: the `resolveConflict` workflow (`src/workflows/resolve-conflict.workflow.ts`) requests an approval through it and blocks on `getApprovalDecision` until a human decides. |
 
 `FakeModelProvider`, `FakeEmbeddingProvider`, `FakeRetrievalStore`, and `FakeDocumentStore` also
 exist, but they are bound directly by unit tests, not through this module.

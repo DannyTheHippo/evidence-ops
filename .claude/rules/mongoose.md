@@ -22,6 +22,8 @@ paths:
 
 Migrations, seeds, and background jobs run with no ALS store at all. That is a deliberate no-op, not a bug to "fix" by faking a store.
 
+`tenantScopePlugin` reads the same ALS store, at the same lazy-query moment, and shares this exact caveat — but not its consequence. A missed audit stamp on `auditablePlugin` is a gap (`createdBy`/`updatedBy` stay blank). A missed tenant predicate on `tenantScopePlugin` is a leak (the query runs against every tenant, not none).
+
 ## Migrations
 
 - Tool: `migrate-mongo`, configured in `migrate-mongo-config.js`, run through `tsx`. Commands: `npm run migrate:up` / `npm run migrate:down`.

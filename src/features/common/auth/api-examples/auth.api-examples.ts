@@ -80,4 +80,18 @@ export const meApiExamples: Record<string, ApiResponseOptions> = {
       },
     },
   },
+  unauthorized: {
+    status: HttpStatus.UNAUTHORIZED,
+    description: 'No or invalid token provided.',
+    examples: {
+      example: {
+        summary: 'Missing or invalid token',
+        value: {
+          statusCode: HttpStatus.UNAUTHORIZED,
+          message: 'Invalid or expired token',
+          error: 'Unauthorized',
+        },
+      },
+    },
+  },
 };
