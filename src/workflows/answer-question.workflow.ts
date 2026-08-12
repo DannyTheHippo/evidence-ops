@@ -55,7 +55,7 @@ export async function answerQuestion(input: AnswerQuestionInput): Promise<Answer
     tenantId: input.tenantId,
   });
 
-  const outcome = await synthesisActivities.synthesizeAnswer({
+  const { contract: outcome, usage } = await synthesisActivities.synthesizeAnswer({
     questionText: input.questionText,
     chunks,
   });
@@ -78,6 +78,7 @@ export async function answerQuestion(input: AnswerQuestionInput): Promise<Answer
     claimCoverage: grounding.claimCoverage,
     verificationReport: grounding.verificationReport,
     conflictIds: grounding.conflictIds,
+    usage,
   });
 
   return {

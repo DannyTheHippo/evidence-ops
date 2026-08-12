@@ -65,7 +65,7 @@ describe('JwtAuthGuard', () => {
     expect(mockJwtService.verifyAsync).not.toHaveBeenCalled();
   });
 
-  it('should throw UnauthorizedException when no Authorization header is present', async () => {
+  it('should throw UnauthorizedException when neither an Authorization header nor a cookie is present', async () => {
     const { context } = buildContext();
 
     await expect(guard.canActivate(context)).rejects.toThrow(UnauthorizedException);
@@ -117,5 +117,38 @@ describe('JwtAuthGuard', () => {
     });
     expect(alsStore.user).toBe('user-id');
     expect(alsStore.tenant).toBe('default');
+  });
+
+  it('should accept a token carried only by the eo_session cookie', async () => {
+    const payload: JwtPayload = {
+      sub: 'user-id',
+      email: 'user@example.com',
+      tenantId: 'default',
+      role: UserRole.Admin,
+    };
+    mockJwtService.verifyAsync.mockResolvedValueOnce(payload);
+    const { context } = buildContext({ cookie: 'eo_session=cookie-token' });
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+    expect(mockJwtService.verifyAsync).toHaveBeenCalledWith('cookie-token');
+  });
+
+  // Dual-accept precedence: a scripted client sending both should not be able to shadow the
+  // Bearer token with a stale or attacker-supplied cookie.
+  it('should prefer the Authorization header over the cookie when both are present', async () => {
+    const payload: JwtPayload = {
+      sub: 'user-id',
+      email: 'user@example.com',
+      tenantId: 'default',
+      role: UserRole.Admin,
+    };
+    mockJwtService.verifyAsync.mockResolvedValueOnce(payload);
+    const { context } = buildContext({
+      authorization: 'Bearer header-token',
+      cookie: 'eo_session=cookie-token',
+    });
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+    expect(mockJwtService.verifyAsync).toHaveBeenCalledWith('header-token');
   });
 });

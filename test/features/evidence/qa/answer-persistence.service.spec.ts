@@ -35,6 +35,7 @@ function buildAnswerDoc(overrides: Partial<Record<string, unknown>> = {}): Recor
     claims: [],
     claimCoverage: undefined,
     verificationReport: undefined,
+    usage: undefined,
     tenantId: 'default',
     save: jest.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -197,5 +198,44 @@ describe('AnswerPersistenceService', () => {
       outcomeKind: 'answered',
       claimCoverage: 1,
     });
+  });
+
+  it('should persist usage when the input carries it', async () => {
+    const outcome = { kind: 'insufficient_evidence' as const, reason: 'no supporting evidence' };
+    const usage = { promptTokens: 875, completionTokens: 120, costUsd: 0.0234 };
+    const answerDoc = buildAnswerDoc();
+    mockAnswerModel.findById.mockResolvedValueOnce(answerDoc);
+
+    await service.persist({
+      answerId: (answerDoc._id as Types.ObjectId).toString(),
+      questionText: 'What is the cap rate?',
+      retrievedChunkIds: [],
+      outcome,
+      claims: [],
+      usage,
+    });
+
+    expect(answerDoc).toMatchObject({ usage });
+  });
+
+  // Regression for the retry case: an activity retry that produces no usage must clear a stale
+  // value from a prior attempt, not leave it attached to a different attempt's answer — the same
+  // unconditional-assign discipline `conflictIds` already follows above.
+  it('should clear a previously-set usage when the input omits it', async () => {
+    const outcome = { kind: 'insufficient_evidence' as const, reason: 'no supporting evidence' };
+    const answerDoc = buildAnswerDoc({
+      usage: { promptTokens: 500, completionTokens: 50, costUsd: 0.01 },
+    });
+    mockAnswerModel.findById.mockResolvedValueOnce(answerDoc);
+
+    await service.persist({
+      answerId: (answerDoc._id as Types.ObjectId).toString(),
+      questionText: 'What is the cap rate?',
+      retrievedChunkIds: [],
+      outcome,
+      claims: [],
+    });
+
+    expect(answerDoc.usage).toBeUndefined();
   });
 });

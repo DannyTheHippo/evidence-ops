@@ -25,6 +25,7 @@ import {
   WORKFLOW_ENGINE,
   type WorkflowEngine,
 } from '../../../providers/workflow-engine/workflow-engine.interface';
+import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
 import type { IngestDocumentVersionInput } from '../../../workflows/types';
@@ -36,10 +37,20 @@ import { DocumentVersionResponseDto } from './dtos/response/document-version.res
 import { DocumentWithVersionsResponseDto } from './dtos/response/document-with-versions.response.dto';
 import {
   DocumentNotFoundException,
+  DocumentVersionNotFoundException,
   MissingFileException,
   UnsupportedContentTypeException,
 } from './exceptions/documents.exception';
+import { sanitizeDownloadFilename } from './sanitize-download-filename.util';
 import type { UploadedFileLike } from './types/uploaded-file.type';
+
+/** Return shape of `getVersionContent` — the bytes plus everything the controller needs to build
+ * the download response, so the controller never has to re-derive a `Content-Type` or filename. */
+export interface DocumentVersionContent {
+  content: Buffer;
+  contentType: string;
+  filename: string;
+}
 
 interface UploadResult {
   document: DocumentDocument;
@@ -74,6 +85,8 @@ export class DocumentsService {
 
     @Inject(WORKFLOW_ENGINE)
     private readonly workflowEngine: WorkflowEngine,
+
+    private readonly auditService: AuditService,
 
     private readonly logger: AppLogger,
   ) {
@@ -195,6 +208,72 @@ export class DocumentsService {
       ...this.toDocumentDto(document, this.assertCurrentVersion(document, currentVersion)),
       versions: versions.map((version) => this.toVersionDto(version)),
     };
+  }
+
+  /**
+   * This route is what actually closes the GridFS tenant bypass (`document-store.interface.ts`'s
+   * `metadata` comment): `tenantScopePlugin` cannot reach GridFS, so a version row that resolves
+   * correctly through the tenant-scoped `document_versions` lookup below still has to have its
+   * stored bytes' `metadata.tenantId` checked separately at read time. Two failure directions,
+   * both deliberate:
+   * - Present and mismatched: FAIL CLOSED, a 404 indistinguishable from "not found" — the route
+   *   must not let a caller learn a wrong-tenant version id exists by getting a different error.
+   * - Absent (a stored object from before this stamp existed): FAIL OPEN and serve, with a warning
+   *   — refusing would break every document uploaded before the stamp was introduced.
+   */
+  async getVersionContent(
+    versionId: string,
+    actorId: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<DocumentVersionContent> {
+    if (!Types.ObjectId.isValid(versionId)) {
+      throw new DocumentVersionNotFoundException(`Document version '${versionId}' not found`);
+    }
+
+    // Cross-tenant id must be indistinguishable from a missing one — same `findOne` + tenant
+    // predicate pattern as `getById`/`addVersion` above.
+    const version = await this.documentVersionModel.findOne({ _id: versionId, tenantId });
+    if (!version) {
+      throw new DocumentVersionNotFoundException(`Document version '${versionId}' not found`);
+    }
+
+    const document = await this.documentModel.findOne({ _id: version.documentId, tenantId });
+    if (!document) {
+      throw new DocumentVersionNotFoundException(`Document version '${versionId}' not found`);
+    }
+
+    const stored = await this.documentStore.get(version.storageKey);
+    if (!stored) {
+      // A version row created by `addVersion`/`createDocument` always stores its bytes in the
+      // same call that creates the row — a version with no resolvable stored object is corruption,
+      // not a client error, mirroring `IngestionService`'s identical reasoning for a missing
+      // stored object on the ingest path.
+      throw new InternalServerErrorException(
+        `Document version '${versionId}' has no stored content for key '${version.storageKey}'`,
+      );
+    }
+
+    const storedTenantId = stored.metadata.tenantId;
+    if (storedTenantId !== undefined && storedTenantId !== tenantId) {
+      throw new DocumentVersionNotFoundException(`Document version '${versionId}' not found`);
+    }
+    if (storedTenantId === undefined) {
+      this.logger.warn(
+        `Document version '${versionId}' storage object '${version.storageKey}' has no tenantId stamp; serving without one`,
+      );
+    }
+
+    const extension = MIME_TYPE_TO_SOURCE_KIND[stored.contentType] ?? 'bin';
+    const filename = sanitizeDownloadFilename(document.title, version.versionNumber, extension);
+
+    await this.auditService.record({
+      action: 'documents.version.downloaded',
+      actorId,
+      subject: { entityType: 'DocumentVersion', entityId: version._id.toString() },
+      tenantId,
+    });
+
+    return { content: stored.content, contentType: stored.contentType, filename };
   }
 
   private async addVersion(

@@ -68,6 +68,28 @@ export const loginApiExamples: Record<string, ApiResponseOptions> = {
   },
 };
 
+export const logoutApiExamples: Record<string, ApiResponseOptions> = {
+  noContent: {
+    status: HttpStatus.NO_CONTENT,
+    description:
+      'Session cookie cleared. The underlying JWT is not revoked and stays valid until it expires.',
+  },
+  unauthorized: {
+    status: HttpStatus.UNAUTHORIZED,
+    description: 'No or invalid token provided.',
+    examples: {
+      example: {
+        summary: 'Missing or invalid token',
+        value: {
+          statusCode: HttpStatus.UNAUTHORIZED,
+          message: 'Invalid or expired token',
+          error: 'Unauthorized',
+        },
+      },
+    },
+  },
+};
+
 export const meApiExamples: Record<string, ApiResponseOptions> = {
   success: {
     status: HttpStatus.OK,

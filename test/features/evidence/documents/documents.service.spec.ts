@@ -9,6 +9,7 @@ import { DocumentVersion } from '../../../../src/database/schemas/evidence/docum
 import { DocumentsService } from '../../../../src/features/evidence/documents/documents.service';
 import {
   DocumentNotFoundException,
+  DocumentVersionNotFoundException,
   MissingFileException,
   UnsupportedContentTypeException,
 } from '../../../../src/features/evidence/documents/exceptions/documents.exception';
@@ -21,6 +22,7 @@ import {
   WORKFLOW_ENGINE,
   type WorkflowEngine,
 } from '../../../../src/providers/workflow-engine/workflow-engine.interface';
+import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
 import { getMockModel } from '../../../utils/get-mock-model';
@@ -44,6 +46,7 @@ describe('DocumentsService', () => {
     status: jest.fn(),
     signal: jest.fn(),
   } satisfies Record<keyof WorkflowEngine, jest.Mock>;
+  const mockAuditService = { record: jest.fn() };
 
   const documentId = new Types.ObjectId();
   const versionId = new Types.ObjectId();
@@ -88,6 +91,7 @@ describe('DocumentsService', () => {
         { provide: getModelToken(DocumentVersion.name), useValue: mockDocumentVersionModel },
         { provide: DOCUMENT_STORE, useValue: mockDocumentStore },
         { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
+        { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: getMockLogger() },
       ],
     }).compile();
@@ -411,6 +415,126 @@ describe('DocumentsService', () => {
       await expect(service.getById(documentId.toString())).rejects.toBeInstanceOf(
         InternalServerErrorException,
       );
+    });
+  });
+
+  describe('getVersionContent', () => {
+    const actorId = new Types.ObjectId().toString();
+    const storedContent = {
+      id: 'gridfs-id-1',
+      content: Buffer.from('workbook-bytes'),
+      contentType: XLSX_MIME,
+      metadata: { tenantId: 'tenant-a' },
+    };
+
+    it('should throw DocumentVersionNotFoundException for a malformed versionId', async () => {
+      await expect(service.getVersionContent('not-an-object-id', actorId)).rejects.toBeInstanceOf(
+        DocumentVersionNotFoundException,
+      );
+      expect(mockDocumentVersionModel.findOne).not.toHaveBeenCalled();
+    });
+
+    it('should throw DocumentVersionNotFoundException when the version does not exist', async () => {
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(null);
+
+      await expect(
+        service.getVersionContent(versionId.toString(), actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(DocumentVersionNotFoundException);
+      expect(mockDocumentVersionModel.findOne).toHaveBeenCalledWith({
+        _id: versionId.toString(),
+        tenantId: 'tenant-a',
+      });
+      expect(mockDocumentStore.get).not.toHaveBeenCalled();
+    });
+
+    it('should throw DocumentVersionNotFoundException when the version belongs to another tenant — the cross-tenant lookup this scoping closes', async () => {
+      // The mock model does not filter by predicate — this asserts the tenant predicate is on
+      // the query at all, not that a real Mongo would exclude the row.
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(null);
+
+      await expect(
+        service.getVersionContent(versionId.toString(), actorId, 'tenant-b'),
+      ).rejects.toBeInstanceOf(DocumentVersionNotFoundException);
+    });
+
+    it('should throw DocumentVersionNotFoundException when the parent document cannot be resolved for this tenant', async () => {
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(buildMockVersion());
+      mockDocumentModel.findOne.mockResolvedValueOnce(null);
+
+      await expect(
+        service.getVersionContent(versionId.toString(), actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(DocumentVersionNotFoundException);
+      expect(mockDocumentStore.get).not.toHaveBeenCalled();
+    });
+
+    it('should throw InternalServerErrorException when the version row has no stored bytes — corruption, not a client error', async () => {
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(buildMockVersion());
+      mockDocumentModel.findOne.mockResolvedValueOnce(buildMockDocument());
+      mockDocumentStore.get.mockResolvedValueOnce(null);
+
+      await expect(
+        service.getVersionContent(versionId.toString(), actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(InternalServerErrorException);
+      expect(mockAuditService.record).not.toHaveBeenCalled();
+    });
+
+    it('should throw DocumentVersionNotFoundException — fail CLOSED, indistinguishable from not-found — when the GridFS tenantId stamp is present but mismatched', async () => {
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(buildMockVersion());
+      mockDocumentModel.findOne.mockResolvedValueOnce(buildMockDocument());
+      mockDocumentStore.get.mockResolvedValueOnce({
+        ...storedContent,
+        metadata: { tenantId: 'tenant-b' },
+      });
+
+      await expect(
+        service.getVersionContent(versionId.toString(), actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(DocumentVersionNotFoundException);
+      expect(mockAuditService.record).not.toHaveBeenCalled();
+    });
+
+    it('should serve and warn — fail OPEN — when the GridFS tenantId stamp is absent (a pre-stamp legacy object)', async () => {
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(buildMockVersion());
+      mockDocumentModel.findOne.mockResolvedValueOnce(buildMockDocument());
+      mockDocumentStore.get.mockResolvedValueOnce({ ...storedContent, metadata: {} });
+
+      const result = await service.getVersionContent(versionId.toString(), actorId, 'tenant-a');
+
+      expect(result.content).toBe(storedContent.content);
+      expect(mockAuditService.record).toHaveBeenCalled();
+    });
+
+    it('should return the stored bytes, content type, and a sanitized filename, and record an audit row', async () => {
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(buildMockVersion());
+      mockDocumentModel.findOne.mockResolvedValueOnce(buildMockDocument());
+      mockDocumentStore.get.mockResolvedValueOnce(storedContent);
+
+      const result = await service.getVersionContent(versionId.toString(), actorId, 'tenant-a');
+
+      expect(mockDocumentStore.get).toHaveBeenCalledWith('gridfs-id-1');
+      expect(result).toEqual({
+        content: storedContent.content,
+        contentType: XLSX_MIME,
+        filename: 'Q3_Rent_Roll-v1.xlsx',
+      });
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'documents.version.downloaded',
+        actorId,
+        subject: { entityType: 'DocumentVersion', entityId: versionId.toString() },
+        tenantId: 'tenant-a',
+      });
+    });
+
+    it('should derive an unrecognised stored content type to a "bin" extension rather than throwing', async () => {
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(buildMockVersion());
+      mockDocumentModel.findOne.mockResolvedValueOnce(buildMockDocument());
+      mockDocumentStore.get.mockResolvedValueOnce({
+        ...storedContent,
+        contentType: 'application/octet-stream',
+      });
+
+      const result = await service.getVersionContent(versionId.toString(), actorId, 'tenant-a');
+
+      expect(result.filename).toBe('Q3_Rent_Roll-v1.bin');
     });
   });
 });

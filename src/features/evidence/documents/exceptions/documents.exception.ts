@@ -7,6 +7,12 @@ export class DocumentNotFoundException extends BaseException {
   }
 }
 
+export class DocumentVersionNotFoundException extends BaseException {
+  constructor(message: string, cause?: unknown) {
+    super(message, HttpStatus.NOT_FOUND, cause);
+  }
+}
+
 export class UnsupportedContentTypeException extends BaseException {
   constructor(message: string, cause?: unknown) {
     super(message, HttpStatus.UNSUPPORTED_MEDIA_TYPE, cause);

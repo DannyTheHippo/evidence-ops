@@ -13,6 +13,7 @@ import {
   InvalidCredentialsException,
 } from '../../../../src/features/common/auth/exceptions/auth.exception';
 import { UserRole } from '../../../../src/shared/enums/user-role.enum';
+import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockConfig } from '../../../utils/get-mock-config';
 import { getMockLogger } from '../../../utils/get-mock-logger';
@@ -25,6 +26,7 @@ describe('AuthService', () => {
   const mockUserId = '65f1c2e4a1b2c3d4e5f6a7b8';
   const mockUserModel = getMockModel();
   const mockConfig = getMockConfig();
+  const mockAuditService = { record: jest.fn() };
 
   const buildMockUser = (overrides: Record<string, unknown> = {}) => ({
     _id: { toString: () => mockUserId },
@@ -53,6 +55,10 @@ describe('AuthService', () => {
         {
           provide: AppLogger,
           useValue: getMockLogger(),
+        },
+        {
+          provide: AuditService,
+          useValue: mockAuditService,
         },
       ],
     }).compile();
@@ -191,6 +197,21 @@ describe('AuthService', () => {
       mockUserModel.findById.mockResolvedValueOnce(null);
 
       await expect(service.me(mockUserId)).rejects.toThrow(UnauthorizedException);
+    });
+  });
+
+  describe('logout', () => {
+    it('should record an auth.logout audit event for the given user and tenant', async () => {
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      await service.logout(mockUserId, DEFAULT_TENANT_ID);
+
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'auth.logout',
+        actorId: mockUserId,
+        subject: { entityType: 'User', entityId: mockUserId },
+        tenantId: DEFAULT_TENANT_ID,
+      });
     });
   });
 });

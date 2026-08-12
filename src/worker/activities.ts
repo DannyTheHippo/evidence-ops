@@ -29,7 +29,10 @@ import {
   factKeysMatch,
   GroundingGateService,
 } from '../features/evidence/qa/grounding-gate.service';
-import { SynthesisService } from '../features/evidence/qa/synthesis.service';
+import {
+  SynthesisService,
+  type SynthesizeAnswerResult,
+} from '../features/evidence/qa/synthesis.service';
 import type { RetrievedChunk } from '../features/evidence/qa/types/retrieved-chunk.type';
 import type { GroundingCellFact } from '../features/evidence/qa/verify-claim';
 import {
@@ -122,7 +125,7 @@ export interface Activities {
   extractFacts(documentVersionId: string): Promise<FactsExtractionResult>;
   scanForConflicts(tenantId?: string): Promise<ConflictScanResult>;
   retrieveEvidence(input: RetrieveEvidenceInput): Promise<RetrievedChunk[]>;
-  synthesizeAnswer(input: SynthesizeAnswerActivityInput): Promise<AnswerContract>;
+  synthesizeAnswer(input: SynthesizeAnswerActivityInput): Promise<SynthesizeAnswerResult>;
   groundingCheck(input: GroundingCheckActivityInput): Promise<GroundingCheckActivityResult>;
   persistAnswer(input: PersistAnswerInput): Promise<PersistAnswerResult>;
   loadConflict(input: LoadConflictActivityInput): Promise<ConflictResolutionCandidate>;

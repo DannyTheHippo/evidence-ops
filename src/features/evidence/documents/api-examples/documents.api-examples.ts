@@ -82,4 +82,24 @@ export const documentsApiExamples: Record<string, ApiResponseOptions> = {
       },
     },
   },
+  versionContent: {
+    status: HttpStatus.OK,
+    description:
+      'Raw bytes of the stored document version, served as a file download with a sanitized filename.',
+  },
+  versionContentNotFound: {
+    status: HttpStatus.NOT_FOUND,
+    description:
+      'Document version does not exist, belongs to another tenant, or its stored bytes carry a different tenant stamp — all three are indistinguishable from each other.',
+    examples: {
+      example: {
+        summary: 'Unknown or cross-tenant version',
+        value: {
+          statusCode: HttpStatus.NOT_FOUND,
+          message: "Document version '65f1c2e4a1b2c3d4e5f6a7b9' not found",
+          error: 'Not Found',
+        },
+      },
+    },
+  },
 };

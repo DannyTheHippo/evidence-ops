@@ -15,6 +15,7 @@ import { FactsModule } from './features/evidence/facts/facts.module';
 import { IngestionModule } from './features/evidence/ingestion/ingestion.module';
 import { QaModule } from './features/evidence/qa/qa.module';
 import { WorkflowRunsModule } from './features/evidence/workflow-runs/workflow-runs.module';
+import { AuditEventsModule } from './features/platform/audit-events/audit-events.module';
 import { AuthzModule } from './features/platform/authz/authz.module';
 import { GlobalExceptionFilter } from './shared/filters/global-exception.filter';
 import { SelectInterceptor } from './shared/interceptors/select.interceptor';
@@ -53,6 +54,7 @@ import { SharedModule } from './shared/shared.module';
     ApprovalsModule,
     WorkflowRunsModule,
     AuthzModule,
+    AuditEventsModule,
   ],
 })
 export class AppModule {

@@ -1,8 +1,14 @@
 import type { INestApplication } from '@nestjs/common';
+import { getModelToken } from '@nestjs/mongoose';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { Model } from 'mongoose';
 import request from 'supertest';
+import {
+  DocumentVersion,
+  DocumentVersionDocument,
+} from '../../src/database/schemas/evidence/document-version/document-version.schema';
 import { FakeWorkflowEngine } from '../../src/providers/workflow-engine/fake-workflow.engine';
 import { WORKFLOW_ENGINE } from '../../src/providers/workflow-engine/workflow-engine.interface';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
@@ -34,6 +40,7 @@ describe('Documents (e2e)', () => {
   let comps: Buffer;
   let memo: Buffer;
   let fakeWorkflowEngine: FakeWorkflowEngine;
+  let documentVersionModel: Model<DocumentVersionDocument>;
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -43,6 +50,10 @@ describe('Documents (e2e)', () => {
     await request(getTestServer(app)).post('/api/v1/auth/register').send(credentials);
     const login = await request(getTestServer(app)).post('/api/v1/auth/login').send(credentials);
     token = (login.body as { accessToken: string }).accessToken;
+
+    documentVersionModel = app.get<Model<DocumentVersionDocument>>(
+      getModelToken(DocumentVersion.name),
+    );
 
     comps = await readFile(path.join(FIXTURES, 'comps.xlsx'));
     memo = await readFile(path.join(FIXTURES, 'valuation-memo.pdf'));
@@ -169,5 +180,66 @@ describe('Documents (e2e)', () => {
     expect(response.status).toBe(200);
     expect(body.count).toBeGreaterThan(0);
     expect(body.docs.length).toBeGreaterThan(0);
+  });
+
+  describe('GET /documents/versions/:versionId/content', () => {
+    it('rejects an unauthenticated request', async () => {
+      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Content Auth' });
+      const versionId = (uploaded.body as DocumentBody).currentVersion.id;
+
+      const response = await request(getTestServer(app)).get(
+        `/api/v1/documents/versions/${versionId}/content`,
+      );
+
+      expect(response.status).toBe(401);
+    });
+
+    it('round-trips the exact uploaded bytes and reports both headers', async () => {
+      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Content Roundtrip' });
+      const versionId = (uploaded.body as DocumentBody).currentVersion.id;
+
+      const response = await request(getTestServer(app))
+        .get(`/api/v1/documents/versions/${versionId}/content`)
+        .set('Authorization', `Bearer ${token}`)
+        .responseType('blob');
+
+      expect(response.status).toBe(200);
+      expect(response.headers['content-type']).toBe(XLSX_MIME);
+      expect(response.headers['content-disposition']).toBe(
+        'attachment; filename="Content_Roundtrip-v1.xlsx"',
+      );
+      // The response body must match the uploaded bytes exactly — a truncated or re-encoded
+      // buffer would still pass a status/header-only assertion.
+      expect(Buffer.compare(response.body as Buffer, comps)).toBe(0);
+    });
+
+    it('returns 404, not 403, for a version belonging to another tenant', async () => {
+      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Content Tenant' });
+      const versionId = (uploaded.body as DocumentBody).currentVersion.id;
+
+      // No route lets a self-registered e2e user land in a second tenant, so the cross-tenant
+      // row is produced the same way `approvals.e2e-spec.ts` does: flip the persisted row's
+      // tenantId directly, then request it with the original (default-tenant) token.
+      await documentVersionModel.updateOne({ _id: versionId }, { tenantId: 'other-tenant' });
+
+      const response = await request(getTestServer(app))
+        .get(`/api/v1/documents/versions/${versionId}/content`)
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(response.status).toBe(404);
+      // Fail-closed indistinguishability: a genuinely unknown id gets the identical shape.
+      const unknown = await request(getTestServer(app))
+        .get(`/api/v1/documents/versions/000000000000000000000000/content`)
+        .set('Authorization', `Bearer ${token}`);
+      expect(unknown.status).toBe(response.status);
+    });
+
+    it('returns 404 for a malformed versionId', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/documents/versions/not-an-object-id/content')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(response.status).toBe(404);
+    });
   });
 });

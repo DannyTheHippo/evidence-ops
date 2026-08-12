@@ -67,4 +67,56 @@ describe('Auth (e2e)', () => {
 
     expect(response.status).toBe(401);
   });
+
+  it('sets an HttpOnly, SameSite=Lax session cookie on login and accepts it in place of a Bearer header', async () => {
+    const cookieCredentials = {
+      email: 'auth-e2e-cookie@example.com',
+      password: 'correct-horse-battery-staple',
+    };
+    await request(getTestServer(app)).post('/api/v1/auth/register').send(cookieCredentials);
+
+    const loginResponse = await request(getTestServer(app))
+      .post('/api/v1/auth/login')
+      .send(cookieCredentials);
+    const setCookieHeader = loginResponse.headers['set-cookie'] as unknown as string[];
+    const sessionCookie = setCookieHeader.find((cookie) => cookie.startsWith('eo_session='));
+
+    expect(sessionCookie).toBeDefined();
+    expect(sessionCookie).toMatch(/HttpOnly/);
+    expect(sessionCookie).toMatch(/SameSite=Lax/);
+
+    const cookieValue = sessionCookie?.split(';')[0];
+    const meResponse = await request(getTestServer(app))
+      .get('/api/v1/auth/me')
+      .set('Cookie', cookieValue as string);
+    const meBody = meResponse.body as MeResponseBody;
+
+    expect(meResponse.status).toBe(200);
+    expect(meBody.email).toBe(cookieCredentials.email);
+  });
+
+  // JWT is stateless: logout clears the browser's cookie but cannot revoke the token itself, so
+  // this only asserts the cookie is expired client-side, not that the prior Bearer token stopped
+  // working.
+  it('clears the session cookie on logout', async () => {
+    const logoutCredentials = {
+      email: 'auth-e2e-logout@example.com',
+      password: 'correct-horse-battery-staple',
+    };
+    await request(getTestServer(app)).post('/api/v1/auth/register').send(logoutCredentials);
+    const loginResponse = await request(getTestServer(app))
+      .post('/api/v1/auth/login')
+      .send(logoutCredentials);
+    const loginBody = loginResponse.body as AuthTokenResponseBody;
+
+    const logoutResponse = await request(getTestServer(app))
+      .post('/api/v1/auth/logout')
+      .set('Authorization', `Bearer ${loginBody.accessToken}`);
+    const setCookieHeader = logoutResponse.headers['set-cookie'] as unknown as string[];
+    const clearedCookie = setCookieHeader.find((cookie) => cookie.startsWith('eo_session='));
+
+    expect(logoutResponse.status).toBe(204);
+    expect(clearedCookie).toBeDefined();
+    expect(clearedCookie).toMatch(/Max-Age=0/);
+  });
 });

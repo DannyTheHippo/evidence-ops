@@ -151,6 +151,12 @@ export function getDocumentById(id: string): Promise<DocumentWithVersions> {
   return request<DocumentWithVersions>(`/documents/${id}`);
 }
 
+// A plain URL builder, not a `request<T>()` call: the browser fetches this href directly to
+// drive a file download, so there is no JSON body for `request<T>()` to parse.
+export function documentVersionContentUrl(versionId: string): string {
+  return `${API}/documents/versions/${versionId}/content`;
+}
+
 // ── Questions & answers ─────────────────────────────────────────────────
 
 export type AnswerRunStatus = 'queued' | 'running' | 'completed' | 'failed';
@@ -340,4 +346,40 @@ export function listWorkflowRuns(params: { workflowId: string }): Promise<WithCo
   return request<WithCount<WorkflowRun>>(
     `/workflow-runs?workflowId=${encodeURIComponent(params.workflowId)}`,
   );
+}
+
+// ── Audit events ─────────────────────────────────────────────────────────
+
+export interface AuditEventSubject {
+  entityType: string;
+  entityId: string;
+}
+
+export interface AuditEventView {
+  id: string;
+  actor: string;
+  action: string;
+  subject: AuditEventSubject;
+  timestamp: string;
+  correlationId: string;
+  createdAt: string;
+}
+
+// Four independent optional filters, so this one builds its query with
+// URLSearchParams rather than the ad-hoc template literals above.
+export function listAuditEvents(params?: {
+  skip?: number;
+  limit?: number;
+  action?: string;
+  entityType?: string;
+  entityId?: string;
+}): Promise<WithCount<AuditEventView>> {
+  const query = new URLSearchParams();
+  if (params?.skip !== undefined) query.set('skip', String(params.skip));
+  if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  if (params?.action) query.set('action', params.action);
+  if (params?.entityType) query.set('entityType', params.entityType);
+  if (params?.entityId) query.set('entityId', params.entityId);
+  const qs = query.toString();
+  return request<WithCount<AuditEventView>>(`/audit-events${qs ? `?${qs}` : ''}`);
 }

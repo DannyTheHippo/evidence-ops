@@ -7,6 +7,7 @@ import {
   Param,
   Post,
   Query,
+  StreamableFile,
   UnauthorizedException,
   UploadedFile,
   UseInterceptors,
@@ -108,5 +109,32 @@ export class DocumentsController {
       DocumentWithVersionsResponseDto,
       await this.documentsService.getById(id, user.tenantId),
     );
+  }
+
+  // Buffered, not streamed: uploads already buffer under `MAX_FILE_SIZE_BYTES`, so returning a
+  // buffered `StreamableFile` here is consistent with that cap rather than a new streaming path.
+  @Get('versions/:versionId/content')
+  @Version('1')
+  @HttpCode(HttpStatus.OK)
+  @ApiResponse(documentsApiExamples.versionContent)
+  @ApiResponse(documentsApiExamples.versionContentNotFound)
+  async getVersionContent(
+    @Param('versionId') versionId: string,
+    @CurrentUser() user: AuthenticatedRequest['user'],
+  ): Promise<StreamableFile> {
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    const { content, contentType, filename } = await this.documentsService.getVersionContent(
+      versionId,
+      user.userId,
+      user.tenantId,
+    );
+
+    return new StreamableFile(content, {
+      type: contentType,
+      disposition: `attachment; filename="${filename}"`,
+    });
   }
 }

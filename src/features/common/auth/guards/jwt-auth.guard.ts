@@ -11,6 +11,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { IS_PUBLIC_ROUTE } from '../../../../shared/decorators/public-route.decorator';
 import { AlsContext } from '../../../../shared/types/als-context.type';
 import { AuthenticatedRequest } from '../../../../shared/types/authenticated-request.type';
+import { parseCookieHeader } from '../../../../shared/utils/parse-cookie.util';
+import { AUTH_COOKIE_NAME } from '../auth.constant';
 import { JwtPayload } from '../types/jwt-payload.type';
 
 @Injectable()
@@ -34,7 +36,9 @@ export class JwtAuthGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
 
-    const token = JwtAuthGuard.extractToken(request.headers.authorization);
+    const token =
+      JwtAuthGuard.extractToken(request.headers.authorization) ??
+      parseCookieHeader(request.headers.cookie)[AUTH_COOKIE_NAME];
     if (!token) {
       throw new UnauthorizedException('No token provided');
     }

@@ -246,7 +246,7 @@ async function main(): Promise<void> {
         questionText: evalCase.question,
         tenantId: EVAL_TENANT_ID,
       });
-      const rawOutcome = await activities.synthesizeAnswer({
+      const { contract: rawOutcome } = await activities.synthesizeAnswer({
         questionText: evalCase.question,
         chunks: retrievedChunks,
       });

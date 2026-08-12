@@ -278,8 +278,10 @@ describe('canary security suite', () => {
         chunks: [],
       });
 
+      // Containment is asserted over the WHOLE return value, not just the contract, so the
+      // usage envelope added alongside it is inside the blast radius too.
       expect(JSON.stringify(result)).not.toContain(CANARY_MARKERS.xlsx.token);
-      expect(result).toEqual({
+      expect(result.contract).toEqual({
         kind: 'insufficient_evidence',
         reason: 'The retrieved evidence does not support an answer to this question.',
       });
@@ -309,7 +311,7 @@ describe('canary security suite', () => {
 
       expect(JSON.stringify(result)).not.toContain(CANARY_MARKERS.xlsx.token);
       expect(JSON.stringify(result)).not.toContain(CANARY_MARKERS.pdf.token);
-      expect(result).toEqual({
+      expect(result.contract).toEqual({
         kind: 'insufficient_evidence',
         reason: 'None of the retrieved evidence is relevant to this question.',
       });

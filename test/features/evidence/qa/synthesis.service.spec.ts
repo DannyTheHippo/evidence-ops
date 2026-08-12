@@ -168,7 +168,7 @@ describe('SynthesisService', () => {
       chunks: [buildChunk()],
     });
 
-    expect(result).toEqual({
+    expect(result.contract).toEqual({
       kind: 'insufficient_evidence',
       reason: 'The retrieved evidence does not contain enough information to answer this question.',
       reasonCode: 'evidence_does_not_address_question',
@@ -190,7 +190,7 @@ describe('SynthesisService', () => {
       chunks: [buildChunk()],
     });
 
-    expect(result).toEqual({
+    expect(result.contract).toEqual({
       kind: 'insufficient_evidence',
       reason:
         'The retrieved evidence reports conflicting values for the same fact, so no single answer can be given with confidence.',
@@ -214,12 +214,14 @@ describe('SynthesisService', () => {
       chunks: [buildChunk()],
     });
 
-    expect(result).toEqual({
+    expect(result.contract).toEqual({
       kind: 'insufficient_evidence',
       reason: 'The retrieved evidence does not support an answer to this question.',
     });
-    expect(result.kind === 'insufficient_evidence' && result.reasonCode).toBeUndefined();
-    expect(JSON.stringify(result)).not.toContain('INJECTED_MARKER_7c1a');
+    expect(
+      result.contract.kind === 'insufficient_evidence' && result.contract.reasonCode,
+    ).toBeUndefined();
+    expect(JSON.stringify(result.contract)).not.toContain('INJECTED_MARKER_7c1a');
   });
 
   // Same bypass as above, but for the outcome kind `modelAnswerContractSchema` no longer offers
@@ -243,11 +245,11 @@ describe('SynthesisService', () => {
       chunks: [buildChunk()],
     });
 
-    expect(result).toEqual({
+    expect(result.contract).toEqual({
       kind: 'insufficient_evidence',
       reason: 'None of the retrieved evidence is relevant to this question.',
     });
-    expect(JSON.stringify(result)).not.toContain('INJECTED_ENTITY_9b4e');
+    expect(JSON.stringify(result.contract)).not.toContain('INJECTED_ENTITY_9b4e');
   });
 
   it("should resolve a cited chunkId's docVersionId, sha256, and locator from the retrieved chunk, not the model", async () => {
@@ -276,7 +278,7 @@ describe('SynthesisService', () => {
       chunks: [chunk],
     });
 
-    expect(result).toEqual({
+    expect(result.contract).toEqual({
       kind: 'answered',
       claims: [
         {
@@ -313,7 +315,7 @@ describe('SynthesisService', () => {
       chunks: [buildChunk({ chunkId: 'chunk-1' })],
     });
 
-    expect(result).toEqual({
+    expect(result.contract).toEqual({
       kind: 'answered',
       claims: [
         {
@@ -330,5 +332,30 @@ describe('SynthesisService', () => {
         },
       ],
     });
+  });
+
+  // The load-bearing mapping (§ "Design decision this step implements"): cached tokens are still
+  // prompt tokens billed on the call that produced them, so both cache fields must be summed into
+  // `promptTokens` alongside `inputTokens` — a fixture using only `inputTokens` could not catch an
+  // implementation that dropped the cache fields.
+  it('should sum inputTokens, cacheCreationInputTokens, and cacheReadInputTokens into promptTokens, map outputTokens to completionTokens, and pass costUsd through unchanged', async () => {
+    modelProvider.enqueueResult({
+      output: { kind: 'insufficient_evidence', reasonCode: 'no_relevant_evidence' },
+      usage: {
+        inputTokens: 500,
+        outputTokens: 120,
+        cacheCreationInputTokens: 300,
+        cacheReadInputTokens: 75,
+      },
+      costUsd: 0.0234,
+    });
+
+    const result = await service.synthesizeAnswer({
+      question: 'What is the cap rate?',
+      chunks: [buildChunk()],
+    });
+
+    // 500 + 300 + 75 = 875.
+    expect(result.usage).toEqual({ promptTokens: 875, completionTokens: 120, costUsd: 0.0234 });
   });
 });

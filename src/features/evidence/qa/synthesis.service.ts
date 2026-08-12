@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import type { AnswerUsage } from '../../../database/schemas/evidence/answer/answer.schema';
 import {
   MODEL_PROVIDER,
   type ModelProvider,
@@ -19,6 +20,16 @@ import type { RetrievedChunk } from './types/retrieved-chunk.type';
 export interface SynthesizeAnswerInput {
   readonly question: string;
   readonly chunks: readonly RetrievedChunk[];
+}
+
+export interface SynthesizeAnswerResult {
+  readonly contract: AnswerContract;
+  /**
+   * Spend for this one synthesis call only — not embedding or fact-extraction spend elsewhere in
+   * the pipeline. Threaded through to `Answer.usage` by `answer-question.workflow.ts` /
+   * `AnswerPersistenceService`; never read as total QA-request cost.
+   */
+  readonly usage: AnswerUsage;
 }
 
 // A synthesis call carries every retrieved chunk for a question in one user turn (unlike
@@ -204,7 +215,7 @@ export class SynthesisService {
     this.logger.init(SynthesisService.name);
   }
 
-  async synthesizeAnswer(input: SynthesizeAnswerInput): Promise<AnswerContract> {
+  async synthesizeAnswer(input: SynthesizeAnswerInput): Promise<SynthesizeAnswerResult> {
     const { system, messages } = assembleAnswerMessages({
       question: input.question,
       chunks: input.chunks,
@@ -223,6 +234,19 @@ export class SynthesisService {
       maxCostUsd: MAX_COST_USD,
     });
 
-    return resolveContract(result.output, input.chunks);
+    return {
+      contract: resolveContract(result.output, input.chunks),
+      usage: {
+        // Cached tokens are still prompt tokens billed on the call that produced them — omitting
+        // `cacheCreationInputTokens`/`cacheReadInputTokens` here would under-report spend on
+        // exactly the calls prompt caching makes cheap.
+        promptTokens:
+          result.usage.inputTokens +
+          result.usage.cacheCreationInputTokens +
+          result.usage.cacheReadInputTokens,
+        completionTokens: result.usage.outputTokens,
+        costUsd: result.costUsd,
+      },
+    };
   }
 }

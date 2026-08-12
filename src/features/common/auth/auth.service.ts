@@ -4,6 +4,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import bcrypt from 'bcryptjs';
 import { Model } from 'mongoose';
 import { User, UserDocument } from '../../../database/schemas/administration/user/user.schema';
+import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import { LoginRequestDto } from './dtos/request/login.request.dto';
 import { RegisterRequestDto } from './dtos/request/register.request.dto';
@@ -27,6 +28,7 @@ export class AuthService {
     private readonly userModel: Model<UserDocument>,
 
     private readonly jwtService: JwtService,
+    private readonly auditService: AuditService,
     private readonly logger: AppLogger,
   ) {
     this.logger.init(AuthService.name);
@@ -84,6 +86,19 @@ export class AuthService {
     }
 
     return this.toMeDto(user);
+  }
+
+  // The JWT itself is stateless and carries on being valid until `exp` — this only records that
+  // the user asked to end the session client-side, it does not revoke anything.
+  async logout(userId: string, tenantId: string): Promise<void> {
+    await this.auditService.record({
+      action: 'auth.logout',
+      actorId: userId,
+      subject: { entityType: 'User', entityId: userId },
+      tenantId,
+    });
+
+    this.logger.debug(`User logged out with the _id '${userId}'`);
   }
 
   private toMeDto(user: UserDocument): MeResponseDto {
