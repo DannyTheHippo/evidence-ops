@@ -12,12 +12,17 @@ export type ConflictDocument = HydratedDocument<WithTimestamps<Conflict>>;
 
 const MIN_CONFLICTING_FACTS = 2;
 
-export type ConflictResolutionOutcome = 'resolved' | 'rejected' | 'timed_out';
+// 'superseded' is reachable ONLY from `DocumentsService.remove`'s deletion cascade — never from
+// `ConflictsService.recordResolution`'s human-decision path (`resolveConflict`'s three branches
+// stay `resolved` | `rejected` | `timed_out`). It marks a conflict whose disagreeing facts no
+// longer exist because their source document was deleted, so there is nothing left to decide.
+export type ConflictResolutionOutcome = 'resolved' | 'rejected' | 'timed_out' | 'superseded';
 
 export const CONFLICT_RESOLUTION_OUTCOMES: readonly ConflictResolutionOutcome[] = [
   'resolved',
   'rejected',
   'timed_out',
+  'superseded',
 ];
 
 /** Set once by `ConflictsService.recordResolution` (`resolve-conflict.workflow.ts`'s

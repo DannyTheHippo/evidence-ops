@@ -43,7 +43,10 @@ const zOptionalString = () =>
     .optional()
     .transform((v) => (v?.trim() ? v.trim() : undefined));
 
-const isProdLike = (nodeEnv: string): boolean => ['production', 'staging'].includes(nodeEnv);
+// Exported so callers outside this module (the login cookie's `Secure`/`__Host-` decision) share
+// the one predicate that also gates the MONGO_DB_URI/JWT_SECRET requirement below — a fourth
+// prod-like environment added only here must not silently ship an insecure cookie elsewhere.
+export const isProdLike = (nodeEnv: string): boolean => ['production', 'staging'].includes(nodeEnv);
 
 /**
  * Raw-env schema. Validates `process.env` and projects it into namespaced,

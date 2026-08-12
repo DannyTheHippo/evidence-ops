@@ -133,6 +133,22 @@ describe('JwtAuthGuard', () => {
     expect(mockJwtService.verifyAsync).toHaveBeenCalledWith('cookie-token');
   });
 
+  // Prod-like login sets `__Host-eo_session` instead of `eo_session` (see auth.controller.ts);
+  // the guard must accept either name without knowing which environment issued the cookie.
+  it('should accept a token carried only by the __Host-eo_session cookie', async () => {
+    const payload: JwtPayload = {
+      sub: 'user-id',
+      email: 'user@example.com',
+      tenantId: 'default',
+      role: UserRole.Admin,
+    };
+    mockJwtService.verifyAsync.mockResolvedValueOnce(payload);
+    const { context } = buildContext({ cookie: '__Host-eo_session=secure-cookie-token' });
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+    expect(mockJwtService.verifyAsync).toHaveBeenCalledWith('secure-cookie-token');
+  });
+
   // Dual-accept precedence: a scripted client sending both should not be able to shadow the
   // Bearer token with a stale or attacker-supplied cookie.
   it('should prefer the Authorization header over the cookie when both are present', async () => {

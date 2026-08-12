@@ -1,4 +1,4 @@
-import { clearToken, getToken, setToken } from '../lib/auth';
+import { clearSession, setSession } from '../lib/auth';
 
 const API = '/api/v1';
 
@@ -43,7 +43,6 @@ async function readErrorMessage(res: Response): Promise<string> {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getToken();
   const isFormData = init?.body instanceof FormData;
   const headers: Record<string, string> = {
     // A FormData body needs the browser to set its own multipart boundary; a fixed
@@ -51,12 +50,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
     ...(init?.headers as Record<string, string> | undefined),
   };
-  if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${API}${path}`, { ...init, headers });
+  // The credential is now an HttpOnly cookie, not a header the SPA attaches itself —
+  // 'same-origin' is what makes the browser actually send it.
+  const res = await fetch(`${API}${path}`, { ...init, headers, credentials: 'same-origin' });
 
   if (res.status === 401 && !path.startsWith('/auth/')) {
-    clearToken();
     window.location.assign('/login');
     throw new ApiError(401, 'Unauthorized');
   }
@@ -86,12 +85,13 @@ export async function login(email: string, password: string): Promise<AuthToken>
     method: 'POST',
     ...jsonBody({ email, password }),
   });
-  setToken(result.accessToken);
+  setSession(result.user);
   return result;
 }
 
-export function logout(): void {
-  clearToken();
+export async function logout(): Promise<void> {
+  await request<void>('/auth/logout', { method: 'POST' });
+  clearSession();
 }
 
 export function getMe(): Promise<Me> {
@@ -149,6 +149,12 @@ export function listDocuments(): Promise<WithCount<EvidenceDocument>> {
 
 export function getDocumentById(id: string): Promise<DocumentWithVersions> {
   return request<DocumentWithVersions>(`/documents/${id}`);
+}
+
+// Admin-only, and irreversible: the server cascades to versions, chunks, facts and stored bytes.
+// Answers that already cited this document keep their citations — see documents.service.ts.
+export async function deleteDocument(id: string): Promise<void> {
+  await request<void>(`/documents/${id}`, { method: 'DELETE' });
 }
 
 // A plain URL builder, not a `request<T>()` call: the browser fetches this href directly to

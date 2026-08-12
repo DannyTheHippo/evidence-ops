@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
-import { NavLink, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { logout } from './api/client';
-import { getToken } from './lib/auth';
+import { ensureSession } from './lib/auth';
 import ApprovalsPage from './pages/ApprovalsPage';
 import AskPage from './pages/AskPage';
 import ConflictsPage from './pages/ConflictsPage';
@@ -14,26 +15,49 @@ function navLinkClassName({ isActive }: { isActive: boolean }): string {
   return isActive ? 'topnav-link is-active' : 'topnav-link';
 }
 
+type SessionStatus = 'loading' | 'authed' | 'anon';
+
 function RequireAuth({ children }: { children: ReactNode }) {
-  if (!getToken()) {
-    return <Navigate to="/login" replace />;
-  }
+  const [status, setStatus] = useState<SessionStatus>('loading');
+
+  useEffect(() => {
+    let cancelled = false;
+    // The gate fails CLOSED on its own: both the resolved-anon and the rejected-probe path land
+    // on 'anon', never on 'authed'. Not relying on ensureSession() to never reject.
+    ensureSession()
+      .then((me) => {
+        if (!cancelled) setStatus(me ? 'authed' : 'anon');
+      })
+      .catch(() => {
+        if (!cancelled) setStatus('anon');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (status === 'loading') return null;
+  if (status === 'anon') return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
 
 export default function App() {
   const navigate = useNavigate();
+  const location = useLocation();
 
-  function handleLogout() {
-    logout();
+  async function handleLogout() {
+    await logout();
     navigate('/login');
   }
 
-  const isAuthenticated = !!getToken();
+  // Chrome visibility only, not an authorization check — RequireAuth on each route is the actual
+  // gate. Route-based rather than session-based: an App-level probe would only run once on mount
+  // (empty dep array) and would not notice a login that happens after that first render.
+  const showChrome = location.pathname !== '/login';
 
   return (
     <>
-      {isAuthenticated && (
+      {showChrome && (
         <header className="topbar">
           <span className="brand">
             <span className="brand-mark" aria-hidden />
@@ -57,7 +81,7 @@ export default function App() {
             </NavLink>
           </nav>
           <span className="topbar-spacer" />
-          <button className="btn btn--ghost btn--sm" onClick={handleLogout}>
+          <button className="btn btn--ghost btn--sm" onClick={() => void handleLogout()}>
             Logout
           </button>
         </header>

@@ -6,6 +6,15 @@ import path from 'node:path';
 import type { Model } from 'mongoose';
 import { Types } from 'mongoose';
 import request from 'supertest';
+import { User, UserDocument } from '../../src/database/schemas/administration/user/user.schema';
+import {
+  AuditEvent,
+  AuditEventDocument,
+} from '../../src/database/schemas/audit/audit-event/audit-event.schema';
+import {
+  Conflict,
+  ConflictDocument,
+} from '../../src/database/schemas/evidence/conflict/conflict.schema';
 import {
   DocumentVersion,
   DocumentVersionDocument,
@@ -14,8 +23,17 @@ import {
   EvidenceChunk,
   EvidenceChunkDocument,
 } from '../../src/database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
+import {
+  ExtractedFact,
+  ExtractedFactDocument,
+} from '../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import {
+  DOCUMENT_STORE,
+  type DocumentStore,
+} from '../../src/providers/storage/document-store.interface';
 import { FakeWorkflowEngine } from '../../src/providers/workflow-engine/fake-workflow.engine';
 import { WORKFLOW_ENGINE } from '../../src/providers/workflow-engine/workflow-engine.interface';
+import { UserRole } from '../../src/shared/enums/user-role.enum';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
 
 const FIXTURES = path.join(__dirname, '../../fixtures/data-room');
@@ -42,11 +60,16 @@ interface DocumentBody {
 describe('Documents (e2e)', () => {
   let app: INestApplication;
   let token: string;
+  let adminToken: string;
   let comps: Buffer;
   let memo: Buffer;
   let fakeWorkflowEngine: FakeWorkflowEngine;
   let documentVersionModel: Model<DocumentVersionDocument>;
   let evidenceChunkModel: Model<EvidenceChunkDocument>;
+  let extractedFactModel: Model<ExtractedFactDocument>;
+  let conflictModel: Model<ConflictDocument>;
+  let auditEventModel: Model<AuditEventDocument>;
+  let documentStore: DocumentStore;
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -57,10 +80,30 @@ describe('Documents (e2e)', () => {
     const login = await request(getTestServer(app)).post('/api/v1/auth/login').send(credentials);
     token = (login.body as { accessToken: string }).accessToken;
 
+    // DELETE /documents/:id is admin-gated; a freshly-registered user defaults to `member`. Flip
+    // the row directly, then re-login — the role travels in the JWT, so flipping the row without
+    // re-issuing the token would leave the existing `token` unchanged. Mirrors
+    // `approvals.e2e-spec.ts`'s identical admin-flip block for its own admin-gated route.
+    const userModel = app.get<Model<UserDocument>>(getModelToken(User.name));
+    const adminCredentials = {
+      email: 'documents-admin-e2e@example.com',
+      password: 'correct-horse-battery',
+    };
+    await request(getTestServer(app)).post('/api/v1/auth/register').send(adminCredentials);
+    await userModel.updateOne({ email: adminCredentials.email }, { role: UserRole.Admin });
+    const adminLogin = await request(getTestServer(app))
+      .post('/api/v1/auth/login')
+      .send(adminCredentials);
+    adminToken = (adminLogin.body as { accessToken: string }).accessToken;
+
     documentVersionModel = app.get<Model<DocumentVersionDocument>>(
       getModelToken(DocumentVersion.name),
     );
     evidenceChunkModel = app.get<Model<EvidenceChunkDocument>>(getModelToken(EvidenceChunk.name));
+    extractedFactModel = app.get<Model<ExtractedFactDocument>>(getModelToken(ExtractedFact.name));
+    conflictModel = app.get<Model<ConflictDocument>>(getModelToken(Conflict.name));
+    auditEventModel = app.get<Model<AuditEventDocument>>(getModelToken(AuditEvent.name));
+    documentStore = app.get<DocumentStore>(DOCUMENT_STORE);
 
     comps = await readFile(path.join(FIXTURES, 'comps.xlsx'));
     memo = await readFile(path.join(FIXTURES, 'valuation-memo.pdf'));
@@ -81,6 +124,28 @@ describe('Documents (e2e)', () => {
 
     return req.attach('file', body, { filename, contentType: mime });
   };
+
+  // Direct model writes, following the seeding pattern in `qa.e2e-spec.ts`'s conflicts block —
+  // no route creates a chunk row directly, ingestion does, and the workflow that runs it is
+  // faked in this test app. Shared across describe blocks: the delete-cascade suite needs a chunk
+  // whose `documentId` genuinely matches the uploaded document, not the random one the chunks-list
+  // suite defaults to (that suite only ever queries by `documentVersionId`).
+  const seedChunk = (
+    documentVersionId: string,
+    page: number,
+    overrides: Record<string, unknown> = {},
+  ) =>
+    evidenceChunkModel.create({
+      _id: `chunk-${documentVersionId}-${page}-${new Types.ObjectId().toString()}`,
+      documentId: new Types.ObjectId(),
+      documentVersionId: new Types.ObjectId(documentVersionId),
+      text: `chunk text for page ${page}`,
+      tokenCount: 100 + page,
+      embedding: [0.1, 0.2, 0.3],
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page },
+      ingestionAttemptToken: new Types.ObjectId(),
+      ...overrides,
+    });
 
   it('rejects an unauthenticated upload — the routes are not public', async () => {
     const response = await request(getTestServer(app))
@@ -258,26 +323,6 @@ describe('Documents (e2e)', () => {
       locator: unknown;
     }
 
-    // Direct model writes, following the seeding pattern in `qa.e2e-spec.ts`'s conflicts block —
-    // no route creates a chunk row directly, ingestion does, and the workflow that runs it is
-    // faked in this test app.
-    const seedChunk = (
-      documentVersionId: string,
-      page: number,
-      overrides: Record<string, unknown> = {},
-    ) =>
-      evidenceChunkModel.create({
-        _id: `chunk-${documentVersionId}-${page}-${new Types.ObjectId().toString()}`,
-        documentId: new Types.ObjectId(),
-        documentVersionId: new Types.ObjectId(documentVersionId),
-        text: `chunk text for page ${page}`,
-        tokenCount: 100 + page,
-        embedding: [0.1, 0.2, 0.3],
-        locator: { kind: 'pdf-page', extractorVersion: 'v1', page },
-        ingestionAttemptToken: new Types.ObjectId(),
-        ...overrides,
-      });
-
     it('rejects an unauthenticated request', async () => {
       const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Chunks Auth' });
       const versionId = (uploaded.body as DocumentBody).currentVersion.id;
@@ -343,6 +388,130 @@ describe('Documents (e2e)', () => {
         ['id', 'text', 'tokenCount', 'locator'].sort(),
       );
       expect(JSON.stringify(body)).not.toMatch(/embedding/i);
+    });
+  });
+
+  describe('DELETE /documents/:id', () => {
+    it('rejects an unauthenticated request', async () => {
+      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Delete Auth' });
+      const documentId = (uploaded.body as DocumentBody).id;
+
+      const response = await request(getTestServer(app)).delete(`/api/v1/documents/${documentId}`);
+
+      expect(response.status).toBe(401);
+    });
+
+    it('returns 403 when the caller is not an admin — deleting evidence is the second irreversible boundary in the product', async () => {
+      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Delete Forbidden' });
+      const documentId = (uploaded.body as DocumentBody).id;
+
+      const response = await request(getTestServer(app))
+        .delete(`/api/v1/documents/${documentId}`)
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(response.status).toBe(403);
+      // objectContaining, not toEqual: GlobalExceptionFilter also attaches `stack` below
+      // prod-like environments, which is a debugging aid unrelated to what this guard asserts.
+      expect(response.body).toEqual(
+        expect.objectContaining({
+          statusCode: 403,
+          message: 'Insufficient role for this action',
+          error: 'Forbidden',
+        }),
+      );
+    });
+
+    it('returns 404 for an unknown document, even for an admin', async () => {
+      const response = await request(getTestServer(app))
+        .delete('/api/v1/documents/000000000000000000000000')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(response.status).toBe(404);
+    });
+
+    it('cascades the full delete — versions, GridFS bytes, chunks, and facts gone; a referencing conflict resolved as superseded, not deleted; an audit row written', async () => {
+      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Delete Cascade' });
+      const documentBody = uploaded.body as DocumentBody;
+      const documentId = documentBody.id;
+      const versionId = documentBody.currentVersion.id;
+
+      const versionRow = await documentVersionModel.findById(versionId);
+      const storageKey = versionRow?.storageKey;
+      expect(storageKey).toEqual(expect.any(String));
+
+      await seedChunk(versionId, 1, { documentId: new Types.ObjectId(documentId) });
+
+      // Two disagreeing facts form the conflict `MIN_CONFLICTING_FACTS` requires; only one of
+      // them belongs to the document being deleted — the conflict must still resolve as
+      // superseded even though its other side survives untouched.
+      const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+      const deletedFact = await extractedFactModel.create({
+        factKey,
+        value: { amount: 5.25, unit: 'percent' },
+        rawText: 'cap rate of 5.25%',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-xlsx',
+        documentVersionId: new Types.ObjectId(versionId),
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
+      });
+      const survivingFact = await extractedFactModel.create({
+        factKey,
+        value: { amount: 6.1, unit: 'percent' },
+        rawText: 'cap rate of 6.10%',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-prose',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+      });
+      const conflict = await conflictModel.create({
+        factKey,
+        factIds: [deletedFact._id, survivingFact._id],
+        magnitude: 0.0085,
+        status: 'open',
+      });
+
+      const response = await request(getTestServer(app))
+        .delete(`/api/v1/documents/${documentId}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(response.status).toBe(204);
+
+      const detail = await request(getTestServer(app))
+        .get(`/api/v1/documents/${documentId}`)
+        .set('Authorization', `Bearer ${token}`);
+      expect(detail.status).toBe(404);
+
+      const remainingVersions = await documentVersionModel.find({
+        documentId: new Types.ObjectId(documentId),
+      });
+      expect(remainingVersions).toHaveLength(0);
+
+      const remainingChunks = await evidenceChunkModel.find({
+        documentId: new Types.ObjectId(documentId),
+      });
+      expect(remainingChunks).toHaveLength(0);
+
+      const remainingFacts = await extractedFactModel.find({
+        documentVersionId: new Types.ObjectId(versionId),
+      });
+      expect(remainingFacts).toHaveLength(0);
+
+      const storedBytes = await documentStore.get(storageKey as string);
+      expect(storedBytes).toBeNull();
+
+      const resolvedConflict = await conflictModel.findById(conflict._id);
+      expect(resolvedConflict?.status).toBe('resolved');
+      expect(resolvedConflict?.resolution?.outcome).toBe('superseded');
+
+      // The conflict's surviving fact — untouched, on a document that was never deleted — proves
+      // the cascade only reached the deleted document's own rows.
+      const survives = await extractedFactModel.findById(survivingFact._id);
+      expect(survives).not.toBeNull();
+
+      const events = await auditEventModel.find({ action: 'documents.deleted' });
+      expect(events.length).toBeGreaterThan(0);
     });
   });
 });

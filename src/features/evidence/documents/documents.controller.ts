@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -10,14 +11,18 @@ import {
   StreamableFile,
   UnauthorizedException,
   UploadedFile,
+  UseGuards,
   UseInterceptors,
   Version,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
+import { RolesGuard } from '../../common/auth/guards/roles.guard';
+import { RequireRole } from '../../../shared/decorators/require-role.decorator';
 import { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
+import { UserRole } from '../../../shared/enums/user-role.enum';
 import { AuthenticatedRequest } from '../../../shared/types/authenticated-request.type';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { documentsApiExamples } from './api-examples/documents.api-examples';
@@ -159,5 +164,28 @@ export class DocumentsController {
     );
 
     return { docs: docs.map((doc) => toResponseDto(EvidenceChunkResponseDto, doc)), count };
+  }
+
+  // Route-scoped, not a third global APP_GUARD — same reasoning as `ApprovalsController.decide`'s
+  // identical comment: Nest runs global guards (JwtAuthGuard) before route-scoped ones, so
+  // request.user is already populated by the time this guard reads it, and gating only this one
+  // irreversible route avoids coupling every other document route to a role check it doesn't need.
+  @Delete(':id')
+  @Version('1')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(RolesGuard)
+  @RequireRole(UserRole.Admin)
+  @ApiResponse(documentsApiExamples.deleted)
+  @ApiResponse(documentsApiExamples.forbidden)
+  @ApiResponse(documentsApiExamples.notFound)
+  async remove(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedRequest['user'],
+  ): Promise<void> {
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    await this.documentsService.remove(id, user.userId, user.tenantId);
   }
 }

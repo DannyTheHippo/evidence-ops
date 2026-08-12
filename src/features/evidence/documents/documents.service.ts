@@ -8,6 +8,10 @@ import { InjectModel } from '@nestjs/mongoose';
 import { createHash } from 'node:crypto';
 import { Model, Types } from 'mongoose';
 import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
+import {
+  Conflict,
+  ConflictDocument,
+} from '../../../database/schemas/evidence/conflict/conflict.schema';
 import type { DocumentSourceKind } from '../../../database/schemas/evidence/document/document.schema';
 import {
   Document,
@@ -22,6 +26,10 @@ import {
   EvidenceChunkDocument,
 } from '../../../database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
 import type { EvidenceLocator } from '../../../database/schemas/evidence/evidence-chunk/evidence-locator.type';
+import {
+  ExtractedFact,
+  ExtractedFactDocument,
+} from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import {
   DOCUMENT_STORE,
   type DocumentStore,
@@ -88,6 +96,12 @@ export class DocumentsService {
 
     @InjectModel(EvidenceChunk.name)
     private readonly evidenceChunkModel: Model<EvidenceChunkDocument>,
+
+    @InjectModel(ExtractedFact.name)
+    private readonly extractedFactModel: Model<ExtractedFactDocument>,
+
+    @InjectModel(Conflict.name)
+    private readonly conflictModel: Model<ConflictDocument>,
 
     @Inject(DOCUMENT_STORE)
     private readonly documentStore: DocumentStore,
@@ -333,6 +347,78 @@ export class DocumentsService {
     });
 
     return { docs: sorted.map((chunk) => this.toChunkDto(chunk)), count: sorted.length };
+  }
+
+  /**
+   * Hard delete with cascade — the first destructive route in the API, and admin-gated at the
+   * controller for that reason. Order is chosen for retry safety, not for referential neatness:
+   * the document row is deleted LAST, so a process that dies mid-cascade leaves the document (and
+   * whatever children survived) still discoverable and re-deletable, rather than orphaning rows
+   * behind a parent that no longer resolves. Reversing the order — document first — would strand
+   * every child the crash left behind, invisible to any tenant-scoped lookup that starts from the
+   * document.
+   *
+   * Every query below is explicitly tenant-scoped, even where `tenantScopePlugin` would already
+   * backstop it — this is the one path in the codebase where a missed predicate deletes another
+   * tenant's evidence, not just leaks it.
+   */
+  async remove(id: string, actorId: string, tenantId: string = DEFAULT_TENANT_ID): Promise<void> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new DocumentNotFoundException(`Document '${id}' not found`);
+    }
+
+    // Cross-tenant id must be indistinguishable from a missing one — same `findOne` + tenant
+    // predicate pattern as every other lookup in this service.
+    const document = await this.documentModel.findOne({ _id: id, tenantId });
+    if (!document) {
+      throw new DocumentNotFoundException(`Document '${id}' not found`);
+    }
+
+    const versions = await this.documentVersionModel.find({ documentId: document._id, tenantId });
+    const versionIds = versions.map((version) => version._id);
+
+    const facts = await this.extractedFactModel.find(
+      { documentVersionId: { $in: versionIds }, tenantId },
+      { _id: 1 },
+    );
+    const factIds = facts.map((fact) => fact._id);
+
+    // Only conflicts whose disagreement actually involved one of this document's facts are
+    // touched — resolved-as-superseded, never deleted, so a reviewer who later opens the
+    // conflicts list still sees why it stopped being open. Rides the `conflicts_tenantId_status_
+    // factIds` compound index from migration 0006 (same `{ tenantId, status, factIds }` shape
+    // `findConflictedFactGroupsForChunks` already queries).
+    if (factIds.length > 0) {
+      await this.conflictModel.updateMany(
+        { tenantId, status: 'open', factIds: { $in: factIds } },
+        { status: 'resolved', resolution: { outcome: 'superseded', resolvedAt: new Date() } },
+      );
+    }
+
+    await this.extractedFactModel.deleteMany({
+      documentVersionId: { $in: versionIds },
+      tenantId,
+    });
+    await this.evidenceChunkModel.deleteMany({ documentId: document._id, tenantId });
+
+    // GridFS is a driver-level bucket the tenant-scope plugin cannot reach (same reasoning as
+    // `addVersion`'s `put` call) — each version's bytes are removed individually via its own
+    // `storageKey`, the only handle the store recognizes.
+    for (const version of versions) {
+      await this.documentStore.delete(version.storageKey);
+    }
+
+    await this.documentVersionModel.deleteMany({ documentId: document._id, tenantId });
+    await this.documentModel.deleteOne({ _id: document._id, tenantId });
+
+    await this.auditService.record({
+      action: 'documents.deleted',
+      actorId,
+      subject: { entityType: 'Document', entityId: document._id.toString() },
+      tenantId,
+    });
+
+    this.logger.debug(`Deleted document '${document._id.toString()}' and its cascade`);
   }
 
   private async addVersion(

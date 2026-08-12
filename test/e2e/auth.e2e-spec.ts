@@ -121,10 +121,18 @@ describe('Auth (e2e)', () => {
   });
 
   describe('CsrfOriginMiddleware', () => {
-    const registerAndLogin = async (
-      email: string,
-    ): Promise<{ accessToken: string; sessionCookie: string }> => {
-      const password = 'correct-horse-battery-staple';
+    const email = 'auth-e2e-csrf@example.com';
+    const password = 'correct-horse-battery-staple';
+    let logoutCredentials: { accessToken: string; sessionCookie: string };
+
+    // Registered once and reused across every case below, including the login-route cases (which
+    // call /auth/login again but never /auth/register): logout only records an audit entry
+    // (auth.service.ts logout) rather than revoking the token, and a repeated login is a
+    // stateless JWT issue — neither invalidates or locks the account, so reuse is safe. A fresh
+    // registration per case runs bcrypt at cost 12, and the full e2e suite runs files in parallel
+    // workers; the added CPU load produced an observed `socket hang up` failure in 1 of 5 full
+    // runs.
+    beforeAll(async () => {
       await request(getTestServer(app)).post('/api/v1/auth/register').send({ email, password });
       const loginResponse = await request(getTestServer(app))
         .post('/api/v1/auth/login')
@@ -135,26 +143,22 @@ describe('Auth (e2e)', () => {
         .find((cookie) => cookie.startsWith('eo_session='))
         ?.split(';')[0] as string;
 
-      return { accessToken: loginBody.accessToken, sessionCookie };
-    };
+      logoutCredentials = { accessToken: loginBody.accessToken, sessionCookie };
+    });
 
     it('rejects a cookie-authenticated mutating request carrying a hostile Origin', async () => {
-      const { sessionCookie } = await registerAndLogin('auth-e2e-csrf-cookie@example.com');
-
       const response = await request(getTestServer(app))
         .post('/api/v1/auth/logout')
-        .set('Cookie', sessionCookie)
+        .set('Cookie', logoutCredentials.sessionCookie)
         .set('Origin', 'https://hostile.example.com');
 
       expect(response.status).toBe(403);
     });
 
     it('leaves a Bearer-authenticated mutating request untouched by the same hostile Origin', async () => {
-      const { accessToken } = await registerAndLogin('auth-e2e-csrf-bearer@example.com');
-
       const response = await request(getTestServer(app))
         .post('/api/v1/auth/logout')
-        .set('Authorization', `Bearer ${accessToken}`)
+        .set('Authorization', `Bearer ${logoutCredentials.accessToken}`)
         .set('Origin', 'https://hostile.example.com');
 
       expect(response.status).toBe(204);
@@ -163,13 +167,45 @@ describe('Auth (e2e)', () => {
     // Pins the documented fail-open: a non-browser client that omits Origin is not rejected, so
     // a future change to that behavior is a visible test edit rather than a silent regression.
     it('passes a cookie-authenticated mutating request that carries no Origin header', async () => {
-      const { sessionCookie } = await registerAndLogin('auth-e2e-csrf-no-origin@example.com');
-
       const response = await request(getTestServer(app))
         .post('/api/v1/auth/logout')
-        .set('Cookie', sessionCookie);
+        .set('Cookie', logoutCredentials.sessionCookie);
 
       expect(response.status).toBe(204);
+    });
+
+    // Login-CSRF hole: /auth/login is @PublicRoute() and its side effect *sets* the session
+    // cookie, so a forced cross-site top-level form navigation to it has no cookie yet — the
+    // general cookie-absent exemption above would otherwise pass it through unconditionally. See
+    // csrf-origin.middleware.ts, COOKIE_SETTING_PATHS.
+    describe('the login route', () => {
+      it('rejects a cross-origin login carrying a hostile Origin and no session cookie', async () => {
+        const response = await request(getTestServer(app))
+          .post('/api/v1/auth/login')
+          .set('Origin', 'https://hostile.example.com')
+          .send({ email, password });
+
+        expect(response.status).toBe(403);
+      });
+
+      it('passes a login request with no Origin header, matching the documented fail-open for non-browser clients', async () => {
+        const response = await request(getTestServer(app))
+          .post('/api/v1/auth/login')
+          .send({ email, password });
+
+        expect(response.status).toBe(200);
+      });
+
+      // 'http://localhost:5173' is CORS_ORIGIN's default (environment.config.ts) — setup-env.ts
+      // does not override it for the e2e run.
+      it('passes a login request whose Origin matches the configured origin', async () => {
+        const response = await request(getTestServer(app))
+          .post('/api/v1/auth/login')
+          .set('Origin', 'http://localhost:5173')
+          .send({ email, password });
+
+        expect(response.status).toBe(200);
+      });
     });
   });
 });

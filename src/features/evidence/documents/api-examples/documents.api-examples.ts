@@ -141,4 +141,24 @@ export const documentsApiExamples: Record<string, ApiResponseOptions> = {
       },
     },
   },
+  deleted: {
+    status: HttpStatus.NO_CONTENT,
+    description:
+      'Document deleted along with its versions, stored bytes, evidence chunks, and extracted ' +
+      'facts. Conflicts referencing a deleted fact are resolved as superseded, not deleted.',
+  },
+  forbidden: {
+    status: HttpStatus.FORBIDDEN,
+    description: 'Caller does not hold the admin role required to delete a document.',
+    examples: {
+      example: {
+        summary: 'Insufficient role',
+        value: {
+          statusCode: HttpStatus.FORBIDDEN,
+          message: 'Insufficient role for this action',
+          error: 'Forbidden',
+        },
+      },
+    },
+  },
 };

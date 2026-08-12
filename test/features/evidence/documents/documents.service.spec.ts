@@ -4,9 +4,11 @@ import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { createHash } from 'node:crypto';
 import { Types } from 'mongoose';
+import { Conflict } from '../../../../src/database/schemas/evidence/conflict/conflict.schema';
 import { Document } from '../../../../src/database/schemas/evidence/document/document.schema';
 import { DocumentVersion } from '../../../../src/database/schemas/evidence/document-version/document-version.schema';
 import { EvidenceChunk } from '../../../../src/database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
+import { ExtractedFact } from '../../../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import { DocumentsService } from '../../../../src/features/evidence/documents/documents.service';
 import {
   DocumentNotFoundException,
@@ -34,6 +36,8 @@ describe('DocumentsService', () => {
   const mockDocumentModel = getMockModel();
   const mockDocumentVersionModel = getMockModel();
   const mockEvidenceChunkModel = getMockModel();
+  const mockExtractedFactModel = getMockModel();
+  const mockConflictModel = getMockModel();
   // `satisfies` rather than `: jest.Mocked<DocumentStore>`: the annotation types each property as
   // an interface *method*, so every `expect(mockDocumentStore.put)` reads as an unbound method
   // reference and trips `@typescript-eslint/unbound-method`. This keeps the constraint that the
@@ -92,6 +96,8 @@ describe('DocumentsService', () => {
         { provide: getModelToken(Document.name), useValue: mockDocumentModel },
         { provide: getModelToken(DocumentVersion.name), useValue: mockDocumentVersionModel },
         { provide: getModelToken(EvidenceChunk.name), useValue: mockEvidenceChunkModel },
+        { provide: getModelToken(ExtractedFact.name), useValue: mockExtractedFactModel },
+        { provide: getModelToken(Conflict.name), useValue: mockConflictModel },
         { provide: DOCUMENT_STORE, useValue: mockDocumentStore },
         { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
         { provide: AuditService, useValue: mockAuditService },
@@ -668,6 +674,131 @@ describe('DocumentsService', () => {
           headingPath: [],
         },
       });
+    });
+  });
+
+  describe('remove', () => {
+    const actorId = new Types.ObjectId().toString();
+
+    it('should throw DocumentNotFoundException for a malformed id', async () => {
+      // 2-arg call (no tenantId) — covers the default-tenant-parameter branch even though the
+      // early throw never reads it.
+      await expect(service.remove('not-an-object-id', actorId)).rejects.toBeInstanceOf(
+        DocumentNotFoundException,
+      );
+      expect(mockDocumentModel.findOne).not.toHaveBeenCalled();
+    });
+
+    it('should throw DocumentNotFoundException when the document does not exist', async () => {
+      mockDocumentModel.findOne.mockResolvedValueOnce(null);
+
+      await expect(
+        service.remove(documentId.toString(), actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(DocumentNotFoundException);
+      expect(mockDocumentVersionModel.find).not.toHaveBeenCalled();
+    });
+
+    it('should throw DocumentNotFoundException when the document belongs to another tenant — the cross-tenant lookup this scoping closes', async () => {
+      // The mock model does not filter by predicate — this asserts `remove` queries with the
+      // caller's tenant predicate at all, not that a real Mongo would exclude the row.
+      mockDocumentModel.findOne.mockResolvedValueOnce(null);
+
+      await expect(
+        service.remove(documentId.toString(), actorId, 'tenant-b'),
+      ).rejects.toBeInstanceOf(DocumentNotFoundException);
+      expect(mockDocumentModel.findOne).toHaveBeenCalledWith({
+        _id: documentId.toString(),
+        tenantId: 'tenant-b',
+      });
+    });
+
+    it('should cascade-delete a document with no versions, skipping GridFS deletes and conflict resolution', async () => {
+      const mockDocument = buildMockDocument();
+      mockDocumentModel.findOne.mockResolvedValueOnce(mockDocument);
+      mockDocumentVersionModel.find.mockResolvedValueOnce([]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+
+      await service.remove(documentId.toString(), actorId, 'tenant-a');
+
+      expect(mockConflictModel.updateMany).not.toHaveBeenCalled();
+      expect(mockExtractedFactModel.deleteMany).toHaveBeenCalledWith({
+        documentVersionId: { $in: [] },
+        tenantId: 'tenant-a',
+      });
+      expect(mockEvidenceChunkModel.deleteMany).toHaveBeenCalledWith({
+        documentId,
+        tenantId: 'tenant-a',
+      });
+      expect(mockDocumentStore.delete).not.toHaveBeenCalled();
+      expect(mockDocumentVersionModel.deleteMany).toHaveBeenCalledWith({
+        documentId,
+        tenantId: 'tenant-a',
+      });
+      expect(mockDocumentModel.deleteOne).toHaveBeenCalledWith({
+        _id: documentId,
+        tenantId: 'tenant-a',
+      });
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'documents.deleted',
+        actorId,
+        subject: { entityType: 'Document', entityId: documentId.toString() },
+        tenantId: 'tenant-a',
+      });
+    });
+
+    it('should delete the stored GridFS bytes for every version in the cascade', async () => {
+      const mockDocument = buildMockDocument();
+      mockDocumentModel.findOne.mockResolvedValueOnce(mockDocument);
+      const versionA = buildMockVersion({ _id: new Types.ObjectId(), storageKey: 'gridfs-id-a' });
+      const versionB = buildMockVersion({ _id: new Types.ObjectId(), storageKey: 'gridfs-id-b' });
+      mockDocumentVersionModel.find.mockResolvedValueOnce([versionA, versionB]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+
+      await service.remove(documentId.toString(), actorId, 'tenant-a');
+
+      expect(mockDocumentStore.delete).toHaveBeenCalledTimes(2);
+      expect(mockDocumentStore.delete).toHaveBeenNthCalledWith(1, 'gridfs-id-a');
+      expect(mockDocumentStore.delete).toHaveBeenNthCalledWith(2, 'gridfs-id-b');
+    });
+
+    it("should resolve open conflicts referencing the deleted facts as 'superseded', riding the {tenantId, status, factIds} index", async () => {
+      const mockDocument = buildMockDocument();
+      mockDocumentModel.findOne.mockResolvedValueOnce(mockDocument);
+      mockDocumentVersionModel.find.mockResolvedValueOnce([buildMockVersion()]);
+      const factId = new Types.ObjectId();
+      mockExtractedFactModel.find.mockResolvedValueOnce([{ _id: factId }]);
+
+      await service.remove(documentId.toString(), actorId, 'tenant-a');
+
+      expect(mockConflictModel.updateMany).toHaveBeenCalledTimes(1);
+      // Recast rather than `expect.any(Date)` inside an object literal — its `any`-typed return
+      // trips `no-unsafe-assignment`, same reasoning `ingestion.service.spec.ts`'s
+      // `getFindOneAndUpdateCall` documents for its own identical case.
+      const [filterArg, updateArg] = (
+        mockConflictModel.updateMany as jest.Mock<
+          Promise<unknown>,
+          [Record<string, unknown>, { status: string; resolution: Record<string, unknown> }]
+        >
+      ).mock.calls[0];
+      expect(filterArg).toEqual({
+        tenantId: 'tenant-a',
+        status: 'open',
+        factIds: { $in: [factId] },
+      });
+      expect(updateArg.status).toBe('resolved');
+      expect(updateArg.resolution.outcome).toBe('superseded');
+      expect(updateArg.resolution.resolvedAt).toBeInstanceOf(Date);
+    });
+
+    it('should skip conflict resolution when the document has no extracted facts', async () => {
+      const mockDocument = buildMockDocument();
+      mockDocumentModel.findOne.mockResolvedValueOnce(mockDocument);
+      mockDocumentVersionModel.find.mockResolvedValueOnce([buildMockVersion()]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+
+      await service.remove(documentId.toString(), actorId, 'tenant-a');
+
+      expect(mockConflictModel.updateMany).not.toHaveBeenCalled();
     });
   });
 });
