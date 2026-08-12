@@ -9,6 +9,16 @@ const exampleRunningRun = {
 };
 
 export const workflowRunsApiExamples: Record<string, ApiResponseOptions> = {
+  list: {
+    status: HttpStatus.OK,
+    description: 'Runs matching the given workflowId, most recent first.',
+    examples: {
+      example: {
+        summary: 'One running run',
+        value: { docs: [exampleRunningRun], count: 1 },
+      },
+    },
+  },
   detail: {
     status: HttpStatus.OK,
     description: "The run's current status, best-effort refreshed from the live workflow engine.",

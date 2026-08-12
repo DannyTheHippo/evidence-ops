@@ -13,6 +13,8 @@ import {
 } from '../../../providers/workflow-engine/workflow-engine.interface';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
+import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import type { ListWorkflowRunsRequestDto } from './dtos/request/list-workflow-runs.request.dto';
 import { WorkflowRunNotFoundException } from './exceptions/workflow-runs.exception';
 
 export interface CreateWorkflowRunInput {
@@ -103,6 +105,40 @@ export class WorkflowRunsService {
     });
 
     return this.toResult(run, liveStatus);
+  }
+
+  /**
+   * Tenant-scoped lookup by Temporal `workflowId` — the SPA's only way to link an
+   * `ApprovalResponseDto` (which exposes `workflowId`, not the Mongo `_id`) to its run timeline.
+   * Deliberately does not refresh against the live engine the way `findById` does: a caller lands
+   * here to find the `_id` to link to, then immediately follows with `GET /workflow-runs/:id`,
+   * which already does the best-effort refresh — refreshing twice would be a redundant Temporal
+   * round-trip for a listing view.
+   */
+  async listByWorkflowId(
+    dto: ListWorkflowRunsRequestDto,
+    actorId: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<DocumentResultWithCount<WorkflowRunResult>> {
+    const filter = { workflowId: dto.workflowId, tenantId };
+
+    const [runs, count] = await Promise.all([
+      this.workflowRunModel.find(filter, null, {
+        sort: { createdAt: -1 },
+        skip: dto.skip,
+        limit: dto.limit,
+      }),
+      this.workflowRunModel.countDocuments(filter),
+    ]);
+
+    await this.auditService.record({
+      action: 'workflow-runs.listed',
+      actorId,
+      subject: { entityType: 'User', entityId: actorId },
+      tenantId,
+    });
+
+    return { docs: runs.map((run) => this.toResult(run)), count };
   }
 
   private toResult(

@@ -155,4 +155,80 @@ describe('WorkflowRunsService', () => {
       expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining(id.toString()));
     });
   });
+
+  describe('listByWorkflowId', () => {
+    it('should page runs by workflowId for the default tenant, never refreshing from the live engine, and record an audit event scoped to the actor', async () => {
+      const actorId = new Types.ObjectId().toString();
+      const id = new Types.ObjectId();
+      const run = {
+        _id: id,
+        workflowId: 'wf-1',
+        status: 'running',
+        currentStep: undefined,
+        errorMessage: undefined,
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      };
+      mockWorkflowRunModel.find.mockResolvedValueOnce([run]);
+      mockWorkflowRunModel.countDocuments.mockResolvedValueOnce(1);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      const result = await service.listByWorkflowId(
+        { workflowId: 'wf-1', skip: 0, limit: 20 },
+        actorId,
+      );
+
+      expect(mockWorkflowRunModel.find).toHaveBeenCalledWith(
+        { workflowId: 'wf-1', tenantId: DEFAULT_TENANT_ID },
+        null,
+        { sort: { createdAt: -1 }, skip: 0, limit: 20 },
+      );
+      expect(mockWorkflowRunModel.countDocuments).toHaveBeenCalledWith({
+        workflowId: 'wf-1',
+        tenantId: DEFAULT_TENANT_ID,
+      });
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'workflow-runs.listed',
+        actorId,
+        subject: { entityType: 'User', entityId: actorId },
+        tenantId: DEFAULT_TENANT_ID,
+      });
+      expect(mockWorkflowEngine.status).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        docs: [
+          {
+            id: id.toString(),
+            workflowId: 'wf-1',
+            status: 'running',
+            currentStep: undefined,
+            errorMessage: undefined,
+            createdAt: run.createdAt,
+          },
+        ],
+        count: 1,
+      });
+    });
+
+    it('should scope the lookup to an explicit tenantId when provided', async () => {
+      const actorId = new Types.ObjectId().toString();
+      mockWorkflowRunModel.find.mockResolvedValueOnce([]);
+      mockWorkflowRunModel.countDocuments.mockResolvedValueOnce(0);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      await service.listByWorkflowId(
+        { workflowId: 'wf-1', skip: 0, limit: 20 },
+        actorId,
+        'acme-corp',
+      );
+
+      expect(mockWorkflowRunModel.find).toHaveBeenCalledWith(
+        { workflowId: 'wf-1', tenantId: 'acme-corp' },
+        null,
+        { sort: { createdAt: -1 }, skip: 0, limit: 20 },
+      );
+      expect(mockWorkflowRunModel.countDocuments).toHaveBeenCalledWith({
+        workflowId: 'wf-1',
+        tenantId: 'acme-corp',
+      });
+    });
+  });
 });
