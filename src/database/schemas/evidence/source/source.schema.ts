@@ -109,3 +109,15 @@ export class Source extends AuditableDocument {
 }
 
 export const SourceSchema = SchemaFactory.createForClass(Source);
+
+/**
+ * Declared here as well as in `migrations/0014-sources-indexes.ts`, with the same keys, options and
+ * names. The migration is what builds them in a deployed database; these declarations are what
+ * `Model.syncIndexes()` builds, which is how a test lane that never runs migrations still enforces
+ * the uniqueness `SourcesService.create` relies on to return a 409.
+ */
+SourceSchema.index({ tenantId: 1, createdAt: -1 }, { name: 'sources_tenantId_createdAt' });
+SourceSchema.index(
+  { tenantId: 1, name: 1 },
+  { unique: true, name: 'sources_tenantId_name_unique' },
+);

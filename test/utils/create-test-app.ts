@@ -1,5 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
+import { getConnectionToken } from '@nestjs/mongoose';
 import { Test } from '@nestjs/testing';
+import type { Connection } from 'mongoose';
 import type request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { createApplicationConfig } from '../../src/config/app.config';
@@ -31,7 +33,32 @@ export const createTestApp = async (): Promise<INestApplication> => {
   await createApplicationConfig(app);
   await app.init();
 
+  await syncModelIndexes(app);
+
   return app;
+};
+
+/**
+ * Builds every index the registered schemas declare against the in-memory database.
+ *
+ * Indexes reach a deployed database through `migrations/`, which no jest lane runs, so without this
+ * an e2e suite exercises a database with no unique constraints at all — a duplicate insert that
+ * production rejects with a duplicate-key error succeeds silently in tests, and the 409 contract
+ * built on top of it can never be asserted.
+ *
+ * Failures are swallowed deliberately: this is test-harness setup, not a gate. An index that cannot
+ * be built must not stop the suite from running the assertions that do not depend on it.
+ */
+const syncModelIndexes = async (app: INestApplication): Promise<void> => {
+  const connection = app.get<Connection>(getConnectionToken());
+
+  await Promise.all(
+    Object.values(connection.models).map((model) =>
+      model.syncIndexes().catch(() => {
+        return undefined;
+      }),
+    ),
+  );
 };
 
 /**
