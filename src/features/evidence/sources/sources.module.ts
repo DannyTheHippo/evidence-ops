@@ -4,6 +4,7 @@ import { Source, SourceSchema } from '../../../database/schemas/evidence/source/
 import { ProvidersModule } from '../../../providers/providers.module';
 import { DocumentsModule } from '../documents/documents.module';
 import { WorkflowRunsModule } from '../workflow-runs/workflow-runs.module';
+import { SourcesController } from './sources.controller';
 import { SourcesService } from './sources.service';
 
 /**
@@ -21,6 +22,7 @@ import { SourcesService } from './sources.service';
     WorkflowRunsModule,
     DocumentsModule,
   ],
+  controllers: [SourcesController],
   providers: [SourcesService],
   exports: [SourcesService],
 })

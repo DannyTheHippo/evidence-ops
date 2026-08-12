@@ -241,6 +241,49 @@ describe('WorkflowRunsService', () => {
     });
   });
 
+  describe('findRunByWorkflowId', () => {
+    it('should return the projection for a matching row without recording an audit event', async () => {
+      const id = new Types.ObjectId();
+      const run = {
+        _id: id,
+        workflowId: 'wf-1',
+        status: 'running',
+        currentStep: undefined,
+        errorMessage: undefined,
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      };
+      mockWorkflowRunModel.findOne.mockResolvedValueOnce(run);
+
+      const result = await service.findRunByWorkflowId('wf-1', 'acme-corp');
+
+      expect(mockWorkflowRunModel.findOne).toHaveBeenCalledWith({
+        workflowId: 'wf-1',
+        tenantId: 'acme-corp',
+      });
+      expect(mockAuditService.record).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        id: id.toString(),
+        workflowId: 'wf-1',
+        status: 'running',
+        currentStep: undefined,
+        errorMessage: undefined,
+        createdAt: run.createdAt,
+      });
+    });
+
+    it('should return null and default the tenant when no row matches', async () => {
+      mockWorkflowRunModel.findOne.mockResolvedValueOnce(null);
+
+      const result = await service.findRunByWorkflowId('wf-1');
+
+      expect(mockWorkflowRunModel.findOne).toHaveBeenCalledWith({
+        workflowId: 'wf-1',
+        tenantId: DEFAULT_TENANT_ID,
+      });
+      expect(result).toBeNull();
+    });
+  });
+
   describe('peekRun', () => {
     it('should refresh the status from the live engine without recording an audit event', async () => {
       const id = new Types.ObjectId();

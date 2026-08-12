@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, InternalServerErrorException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
@@ -21,12 +21,14 @@ import {
   type WorkflowEngine,
 } from '../../../providers/workflow-engine/workflow-engine.interface';
 import type { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
+import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
 import type { SyncSourceWorkflowInput } from '../../../workflows/types';
 import { MAX_FILE_SIZE_BYTES, resolveUploadKind } from '../documents/documents.constant';
 import { DocumentsService } from '../documents/documents.service';
 import type { UploadedFileLike } from '../documents/types/uploaded-file.type';
+import type { WorkflowRunResult } from '../workflow-runs/workflow-runs.service';
 import { WorkflowRunsService } from '../workflow-runs/workflow-runs.service';
 import {
   SourceNameConflictException,
@@ -39,6 +41,7 @@ export interface CreateSourceInput {
   readonly path: string;
   readonly enabled?: boolean;
   readonly intervalMs?: number;
+  readonly actorId: string;
   readonly tenantId?: string;
 }
 
@@ -53,14 +56,8 @@ export interface SourceResult {
   readonly lastSyncAt?: Date;
   readonly lastSyncStatus?: string;
   readonly lastSyncError?: string;
+  readonly fileCount: number;
   readonly createdAt: Date;
-}
-
-/** `started: false` means an already-running `syncSource` execution owns this source's loop —
- *  `workflowId` still names it, so a caller can poll the same run either way. */
-export interface RequestSyncResult {
-  readonly workflowId: string;
-  readonly started: boolean;
 }
 
 /** Return of `runSync` — see `SyncSourceActivityResult`'s doc comment (`workflows/types.ts`), which
@@ -94,6 +91,7 @@ export class SourcesService {
     private readonly workflowRunsService: WorkflowRunsService,
     private readonly documentsService: DocumentsService,
     private readonly config: TypedConfigService,
+    private readonly auditService: AuditService,
     private readonly logger: AppLogger,
   ) {
     this.logger.init(SourcesService.name);
@@ -105,8 +103,9 @@ export class SourcesService {
   async create(input: CreateSourceInput): Promise<SourceResult> {
     const tenantId = input.tenantId ?? DEFAULT_TENANT_ID;
 
+    let source: SourceDocument;
     try {
-      const source = await this.sourceModel.create({
+      source = await this.sourceModel.create({
         name: input.name,
         kind: input.kind,
         path: input.path,
@@ -114,7 +113,6 @@ export class SourcesService {
         intervalMs: input.intervalMs,
         tenantId,
       });
-      return this.toResult(source);
     } catch (error) {
       if (this.isDuplicateKeyError(error)) {
         throw new SourceNameConflictException(
@@ -124,10 +122,20 @@ export class SourcesService {
       }
       throw error;
     }
+
+    await this.auditService.record({
+      action: 'sources.created',
+      actorId: input.actorId,
+      subject: { entityType: 'Source', entityId: source._id.toString() },
+      tenantId,
+    });
+
+    return this.toResult(source);
   }
 
   async list(
     pagination: PaginationRequestDto,
+    actorId: string,
     tenantId: string = DEFAULT_TENANT_ID,
   ): Promise<DocumentResultWithCount<SourceResult>> {
     const filter = { tenantId };
@@ -141,17 +149,37 @@ export class SourcesService {
       this.sourceModel.countDocuments(filter),
     ]);
 
+    await this.auditService.record({
+      action: 'sources.listed',
+      actorId,
+      subject: { entityType: 'User', entityId: actorId },
+      tenantId,
+    });
+
     return { docs: sources.map((source) => this.toResult(source)), count };
   }
 
-  async getById(id: string, tenantId: string = DEFAULT_TENANT_ID): Promise<SourceResult> {
+  async getById(
+    id: string,
+    actorId: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<SourceResult> {
     const source = await this.findOwnedSource(id, tenantId);
+
+    await this.auditService.record({
+      action: 'sources.viewed',
+      actorId,
+      subject: { entityType: 'Source', entityId: id },
+      tenantId,
+    });
+
     return this.toResult(source);
   }
 
   async setEnabled(
     id: string,
     enabled: boolean,
+    actorId: string,
     tenantId: string = DEFAULT_TENANT_ID,
   ): Promise<SourceResult> {
     if (!Types.ObjectId.isValid(id)) {
@@ -167,6 +195,13 @@ export class SourcesService {
       throw new SourceNotFoundException(`Source '${id}' not found`);
     }
 
+    await this.auditService.record({
+      action: 'sources.enabled_updated',
+      actorId,
+      subject: { entityType: 'Source', entityId: id },
+      tenantId,
+    });
+
     return this.toResult(source);
   }
 
@@ -178,33 +213,57 @@ export class SourcesService {
    * "not running" on a lookup failure (a stale handle, an engine hiccup) — same posture
    * `WorkflowRunsService.peekRun` takes for the identical call, and safe here because the sync
    * activity's own lease CAS (`runSync`) is the backstop against two loops actually racing writes.
+   *
+   * Returns the `WorkflowRun` projection either way: the row just created when a new loop starts,
+   * or the existing row named by `Source.syncWorkflowId` when a loop is already running — a caller
+   * polls the same shape regardless of which branch fired. A miss on that second lookup means the
+   * source's `syncWorkflowId` outlived the projection it names, which is data corruption rather
+   * than a client error.
    */
-  async requestSync(id: string, tenantId: string = DEFAULT_TENANT_ID): Promise<RequestSyncResult> {
+  async requestSync(
+    id: string,
+    actorId: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<WorkflowRunResult> {
     const source = await this.findOwnedSource(id, tenantId);
 
+    let run: WorkflowRunResult | null;
     if (source.syncWorkflowId && (await this.isWorkflowRunning(source.syncWorkflowId))) {
       this.logger.debug(
         `Source '${id}' already has a running sync workflow '${source.syncWorkflowId}'; not starting a second one`,
       );
-      return { workflowId: source.syncWorkflowId, started: false };
+      run = await this.workflowRunsService.findRunByWorkflowId(source.syncWorkflowId, tenantId);
+    } else {
+      const handle = await this.workflowEngine.start(SYNC_SOURCE_WORKFLOW_TYPE, {
+        sourceId: id,
+      } satisfies SyncSourceWorkflowInput);
+
+      source.syncWorkflowId = handle.id;
+      await source.save();
+
+      run = await this.workflowRunsService.create({
+        workflowId: handle.id,
+        status: handle.status,
+        tenantId,
+      });
+
+      this.logger.debug(`Started syncSource workflow '${handle.id}' for source '${id}'`);
     }
 
-    const handle = await this.workflowEngine.start(SYNC_SOURCE_WORKFLOW_TYPE, {
-      sourceId: id,
-    } satisfies SyncSourceWorkflowInput);
+    if (!run) {
+      throw new InternalServerErrorException(
+        `Source '${id}' names sync workflow '${source.syncWorkflowId}' with no WorkflowRun row`,
+      );
+    }
 
-    source.syncWorkflowId = handle.id;
-    await source.save();
-
-    await this.workflowRunsService.create({
-      workflowId: handle.id,
-      status: handle.status,
+    await this.auditService.record({
+      action: 'sources.sync_requested',
+      actorId,
+      subject: { entityType: 'Source', entityId: id },
       tenantId,
     });
 
-    this.logger.debug(`Started syncSource workflow '${handle.id}' for source '${id}'`);
-
-    return { workflowId: handle.id, started: true };
+    return run;
   }
 
   /**
@@ -454,6 +513,7 @@ export class SourcesService {
       lastSyncAt: source.lastSyncAt,
       lastSyncStatus: source.lastSyncStatus,
       lastSyncError: source.lastSyncError,
+      fileCount: source.fileStates.length,
       createdAt: source.createdAt,
     };
   }

@@ -282,6 +282,23 @@ export class WorkflowRunsService {
     return { docs: runs.map((run) => this.toResult(run)), count };
   }
 
+  /**
+   * Tenant-scoped, audit-free lookup of the durable row by Temporal `workflowId` — reused by
+   * `SourcesService.requestSync` to resurface the run projection for an already-running sync loop
+   * without minting a second `workflow-runs.listed` audit row for what is, from the caller's
+   * perspective, still a single `sources.sync_requested` action. Returns `null` on a miss rather
+   * than throwing: an absent row here means a source's `syncWorkflowId` outlived the projection
+   * that named it, which the caller is better placed to turn into a specific error than this
+   * generic lookup is.
+   */
+  async findRunByWorkflowId(
+    workflowId: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<WorkflowRunResult | null> {
+    const run = await this.workflowRunModel.findOne({ workflowId, tenantId });
+    return run ? this.toResult(run) : null;
+  }
+
   private toResult(
     run: WorkflowRunDocument,
     statusOverride?: WorkflowRunStatus,

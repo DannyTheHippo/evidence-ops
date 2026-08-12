@@ -1,3 +1,4 @@
+import { InternalServerErrorException } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
@@ -24,6 +25,7 @@ import {
   WORKFLOW_ENGINE,
   type WorkflowEngine,
 } from '../../../../src/providers/workflow-engine/workflow-engine.interface';
+import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
 import { getMockModel } from '../../../utils/get-mock-model';
@@ -55,13 +57,15 @@ describe('SourcesService', () => {
     status: jest.fn(),
     signal: jest.fn(),
   } satisfies Record<keyof WorkflowEngine, jest.Mock>;
-  const mockWorkflowRunsService = { create: jest.fn() };
+  const mockWorkflowRunsService = { create: jest.fn(), findRunByWorkflowId: jest.fn() };
   const mockDocumentsService = { upload: jest.fn() };
+  const mockAuditService = { record: jest.fn() };
   const mockLogger = getMockLogger();
 
   const sourceId = new Types.ObjectId();
   const documentIdA = new Types.ObjectId();
   const documentIdB = new Types.ObjectId();
+  const actorId = new Types.ObjectId().toString();
 
   const buildMockSource = (overrides: Record<string, unknown> = {}) => ({
     _id: sourceId,
@@ -103,6 +107,7 @@ describe('SourcesService', () => {
         { provide: WorkflowRunsService, useValue: mockWorkflowRunsService },
         { provide: DocumentsService, useValue: mockDocumentsService },
         { provide: TypedConfigService, useValue: getMockTypedConfig() },
+        { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: mockLogger },
       ],
     }).compile();
@@ -123,6 +128,7 @@ describe('SourcesService', () => {
         name: 'Deal Room Inbox',
         kind: 'local-folder',
         path: 'deal-room',
+        actorId,
         tenantId: 'tenant-a',
       });
 
@@ -132,6 +138,12 @@ describe('SourcesService', () => {
         path: 'deal-room',
         enabled: true,
         intervalMs: undefined,
+        tenantId: 'tenant-a',
+      });
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'sources.created',
+        actorId,
+        subject: { entityType: 'Source', entityId: sourceId.toString() },
         tenantId: 'tenant-a',
       });
       expect(result.id).toBe(sourceId.toString());
@@ -146,6 +158,7 @@ describe('SourcesService', () => {
         path: 'deal-room',
         enabled: false,
         intervalMs: 60000,
+        actorId,
       });
 
       expect(mockSourceModel.create).toHaveBeenCalledWith(
@@ -155,13 +168,21 @@ describe('SourcesService', () => {
           tenantId: DEFAULT_TENANT_ID,
         }),
       );
+      expect(mockAuditService.record).toHaveBeenCalledWith(
+        expect.objectContaining({ tenantId: DEFAULT_TENANT_ID }),
+      );
     });
 
     it('should map a duplicate-name E11000 error to SourceNameConflictException', async () => {
       mockSourceModel.create.mockRejectedValueOnce({ code: 11000 });
 
       await expect(
-        service.create({ name: 'Deal Room Inbox', kind: 'local-folder', path: 'deal-room' }),
+        service.create({
+          name: 'Deal Room Inbox',
+          kind: 'local-folder',
+          path: 'deal-room',
+          actorId,
+        }),
       ).rejects.toBeInstanceOf(SourceNameConflictException);
     });
 
@@ -170,7 +191,12 @@ describe('SourcesService', () => {
       mockSourceModel.create.mockRejectedValueOnce(error);
 
       await expect(
-        service.create({ name: 'Deal Room Inbox', kind: 'local-folder', path: 'deal-room' }),
+        service.create({
+          name: 'Deal Room Inbox',
+          kind: 'local-folder',
+          path: 'deal-room',
+          actorId,
+        }),
       ).rejects.toBe(error);
     });
 
@@ -179,7 +205,12 @@ describe('SourcesService', () => {
       mockSourceModel.create.mockRejectedValueOnce(error);
 
       await expect(
-        service.create({ name: 'Deal Room Inbox', kind: 'local-folder', path: 'deal-room' }),
+        service.create({
+          name: 'Deal Room Inbox',
+          kind: 'local-folder',
+          path: 'deal-room',
+          actorId,
+        }),
       ).rejects.toBe(error);
     });
 
@@ -187,7 +218,12 @@ describe('SourcesService', () => {
       mockSourceModel.create.mockRejectedValueOnce('boom');
 
       await expect(
-        service.create({ name: 'Deal Room Inbox', kind: 'local-folder', path: 'deal-room' }),
+        service.create({
+          name: 'Deal Room Inbox',
+          kind: 'local-folder',
+          path: 'deal-room',
+          actorId,
+        }),
       ).rejects.toBe('boom');
     });
 
@@ -195,23 +231,34 @@ describe('SourcesService', () => {
       mockSourceModel.create.mockRejectedValueOnce(null);
 
       await expect(
-        service.create({ name: 'Deal Room Inbox', kind: 'local-folder', path: 'deal-room' }),
+        service.create({
+          name: 'Deal Room Inbox',
+          kind: 'local-folder',
+          path: 'deal-room',
+          actorId,
+        }),
       ).rejects.toBe(null);
     });
   });
 
   describe('list', () => {
-    it('should list sources for a tenant with count', async () => {
+    it('should list sources for a tenant with count and record an audit event', async () => {
       mockSourceModel.find.mockResolvedValueOnce([buildMockSource()]);
       mockSourceModel.countDocuments.mockResolvedValueOnce(1);
 
-      const result = await service.list({ skip: 0, limit: 20 }, 'tenant-a');
+      const result = await service.list({ skip: 0, limit: 20 }, actorId, 'tenant-a');
 
       expect(mockSourceModel.find).toHaveBeenCalledWith(
         { tenantId: 'tenant-a' },
         null,
         expect.objectContaining({ skip: 0, limit: 20 }),
       );
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'sources.listed',
+        actorId,
+        subject: { entityType: 'User', entityId: actorId },
+        tenantId: 'tenant-a',
+      });
       expect(result.count).toBe(1);
       expect(result.docs).toHaveLength(1);
     });
@@ -220,7 +267,7 @@ describe('SourcesService', () => {
       mockSourceModel.find.mockResolvedValueOnce([]);
       mockSourceModel.countDocuments.mockResolvedValueOnce(0);
 
-      await service.list({ skip: 0, limit: 20 });
+      await service.list({ skip: 0, limit: 20 }, actorId);
 
       expect(mockSourceModel.find).toHaveBeenCalledWith(
         { tenantId: DEFAULT_TENANT_ID },
@@ -232,30 +279,38 @@ describe('SourcesService', () => {
 
   describe('getById', () => {
     it('should throw SourceNotFoundException for a malformed id', async () => {
-      await expect(service.getById('not-an-id')).rejects.toBeInstanceOf(SourceNotFoundException);
+      await expect(service.getById('not-an-id', actorId)).rejects.toBeInstanceOf(
+        SourceNotFoundException,
+      );
       expect(mockSourceModel.findOne).not.toHaveBeenCalled();
     });
 
     it('should throw SourceNotFoundException when no source matches the tenant', async () => {
       mockSourceModel.findOne.mockResolvedValueOnce(null);
 
-      await expect(service.getById(sourceId.toString(), 'tenant-a')).rejects.toBeInstanceOf(
-        SourceNotFoundException,
-      );
+      await expect(
+        service.getById(sourceId.toString(), actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(SourceNotFoundException);
     });
 
-    it('should return the source when found', async () => {
+    it('should return the source and record an audit event when found', async () => {
       mockSourceModel.findOne.mockResolvedValueOnce(buildMockSource());
 
-      const result = await service.getById(sourceId.toString(), 'tenant-a');
+      const result = await service.getById(sourceId.toString(), actorId, 'tenant-a');
 
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'sources.viewed',
+        actorId,
+        subject: { entityType: 'Source', entityId: sourceId.toString() },
+        tenantId: 'tenant-a',
+      });
       expect(result.name).toBe('Deal Room Inbox');
     });
   });
 
   describe('setEnabled', () => {
     it('should throw SourceNotFoundException for a malformed id', async () => {
-      await expect(service.setEnabled('not-an-id', false)).rejects.toBeInstanceOf(
+      await expect(service.setEnabled('not-an-id', false, actorId)).rejects.toBeInstanceOf(
         SourceNotFoundException,
       );
       expect(mockSourceModel.findOneAndUpdate).not.toHaveBeenCalled();
@@ -265,20 +320,26 @@ describe('SourcesService', () => {
       mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(null);
 
       await expect(
-        service.setEnabled(sourceId.toString(), false, 'tenant-a'),
+        service.setEnabled(sourceId.toString(), false, actorId, 'tenant-a'),
       ).rejects.toBeInstanceOf(SourceNotFoundException);
     });
 
-    it('should flip enabled and return the updated source', async () => {
+    it('should flip enabled, return the updated source, and record an audit event', async () => {
       mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(buildMockSource({ enabled: false }));
 
-      const result = await service.setEnabled(sourceId.toString(), false, 'tenant-a');
+      const result = await service.setEnabled(sourceId.toString(), false, actorId, 'tenant-a');
 
       expect(mockSourceModel.findOneAndUpdate).toHaveBeenCalledWith(
         { _id: sourceId.toString(), tenantId: 'tenant-a' },
         { $set: { enabled: false } },
         { new: true },
       );
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'sources.enabled_updated',
+        actorId,
+        subject: { entityType: 'Source', entityId: sourceId.toString() },
+        tenantId: 'tenant-a',
+      });
       expect(result.enabled).toBe(false);
     });
   });
@@ -287,18 +348,26 @@ describe('SourcesService', () => {
     it('should throw SourceNotFoundException for an unknown source', async () => {
       mockSourceModel.findOne.mockResolvedValueOnce(null);
 
-      await expect(service.requestSync(sourceId.toString(), 'tenant-a')).rejects.toBeInstanceOf(
-        SourceNotFoundException,
-      );
+      await expect(
+        service.requestSync(sourceId.toString(), actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(SourceNotFoundException);
     });
 
-    it('should start a new sync workflow when no syncWorkflowId is recorded', async () => {
+    it('should start a new sync workflow, record an audit event, and return the run projection', async () => {
       const source = buildMockSource();
+      const runProjection = {
+        id: 'run-1',
+        workflowId: 'wf-sync-1',
+        status: 'running',
+        currentStep: undefined,
+        errorMessage: undefined,
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      };
       mockSourceModel.findOne.mockResolvedValueOnce(source);
       mockWorkflowEngine.start.mockResolvedValueOnce({ id: 'wf-sync-1', status: 'running' });
-      mockWorkflowRunsService.create.mockResolvedValueOnce({ id: 'run-1' });
+      mockWorkflowRunsService.create.mockResolvedValueOnce(runProjection);
 
-      const result = await service.requestSync(sourceId.toString(), 'tenant-a');
+      const result = await service.requestSync(sourceId.toString(), actorId, 'tenant-a');
 
       expect(mockWorkflowEngine.start).toHaveBeenCalledWith('syncSource', {
         sourceId: sourceId.toString(),
@@ -310,16 +379,27 @@ describe('SourcesService', () => {
         status: 'running',
         tenantId: 'tenant-a',
       });
-      expect(result).toEqual({ workflowId: 'wf-sync-1', started: true });
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'sources.sync_requested',
+        actorId,
+        subject: { entityType: 'Source', entityId: sourceId.toString() },
+        tenantId: 'tenant-a',
+      });
+      expect(result).toEqual(runProjection);
     });
 
     it('should default the tenant to DEFAULT_TENANT_ID when omitted', async () => {
       const source = buildMockSource();
       mockSourceModel.findOne.mockResolvedValueOnce(source);
       mockWorkflowEngine.start.mockResolvedValueOnce({ id: 'wf-sync-1', status: 'running' });
-      mockWorkflowRunsService.create.mockResolvedValueOnce({ id: 'run-1' });
+      mockWorkflowRunsService.create.mockResolvedValueOnce({
+        id: 'run-1',
+        workflowId: 'wf-sync-1',
+        status: 'running',
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      });
 
-      await service.requestSync(sourceId.toString());
+      await service.requestSync(sourceId.toString(), actorId);
 
       expect(mockSourceModel.findOne).toHaveBeenCalledWith({
         _id: sourceId.toString(),
@@ -330,15 +410,40 @@ describe('SourcesService', () => {
       );
     });
 
-    it('should not start a second workflow when the recorded one is still running', async () => {
+    it('should not start a second workflow and return the existing run when one is still running', async () => {
+      const source = buildMockSource({ syncWorkflowId: 'wf-sync-1' });
+      const runProjection = {
+        id: 'run-1',
+        workflowId: 'wf-sync-1',
+        status: 'running',
+        currentStep: undefined,
+        errorMessage: undefined,
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      };
+      mockSourceModel.findOne.mockResolvedValueOnce(source);
+      mockWorkflowEngine.status.mockResolvedValueOnce({ id: 'wf-sync-1', status: 'running' });
+      mockWorkflowRunsService.findRunByWorkflowId.mockResolvedValueOnce(runProjection);
+
+      const result = await service.requestSync(sourceId.toString(), actorId, 'tenant-a');
+
+      expect(mockWorkflowEngine.start).not.toHaveBeenCalled();
+      expect(mockWorkflowRunsService.findRunByWorkflowId).toHaveBeenCalledWith(
+        'wf-sync-1',
+        'tenant-a',
+      );
+      expect(result).toEqual(runProjection);
+    });
+
+    it('should throw when the recorded workflow is still running but its WorkflowRun row is missing', async () => {
       const source = buildMockSource({ syncWorkflowId: 'wf-sync-1' });
       mockSourceModel.findOne.mockResolvedValueOnce(source);
       mockWorkflowEngine.status.mockResolvedValueOnce({ id: 'wf-sync-1', status: 'running' });
+      mockWorkflowRunsService.findRunByWorkflowId.mockResolvedValueOnce(null);
 
-      const result = await service.requestSync(sourceId.toString(), 'tenant-a');
-
-      expect(mockWorkflowEngine.start).not.toHaveBeenCalled();
-      expect(result).toEqual({ workflowId: 'wf-sync-1', started: false });
+      await expect(
+        service.requestSync(sourceId.toString(), actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(InternalServerErrorException);
+      expect(mockAuditService.record).not.toHaveBeenCalled();
     });
 
     it('should start a new workflow when the recorded one has already finished', async () => {
@@ -346,12 +451,17 @@ describe('SourcesService', () => {
       mockSourceModel.findOne.mockResolvedValueOnce(source);
       mockWorkflowEngine.status.mockResolvedValueOnce({ id: 'wf-sync-1', status: 'completed' });
       mockWorkflowEngine.start.mockResolvedValueOnce({ id: 'wf-sync-2', status: 'running' });
-      mockWorkflowRunsService.create.mockResolvedValueOnce({ id: 'run-2' });
+      mockWorkflowRunsService.create.mockResolvedValueOnce({
+        id: 'run-2',
+        workflowId: 'wf-sync-2',
+        status: 'running',
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      });
 
-      const result = await service.requestSync(sourceId.toString(), 'tenant-a');
+      const result = await service.requestSync(sourceId.toString(), actorId, 'tenant-a');
 
       expect(mockWorkflowEngine.start).toHaveBeenCalled();
-      expect(result).toEqual({ workflowId: 'wf-sync-2', started: true });
+      expect(result.workflowId).toBe('wf-sync-2');
     });
 
     it('should fail open and start a new workflow when the status lookup throws', async () => {
@@ -359,12 +469,17 @@ describe('SourcesService', () => {
       mockSourceModel.findOne.mockResolvedValueOnce(source);
       mockWorkflowEngine.status.mockRejectedValueOnce(new Error('engine unreachable'));
       mockWorkflowEngine.start.mockResolvedValueOnce({ id: 'wf-sync-2', status: 'running' });
-      mockWorkflowRunsService.create.mockResolvedValueOnce({ id: 'run-2' });
+      mockWorkflowRunsService.create.mockResolvedValueOnce({
+        id: 'run-2',
+        workflowId: 'wf-sync-2',
+        status: 'running',
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      });
 
-      const result = await service.requestSync(sourceId.toString(), 'tenant-a');
+      const result = await service.requestSync(sourceId.toString(), actorId, 'tenant-a');
 
       expect(mockWorkflowEngine.start).toHaveBeenCalled();
-      expect(result.started).toBe(true);
+      expect(result.workflowId).toBe('wf-sync-2');
     });
   });
 
