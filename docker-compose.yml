@@ -285,7 +285,11 @@ services:
       # in-process and Temporal's `Worker.create` bundles workflow code on top of it, and V8 sizes
       # its heap from the container limit. The compiled entrypoint pays neither cost.
       target: runtime
-    command:
+    # `entrypoint`, not `command`. The image's ENTRYPOINT is exec-form and runs `dist/main.js`, so a
+    # `command` here is APPENDED to it as argv rather than replacing it: the container would run the
+    # API with the worker's argv trailing behind it, ignored. Nothing would poll the task queue, and
+    # every workflow the API started would sit queued forever behind a container that looks healthy.
+    entrypoint:
       ["node", "--import", "./dist/instrumentation.js", "dist/worker/main.js"]
     env_file:
       - path: .env
