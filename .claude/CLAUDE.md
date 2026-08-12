@@ -77,7 +77,18 @@ kebab-case with a type suffix.
 - All new code ships with tests in the same change. Every new `*.service.ts` needs 100% branch coverage or the build fails (see § Validation).
 - Changes minimal and production-ready; preserve existing architecture unless refactoring is the task.
 - **FORBIDDEN** to add a dependency unless the task requires it. Prefer the existing `shared/` utilities, base classes, and mock factories.
+- **Keep dependencies current, but never blindly.** `npm run deps` (`ncu -u && npm i && husky`) refreshes the root manifest; `web/` has its own manifest and lockfile and is not covered by it. Rules that make this safe:
+  - A dependency bump is **its own commit with its own full gate** — `npm run checks:ci` and `npm run checks:web`, both green — never folded into a feature commit. A patch bump is not self-evidently safe: cycle 4 was bitten by a Mongoose 9 behaviour change (`updatePipeline`) that `tsc` could not see and every mocked unit test passed straight through.
+  - **`ncu -u` rewrites `package.json` before `npm i` runs.** If the install then fails, the tree is left claiming versions that neither `node_modules` nor the tracked lockfiles have, and `npm ci` breaks. Always check `git diff package.json` after a failed `deps` run and either finish the install or restore the file.
+  - **FORBIDDEN** to resolve an `ERESOLVE` peer conflict with `--force` or `--legacy-peer-deps`. A peer range is a claim about what the package was tested against; overriding it installs a combination nobody has verified, and for lint/type tooling the failure is silent wrong answers rather than a crash. Hold the conflicting package back, record why, and re-check when upstream widens the range.
+  - Never run an install while tests are executing — the suites read `node_modules` live.
 - Run the smallest relevant validation first, then broaden.
+- **Comments are JSDoc, and only JSDoc.** This section overrides the user-level comment-discipline rule wherever the two differ (per § Precedence).
+  - **`//` is FORBIDDEN anywhere in `src/`, `test/`, `web/src/`, `migrations/`, `scripts/`, and `eval/`** — line comments, trailing comments, and commented-out code alike. Every comment is a `/** … */` block attached to the thing it describes.
+  - A comment describes **its target**: what this function/class/field/branch is and how it behaves. It must be accurate against the code as it stands right now — a comment that has drifted from its target is a defect, not cosmetic debt, and is fixed in the same change that made it drift.
+  - **FORBIDDEN to quote decisions or dates.** No "decided 2026-08-12", no "per the review", no "changed from X to Y", no "ADR-0008 rejected …", no measurement provenance ("measured on express 5.2.1"), no narration of what a previous implementation did. Code comments describe the present state of the code, never its history or the argument that produced it.
+  - Decision records, dated findings, measurement provenance, and rejected alternatives belong in `docs/adr/`, the threat model, or the plan file — the places built to hold them, where they can be superseded cleanly. A rationale worth keeping is worth writing where it will be maintained; a rationale inlined as a comment rots silently the moment the code moves.
+  - The **behaviour** a rationale protects still gets stated, in present tense and about the code: not "Mongoose 9 started rejecting array updates, found via e2e", but "Pipeline updates require `updatePipeline`; without it the driver rejects the call." State a guard's failure direction the same way — as what it does, not as what was decided.
 - Never commit, merge, or rebase — the user commits manually. No remote writes.
 - No path aliases in either root; relative imports are the convention.
 - Per-project `.claude/settings.local.json` inherits user-level `permissions.deny`/`ask` without downgrade.
@@ -125,7 +136,7 @@ timeout. Neither `checks`/`checks:ci` nor any CI workflow runs it; it is a manua
 
 **Never claim done while any of these is red**, including pre-existing failures — surface them, fix them, or halt and escalate.
 
-Coverage: `jest.config.ts` requires 100% statements/branches/functions/lines, but `collectCoverageFrom` is scoped to `src/**/*.service.ts` (minus config, logger, `main.ts`). Every new service needs full branch coverage or the build fails; other files are not measured, which is not permission to leave them untested.
+Coverage: `jest.config.ts` requires 100% statements/branches/functions/lines, and `collectCoverageFrom` is scoped to `src/**/*.service.ts` **and `src/shared/utils/**`** (minus config, logger, `main.ts`). Every new service and every shared util needs full branch coverage or the build fails. `shared/utils` joined the gate after a security review found `parse-cookie.util.ts`'s hostile-input handling unpinned precisely because nothing measured it. Controllers, providers, filters and interceptors are deliberately still outside — they are thin and e2e-proven, and pulling them in fails the gate at ~82% today. That is not permission to leave them untested.
 
 CI (`.github/workflows/ci.yml`) runs `format:check`, `lint:check`, `tsc`, `test` as a matrix, plus a `web` job running `lint:check`, `typecheck`, `test`, `build`. `test:e2e` runs in `e2e.yml`. Husky pre-commit runs the mutating `format`, `lint`, `tsc`.
 

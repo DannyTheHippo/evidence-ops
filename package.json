@@ -37,6 +37,8 @@
     "--- TEMPORAL ---": "--------------------------------",
     "temporal:dev": "temporal server start-dev --db-filename .temporal/dev.db",
     "worker:dev": "OTEL_SERVICE_NAME=evidence-ops-worker npx ts-node -P tsconfig.ts-node.json -r ./src/instrumentation.ts src/worker/main.ts",
+    "--- DEPS ---": "--------------------------------",
+    "deps": "ncu -u && npm i && husky",
     "--- HOOKS ---": "--------------------------------",
     "prepare": "husky"
   },
