@@ -3,6 +3,7 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import type { Connection, ConnectOptions } from 'mongoose';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { auditablePlugin } from '../database/plugins/auditable.plugin';
+import { tenantScopePlugin } from '../database/plugins/tenant-scope.plugin';
 import { AlsContext } from '../shared/types/als-context.type';
 import { TypedConfigService } from './environment/typed-config.service';
 
@@ -47,6 +48,7 @@ export const mongooseModuleOptions: MongooseModuleAsyncOptions = {
       ...options,
       connectionFactory: (connection: Connection) => {
         connection.plugin(auditablePlugin(als));
+        connection.plugin(tenantScopePlugin(als));
         return connection;
       },
     };
