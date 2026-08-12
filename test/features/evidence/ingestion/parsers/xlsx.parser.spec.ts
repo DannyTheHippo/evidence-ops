@@ -130,10 +130,10 @@ describe('XlsxParser', () => {
 
       const result = await parser.parse(content);
 
-      expect(result.extractorVersion).toBe('xlsx-exceljs-1');
+      expect(result.extractorVersion).toBe('xlsx-exceljs-2');
       expect(result.elements.length).toBeGreaterThan(0);
       for (const element of result.elements) {
-        expect(element.locator.extractorVersion).toBe('xlsx-exceljs-1');
+        expect(element.locator.extractorVersion).toBe('xlsx-exceljs-2');
         expect(element.headingPath).toEqual([]);
       }
     });
@@ -146,6 +146,80 @@ describe('XlsxParser', () => {
       // Row 2's Notes cell (H2) has no note in the fixture; a blank-looking cell is not evidence
       // worth citing.
       expect(findCellElement(result.elements, 'Comps', 'H2')).toBeUndefined();
+    });
+  });
+
+  describe('parse — merged cells', () => {
+    // The regression case: exceljs itself already points a covered cell's raw *value* at its
+    // master on load, but a covered cell keeps its own numFmt (mergeCellsWithoutStyle at load
+    // time never re-copies the master's style). A percent-formatted master with an unformatted
+    // covered cell is exactly the divergence that produced a false conflict before this fix —
+    // master displays '5.25%', an unformatted covered cell would display the raw '0.0525'.
+    it("should give every covered cell the master cell's own display text, not its own numFmt", async () => {
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('Sheet1');
+      sheet.getCell('A1').value = 0.0525;
+      sheet.getCell('A1').numFmt = '0.00%';
+      sheet.mergeCellsWithoutStyle('A1:C1');
+      const content = Buffer.from(await workbook.xlsx.writeBuffer());
+
+      const result = await parser.parse(content);
+
+      const master = findCellElement(result.elements, 'Sheet1', 'A1');
+      const coveredB1 = findCellElement(result.elements, 'Sheet1', 'B1');
+      const coveredC1 = findCellElement(result.elements, 'Sheet1', 'C1');
+      expect(master?.text).toBe('5.25%');
+      expect(coveredB1?.text).toBe('5.25%');
+      expect(coveredC1?.text).toBe('5.25%');
+    });
+
+    it('should emit exactly one element per merged cell address, never a duplicate', async () => {
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('Sheet1');
+      sheet.getCell('A1').value = 'Q1 2025 Comparable Sales Report';
+      sheet.mergeCells('A1:D1');
+      const content = Buffer.from(await workbook.xlsx.writeBuffer());
+
+      const result = await parser.parse(content);
+
+      for (const address of ['A1', 'B1', 'C1', 'D1']) {
+        const matches = result.elements.filter(
+          (element) =>
+            element.locator.kind === 'xlsx-cell' &&
+            element.locator.sheetName === 'Sheet1' &&
+            element.locator.cell === address,
+        );
+        expect(matches).toHaveLength(1);
+        expect(matches[0].text).toBe('Q1 2025 Comparable Sales Report');
+      }
+    });
+
+    it('should not emit an element for any cell covered by a merge whose master is blank', async () => {
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('Sheet1');
+      sheet.mergeCells('A1:B1');
+      sheet.getCell('A2').value = 'data';
+      const content = Buffer.from(await workbook.xlsx.writeBuffer());
+
+      const result = await parser.parse(content);
+
+      expect(findCellElement(result.elements, 'Sheet1', 'A1')).toBeUndefined();
+      expect(findCellElement(result.elements, 'Sheet1', 'B1')).toBeUndefined();
+    });
+
+    it('should stamp the current extractorVersion on a covered-cell element the same as any other', async () => {
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('Sheet1');
+      sheet.getCell('A1').value = 'Title';
+      sheet.mergeCells('A1:B1');
+      const content = Buffer.from(await workbook.xlsx.writeBuffer());
+
+      const result = await parser.parse(content);
+
+      const covered = findCellElement(result.elements, 'Sheet1', 'B1');
+      expect((covered?.locator as XlsxCellLocator | undefined)?.extractorVersion).toBe(
+        'xlsx-exceljs-2',
+      );
     });
   });
 

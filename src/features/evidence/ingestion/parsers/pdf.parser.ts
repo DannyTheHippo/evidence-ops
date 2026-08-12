@@ -63,6 +63,22 @@ export class MalformedPdfException extends BaseException {
   }
 }
 
+/**
+ * A scanned page with no embedded text layer parses without error and yields zero extracted
+ * text — indistinguishable from a legitimately empty page unless checked explicitly. This closes
+ * exactly that gap: at least one page present and every page's extracted text empty rejects the
+ * whole document rather than completing to zero chunks. OCR is out of scope for this parser and
+ * stays out; the thrown message says so.
+ *
+ * A document with zero pages is a different condition and is not covered here — `parse()` still
+ * returns an empty `elements` array for it, unchanged.
+ */
+export class EmptyPdfTextLayerException extends BaseException {
+  constructor(message: string, cause?: unknown) {
+    super(message, HttpStatus.BAD_REQUEST, cause);
+  }
+}
+
 // `PDFPageProxy.getTextContent()`'s resolved shape is not re-exported from pdfjs-dist's
 // top-level type barrel (only `PDFDocumentProxy`/`PDFPageProxy`/`PageViewport` are); deriving it
 // from the method itself avoids reaching into an internal `display/api` path that is not part of
@@ -252,8 +268,18 @@ export class PdfParser implements DocumentParser {
         });
       }
 
+      if (doc.numPages > 0 && elements.every((element) => element.text.trim().length === 0)) {
+        throw new EmptyPdfTextLayerException(
+          `Document has ${doc.numPages} page(s) but no extractable text on any of them ` +
+            '(likely a scanned image with no embedded text layer); OCR is out of scope for this parser',
+        );
+      }
+
       return { elements, extractorVersion: EXTRACTOR_VERSION };
     } catch (error) {
+      if (error instanceof EmptyPdfTextLayerException) {
+        throw error;
+      }
       throw new MalformedPdfException('Could not parse the file as a PDF document', error);
     } finally {
       await loadingTask.destroy();

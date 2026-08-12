@@ -698,6 +698,13 @@ export class DocumentsService {
       // The observable marker for the ingestion workflow this version's upload just started —
       // 'pending' until the worker's `finalizeCompletion` flips it (`IngestionService`).
       ingestionStatus: version.ingestionStatus,
+      /**
+       * Carried explicitly because this mapping is hand-built: `@Expose()` on the DTO field only
+       * governs what survives serialization, so a field missing from the object handed to
+       * `toResponseDto` is absent from the payload no matter how it is decorated. Undefined while
+       * the status is anything other than `'failed'`, and JSON omits the key entirely then.
+       */
+      ingestionFailureReason: version.ingestionFailureReason,
       createdAt: version.createdAt,
     };
   }

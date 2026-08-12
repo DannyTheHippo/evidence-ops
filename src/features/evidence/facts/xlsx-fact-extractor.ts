@@ -10,6 +10,7 @@ import type {
 import { derivePeriodFromDateText } from './derive-period';
 import { findMetricByAlias, type MetricDefinition } from './metric-ontology';
 import type { ParsedElement } from '../ingestion/parsers/parsed-element.type';
+import { detectHeaderRow } from '../ingestion/sheet-header';
 
 export interface FactCandidate {
   readonly factKey: FactKey;
@@ -171,14 +172,18 @@ function extractSheetFacts(
     return { accepted: [], rejected: [] };
   }
 
-  const headerRow = Math.min(...cells.map((cell) => cell.row));
+  // Mirrors chunker.ts's identical assumption near its own header-row derivation — pointed at the
+  // same detectHeaderRow helper (sheet-header.ts) so the two consumers cannot drift back apart.
+  const headerRow = detectHeaderRow(cells);
   const headerByColumn = new Map<string, string>();
   for (const cell of cells.filter((cell) => cell.row === headerRow)) {
     headerByColumn.set(cell.column, cell.text);
   }
 
   const rowsByNumber = new Map<number, SheetCell[]>();
-  for (const cell of cells.filter((cell) => cell.row !== headerRow)) {
+  // Strictly below the header, not merely "not the header row" — a row above the header (a
+  // report-layout preamble/title) is not a data row and must not be walked for facts.
+  for (const cell of cells.filter((cell) => cell.row > headerRow)) {
     const row = rowsByNumber.get(cell.row) ?? [];
     row.push(cell);
     rowsByNumber.set(cell.row, row);

@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import PDFDocument from 'pdfkit';
 import {
+  EmptyPdfTextLayerException,
   MalformedPdfException,
   PdfParser,
 } from '../../../../../src/features/evidence/ingestion/parsers/pdf.parser';
@@ -208,6 +209,39 @@ describe('PdfParser', () => {
       const truncated = fullBuffer.subarray(0, 200);
 
       await expect(parser.parse(truncated)).rejects.toBeInstanceOf(MalformedPdfException);
+    });
+  });
+
+  describe('parse — empty text layer', () => {
+    /** A PDF with `pageCount` pages, each with no text drawn on it — pdf.js reports zero text
+     * items per page for this, the same shape a scanned image-only page produces. */
+    async function buildPdfWithNoText(pageCount: number): Promise<Buffer> {
+      return new Promise((resolve, reject) => {
+        const doc = new PDFDocument({ size: 'LETTER', autoFirstPage: false });
+        const chunks: Buffer[] = [];
+        doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+        doc.on('end', () => resolve(Buffer.concat(chunks)));
+        doc.on('error', reject);
+        for (let index = 0; index < pageCount; index += 1) {
+          doc.addPage();
+        }
+        doc.end();
+      });
+    }
+
+    it('should reject a document with at least one page and zero extractable text on every page, and say OCR is out of scope', async () => {
+      const buffer = await buildPdfWithNoText(2);
+
+      await expect(parser.parse(buffer)).rejects.toBeInstanceOf(EmptyPdfTextLayerException);
+      await expect(parser.parse(buffer)).rejects.toThrow(/OCR is out of scope/);
+    });
+
+    it('should not reject a genuinely zero-page document — that is a different condition from an empty text layer', async () => {
+      const buffer = await buildPdfWithNoText(0);
+
+      const parsed = await parser.parse(buffer);
+
+      expect(parsed.elements).toEqual([]);
     });
   });
 });

@@ -192,6 +192,68 @@ describe('Documents (e2e)', () => {
     expect(started).toBeDefined();
   });
 
+  it('exposes ingestionFailureReason only once a version is actually marked failed, with the exact key set at each state', async () => {
+    const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, {
+      title: 'Ingestion Failure Reason',
+    });
+    const documentId = (uploaded.body as DocumentBody).id;
+    const versionId = (uploaded.body as DocumentBody).currentVersion.id;
+
+    /**
+     * Undefined class-transformer fields are dropped before serialization (`toResponseDto`'s
+     * `excludeExtraneousValues`), so a version that never failed must not carry the key at all —
+     * this is what distinguishes "never failed" from "failed with an empty reason" at the wire
+     * level.
+     */
+    expect(Object.keys((uploaded.body as DocumentBody).currentVersion).sort()).toEqual(
+      ['id', 'versionNumber', 'sha256', 'sizeBytes', 'ingestionStatus', 'createdAt'].sort(),
+    );
+
+    /**
+     * No route sets `ingestionStatus: 'failed'` within what this sandbox-safe e2e can drive —
+     * `FakeWorkflowEngine` never executes the workflow that would call `IngestionService` — so the
+     * failed state is seeded directly on the model, mirroring the cross-tenant tests elsewhere in
+     * this file.
+     */
+    await documentVersionModel.updateOne(
+      { _id: versionId },
+      {
+        ingestionStatus: 'failed',
+        ingestionFailureReason:
+          'Document has 1 page(s) but no extractable text on any of them ' +
+          '(likely a scanned image with no embedded text layer); OCR is out of scope for this parser',
+      },
+    );
+
+    const detail = await request(getTestServer(app))
+      .get(`/api/v1/documents/${documentId}`)
+      .set('Authorization', `Bearer ${token}`);
+    const version = (detail.body as DocumentBody).currentVersion;
+
+    expect(version.ingestionStatus).toBe('failed');
+    expect(
+      (version as DocumentVersionBody & { ingestionFailureReason?: string }).ingestionFailureReason,
+    ).toBe(
+      'Document has 1 page(s) but no extractable text on any of them ' +
+        '(likely a scanned image with no embedded text layer); OCR is out of scope for this parser',
+    );
+    /**
+     * Asserting the exact key set is the only gate that catches a response-DTO field missing
+     * @Expose() — such a field is silently dropped from the payload with no error anywhere.
+     */
+    expect(Object.keys(version).sort()).toEqual(
+      [
+        'id',
+        'versionNumber',
+        'sha256',
+        'sizeBytes',
+        'ingestionStatus',
+        'ingestionFailureReason',
+        'createdAt',
+      ].sort(),
+    );
+  });
+
   it('does not create a second version when the same bytes are re-uploaded', async () => {
     const first = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Idempotent' });
     const documentId = (first.body as DocumentBody).id;

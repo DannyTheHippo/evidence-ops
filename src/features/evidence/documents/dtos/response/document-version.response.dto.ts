@@ -34,6 +34,18 @@ export class DocumentVersionResponseDto {
   ingestionStatus: DocumentVersionIngestionStatus;
 
   @Expose()
+  @ApiProperty({
+    example:
+      'Document has 3 page(s) but no extractable text on any of them (likely a scanned image ' +
+      'with no embedded text layer); OCR is out of scope for this parser',
+    description:
+      'Present only when ingestionStatus is "failed" — the parser exception message ' +
+      'from the attempt that set that status.',
+    required: false,
+  })
+  ingestionFailureReason?: string;
+
+  @Expose()
   @ApiProperty({ example: '2026-07-01T00:00:00.000Z', description: 'Version creation timestamp.' })
   createdAt: Date;
 }

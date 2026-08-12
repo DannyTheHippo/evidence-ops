@@ -5,6 +5,7 @@ import type {
 } from '../../../database/schemas/evidence/evidence-chunk/evidence-locator.type';
 import type { Chunk } from './chunk.type';
 import type { ParsedElement } from './parsers/parsed-element.type';
+import { detectHeaderRow } from './sheet-header';
 
 // No tokenizer dependency: chars/4 is the standard order-of-magnitude approximation for English
 // text (the same rule of thumb OpenAI documents for its own models). It is only ever used to size
@@ -175,23 +176,30 @@ function chunkSheet(sheetName: string, elements: readonly ParsedElement[]): Chun
   });
   const extractorVersion = elements[0].locator.extractorVersion;
 
-  // The header row is the topmost row this sheet's elements actually touch, not a hardcoded row
-  // 1 — derivable from the elements themselves rather than assumed.
-  const headerRowNumber = Math.min(...cells.map((cell) => cell.row));
-  const headerCells = cells
-    .filter((cell) => cell.row === headerRowNumber)
-    .sort((a, b) => columnIndex(a.column) - columnIndex(b.column));
-  const columns = headerCells.map((cell) => cell.column);
+  // detectHeaderRow (sheet-header.ts) replaces the old "topmost occupied row is the header"
+  // assumption — a report-layout sheet with a title above the table needs the real header, not
+  // row 1, or the union below silently drops every data column.
+  const headerRowNumber = detectHeaderRow(cells);
+
+  // The column set is the union of every column occupied at or below the header row, not just the
+  // header row's own cells — a ragged header (a data row with a value in a column the header left
+  // blank) no longer loses that column, which is today's dropped-columns defect.
+  const columns = Array.from(
+    new Set(cells.filter((cell) => cell.row >= headerRowNumber).map((cell) => cell.column)),
+  ).sort((a, b) => columnIndex(a) - columnIndex(b));
   const firstColumn = columns[0];
   const lastColumn = columns[columns.length - 1];
 
+  const headerTextByColumn = new Map(
+    cells.filter((cell) => cell.row === headerRowNumber).map((cell) => [cell.column, cell.text]),
+  );
   const headerMarkdown = [
-    toMarkdownRow(headerCells.map((cell) => cell.text)),
+    toMarkdownRow(columns.map((column) => headerTextByColumn.get(column) ?? '')),
     toMarkdownRow(columns.map(() => '---')),
   ].join('\n');
 
   const dataRowNumbers = Array.from(
-    new Set(cells.filter((cell) => cell.row !== headerRowNumber).map((cell) => cell.row)),
+    new Set(cells.filter((cell) => cell.row > headerRowNumber).map((cell) => cell.row)),
   ).sort((a, b) => a - b);
 
   const rowMarkdown = (rowNumber: number): string => {
@@ -202,6 +210,28 @@ function chunkSheet(sheetName: string, elements: readonly ParsedElement[]): Chun
   };
 
   const chunks: Chunk[] = [];
+
+  // Rows above the header (a title, a report-layout preamble) are not part of the table, but
+  // discarding them outright would make a sheet's title uncitable — one region chunk keeps them
+  // retrievable without folding them into the header/data windowing below.
+  const preambleRowNumbers = Array.from(
+    new Set(cells.filter((cell) => cell.row < headerRowNumber).map((cell) => cell.row)),
+  ).sort((a, b) => a - b);
+  if (preambleRowNumbers.length > 0) {
+    const preambleText = preambleRowNumbers.map((rowNumber) => rowMarkdown(rowNumber)).join('\n');
+    const preambleLocator: XlsxRegionLocator = {
+      kind: 'xlsx-region',
+      sheetName,
+      range: `${firstColumn}${preambleRowNumbers[0]}:${lastColumn}${preambleRowNumbers[preambleRowNumbers.length - 1]}`,
+      extractorVersion,
+    };
+    chunks.push({
+      text: preambleText,
+      tokenCount: approxTokenCount(preambleText),
+      locator: preambleLocator,
+    });
+  }
+
   let windowRows: number[] = [];
   let windowText = headerMarkdown;
 

@@ -45,7 +45,7 @@ function docxElement(
 function xlsxCellElement(sheetName: string, cell: string, text: string): ParsedElement {
   return {
     text,
-    locator: { kind: 'xlsx-cell', sheetName, cell, extractorVersion: 'xlsx-exceljs-1' },
+    locator: { kind: 'xlsx-cell', sheetName, cell, extractorVersion: 'xlsx-exceljs-2' },
     headingPath: [],
   };
 }
@@ -215,6 +215,67 @@ describe('chunkElements', () => {
 
       expect(chunks).toHaveLength(1);
       expect(chunks[0].text).toContain('| only-a |  |');
+    });
+
+    // Regression: a data row with a value in a column the header row itself left blank used to
+    // lose that column entirely, because the old column set came only from the header row's own
+    // cells. The column union is now every column occupied at or below the header row.
+    it('should widen the column set to include a column occupied only by a data row, not just the header row', () => {
+      const elements = [
+        xlsxCellElement('Sheet1', 'A1', 'Col1'),
+        xlsxCellElement('Sheet1', 'B1', 'Col2'),
+        xlsxCellElement('Sheet1', 'A2', 'only-a'),
+        xlsxCellElement('Sheet1', 'C2', 'extra'),
+      ];
+
+      const chunks = chunkElements(elements);
+
+      expect(chunks).toHaveLength(1);
+      expect(chunks[0].text).toContain('| Col1 | Col2 |  |');
+      expect(chunks[0].text).toContain('| only-a |  | extra |');
+      expect((chunks[0].locator as XlsxRegionLocator).range).toBe('A1:C2');
+    });
+  });
+
+  describe('spreadsheet — report-layout preamble', () => {
+    it('should emit one preamble region chunk for the rows above the detected header, keeping a sheet title citable', () => {
+      const elements = [
+        xlsxCellElement('Sheet1', 'A1', 'Q1 2025 Comparable Sales Report'),
+        xlsxCellElement('Sheet1', 'A2', 'Property Name'),
+        xlsxCellElement('Sheet1', 'B2', 'Sale Date'),
+        xlsxCellElement('Sheet1', 'A3', 'Acme Tower'),
+        xlsxCellElement('Sheet1', 'B3', '2025-01-15'),
+      ];
+
+      const chunks = chunkElements(elements);
+
+      expect(chunks).toHaveLength(2);
+      const preamble = chunks[0].locator as XlsxRegionLocator;
+      expect(preamble.kind).toBe('xlsx-region');
+      expect(preamble.range).toBe('A1:B1');
+      expect(chunks[0].text).toContain('Q1 2025 Comparable Sales Report');
+      // The preamble chunk never carries the table's header/separator markdown — it is not a
+      // data window.
+      expect(chunks[0].text).not.toContain('| --- |');
+
+      const table = chunks[1].locator as XlsxRegionLocator;
+      expect(table.range).toBe('A2:B3');
+      expect(chunks[1].text).toContain('| Property Name | Sale Date |');
+      expect(chunks[1].text).toContain('| Acme Tower | 2025-01-15 |');
+    });
+
+    it('should emit no preamble chunk when the header row is already the topmost occupied row', () => {
+      const elements = [
+        xlsxCellElement('Sheet1', 'A1', 'Property Name'),
+        xlsxCellElement('Sheet1', 'B1', 'Sale Date'),
+        xlsxCellElement('Sheet1', 'A2', 'Acme Tower'),
+        xlsxCellElement('Sheet1', 'B2', '2025-01-15'),
+      ];
+
+      const chunks = chunkElements(elements);
+
+      expect(chunks).toHaveLength(1);
+      expect((chunks[0].locator as XlsxRegionLocator).range).toBe('A1:B2');
     });
   });
 

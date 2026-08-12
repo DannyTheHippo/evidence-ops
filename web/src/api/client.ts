@@ -107,7 +107,7 @@ export function getMe(): Promise<Me> {
 // ── Documents ────────────────────────────────────────────────────────────
 
 export type DocumentSourceKind = 'pdf' | 'docx' | 'xlsx';
-export type DocumentVersionIngestionStatus = 'pending' | 'completed';
+export type DocumentVersionIngestionStatus = 'pending' | 'completed' | 'failed';
 
 export interface DocumentVersion {
   id: string;
@@ -115,6 +115,9 @@ export interface DocumentVersion {
   sha256: string;
   sizeBytes: number;
   ingestionStatus: DocumentVersionIngestionStatus;
+  /** Present only when ingestionStatus is 'failed' — the parser exception message from the
+   * attempt that set that status. */
+  ingestionFailureReason?: string;
   createdAt: string;
 }
 

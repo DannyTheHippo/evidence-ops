@@ -22,6 +22,7 @@ import {
   DOCUMENT_STORE,
   type DocumentStore,
 } from '../../../providers/storage/document-store.interface';
+import { BaseException } from '../../../shared/exceptions/base.exception';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import {
   createSearchChunkCountProbe,
@@ -32,6 +33,7 @@ import { chunkElements } from './chunker';
 import { computeChunkId } from './compute-chunk-id';
 import { DocumentVersionNotFoundException } from './exceptions/ingestion.exception';
 import { ParserRegistry } from './parser.registry';
+import type { ParsedDocument } from './parsers/parsed-element.type';
 import { screenInstructionInjection } from './screen-instruction-injection';
 
 // Each `waitForIndexConvergence` call below spends up to this budget *twice* — once polling
@@ -172,7 +174,20 @@ export class IngestionService {
     }
 
     const parser = this.parserRegistry.resolve(stored.contentType);
-    const parsed = await parser.parse(stored.content);
+    let parsed: ParsedDocument;
+    try {
+      parsed = await parser.parse(stored.content);
+    } catch (error) {
+      if (error instanceof BaseException) {
+        const recorded = await this.finalizeFailure(version._id, leaseToken, error.message);
+        if (!recorded) {
+          this.logger.debug(
+            `Document version '${documentVersionId}' parse-failure recording superseded by a newer attempt`,
+          );
+        }
+      }
+      throw error;
+    }
 
     // Screened before chunking, not after: `chunkElements` merges a run of elements sharing a
     // heading path (prose) or a window of rows (spreadsheet) into one `Chunk`, so screening a
@@ -375,9 +390,17 @@ export class IngestionService {
     }
   }
 
-  /** Fails CLOSED: only succeeds (and overwrites the lease) while the version is not yet
+  /**
+   * Fails CLOSED: only succeeds (and overwrites the lease) while the version is not yet
    * `completed` — a concurrent attempt that already finished this version leaves nothing to
-   * claim, so the recovery `deleteMany` below never runs against a version another attempt owns. */
+   * claim, so the recovery `deleteMany` below never runs against a version another attempt owns.
+   *
+   * `{ $ne: 'completed' }` also re-claims a `'failed'` version, so a retried attempt (a new
+   * Temporal run, not the automatic in-workflow retries `maximumAttempts` already exhausted) can
+   * ingest it again. That retry only ever comes from new bytes: `DocumentsService.addVersion`
+   * dedupes a byte-identical re-upload onto the existing version by sha256 without starting a new
+   * ingestion workflow, so a `'failed'` version stays `'failed'` until different bytes arrive.
+   */
   private async claimAttempt(
     versionId: Types.ObjectId,
     leaseToken: Types.ObjectId,
@@ -399,6 +422,27 @@ export class IngestionService {
     const finalized = await this.documentVersionModel.findOneAndUpdate(
       { _id: versionId, ingestionLeaseToken: leaseToken },
       { $set: { ingestionStatus: 'completed' }, $unset: { ingestionLeaseToken: '' } },
+    );
+    return finalized !== null;
+  }
+
+  /**
+   * Mirrors `finalizeCompletion`'s compare-and-set exactly, so a parse failure is recorded under
+   * the same lease guard as a success: only while `leaseToken` is still the current one, or a
+   * stale attempt's failure write could overwrite a newer attempt's in-progress or already-
+   * completed state.
+   */
+  private async finalizeFailure(
+    versionId: Types.ObjectId,
+    leaseToken: Types.ObjectId,
+    reason: string,
+  ): Promise<boolean> {
+    const finalized = await this.documentVersionModel.findOneAndUpdate(
+      { _id: versionId, ingestionLeaseToken: leaseToken },
+      {
+        $set: { ingestionStatus: 'failed', ingestionFailureReason: reason },
+        $unset: { ingestionLeaseToken: '' },
+      },
     );
     return finalized !== null;
   }

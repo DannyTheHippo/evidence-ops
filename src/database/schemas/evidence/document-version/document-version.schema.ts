@@ -5,11 +5,12 @@ import { AuditableDocument } from '../../../global/auditable-document/auditable-
 
 export type DocumentVersionDocument = HydratedDocument<WithTimestamps<DocumentVersion>>;
 
-export type DocumentVersionIngestionStatus = 'pending' | 'completed';
+export type DocumentVersionIngestionStatus = 'pending' | 'completed' | 'failed';
 
 export const DOCUMENT_VERSION_INGESTION_STATUSES: readonly DocumentVersionIngestionStatus[] = [
   'pending',
   'completed',
+  'failed',
 ];
 
 @Schema({ timestamps: true, collection: 'document_versions' })
@@ -54,6 +55,16 @@ export class DocumentVersion extends AuditableDocument {
   // predates, so no backfill migration is needed.
   @Prop({ type: Types.ObjectId })
   ingestionLeaseToken?: Types.ObjectId;
+
+  /**
+   * Populated only when `ingestionStatus` is `'failed'` — the parser exception message, verbatim,
+   * from the attempt that set that status (`IngestionService.ingestVersion`). Optional and
+   * unindexed: a version predating this field has no failure to record and there is no query
+   * pattern over this field, so no migration accompanies its addition (`.claude/rules/mongoose.md`
+   * requires one only for an index or a backfill).
+   */
+  @Prop({ type: String })
+  ingestionFailureReason?: string;
 
   @Prop({ type: String, required: true, default: DEFAULT_TENANT_ID })
   tenantId: string;

@@ -12,7 +12,7 @@ import rawManifest from '../../../../fixtures/data-room/manifest.json';
 
 const FIXTURE_PATH = path.join(__dirname, '../../../../fixtures/data-room/comps.xlsx');
 
-const EXTRACTOR_VERSION = 'xlsx-exceljs-1';
+const EXTRACTOR_VERSION = 'xlsx-exceljs-2';
 
 function cellElement(sheetName: string, cell: string, text: string): ParsedElement {
   const locator: XlsxCellLocator = {
@@ -264,5 +264,32 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
     ];
 
     expect(extractXlsxFacts(elements, METRIC_ONTOLOGY)).toEqual({ accepted: [], rejected: [] });
+  });
+
+  // Regression for the defect this file exists to fix: a report-layout sheet with a title row
+  // above the real header used to have that title row mistaken for the header (the old
+  // Math.min-of-occupied-rows assumption), so "Property Name" and "Sale Date" were never
+  // recognized as headers and every row below produced zero facts. detectHeaderRow (sheet-header.ts)
+  // skips the title and finds row 2 instead.
+  it('should derive facts from a report-layout sheet whose real header sits below a title row', () => {
+    const elements = [
+      cellElement('Sheet1', 'A1', 'Q1 2025 Comparable Sales Report'),
+      cellElement('Sheet1', 'A2', 'Property Name'),
+      cellElement('Sheet1', 'B2', 'Sale Date'),
+      cellElement('Sheet1', 'C2', 'Building Area (SF)'),
+      cellElement('Sheet1', 'A3', 'Acme Tower'),
+      cellElement('Sheet1', 'B3', '2025-01-15'),
+      cellElement('Sheet1', 'C3', '100,000'),
+    ];
+
+    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+
+    expect(accepted).toHaveLength(1);
+    expect(accepted[0].factKey).toEqual({
+      entity: 'Acme Tower',
+      metric: 'building_area_sf',
+      period: '2025-01',
+    });
+    expect(accepted[0].value).toEqual({ amount: 100000, unit: 'sf' });
   });
 });

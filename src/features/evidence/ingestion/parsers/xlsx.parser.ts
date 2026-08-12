@@ -12,7 +12,7 @@ import { sanitizeEvidenceText } from '../sanitize-evidence-text';
 const XLSX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 // Bump whenever a change here could shift the sheet/cell coordinates a stored citation points at.
-const EXTRACTOR_VERSION = 'xlsx-exceljs-1';
+const EXTRACTOR_VERSION = 'xlsx-exceljs-2';
 
 export class MalformedXlsxException extends BaseException {
   constructor(message: string, cause?: unknown) {
@@ -104,6 +104,45 @@ function displayTextForValue(
   return undefined;
 }
 
+interface MergeBounds {
+  readonly top: number;
+  readonly left: number;
+  readonly bottom: number;
+  readonly right: number;
+}
+
+// Mirrors chunker.ts's own local A1-notation helpers — duplicated by design (see e.g.
+// xlsx-fact-extractor.ts's identical comment): this module parses cell addresses to resolve a
+// merge range's bounding box, an unrelated purpose to either of those modules', so sharing an
+// import would couple modules that have no other reason to depend on each other.
+function parseCellAddress(cell: string): { column: string; row: number } {
+  const match = /^([A-Z]+)(\d+)$/.exec(cell);
+  if (!match) {
+    throw new Error(`Cell address '${cell}' is not in A1 notation`);
+  }
+  return { column: match[1], row: Number(match[2]) };
+}
+
+function columnIndex(column: string): number {
+  let index = 0;
+  for (const char of column) {
+    index = index * 26 + (char.charCodeAt(0) - 64);
+  }
+  return index;
+}
+
+function decodeMergeRange(range: string): MergeBounds {
+  const [topLeft, bottomRight] = range.split(':');
+  const start = parseCellAddress(topLeft);
+  const end = parseCellAddress(bottomRight ?? topLeft);
+  return {
+    top: start.row,
+    left: columnIndex(start.column),
+    bottom: end.row,
+    right: columnIndex(end.column),
+  };
+}
+
 /**
  * Emits one element per non-empty cell — the finest granularity `XlsxCellLocator` can address,
  * and what makes a conflict-detection citation resolvable to the exact cell rather than a region
@@ -140,6 +179,18 @@ export class XlsxParser implements DocumentParser {
     workbook.eachSheet((worksheet) => {
       worksheet.eachRow({ includeEmpty: false }, (row) => {
         row.eachCell({ includeEmpty: false }, (cell) => {
+          if (cell.master !== cell) {
+            // A merge-covered cell (exceljs re-points every covered cell at its master on load,
+            // via Worksheet#_parseMergeCells — `cell.master` differs from `cell` itself only for
+            // one of these). Its raw `.value` already equals the master's, but it keeps its own
+            // `.numFmt`, so formatting it here can diverge from the master's display text (e.g. a
+            // covered cell with no format showing `0.0525` next to the master's `5.25%`). The
+            // merge pass below re-emits every covered cell using the master's own display text
+            // instead, so skip it here rather than emit a value this cell's own format would
+            // mangle.
+            return;
+          }
+
           const text = displayTextForValue(cell.value, cell.numFmt);
           if (text === undefined || text.trim() === '') {
             return;
@@ -159,6 +210,45 @@ export class XlsxParser implements DocumentParser {
           });
         });
       });
+
+      // Propagates each merge range's master display text onto every cell it covers. exceljs
+      // already points a covered cell's raw value at the master (see the skip above), but formats
+      // it through the covered cell's own `numFmt` — not guaranteed to match the master's — so
+      // text equality across a merge is not guaranteed by exceljs alone. Using the master's own
+      // display text here makes it guaranteed: every covered cell ends up with the identical
+      // (key, value) as the master, so spread across them is zero and conflict detection never
+      // manufactures a false conflict out of a merge. That guarantee is what makes
+      // `detectHeaderRow`'s distinct-value check in sheet-header.ts safe to lean on (a propagated
+      // title has many non-empty cells but only one distinct value).
+      for (const mergeRange of worksheet.model.merges) {
+        const { top, left, bottom, right } = decodeMergeRange(mergeRange);
+        const masterCell = worksheet.getCell(top, left);
+        const masterText = displayTextForValue(masterCell.value, masterCell.numFmt);
+        if (masterText === undefined || masterText.trim() === '') {
+          continue;
+        }
+        const sanitizedText = sanitizeEvidenceText(masterText);
+
+        for (let rowNumber = top; rowNumber <= bottom; rowNumber += 1) {
+          for (let colNumber = left; colNumber <= right; colNumber += 1) {
+            if (rowNumber === top && colNumber === left) {
+              continue; // the master cell itself was already emitted by the eachRow pass above.
+            }
+            const coveredCell = worksheet.getCell(rowNumber, colNumber);
+            const locator: XlsxCellLocator = {
+              kind: 'xlsx-cell',
+              sheetName: worksheet.name,
+              cell: coveredCell.address,
+              extractorVersion: EXTRACTOR_VERSION,
+            };
+            elements.push({
+              text: sanitizedText,
+              locator,
+              headingPath: [],
+            });
+          }
+        }
+      }
     });
 
     return { elements, extractorVersion: EXTRACTOR_VERSION };

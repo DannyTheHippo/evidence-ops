@@ -32,10 +32,18 @@ describe('Health (e2e)', () => {
   // (tracked per-IP for the TTL window), so any request against this route afterwards
   // would itself be rejected with 429 and corrupt the assertions above.
   it('rejects a request burst past the configured throttle limit with 429', async () => {
-    // Sequential, not Promise.all: each supertest call binds its own ephemeral listener, and
-    // firing 120 at once exhausts sockets and fails with ECONNRESET before the throttler is
-    // ever consulted. The bucket is per-IP over a TTL window, so serial requests still fill it.
-    const burstSize = 120;
+    /**
+     * Sequential, not `Promise.all`: firing the whole burst at once exhausts sockets and fails
+     * with ECONNRESET before the throttler is ever consulted. The bucket is per-IP over a TTL
+     * window, so serial requests still fill it.
+     *
+     * Sized from the configured limit rather than hardcoded. Every request here pings Mongo, and
+     * the suites run in parallel with one in-memory mongod per worker, so the loop's wall-clock is
+     * dominated by that contention — a hardcoded 120 took over 60s under load and timed out. The
+     * e2e limit is lowered in `setup-env.ts` precisely so this stays small.
+     */
+    const throttleLimit = Number(process.env.THROTTLE_LIMIT);
+    const burstSize = throttleLimit + 5;
     const server = getTestServer(app);
     const statuses: number[] = [];
 

@@ -12,6 +12,7 @@ import type {
   DocumentParser,
   ParsedDocument,
 } from '../../../../src/features/evidence/ingestion/parsers/parsed-element.type';
+import { MalformedPdfException } from '../../../../src/features/evidence/ingestion/parsers/pdf.parser';
 import { EMBEDDING_PROVIDER } from '../../../../src/providers/embedding/embedding-provider.interface';
 import { FakeEmbeddingProvider } from '../../../../src/providers/embedding/fake-embedding.provider';
 import { DOCUMENT_STORE } from '../../../../src/providers/storage/document-store.interface';
@@ -693,6 +694,76 @@ describe('IngestionService', () => {
     expect(deleteManyMock.mock.calls[1][0]).toEqual({
       documentVersionId: versionId,
       ingestionAttemptToken: leaseToken,
+    });
+  });
+
+  describe('parse-failure recording', () => {
+    const buildFailingParser = (error: unknown): DocumentParser => ({
+      supports: [PDF_MIME],
+      parse: jest.fn().mockRejectedValue(error),
+    });
+
+    it('should record a failed status and reason through the same lease-gated CAS the success path uses, then rethrow', async () => {
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('%PDF-corrupt'),
+        contentType: PDF_MIME,
+        metadata: {},
+      });
+      const version = buildVersion({ storageKey: stored.id });
+      mockDocumentVersionModel.findById.mockResolvedValueOnce(version);
+      const parseFailure = new MalformedPdfException('Could not parse the file as a PDF document');
+      mockParserRegistry.resolve.mockReturnValueOnce(buildFailingParser(parseFailure));
+
+      await expect(service.ingestVersion(versionId.toString())).rejects.toBe(parseFailure);
+
+      expect(mockEvidenceChunkModel.insertMany).not.toHaveBeenCalled();
+      // Same shape as `finalizeCompletion`'s CAS (see the fresh-ingest test above), except the
+      // `$set` carries `'failed'` and the parser's own message instead of `'completed'`.
+      const [failureFilter, failureUpdate] = getFindOneAndUpdateCall(2);
+      expect(failureFilter._id).toBe(versionId);
+      expect(failureFilter.ingestionLeaseToken).toBeInstanceOf(Types.ObjectId);
+      expect(failureUpdate).toEqual({
+        $set: { ingestionStatus: 'failed', ingestionFailureReason: parseFailure.message },
+        $unset: { ingestionLeaseToken: '' },
+      });
+    });
+
+    it('should rethrow without recording a failure when the parser throws something other than a BaseException', async () => {
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('%PDF-corrupt'),
+        contentType: PDF_MIME,
+        metadata: {},
+      });
+      const version = buildVersion({ storageKey: stored.id });
+      mockDocumentVersionModel.findById.mockResolvedValueOnce(version);
+      const genericFailure = new Error('unexpected parser crash');
+      mockParserRegistry.resolve.mockReturnValueOnce(buildFailingParser(genericFailure));
+
+      await expect(service.ingestVersion(versionId.toString())).rejects.toBe(genericFailure);
+
+      // Only the claim CAS ran — a non-`BaseException` failure never reaches `finalizeFailure`.
+      expect(mockDocumentVersionModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    it('should log a debug message but still rethrow the original parse error when a newer attempt claims the lease before the failure write finalizes', async () => {
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('%PDF-corrupt'),
+        contentType: PDF_MIME,
+        metadata: {},
+      });
+      const version = buildVersion({ storageKey: stored.id });
+      mockDocumentVersionModel.findById.mockResolvedValueOnce(version);
+      mockDocumentVersionModel.findOneAndUpdate
+        .mockResolvedValueOnce(version) // claim succeeds
+        .mockResolvedValueOnce(null); // failure-recording CAS loses the race to a newer attempt
+      const parseFailure = new MalformedPdfException('Could not parse the file as a PDF document');
+      mockParserRegistry.resolve.mockReturnValueOnce(buildFailingParser(parseFailure));
+
+      await expect(service.ingestVersion(versionId.toString())).rejects.toBe(parseFailure);
+
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        expect.stringContaining('parse-failure recording superseded by a newer attempt'),
+      );
     });
   });
 });
