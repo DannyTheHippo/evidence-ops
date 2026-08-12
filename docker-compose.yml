@@ -59,11 +59,19 @@ services:
     image: jaegertracing/all-in-one:1.65.0
     container_name: evidence-ops-jaeger
     restart: always
-    # mem_limit: 128m. Observed 37.5 MiB idle (2026-08-11) — the most over-provisioned service in the
-    # original estimate, but not trimmed to `temporal-ui`'s ratio: Jaeger buffers spans in memory
-    # before flushing, so a burst of trace volume needs somewhere to land without OOMing the
-    # collector mid-trace.
+    # mem_limit: 128m. The original figure behind this was 37.5 MiB "idle" (2026-08-11) — measured
+    # moments after start, which turned out to be the wrong thing to measure. all-in-one defaults to
+    # in-memory span storage with NO retention bound, so it grows monotonically with every trace it
+    # receives: after ~13 hours of a running stack it was observed at 123.3 MiB, i.e. 96% of this
+    # limit and still climbing (2026-08-12). Raising the limit would only move the OOM later, so the
+    # bound goes on the thing that actually grows — see MEMORY_MAX_TRACES below. An idle reading of a
+    # monotonically growing process is not a capacity measurement.
     mem_limit: 128m
+    environment:
+      # Caps retained traces so memory plateaus instead of growing until the kernel intervenes.
+      # 5000 is far more than any demo or eval run produces, and eviction is oldest-first — this is a
+      # local trace viewer, not a retention system, so losing the oldest traces costs nothing.
+      MEMORY_MAX_TRACES: "5000"
     ports:
       # UI
       - "16686:16686"
@@ -235,8 +243,9 @@ services:
       migrate:
         condition: service_completed_successfully
     ports:
-      # Host side defaults to 3001, not 3000, for the same reason `mongo` above defaults to 27018:
-      # 3000 is the default for practically every Node API on a developer machine, and the host dev
+      # Host side defaults to 3001, not 3000, for the same collision concern `mongo`'s
+      # `MONGO_HOST_PORT` override above exists for: 3000 is the default for practically every Node
+      # API on a developer machine, and the host dev
       # loop (`npm run start:dev`, the primary path per the README) already binds it. Publishing
       # 3000 here made `--profile full up` fail outright with "port is already allocated" against an
       # unrelated project's container. Container side stays 3000 so nothing inside the network,
@@ -325,6 +334,40 @@ services:
       - evidence_ops_net
     profiles:
       - full
+
+  qdrant:
+    image: qdrant/qdrant:v1.19.0
+    container_name: evidence-ops-qdrant
+    restart: always
+    # Measured 2026-08-12: 63 MiB resident idle with the benchmark collection absent (the eval run
+    # creates and drops it per invocation), i.e. ~25% of this limit. Kept at 256m rather than
+    # tightened to the observation: the measurement is of an EMPTY instance, and the headroom covers
+    # the 12-vector collection the benchmark builds plus Qdrant's own segment overhead.
+    mem_limit: 256m
+    ports:
+      # Overridable for the same host-port-collision reason as `mongo`/`api`/`web` above.
+      - "${QDRANT_HOST_PORT:-6333}:6333"
+    # No volume: ephemeral by design. This is benchmark infrastructure, not the retrieval store —
+    # the eval harness recreates and repopulates the collection from the already-embedded
+    # `evidence_chunks` rows on every run, so nothing here needs to survive a recreate.
+    networks:
+      - evidence_ops_net
+    healthcheck:
+      # No curl/wget in this image, but `tools/entrypoint.sh` — the image's own CMD — has the
+      # shebang `#!/usr/bin/env bash` (verified against
+      # github.com/qdrant/qdrant/blob/v1.19.0/tools/entrypoint.sh), so the container could not
+      # start at all without bash present. A bash `/dev/tcp` probe is therefore safe here.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/6333 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    # `full` is the product demo stack and the benchmark's conclusion is that MongoDB stays the
+    # production retrieval store, so this deliberately does NOT carry `full`. Nothing
+    # `depends_on` qdrant, so the shared-profile rule noted on `temporal-postgres`/`temporal`/
+    # `temporal-ui` above does not bind here — this can sit alone in its own profile.
+    profiles:
+      - qdrant
 
 networks:
   evidence_ops_net:
