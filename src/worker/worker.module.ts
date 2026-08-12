@@ -6,6 +6,7 @@ import { ConflictsModule } from '../features/evidence/conflicts/conflicts.module
 import { FactsModule } from '../features/evidence/facts/facts.module';
 import { IngestionModule } from '../features/evidence/ingestion/ingestion.module';
 import { QaModule } from '../features/evidence/qa/qa.module';
+import { SourcesModule } from '../features/evidence/sources/sources.module';
 import { SharedModule } from '../shared/shared.module';
 
 /**
@@ -13,9 +14,9 @@ import { SharedModule } from '../shared/shared.module';
  * activities resolve real services from the same DI graph as the API process (ADR-0003). Mirrors
  * the slice of `AppModule`'s imports the worker's activities need — config, Mongo, and the
  * request-context/logger providers from `SharedModule`, plus `IngestionModule`, `FactsModule`,
- * `ConflictsModule`, and `QaModule` for the services `createActivities` resolves — without the
- * HTTP-only concerns (`ThrottlerModule`, filters, versioning, middleware) that only apply to the
- * API process.
+ * `ConflictsModule`, `QaModule`, and `SourcesModule` for the services `createActivities`
+ * resolves — without the HTTP-only concerns (`ThrottlerModule`, filters, versioning, middleware)
+ * that only apply to the API process.
  */
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { SharedModule } from '../shared/shared.module';
     FactsModule,
     ConflictsModule,
     QaModule,
+    SourcesModule,
   ],
 })
 export class WorkerModule {}

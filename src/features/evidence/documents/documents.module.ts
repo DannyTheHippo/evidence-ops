@@ -41,5 +41,8 @@ import { DocumentsService } from './documents.service';
   ],
   controllers: [DocumentsController],
   providers: [DocumentsService],
+  /** `SourcesModule` injects `DocumentsService` — `SourcesService.runSync` uploads a synced
+   * file's bytes through the same content-addressed upload path a manual upload uses. */
+  exports: [DocumentsService],
 })
 export class DocumentsModule {}

@@ -1,4 +1,5 @@
 import type { INestApplicationContext } from '@nestjs/common';
+import { Types } from 'mongoose';
 import { DEFAULT_TENANT_ID } from '../database/constants/tenant.constant';
 import type { FactKey } from '../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import {
@@ -12,6 +13,7 @@ import {
 import { FactsService, type FactsExtractionResult } from '../features/evidence/facts/facts.service';
 import { extractNumericTokens } from '../features/evidence/qa/extract-numeric-tokens';
 import { IngestionService } from '../features/evidence/ingestion/ingestion.service';
+import { SourcesService, type RunSyncResult } from '../features/evidence/sources/sources.service';
 import {
   AnswerPersistenceService,
   type PersistAnswerInput,
@@ -141,6 +143,11 @@ export interface Activities {
   recordConflictResolution(
     input: RecordConflictResolutionInput,
   ): Promise<RecordConflictResolutionResult>;
+  /** `sourceId` only — mints a fresh `leaseToken` here, activity-side, on every call, since a
+   * Temporal retry of this exact activity reuses the identical input and could never distinguish a
+   * stale attempt from a newer one with a token threaded through the workflow instead (see
+   * `SourcesService.runSync`'s own doc comment). */
+  runSourceSync(sourceId: string): Promise<RunSyncResult>;
 }
 
 /**
@@ -158,6 +165,7 @@ export function createActivities(app: INestApplicationContext): Activities {
   const groundingGateService = app.get(GroundingGateService);
   const answerPersistenceService = app.get(AnswerPersistenceService);
   const approvalChannel = app.get<ApprovalChannel>(APPROVAL_CHANNEL);
+  const sourcesService = app.get(SourcesService);
 
   return {
     ingestDocumentVersion: (documentVersionId) => ingestionService.ingestVersion(documentVersionId),
@@ -357,5 +365,7 @@ export function createActivities(app: INestApplicationContext): Activities {
       approvalChannel.getDecision(approvalId, tenantId),
 
     recordConflictResolution: (input) => conflictsService.recordResolution(input),
+
+    runSourceSync: (sourceId) => sourcesService.runSync(sourceId, new Types.ObjectId()),
   };
 }

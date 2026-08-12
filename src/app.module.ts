@@ -15,6 +15,7 @@ import { DocumentsModule } from './features/evidence/documents/documents.module'
 import { FactsModule } from './features/evidence/facts/facts.module';
 import { IngestionModule } from './features/evidence/ingestion/ingestion.module';
 import { QaModule } from './features/evidence/qa/qa.module';
+import { SourcesModule } from './features/evidence/sources/sources.module';
 import { WorkflowRunsModule } from './features/evidence/workflow-runs/workflow-runs.module';
 import { AuditEventsModule } from './features/platform/audit-events/audit-events.module';
 import { AuthzModule } from './features/platform/authz/authz.module';
@@ -54,6 +55,7 @@ import { SharedModule } from './shared/shared.module';
     QaModule,
     ApprovalsModule,
     WorkflowRunsModule,
+    SourcesModule,
     AuthzModule,
     AuditEventsModule,
   ],
