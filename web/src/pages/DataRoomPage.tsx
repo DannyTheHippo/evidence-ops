@@ -47,6 +47,8 @@ function DocumentDetail({ id }: { id: string }) {
         </p>
       )}
 
+      {!doc && !error && <p>Loading…</p>}
+
       {doc && (
         <section className="panel">
           <table className="grid">
@@ -81,7 +83,7 @@ function DocumentList() {
   const [documents, setDocuments] = useState<EvidenceDocument[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState('');
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   // Bumped to trigger a re-fetch (initial upload, or a poll tick) without an effect calling an
@@ -112,19 +114,24 @@ function DocumentList() {
 
   async function handleUpload(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!file) return;
+    if (files.length === 0) return;
     setUploading(true);
     setUploadError(null);
-    try {
-      await uploadDocument(file, { title: title || undefined });
-      setTitle('');
-      setFile(null);
-      setRefreshToken((t) => t + 1);
-    } catch (err: unknown) {
-      setUploadError(err instanceof Error ? err.message : 'Upload failed');
-    } finally {
-      setUploading(false);
+    // Sequential, not Promise.all — accumulate one error per file rather than letting an early
+    // rejection hide the others, and avoid hammering the upload endpoint concurrently.
+    const errors: string[] = [];
+    for (const uploadFile of files) {
+      try {
+        await uploadDocument(uploadFile, { title: title || undefined });
+      } catch (err: unknown) {
+        errors.push(`${uploadFile.name}: ${err instanceof Error ? err.message : 'Upload failed'}`);
+      }
     }
+    setTitle('');
+    setFiles([]);
+    setUploading(false);
+    setRefreshToken((t) => t + 1);
+    if (errors.length > 0) setUploadError(errors.join('; '));
   }
 
   return (
@@ -153,10 +160,21 @@ function DocumentList() {
           </label>
           <label>
             File
-            <input type="file" required onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            <input
+              type="file"
+              required
+              multiple
+              accept=".pdf,.docx,.xlsx"
+              onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+            />
+            <span className="form-hint">PDF, DOCX or XLSX, up to 50 MB each</span>
           </label>
           <div className="form-actions">
-            <button type="submit" className="btn btn--primary" disabled={uploading || !file}>
+            <button
+              type="submit"
+              className="btn btn--primary"
+              disabled={uploading || files.length === 0}
+            >
               {uploading ? 'Uploading…' : 'Upload'}
             </button>
           </div>
@@ -167,6 +185,12 @@ function DocumentList() {
           </p>
         )}
       </section>
+
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
 
       <section className="panel">
         <table className="grid">
@@ -179,6 +203,13 @@ function DocumentList() {
             </tr>
           </thead>
           <tbody>
+            {documents === null && !error && (
+              <tr>
+                <td className="grid-empty" colSpan={4}>
+                  Loading…
+                </td>
+              </tr>
+            )}
             {documents && documents.length === 0 && (
               <tr>
                 <td className="grid-empty" colSpan={4}>
@@ -206,12 +237,6 @@ function DocumentList() {
           </tbody>
         </table>
       </section>
-
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
     </div>
   );
 }

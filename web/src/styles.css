@@ -189,6 +189,9 @@ h2 {
   padding: 0 1.5rem;
 }
 
+.view {
+  padding: 1.6rem 0;
+}
 .view--fill {
   height: 100%;
   display: flex;
@@ -500,6 +503,9 @@ h2 {
 
 /* ── Claims, citations & conflicts ──────────────────────────────────────── */
 
+.answer-outcome {
+  margin-top: 0.85rem;
+}
 .claims {
   list-style: none;
   margin: 0.75rem 0 0;
