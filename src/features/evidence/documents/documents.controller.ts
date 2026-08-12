@@ -26,6 +26,7 @@ import { DocumentsService } from './documents.service';
 import { UploadDocumentRequestDto } from './dtos/request/upload-document.request.dto';
 import { DocumentResponseDto } from './dtos/response/document.response.dto';
 import { DocumentWithVersionsResponseDto } from './dtos/response/document-with-versions.response.dto';
+import { EvidenceChunkResponseDto } from './dtos/response/evidence-chunk.response.dto';
 import type { UploadedFileLike } from './types/uploaded-file.type';
 
 @Controller('documents')
@@ -136,5 +137,27 @@ export class DocumentsController {
       type: contentType,
       disposition: `attachment; filename="${filename}"`,
     });
+  }
+
+  @Get('versions/:versionId/chunks')
+  @Version('1')
+  @HttpCode(HttpStatus.OK)
+  @ApiResponse(documentsApiExamples.versionChunks)
+  @ApiResponse(documentsApiExamples.versionChunksNotFound)
+  async listVersionChunks(
+    @Param('versionId') versionId: string,
+    @CurrentUser() user: AuthenticatedRequest['user'],
+  ): Promise<WithCountResponseDto<EvidenceChunkResponseDto>> {
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    const { docs, count } = await this.documentsService.listVersionChunks(
+      versionId,
+      user.userId,
+      user.tenantId,
+    );
+
+    return { docs: docs.map((doc) => toResponseDto(EvidenceChunkResponseDto, doc)), count };
   }
 }

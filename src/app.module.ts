@@ -6,6 +6,7 @@ import { AppConfigModule } from './config/config.module';
 import { TypedConfigService } from './config/environment/typed-config.service';
 import { mongooseModuleOptions } from './config/mongo.config';
 import { AuthModule } from './features/common/auth/auth.module';
+import { CsrfOriginMiddleware } from './features/common/auth/middlewares/csrf-origin.middleware';
 import { HealthModule } from './features/common/health/health.module';
 import { InfoModule } from './features/common/info/info.module';
 import { ApprovalsModule } from './features/evidence/approvals/approvals.module';
@@ -70,6 +71,10 @@ export class AppModule {
       .forRoutes('*');
     consumer
       .apply(AsyncLocalStorageMiddleware)
+      .exclude(...publicRoutes)
+      .forRoutes('*');
+    consumer
+      .apply(CsrfOriginMiddleware)
       .exclude(...publicRoutes)
       .forRoutes('*');
   }

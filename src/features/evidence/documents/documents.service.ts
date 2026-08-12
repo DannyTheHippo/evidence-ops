@@ -18,6 +18,11 @@ import {
   DocumentVersionDocument,
 } from '../../../database/schemas/evidence/document-version/document-version.schema';
 import {
+  EvidenceChunk,
+  EvidenceChunkDocument,
+} from '../../../database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
+import type { EvidenceLocator } from '../../../database/schemas/evidence/evidence-chunk/evidence-locator.type';
+import {
   DOCUMENT_STORE,
   type DocumentStore,
 } from '../../../providers/storage/document-store.interface';
@@ -35,6 +40,7 @@ import { UploadDocumentRequestDto } from './dtos/request/upload-document.request
 import { DocumentResponseDto } from './dtos/response/document.response.dto';
 import { DocumentVersionResponseDto } from './dtos/response/document-version.response.dto';
 import { DocumentWithVersionsResponseDto } from './dtos/response/document-with-versions.response.dto';
+import { EvidenceChunkResponseDto } from './dtos/response/evidence-chunk.response.dto';
 import {
   DocumentNotFoundException,
   DocumentVersionNotFoundException,
@@ -79,6 +85,9 @@ export class DocumentsService {
 
     @InjectModel(DocumentVersion.name)
     private readonly documentVersionModel: Model<DocumentVersionDocument>,
+
+    @InjectModel(EvidenceChunk.name)
+    private readonly evidenceChunkModel: Model<EvidenceChunkDocument>,
 
     @Inject(DOCUMENT_STORE)
     private readonly documentStore: DocumentStore,
@@ -276,6 +285,56 @@ export class DocumentsService {
     return { content: stored.content, contentType: stored.contentType, filename };
   }
 
+  /**
+   * Serves the viewer's evidence view of a version — the persisted `evidence_chunks`, not a
+   * re-parse of the source document. Per-element parser output is never persisted, re-parsing on
+   * demand would re-open injection screening inside the request path, and persisting elements
+   * would need its own migration, a backfill, and 2x text storage. Chunks are already
+   * tenant-scoped, already sanitized, and are exactly what a citation's `chunkId` points at.
+   *
+   * No pagination: chunks run ~700 tokens each under the 50MB upload cap
+   * (`MAX_FILE_SIZE_BYTES`), so a whole version is a bounded response.
+   */
+  async listVersionChunks(
+    versionId: string,
+    actorId: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<DocumentResultWithCount<EvidenceChunkResponseDto>> {
+    if (!Types.ObjectId.isValid(versionId)) {
+      throw new DocumentVersionNotFoundException(`Document version '${versionId}' not found`);
+    }
+
+    // Cross-tenant id must be indistinguishable from a missing one — same `findOne` + tenant
+    // predicate pattern as `getVersionContent` above.
+    const version = await this.documentVersionModel.findOne({ _id: versionId, tenantId });
+    if (!version) {
+      throw new DocumentVersionNotFoundException(`Document version '${versionId}' not found`);
+    }
+
+    // `embedding` is large and the viewer never needs it — excluded at the query projection so it
+    // never leaves Mongo, rather than fetched and then dropped by the response DTO.
+    const chunks = await this.evidenceChunkModel.find(
+      { documentVersionId: version._id, tenantId },
+      { embedding: 0 },
+    );
+
+    // Application-side, not a Mongo $sort: a single `documentVersionId` is parser-homogeneous —
+    // one parser produced every chunk in it (`IngestionService.ingestVersion`) — so every chunk's
+    // locator here is the same union member and mutually comparable.
+    const sorted = [...chunks].sort((a, b) =>
+      this.locatorSortKey(a.locator).localeCompare(this.locatorSortKey(b.locator)),
+    );
+
+    await this.auditService.record({
+      action: 'documents.version.chunks.listed',
+      actorId,
+      subject: { entityType: 'DocumentVersion', entityId: version._id.toString() },
+      tenantId,
+    });
+
+    return { docs: sorted.map((chunk) => this.toChunkDto(chunk)), count: sorted.length };
+  }
+
   private async addVersion(
     documentId: string,
     sha256: string,
@@ -420,5 +479,33 @@ export class DocumentsService {
       ingestionStatus: version.ingestionStatus,
       createdAt: version.createdAt,
     };
+  }
+
+  private toChunkDto(chunk: EvidenceChunkDocument): EvidenceChunkResponseDto {
+    return {
+      id: chunk._id,
+      text: chunk.text,
+      tokenCount: chunk.tokenCount,
+      locator: chunk.locator,
+    };
+  }
+
+  // Normalizes every locator variant to a single comparable string, zero-padding the numeric
+  // variants so lexicographic order matches numeric order (page 2 before page 10). Two chunks of
+  // *different* locator kinds still compare via this same string — that never happens for a real
+  // version (see `listVersionChunks`'s parser-homogeneity comment), so no separate kind-mismatch
+  // branch exists; falling through to a plain string comparison keeps this total rather than
+  // throwing if that assumption is ever violated.
+  private locatorSortKey(locator: EvidenceLocator): string {
+    switch (locator.kind) {
+      case 'pdf-page':
+        return `${locator.kind}:${locator.page.toString().padStart(10, '0')}`;
+      case 'docx-paragraph':
+        return `${locator.kind}:${locator.paragraphIndex.toString().padStart(10, '0')}`;
+      case 'xlsx-region':
+        return `${locator.kind}:${locator.range}`;
+      case 'xlsx-cell':
+        return `${locator.kind}:${locator.cell}`;
+    }
   }
 }

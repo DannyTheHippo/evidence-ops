@@ -8,6 +8,10 @@ import {
   Document,
   DocumentSchema,
 } from '../../../database/schemas/evidence/document/document.schema';
+import {
+  EvidenceChunk,
+  EvidenceChunkSchema,
+} from '../../../database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
 import { ProvidersModule } from '../../../providers/providers.module';
 import { DocumentsController } from './documents.controller';
 import { DocumentsService } from './documents.service';
@@ -17,6 +21,7 @@ import { DocumentsService } from './documents.service';
     MongooseModule.forFeature([
       { name: Document.name, schema: DocumentSchema },
       { name: DocumentVersion.name, schema: DocumentVersionSchema },
+      { name: EvidenceChunk.name, schema: EvidenceChunkSchema },
     ]),
     ProvidersModule,
   ],

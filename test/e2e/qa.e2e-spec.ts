@@ -19,6 +19,12 @@ import {
 import type { Citation } from '../../src/features/evidence/qa/contracts/answer.contract';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
 
+interface AnswerUsageBody {
+  promptTokens: number;
+  completionTokens: number;
+  costUsd: number;
+}
+
 interface AnswerBody {
   id: string;
   questionText?: string;
@@ -28,6 +34,7 @@ interface AnswerBody {
   citations?: unknown[];
   conflictIds?: string[];
   createdAt?: string;
+  usage?: AnswerUsageBody;
 }
 
 interface ConflictValueBody {
@@ -194,6 +201,7 @@ describe('QA and Conflicts (e2e)', () => {
         },
         claims: [{ statement: 'The cap rate is approximately 6.10%.', citations: [citation] }],
         claimCoverage: 0.8,
+        usage: { promptTokens: 1240, completionTokens: 180, costUsd: 0.0042 },
       });
 
       const response = await request(getTestServer(app))
@@ -219,8 +227,16 @@ describe('QA and Conflicts (e2e)', () => {
           'citations',
           'conflictIds',
           'createdAt',
+          'usage',
         ].sort(),
       );
+      // Nested exact key set — the trap this field is most likely to hit is a missing @Type() on
+      // the parent field, which serializes usage as {} rather than dropping it, so the top-level
+      // key-set assertion alone would not catch it.
+      expect(Object.keys(body.usage ?? {}).sort()).toEqual(
+        ['promptTokens', 'completionTokens', 'costUsd'].sort(),
+      );
+      expect(body.usage).toEqual({ promptTokens: 1240, completionTokens: 180, costUsd: 0.0042 });
     });
 
     // Regression for the "conflicting_evidence unreachable" gap (ADR-0004 bound 9): `reasonCode`

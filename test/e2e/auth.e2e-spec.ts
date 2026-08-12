@@ -119,4 +119,57 @@ describe('Auth (e2e)', () => {
     expect(clearedCookie).toBeDefined();
     expect(clearedCookie).toMatch(/Max-Age=0/);
   });
+
+  describe('CsrfOriginMiddleware', () => {
+    const registerAndLogin = async (
+      email: string,
+    ): Promise<{ accessToken: string; sessionCookie: string }> => {
+      const password = 'correct-horse-battery-staple';
+      await request(getTestServer(app)).post('/api/v1/auth/register').send({ email, password });
+      const loginResponse = await request(getTestServer(app))
+        .post('/api/v1/auth/login')
+        .send({ email, password });
+      const loginBody = loginResponse.body as AuthTokenResponseBody;
+      const setCookieHeader = loginResponse.headers['set-cookie'] as unknown as string[];
+      const sessionCookie = setCookieHeader
+        .find((cookie) => cookie.startsWith('eo_session='))
+        ?.split(';')[0] as string;
+
+      return { accessToken: loginBody.accessToken, sessionCookie };
+    };
+
+    it('rejects a cookie-authenticated mutating request carrying a hostile Origin', async () => {
+      const { sessionCookie } = await registerAndLogin('auth-e2e-csrf-cookie@example.com');
+
+      const response = await request(getTestServer(app))
+        .post('/api/v1/auth/logout')
+        .set('Cookie', sessionCookie)
+        .set('Origin', 'https://hostile.example.com');
+
+      expect(response.status).toBe(403);
+    });
+
+    it('leaves a Bearer-authenticated mutating request untouched by the same hostile Origin', async () => {
+      const { accessToken } = await registerAndLogin('auth-e2e-csrf-bearer@example.com');
+
+      const response = await request(getTestServer(app))
+        .post('/api/v1/auth/logout')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .set('Origin', 'https://hostile.example.com');
+
+      expect(response.status).toBe(204);
+    });
+
+    // Pins the documented fail-open: a non-browser client that omits Origin is not rejected, so
+    // a future change to that behavior is a visible test edit rather than a silent regression.
+    it('passes a cookie-authenticated mutating request that carries no Origin header', async () => {
+      const { sessionCookie } = await registerAndLogin('auth-e2e-csrf-no-origin@example.com');
+
+      const response = await request(getTestServer(app))
+        .post('/api/v1/auth/logout')
+        .set('Cookie', sessionCookie);
+
+      expect(response.status).toBe(204);
+    });
+  });
 });

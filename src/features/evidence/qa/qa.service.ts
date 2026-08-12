@@ -2,7 +2,10 @@ import { Inject, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Answer, AnswerDocument } from '../../../database/schemas/evidence/answer/answer.schema';
-import type { AnswerRunStatus } from '../../../database/schemas/evidence/answer/answer.schema';
+import type {
+  AnswerRunStatus,
+  AnswerUsage,
+} from '../../../database/schemas/evidence/answer/answer.schema';
 import type { WorkflowEngine } from '../../../providers/workflow-engine/workflow-engine.interface';
 import { WORKFLOW_ENGINE } from '../../../providers/workflow-engine/workflow-engine.interface';
 import { AuditService } from '../../../shared/services/audit/audit.service';
@@ -31,6 +34,7 @@ export interface AnswerEnvelope {
   readonly citations: Citation[];
   readonly conflictIds: string[];
   readonly createdAt: Date;
+  readonly usage?: AnswerUsage;
 }
 
 /**
@@ -128,6 +132,9 @@ export class QaService {
       citations: answer.claims.flatMap((claim) => claim.citations),
       conflictIds: answer.conflictIds.map((conflictId) => conflictId.toString()),
       createdAt: answer.createdAt,
+      // Same withholding rule as `outcome` above — usage is written alongside outcome on
+      // completion (see `answer-persistence.service.ts`), so it follows the same gate.
+      usage: answer.runStatus === 'completed' ? answer.usage : undefined,
     };
   }
 }

@@ -4,11 +4,16 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Model } from 'mongoose';
+import { Types } from 'mongoose';
 import request from 'supertest';
 import {
   DocumentVersion,
   DocumentVersionDocument,
 } from '../../src/database/schemas/evidence/document-version/document-version.schema';
+import {
+  EvidenceChunk,
+  EvidenceChunkDocument,
+} from '../../src/database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
 import { FakeWorkflowEngine } from '../../src/providers/workflow-engine/fake-workflow.engine';
 import { WORKFLOW_ENGINE } from '../../src/providers/workflow-engine/workflow-engine.interface';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
@@ -41,6 +46,7 @@ describe('Documents (e2e)', () => {
   let memo: Buffer;
   let fakeWorkflowEngine: FakeWorkflowEngine;
   let documentVersionModel: Model<DocumentVersionDocument>;
+  let evidenceChunkModel: Model<EvidenceChunkDocument>;
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -54,6 +60,7 @@ describe('Documents (e2e)', () => {
     documentVersionModel = app.get<Model<DocumentVersionDocument>>(
       getModelToken(DocumentVersion.name),
     );
+    evidenceChunkModel = app.get<Model<EvidenceChunkDocument>>(getModelToken(EvidenceChunk.name));
 
     comps = await readFile(path.join(FIXTURES, 'comps.xlsx'));
     memo = await readFile(path.join(FIXTURES, 'valuation-memo.pdf'));
@@ -240,6 +247,102 @@ describe('Documents (e2e)', () => {
         .set('Authorization', `Bearer ${token}`);
 
       expect(response.status).toBe(404);
+    });
+  });
+
+  describe('GET /documents/versions/:versionId/chunks', () => {
+    interface ChunkBody {
+      id: string;
+      text: string;
+      tokenCount: number;
+      locator: unknown;
+    }
+
+    // Direct model writes, following the seeding pattern in `qa.e2e-spec.ts`'s conflicts block —
+    // no route creates a chunk row directly, ingestion does, and the workflow that runs it is
+    // faked in this test app.
+    const seedChunk = (
+      documentVersionId: string,
+      page: number,
+      overrides: Record<string, unknown> = {},
+    ) =>
+      evidenceChunkModel.create({
+        _id: `chunk-${documentVersionId}-${page}-${new Types.ObjectId().toString()}`,
+        documentId: new Types.ObjectId(),
+        documentVersionId: new Types.ObjectId(documentVersionId),
+        text: `chunk text for page ${page}`,
+        tokenCount: 100 + page,
+        embedding: [0.1, 0.2, 0.3],
+        locator: { kind: 'pdf-page', extractorVersion: 'v1', page },
+        ingestionAttemptToken: new Types.ObjectId(),
+        ...overrides,
+      });
+
+    it('rejects an unauthenticated request', async () => {
+      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Chunks Auth' });
+      const versionId = (uploaded.body as DocumentBody).currentVersion.id;
+
+      const response = await request(getTestServer(app)).get(
+        `/api/v1/documents/versions/${versionId}/chunks`,
+      );
+
+      expect(response.status).toBe(401);
+    });
+
+    it('returns 404 for a malformed versionId', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/documents/versions/not-an-object-id/chunks')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(response.status).toBe(404);
+    });
+
+    it('returns 404, not 403, for a version belonging to another tenant', async () => {
+      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Chunks Tenant' });
+      const versionId = (uploaded.body as DocumentBody).currentVersion.id;
+
+      await documentVersionModel.updateOne({ _id: versionId }, { tenantId: 'other-tenant' });
+
+      const response = await request(getTestServer(app))
+        .get(`/api/v1/documents/versions/${versionId}/chunks`)
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(response.status).toBe(404);
+    });
+
+    it("returns chunks in locator order, exposes the exact key set with embedding absent, and excludes another version's chunks", async () => {
+      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Chunks Order' });
+      const versionId = (uploaded.body as DocumentBody).currentVersion.id;
+
+      const otherUploaded = await upload(memo, 'valuation-memo.pdf', 'application/pdf', {
+        title: 'Chunks Other Version',
+      });
+      const otherVersionId = (otherUploaded.body as DocumentBody).currentVersion.id;
+
+      // Seeded out of order (page 3, then 1, then 2) to prove the response is sorted, not a
+      // pass-through of insertion order.
+      await seedChunk(versionId, 3);
+      await seedChunk(versionId, 1);
+      await seedChunk(versionId, 2);
+      await seedChunk(otherVersionId, 1);
+
+      const response = await request(getTestServer(app))
+        .get(`/api/v1/documents/versions/${versionId}/chunks`)
+        .set('Authorization', `Bearer ${token}`);
+      const body = response.body as { docs: ChunkBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.count).toBe(3);
+      // Excludes the other version's chunk entirely — not just sorted alongside it.
+      expect(body.docs).toHaveLength(3);
+      expect(body.docs.map((doc) => (doc.locator as { page: number }).page)).toEqual([1, 2, 3]);
+
+      // Asserting the exact key set is the only gate that catches a response-DTO field missing
+      // @Expose() — such a field is silently dropped from the payload with no error anywhere.
+      expect(Object.keys(body.docs[0]).sort()).toEqual(
+        ['id', 'text', 'tokenCount', 'locator'].sort(),
+      );
+      expect(JSON.stringify(body)).not.toMatch(/embedding/i);
     });
   });
 });

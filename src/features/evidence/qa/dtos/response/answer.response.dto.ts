@@ -1,8 +1,9 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Expose } from 'class-transformer';
+import { Expose, Type } from 'class-transformer';
 import type { AnswerRunStatus } from '../../../../../database/schemas/evidence/answer/answer.schema';
 import { ANSWER_RUN_STATUSES } from '../../../../../database/schemas/evidence/answer/answer.schema';
 import type { AnswerContract, Citation } from '../../contracts/answer.contract';
+import { AnswerUsageResponseDto } from './answer-usage.response.dto';
 
 export class AnswerResponseDto {
   @Expose()
@@ -64,4 +65,16 @@ export class AnswerResponseDto {
   @Expose()
   @ApiProperty({ example: '2026-07-01T00:00:00.000Z', description: 'Answer creation timestamp.' })
   createdAt: Date;
+
+  // Same conditional-presence rule as `outcome` above — usage is recorded on completion, so a
+  // queued, running, or failed answer must not expose a stale or absent value under this key.
+  @Expose()
+  @Type(() => AnswerUsageResponseDto)
+  @ApiProperty({
+    required: false,
+    type: () => AnswerUsageResponseDto,
+    description:
+      "Token and cost accounting for the QA synthesis call, present only once runStatus is 'completed'.",
+  })
+  usage?: AnswerUsageResponseDto;
 }

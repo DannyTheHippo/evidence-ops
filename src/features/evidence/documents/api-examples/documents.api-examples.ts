@@ -2,6 +2,7 @@ import { HttpStatus } from '@nestjs/common';
 import type { ApiResponseOptions } from '@nestjs/swagger';
 import { DocumentResponseDto } from '../dtos/response/document.response.dto';
 import { DocumentWithVersionsResponseDto } from '../dtos/response/document-with-versions.response.dto';
+import { EvidenceChunkResponseDto } from '../dtos/response/evidence-chunk.response.dto';
 
 const exampleVersion = {
   id: '65f1c2e4a1b2c3d4e5f6a7b9',
@@ -91,6 +92,44 @@ export const documentsApiExamples: Record<string, ApiResponseOptions> = {
     status: HttpStatus.NOT_FOUND,
     description:
       'Document version does not exist, belongs to another tenant, or its stored bytes carry a different tenant stamp — all three are indistinguishable from each other.',
+    examples: {
+      example: {
+        summary: 'Unknown or cross-tenant version',
+        value: {
+          statusCode: HttpStatus.NOT_FOUND,
+          message: "Document version '65f1c2e4a1b2c3d4e5f6a7b9' not found",
+          error: 'Not Found',
+        },
+      },
+    },
+  },
+  versionChunks: {
+    status: HttpStatus.OK,
+    description:
+      "The version's evidence chunks, in locator order. Not a re-parse of the source document — " +
+      'chunk granularity may span pages, ~12% overlap means adjacent chunks repeat some text, and ' +
+      'elements quarantined at ingestion are absent entirely.',
+    type: EvidenceChunkResponseDto,
+    examples: {
+      example: {
+        summary: 'Two chunks of one version',
+        value: {
+          docs: [
+            {
+              id: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6',
+              text: 'The cap rate for Northgate Business Park is approximately 6.10%.',
+              tokenCount: 128,
+              locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 3 },
+            },
+          ],
+          count: 1,
+        },
+      },
+    },
+  },
+  versionChunksNotFound: {
+    status: HttpStatus.NOT_FOUND,
+    description: 'Document version does not exist or belongs to another tenant.',
     examples: {
       example: {
         summary: 'Unknown or cross-tenant version',

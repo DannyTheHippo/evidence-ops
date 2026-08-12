@@ -157,6 +157,20 @@ export function documentVersionContentUrl(versionId: string): string {
   return `${API}/documents/versions/${versionId}/content`;
 }
 
+// What a citation actually points at — the stored evidence_chunks, not a re-parse of the source
+// document. Chunk granularity may span pages, ~12% overlap means adjacent chunks repeat some
+// text, and elements quarantined at ingestion are absent entirely: not a faithful page render.
+export interface EvidenceChunkView {
+  id: string;
+  text: string;
+  tokenCount: number;
+  locator: Locator;
+}
+
+export function listVersionChunks(versionId: string): Promise<WithCount<EvidenceChunkView>> {
+  return request<WithCount<EvidenceChunkView>>(`/documents/versions/${versionId}/chunks`);
+}
+
 // ── Questions & answers ─────────────────────────────────────────────────
 
 export type AnswerRunStatus = 'queued' | 'running' | 'completed' | 'failed';
@@ -227,6 +241,9 @@ export interface Answer {
   citations: Citation[];
   conflictIds: string[];
   createdAt: string;
+  // QA synthesis spend only — not embedding or extraction spend. Present only once runStatus is
+  // 'completed', same gate as outcome above.
+  usage?: { promptTokens: number; completionTokens: number; costUsd: number };
 }
 
 export interface StartQuestionResult {

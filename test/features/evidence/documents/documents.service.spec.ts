@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { Types } from 'mongoose';
 import { Document } from '../../../../src/database/schemas/evidence/document/document.schema';
 import { DocumentVersion } from '../../../../src/database/schemas/evidence/document-version/document-version.schema';
+import { EvidenceChunk } from '../../../../src/database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
 import { DocumentsService } from '../../../../src/features/evidence/documents/documents.service';
 import {
   DocumentNotFoundException,
@@ -32,6 +33,7 @@ describe('DocumentsService', () => {
 
   const mockDocumentModel = getMockModel();
   const mockDocumentVersionModel = getMockModel();
+  const mockEvidenceChunkModel = getMockModel();
   // `satisfies` rather than `: jest.Mocked<DocumentStore>`: the annotation types each property as
   // an interface *method*, so every `expect(mockDocumentStore.put)` reads as an unbound method
   // reference and trips `@typescript-eslint/unbound-method`. This keeps the constraint that the
@@ -89,6 +91,7 @@ describe('DocumentsService', () => {
         DocumentsService,
         { provide: getModelToken(Document.name), useValue: mockDocumentModel },
         { provide: getModelToken(DocumentVersion.name), useValue: mockDocumentVersionModel },
+        { provide: getModelToken(EvidenceChunk.name), useValue: mockEvidenceChunkModel },
         { provide: DOCUMENT_STORE, useValue: mockDocumentStore },
         { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
         { provide: AuditService, useValue: mockAuditService },
@@ -535,6 +538,136 @@ describe('DocumentsService', () => {
       const result = await service.getVersionContent(versionId.toString(), actorId, 'tenant-a');
 
       expect(result.filename).toBe('Q3_Rent_Roll-v1.bin');
+    });
+  });
+
+  describe('listVersionChunks', () => {
+    const actorId = new Types.ObjectId().toString();
+
+    const buildMockChunk = (overrides: Record<string, unknown> = {}) => ({
+      _id: 'chunk-1',
+      documentId,
+      documentVersionId: versionId,
+      text: 'chunk text',
+      tokenCount: 128,
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 1 },
+      tenantId: 'tenant-a',
+      ...overrides,
+    });
+
+    it('should throw DocumentVersionNotFoundException for a malformed versionId', async () => {
+      await expect(service.listVersionChunks('not-an-object-id', actorId)).rejects.toBeInstanceOf(
+        DocumentVersionNotFoundException,
+      );
+      expect(mockDocumentVersionModel.findOne).not.toHaveBeenCalled();
+    });
+
+    it('should throw DocumentVersionNotFoundException when the version does not exist', async () => {
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(null);
+
+      await expect(
+        service.listVersionChunks(versionId.toString(), actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(DocumentVersionNotFoundException);
+      expect(mockDocumentVersionModel.findOne).toHaveBeenCalledWith({
+        _id: versionId.toString(),
+        tenantId: 'tenant-a',
+      });
+      expect(mockEvidenceChunkModel.find).not.toHaveBeenCalled();
+    });
+
+    it('should throw DocumentVersionNotFoundException when the version belongs to another tenant — the cross-tenant lookup this scoping closes', async () => {
+      // The mock model does not filter by predicate — this asserts the tenant predicate is on
+      // the query at all, not that a real Mongo would exclude the row.
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(null);
+
+      await expect(
+        service.listVersionChunks(versionId.toString(), actorId, 'tenant-b'),
+      ).rejects.toBeInstanceOf(DocumentVersionNotFoundException);
+      expect(mockEvidenceChunkModel.find).not.toHaveBeenCalled();
+    });
+
+    it('should return an empty docs array with a zero count when the version has no chunks', async () => {
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(buildMockVersion());
+      mockEvidenceChunkModel.find.mockResolvedValueOnce([]);
+
+      const result = await service.listVersionChunks(versionId.toString(), actorId, 'tenant-a');
+
+      expect(result).toEqual({ docs: [], count: 0 });
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'documents.version.chunks.listed',
+        actorId,
+        subject: { entityType: 'DocumentVersion', entityId: versionId.toString() },
+        tenantId: 'tenant-a',
+      });
+    });
+
+    it('should query with embedding excluded by projection, and sort every locator kind application-side', async () => {
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(buildMockVersion());
+      const docChunk = buildMockChunk({
+        _id: 'chunk-docx',
+        locator: {
+          kind: 'docx-paragraph',
+          extractorVersion: 'v1',
+          paragraphIndex: 5,
+          headingPath: [],
+        },
+      });
+      const pdfChunkPage10 = buildMockChunk({
+        _id: 'chunk-pdf-10',
+        locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 10 },
+      });
+      const pdfChunkPage2 = buildMockChunk({
+        _id: 'chunk-pdf-2',
+        locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+      });
+      const xlsxCellChunk = buildMockChunk({
+        _id: 'chunk-xlsx-cell',
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'C3' },
+      });
+      const xlsxRegionChunk = buildMockChunk({
+        _id: 'chunk-xlsx-region',
+        locator: {
+          kind: 'xlsx-region',
+          extractorVersion: 'v1',
+          sheetName: 'Comps',
+          range: 'A1:B2',
+        },
+      });
+      // Deliberately scrambled, and deliberately unsorted within the pdf-page pair (10 before 2) —
+      // a naive string sort on the raw page number would place '10' before '2'.
+      mockEvidenceChunkModel.find.mockResolvedValueOnce([
+        xlsxRegionChunk,
+        pdfChunkPage10,
+        docChunk,
+        xlsxCellChunk,
+        pdfChunkPage2,
+      ]);
+
+      const result = await service.listVersionChunks(versionId.toString(), actorId, 'tenant-a');
+
+      expect(mockEvidenceChunkModel.find).toHaveBeenCalledWith(
+        { documentVersionId: versionId, tenantId: 'tenant-a' },
+        { embedding: 0 },
+      );
+      expect(result.count).toBe(5);
+      expect(result.docs.map((doc) => doc.id)).toEqual([
+        'chunk-docx',
+        'chunk-pdf-2',
+        'chunk-pdf-10',
+        'chunk-xlsx-cell',
+        'chunk-xlsx-region',
+      ]);
+      expect(result.docs[0]).toEqual({
+        id: 'chunk-docx',
+        text: 'chunk text',
+        tokenCount: 128,
+        locator: {
+          kind: 'docx-paragraph',
+          extractorVersion: 'v1',
+          paragraphIndex: 5,
+          headingPath: [],
+        },
+      });
     });
   });
 });

@@ -12,3 +12,9 @@ export class InvalidCredentialsException extends BaseException {
     super(message, HttpStatus.UNAUTHORIZED, cause);
   }
 }
+
+export class CsrfOriginMismatchException extends BaseException {
+  constructor(message: string, cause?: unknown) {
+    super(message, HttpStatus.FORBIDDEN, cause);
+  }
+}
