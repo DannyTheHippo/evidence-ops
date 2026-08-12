@@ -1,7 +1,7 @@
 # Technical walkthrough — five minutes
 
 A script to say aloud. The answer-quality numbers come from
-`eval/results/467691d0e69f6445c4f2cca27b6e6dba636bad50.md`, the newest recording made against a clean
+`eval/results/675820ee2e5267503411886b27d7737887be5ba1.md`, the newest recording made against a clean
 tree; the retrieval-mode comparison including the `qdrant-vector` row is in
 [`docs/adr/0010-retrieval-store-comparison.md`](adr/0010-retrieval-store-comparison.md). Both are
 tracked. A run against a dirty tree writes a `-dirty`-suffixed file, which `.gitignore` excludes
