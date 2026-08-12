@@ -1,4 +1,5 @@
 import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
+import { QdrantClient } from '@qdrant/js-client-rest';
 import { execSync } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -13,14 +14,23 @@ import { loadExistingCorpus } from './load-existing-corpus';
 import { classifyCanaryLeak } from './metrics/classify-canary-leak';
 import { computeMetrics, type CaseOutcomeKind, type CaseResult } from './metrics/compute-metrics';
 import { chunkOverlapsAnyLocator } from './metrics/locator-overlap';
+import { populateQdrantCollection, searchQdrantVector } from './qdrant/qdrant-benchmark-store';
+import { makeQdrantAwareSearch, type QdrantSearch } from './qdrant/qdrant-aware-search';
+import type { RawEvidenceChunkRow } from './qdrant/chunk-to-point.util';
 import {
   EMBEDDING_PROVIDER,
   type EmbeddingProvider,
 } from '../src/providers/embedding/embedding-provider.interface';
 import { assertAtlasSearchSupported } from '../src/providers/retrieval/atlas-search-capability.util';
 import { assertRequiredSearchIndexesExist } from '../src/providers/retrieval/required-search-indexes.util';
-import { buildMarkdownReport, type EvalRunResult, type PerCaseReport } from './report';
-import { runRetrievalComparison } from './retrieval/retrieval-comparison';
+import {
+  buildMarkdownReport,
+  type EvalRunResult,
+  type PerCaseReport,
+  type RetrievalModeSummary,
+} from './report';
+import { runRetrievalComparison, type SearchByMode } from './retrieval/retrieval-comparison';
+import { QDRANT_MODES, RETRIEVAL_MODES, searchByMode } from './retrieval/retrieval-modes';
 import manifest from '../fixtures/data-room/manifest.json';
 import {
   EvidenceChunk,
@@ -34,18 +44,37 @@ const CACHE_DIR = path.join(__dirname, 'cache');
 const MODEL_CACHE_DIR = path.join(CACHE_DIR, 'model');
 const EMBEDDING_CACHE_DIR = path.join(CACHE_DIR, 'embedding');
 const RESULTS_DIR = path.join(__dirname, 'results');
+const DEFAULT_QDRANT_URL = 'http://localhost:6333';
+
+// Duplicated from `retrieval-modes.ts`'s own (unexported) `COLLECTION` constant, not imported —
+// same convention that file's header comment already establishes for the `src`/`eval` boundary,
+// applied here one file further out: the collection name is copied, not shared, across the two
+// eval modules that read it.
+const MONGO_EVIDENCE_CHUNKS_COLLECTION = 'evidence_chunks';
 
 const CANARY_TOKENS: readonly string[] = manifest.canaries.map((canary) => canary.token);
 
 interface CliOptions {
   readonly cacheMode: EvalCacheMode;
   readonly ingest: boolean;
+  readonly qdrant: boolean;
+  readonly qdrantUrl: string;
+}
+
+function readFlagValue(argv: readonly string[], flag: string, fallback: string): string {
+  const index = argv.indexOf(flag);
+  if (index === -1) {
+    return fallback;
+  }
+  return argv[index + 1] ?? fallback;
 }
 
 function parseCliOptions(argv: readonly string[]): CliOptions {
   return {
     cacheMode: argv.includes('--record') ? 'record' : 'replay',
     ingest: argv.includes('--ingest'),
+    qdrant: argv.includes('--qdrant'),
+    qdrantUrl: readFlagValue(argv, '--qdrant-url', DEFAULT_QDRANT_URL),
   };
 }
 
@@ -332,14 +361,68 @@ async function main(): Promise<void> {
 
     const embeddingProvider = app.get<EmbeddingProvider>(EMBEDDING_PROVIDER);
 
-    console.log('eval: running retrieval-mode comparison (lexical / vector / hybrid)');
-    const retrievalComparison = await runRetrievalComparison({
-      db,
-      embeddingProvider,
-      filenameByDocVersionId,
-      cases,
-      tenantId: EVAL_TENANT_ID,
-    });
+    let retrievalComparison: readonly RetrievalModeSummary[];
+    if (options.qdrant) {
+      console.log(
+        `eval: running retrieval-mode comparison (lexical / vector / hybrid / qdrant-vector) ` +
+          `against ${options.qdrantUrl}`,
+      );
+      const qdrantClient = new QdrantClient({ url: options.qdrantUrl });
+      try {
+        await qdrantClient.getCollections();
+      } catch (cause) {
+        // Fails LOUDLY, same posture as `assertAtlasSearchSupported`/
+        // `assertRequiredSearchIndexesExist` above: a benchmark that silently reports nothing for
+        // 'qdrant-vector' is worse than one that refuses to start.
+        throw new Error(
+          `eval: Qdrant is unreachable at ${options.qdrantUrl} — start it with ` +
+            `'docker compose --profile qdrant up -d' before passing --qdrant.`,
+          { cause },
+        );
+      }
+
+      const rows = await db
+        .collection<RawEvidenceChunkRow>(MONGO_EVIDENCE_CHUNKS_COLLECTION)
+        .find({ tenantId: EVAL_TENANT_ID })
+        .toArray();
+      await populateQdrantCollection(qdrantClient, rows);
+      const qdrantSearch: QdrantSearch = (provider, query) =>
+        searchQdrantVector(qdrantClient, provider, query);
+      // `searchByMode` itself stays narrowed to `MongoRetrievalMode` (see `retrieval-modes.ts`'s
+      // doc comment on that choice); `makeQdrantAwareSearch` requires the wider `SearchByMode`
+      // seam, so this adapter bridges the two the same way `retrieval-comparison.ts`'s own
+      // (unexported) `defaultSearch` does. The 'qdrant-vector' branch is unreachable —
+      // `makeQdrantAwareSearch` routes that mode to `qdrantSearch` before ever calling this
+      // adapter — but the parameter type still has to accept it.
+      const mongoSearch: SearchByMode = (db_, provider, mode, query) => {
+        if (mode === 'qdrant-vector') {
+          throw new Error(
+            "mongoSearch adapter received 'qdrant-vector', which makeQdrantAwareSearch should " +
+              'have intercepted first',
+          );
+        }
+        return searchByMode(db_, provider, mode, query);
+      };
+
+      retrievalComparison = await runRetrievalComparison({
+        db,
+        embeddingProvider,
+        filenameByDocVersionId,
+        cases,
+        tenantId: EVAL_TENANT_ID,
+        modes: [...RETRIEVAL_MODES, ...QDRANT_MODES],
+        search: makeQdrantAwareSearch(mongoSearch, qdrantSearch),
+      });
+    } else {
+      console.log('eval: running retrieval-mode comparison (lexical / vector / hybrid)');
+      retrievalComparison = await runRetrievalComparison({
+        db,
+        embeddingProvider,
+        filenameByDocVersionId,
+        cases,
+        tenantId: EVAL_TENANT_ID,
+      });
+    }
 
     const metrics = computeMetrics(caseResults);
     const result: EvalRunResult = {

@@ -122,4 +122,53 @@ describe('runRetrievalComparison', () => {
       { mode: 'hybrid', recallAt5: 0, recallAt10: 0, mrr: 0, caseCount: 0, totalCases: 0 },
     ]);
   });
+
+  // Regression pin for the unflagged `npm run eval` path: `modes` must default to exactly the
+  // three Mongo modes, in this order, so a future change to the Qdrant benchmark wiring can never
+  // silently widen (or reorder) what an unflagged run scores.
+  it('should default `modes` to exactly the three Mongo modes, in order, when omitted', async () => {
+    const search = jest.fn(
+      (
+        _db: mongo.Db,
+        _embeddingProvider: unknown,
+        _mode: RetrievalMode,
+        _query: unknown,
+      ): Promise<ModeRetrievalHit[]> => Promise.resolve([]),
+    );
+
+    const summaries = await runRetrievalComparison({
+      db,
+      embeddingProvider: new FakeEmbeddingProvider(),
+      filenameByDocVersionId,
+      cases: [],
+      tenantId: 'eval',
+      search,
+    });
+
+    expect(summaries.map((summary) => summary.mode)).toEqual(['lexical', 'vector', 'hybrid']);
+  });
+
+  it('should score every mode passed in `modes`, in order, including a non-Mongo mode', async () => {
+    const modes: RetrievalMode[] = ['lexical', 'vector', 'hybrid', 'qdrant-vector'];
+    const search = jest.fn(
+      (
+        _db: mongo.Db,
+        _embeddingProvider: unknown,
+        _mode: RetrievalMode,
+        _query: unknown,
+      ): Promise<ModeRetrievalHit[]> => Promise.resolve([]),
+    );
+
+    const summaries = await runRetrievalComparison({
+      db,
+      embeddingProvider: new FakeEmbeddingProvider(),
+      filenameByDocVersionId,
+      cases: [],
+      tenantId: 'eval',
+      modes,
+      search,
+    });
+
+    expect(summaries.map((summary) => summary.mode)).toEqual(modes);
+  });
 });

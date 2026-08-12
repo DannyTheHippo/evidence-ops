@@ -4,13 +4,50 @@ import type { EvalCase } from '../dataset/schema';
 import { chunkOverlapsAnyLocator } from '../metrics/locator-overlap';
 import { computeMetrics, type CaseResult } from '../metrics/compute-metrics';
 import type { RetrievalModeSummary } from '../report';
-import { RETRIEVAL_MODES, searchByMode } from './retrieval-modes';
+import {
+  RETRIEVAL_MODES,
+  searchByMode,
+  type ModeRetrievalHit,
+  type MongoRetrievalMode,
+  type RetrievalMode,
+  type RetrievalModeQuery,
+} from './retrieval-modes';
 
 // Matches the recall@10 metric — every retrieval-mode comparison run uses the same top-k so the
 // three modes' recall/MRR figures are comparable to each other and to the production pipeline's.
 export const RETRIEVAL_COMPARISON_LIMIT = 10;
 
-export type SearchByMode = typeof searchByMode;
+// Wide over `RetrievalMode`, not `typeof searchByMode` — the comparison loop below iterates
+// whatever `modes` it is given (Mongo modes and 'qdrant-vector' alike), so the seam it calls
+// through must accept the full union. `searchByMode` itself stays narrowed to
+// `MongoRetrievalMode` (see retrieval-modes.ts) for the reason documented there; `defaultSearch`
+// below is what bridges the two without silently widening `searchByMode`'s own contract.
+export type SearchByMode = (
+  db: mongo.Db,
+  embeddingProvider: EmbeddingProvider,
+  mode: RetrievalMode,
+  query: RetrievalModeQuery,
+) => Promise<ModeRetrievalHit[]>;
+
+function isMongoRetrievalMode(mode: RetrievalMode): mode is MongoRetrievalMode {
+  return mode !== 'qdrant-vector';
+}
+
+// Default for `eval/run.ts`'s unflagged path, where `modes` defaults to `RETRIEVAL_MODES` and
+// never contains 'qdrant-vector' — so the `throw` branch below is unreachable there. Fails
+// CLOSED rather than silently falling through to `searchByMode`'s hybrid branch (see that
+// function's parameter-narrowing comment): reaching this default with a qdrant mode means a
+// caller passed `qdrant-vector` without also injecting a qdrant-aware `search`, which is a
+// wiring bug, not a mode to score.
+const defaultSearch: SearchByMode = (db, embeddingProvider, mode, query) => {
+  if (!isMongoRetrievalMode(mode)) {
+    throw new Error(
+      `runRetrievalComparison: no search override provided for 'qdrant-vector' — pass ` +
+        `makeQdrantAwareSearch(...)'s result as \`search\` when including 'qdrant-vector' in \`modes\`.`,
+    );
+  }
+  return searchByMode(db, embeddingProvider, mode, query);
+};
 
 export interface RunRetrievalComparisonParams {
   readonly db: mongo.Db;
@@ -18,9 +55,15 @@ export interface RunRetrievalComparisonParams {
   readonly filenameByDocVersionId: ReadonlyMap<string, string>;
   readonly cases: readonly EvalCase[];
   readonly tenantId: string;
-  /** Injected for tests only. `mongodb-memory-server` cannot run `$search`/`$vectorSearch`/
-   * `$rankFusion` (Atlas-only aggregation stages), so a unit test replaces this with a fake instead
-   * of requiring live Mongo. Defaults to the real `searchByMode` for `eval/run.ts`. */
+  /** Which modes to run and score, in table order. Defaults to `RETRIEVAL_MODES` (the three Mongo
+   * modes) so an unflagged `eval/run.ts` run stays on a byte-for-byte unchanged code path; the
+   * Qdrant benchmark wiring passes a wider list that includes `'qdrant-vector'`. */
+  readonly modes?: readonly RetrievalMode[];
+  /** Seam for both tests and the Qdrant benchmark wiring: `mongodb-memory-server` cannot run
+   * `$search`/`$vectorSearch`/`$rankFusion` (Atlas-only aggregation stages), so a unit test
+   * replaces this with a fake instead of requiring live Mongo; `eval/qdrant/qdrant-aware-search.ts`
+   * routes `'qdrant-vector'` through here for the benchmark's live wiring. Defaults to
+   * `defaultSearch` (real `searchByMode` for every Mongo mode) for `eval/run.ts`. */
   readonly search?: SearchByMode;
 }
 
@@ -44,12 +87,13 @@ export async function runRetrievalComparison(
     filenameByDocVersionId,
     cases,
     tenantId,
-    search = searchByMode,
+    modes = RETRIEVAL_MODES,
+    search = defaultSearch,
   } = params;
   const locatorBearing = cases.filter((evalCase) => evalCase.expectedLocators.length > 0);
 
   const summaries: RetrievalModeSummary[] = [];
-  for (const mode of RETRIEVAL_MODES) {
+  for (const mode of modes) {
     const results: CaseResult[] = [];
     for (const evalCase of locatorBearing) {
       const hits = await search(db, embeddingProvider, mode, {

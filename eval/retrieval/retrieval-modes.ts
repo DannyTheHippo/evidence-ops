@@ -18,8 +18,20 @@ import type { EmbeddingProvider } from '../../src/providers/embedding/embedding-
  * *only* thing that varies between `searchByMode` calls is which stages run, never a pool size or
  * a weight recomputed differently by two code paths that are supposed to mean the same thing.
  */
-export type RetrievalMode = 'lexical' | 'vector' | 'hybrid';
-export const RETRIEVAL_MODES: readonly RetrievalMode[] = ['lexical', 'vector', 'hybrid'];
+// Split from the wider `RetrievalMode` (below) so `searchByMode`'s parameter type only ever
+// accepts a mode it actually dispatches on. Its control flow falls through to the `$rankFusion`
+// branch for anything that isn't 'lexical' or 'vector', so widening this union to include
+// 'qdrant-vector' directly would let a forgotten dispatch silently report **hybrid** results
+// labelled 'qdrant-vector' — a wrong number in an ADR table, not a compiler error. Keeping
+// `searchByMode` narrow turns that into a type error at the qdrant call site instead.
+export type MongoRetrievalMode = 'lexical' | 'vector' | 'hybrid';
+export const RETRIEVAL_MODES: readonly MongoRetrievalMode[] = ['lexical', 'vector', 'hybrid'];
+
+// Summaries and the comparison table deal in every mode the benchmark can produce, Mongo and
+// Qdrant alike — this is the union `RetrievalModeSummary`/`retrieval-comparison.ts` use.
+export type RetrievalMode = MongoRetrievalMode | 'qdrant-vector';
+
+export const QDRANT_MODES: readonly RetrievalMode[] = ['qdrant-vector'];
 
 const COLLECTION = 'evidence_chunks';
 const SEARCH_INDEX = 'evidence_chunks_search';
@@ -124,7 +136,7 @@ async function embedQuery(
 export async function searchByMode(
   db: mongo.Db,
   embeddingProvider: EmbeddingProvider,
-  mode: RetrievalMode,
+  mode: MongoRetrievalMode,
   query: RetrievalModeQuery,
 ): Promise<ModeRetrievalHit[]> {
   const collection = db.collection<RawEvidenceChunkDoc>(COLLECTION);
