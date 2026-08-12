@@ -12,6 +12,10 @@ import {
   Conflict,
   ConflictDocument,
 } from '../../src/database/schemas/evidence/conflict/conflict.schema';
+import {
+  ExtractedFact,
+  ExtractedFactDocument,
+} from '../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import type { Citation } from '../../src/features/evidence/qa/contracts/answer.contract';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
 
@@ -26,10 +30,20 @@ interface AnswerBody {
   createdAt?: string;
 }
 
+interface ConflictValueBody {
+  factId: string;
+  value: number;
+  unit: string;
+  sourceChunkId: string;
+  documentVersionId: string;
+  locator: unknown;
+}
+
 interface ConflictBody {
   id: string;
   factKey: { entity: string; metric: string; period: string };
   factIds: string[];
+  values: ConflictValueBody[];
   magnitude: number;
   status: string;
   createdAt: string;
@@ -42,6 +56,7 @@ describe('QA and Conflicts (e2e)', () => {
   let answerModel: Model<AnswerDocument>;
   let auditEventModel: Model<AuditEventDocument>;
   let conflictModel: Model<ConflictDocument>;
+  let extractedFactModel: Model<ExtractedFactDocument>;
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -58,6 +73,7 @@ describe('QA and Conflicts (e2e)', () => {
     answerModel = app.get<Model<AnswerDocument>>(getModelToken(Answer.name));
     auditEventModel = app.get<Model<AuditEventDocument>>(getModelToken(AuditEvent.name));
     conflictModel = app.get<Model<ConflictDocument>>(getModelToken(Conflict.name));
+    extractedFactModel = app.get<Model<ExtractedFactDocument>>(getModelToken(ExtractedFact.name));
   });
 
   afterAll(async () => {
@@ -246,11 +262,31 @@ describe('QA and Conflicts (e2e)', () => {
       expect(response.status).toBe(401);
     });
 
-    it('lists conflicts with a count, exposing the exact conflict key set, and records an audit event', async () => {
+    it('lists conflicts with a count, exposing the exact conflict key set and value provenance, and records an audit event', async () => {
       const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+      const factLow = await extractedFactModel.create({
+        factKey,
+        value: { amount: 5.25, unit: 'percent' },
+        rawText: 'cap rate of 5.25%',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-xlsx',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
+      });
+      const factHigh = await extractedFactModel.create({
+        factKey,
+        value: { amount: 6.1, unit: 'percent' },
+        rawText: 'cap rate of 6.10%',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-prose',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+      });
       await conflictModel.create({
         factKey,
-        factIds: [new Types.ObjectId(), new Types.ObjectId()],
+        factIds: [factLow._id, factHigh._id],
         magnitude: 0.0085,
         status: 'open',
       });
@@ -265,7 +301,11 @@ describe('QA and Conflicts (e2e)', () => {
       expect(body.count).toBeGreaterThan(0);
       expect(body.docs.length).toBeGreaterThan(0);
       expect(Object.keys(body.docs[0]).sort()).toEqual(
-        ['id', 'factKey', 'factIds', 'magnitude', 'status', 'createdAt'].sort(),
+        ['id', 'factKey', 'factIds', 'values', 'magnitude', 'status', 'createdAt'].sort(),
+      );
+      expect(body.docs[0].values.length).toBeGreaterThan(0);
+      expect(Object.keys(body.docs[0].values[0]).sort()).toEqual(
+        ['factId', 'value', 'unit', 'sourceChunkId', 'documentVersionId', 'locator'].sort(),
       );
 
       const events = await auditEventModel.find({ action: 'conflicts.listed' });

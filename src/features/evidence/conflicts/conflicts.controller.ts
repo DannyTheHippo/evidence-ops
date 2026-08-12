@@ -42,7 +42,11 @@ export class ConflictsController {
       throw new UnauthorizedException('No token provided');
     }
 
-    const { docs, count } = await this.conflictsService.list(pagination, user.userId);
+    const { docs, count } = await this.conflictsService.list(
+      pagination,
+      user.userId,
+      user.tenantId,
+    );
 
     return { docs: docs.map((doc) => toResponseDto(ConflictResponseDto, doc)), count };
   }
@@ -69,6 +73,7 @@ export class ConflictsController {
         winningFactId: dto.winningFactId,
         actorId: user.userId,
         requestedBy: user.email,
+        tenantId: user.tenantId,
       }),
     );
   }

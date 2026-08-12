@@ -26,6 +26,7 @@ import {
   WorkflowRunsService,
   type WorkflowRunResult,
 } from '../workflow-runs/workflow-runs.service';
+import type { ConflictValueShape } from './dtos/response/conflict.response.dto';
 import { ConflictResponseDto } from './dtos/response/conflict.response.dto';
 import { detectConflicts, groupKey } from './detect-conflicts';
 import {
@@ -162,6 +163,15 @@ export class ConflictsService {
       this.conflictModel.countDocuments(filter),
     ]);
 
+    let factById = new Map<string, ExtractedFactDocument>();
+    if (conflicts.length > 0) {
+      const everyFactId = [
+        ...new Set(conflicts.flatMap((conflict) => conflict.factIds.map((id) => id.toString()))),
+      ].map((id) => new Types.ObjectId(id));
+      const facts = await this.extractedFactModel.find({ _id: { $in: everyFactId } });
+      factById = new Map(facts.map((fact) => [fact._id.toString(), fact]));
+    }
+
     await this.auditService.record({
       action: 'conflicts.listed',
       actorId,
@@ -169,7 +179,10 @@ export class ConflictsService {
       tenantId,
     });
 
-    return { docs: conflicts.map((conflict) => this.toConflictDto(conflict)), count };
+    return {
+      docs: conflicts.map((conflict) => this.toConflictDto(conflict, factById)),
+      count,
+    };
   }
 
   /**
@@ -461,7 +474,37 @@ export class ConflictsService {
     return { conflictId: input.conflictId, outcome: input.outcome };
   }
 
-  private toConflictDto(conflict: ConflictDocument): ConflictResponseDto {
+  private toConflictDto(
+    conflict: ConflictDocument,
+    factById: Map<string, ExtractedFactDocument>,
+  ): ConflictResponseDto {
+    const values: ConflictValueShape[] = [];
+    for (const id of conflict.factIds) {
+      const fact = factById.get(id.toString());
+      if (!fact) {
+        continue;
+      }
+      values.push({
+        factId: fact._id.toString(),
+        value: fact.value.amount,
+        unit: fact.value.unit,
+        sourceChunkId: fact.chunkId,
+        documentVersionId: fact.documentVersionId.toString(),
+        locator: fact.locator,
+      });
+    }
+
+    if (values.length < conflict.factIds.length) {
+      // A `Conflict.factIds` reference that no longer resolves to an `ExtractedFact` is a
+      // data-integrity fault, not a normal degradation path — same reasoning
+      // `findConflictedFactGroupsForChunks` applies to its identical check, and the same shape of
+      // throw: silently presenting fewer values than `factIds` would let a human choose a winner
+      // without seeing the whole disagreement.
+      throw new InternalServerErrorException(
+        `Conflict '${conflict._id.toString()}' references ${conflict.factIds.length} fact(s), but only ${values.length} still resolve to an ExtractedFact`,
+      );
+    }
+
     return {
       id: conflict._id.toString(),
       // Spread rather than pass `conflict.factKey` through by reference: unlike
@@ -474,6 +517,7 @@ export class ConflictsService {
         period: conflict.factKey.period,
       },
       factIds: conflict.factIds.map((id) => id.toString()),
+      values,
       magnitude: conflict.magnitude,
       status: conflict.status,
       createdAt: conflict.createdAt,

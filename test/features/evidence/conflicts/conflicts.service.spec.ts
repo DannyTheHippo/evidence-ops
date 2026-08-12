@@ -273,7 +273,7 @@ describe('ConflictsService', () => {
   });
 
   describe('list', () => {
-    it('should page conflicts for the default tenant and record an audit event scoped to the actor', async () => {
+    it('should page conflicts for the default tenant, batch-load their facts in one $in query, and record an audit event scoped to the actor', async () => {
       const actorId = new Types.ObjectId().toString();
       const factIdA = new Types.ObjectId();
       const factIdB = new Types.ObjectId();
@@ -285,8 +285,25 @@ describe('ConflictsService', () => {
         status: 'open',
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
       };
+      const documentVersionIdA = new Types.ObjectId();
+      const documentVersionIdB = new Types.ObjectId();
+      const factA = {
+        _id: factIdA,
+        value: { amount: 5.25, unit: 'percent' },
+        chunkId: 'chunk-xlsx',
+        documentVersionId: documentVersionIdA,
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
+      };
+      const factB = {
+        _id: factIdB,
+        value: { amount: 6.1, unit: 'percent' },
+        chunkId: 'chunk-prose',
+        documentVersionId: documentVersionIdB,
+        locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+      };
       mockConflictModel.find.mockResolvedValueOnce([conflict]);
       mockConflictModel.countDocuments.mockResolvedValueOnce(1);
+      mockExtractedFactModel.find.mockResolvedValueOnce([factA, factB]);
       mockAuditService.record.mockResolvedValueOnce(undefined);
 
       const result = await service.list({ skip: 0, limit: 20 }, actorId);
@@ -298,6 +315,10 @@ describe('ConflictsService', () => {
       });
       expect(mockConflictModel.countDocuments).toHaveBeenCalledWith({
         tenantId: DEFAULT_TENANT_ID,
+      });
+      expect(mockExtractedFactModel.find).toHaveBeenCalledTimes(1);
+      expect(mockExtractedFactModel.find).toHaveBeenCalledWith({
+        _id: { $in: [factIdA, factIdB] },
       });
       expect(mockAuditService.record).toHaveBeenCalledWith({
         action: 'conflicts.listed',
@@ -311,6 +332,24 @@ describe('ConflictsService', () => {
             id: conflict._id.toString(),
             factKey: conflict.factKey,
             factIds: [factIdA.toString(), factIdB.toString()],
+            values: [
+              {
+                factId: factIdA.toString(),
+                value: 5.25,
+                unit: 'percent',
+                sourceChunkId: 'chunk-xlsx',
+                documentVersionId: documentVersionIdA.toString(),
+                locator: factA.locator,
+              },
+              {
+                factId: factIdB.toString(),
+                value: 6.1,
+                unit: 'percent',
+                sourceChunkId: 'chunk-prose',
+                documentVersionId: documentVersionIdB.toString(),
+                locator: factB.locator,
+              },
+            ],
             magnitude: 0.0085,
             status: 'open',
             createdAt: conflict.createdAt,
@@ -320,7 +359,7 @@ describe('ConflictsService', () => {
       });
     });
 
-    it('should scope the query to an explicit tenantId when provided', async () => {
+    it('should scope the query to an explicit tenantId and skip the fact query entirely for an empty page', async () => {
       const actorId = new Types.ObjectId().toString();
       mockConflictModel.find.mockResolvedValueOnce([]);
       mockConflictModel.countDocuments.mockResolvedValueOnce(0);
@@ -333,7 +372,44 @@ describe('ConflictsService', () => {
         skip: 0,
         limit: 20,
       });
+      expect(mockExtractedFactModel.find).not.toHaveBeenCalled();
       expect(result).toEqual({ docs: [], count: 0 });
+    });
+
+    it('should throw InternalServerErrorException when a listed conflict references a fact that no longer resolves', async () => {
+      const actorId = new Types.ObjectId().toString();
+      const factIdA = new Types.ObjectId();
+      const missingFactId = new Types.ObjectId();
+      const conflict = {
+        _id: new Types.ObjectId(),
+        factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+        factIds: [factIdA, missingFactId],
+        magnitude: 0.0085,
+        status: 'open',
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      };
+      mockConflictModel.find.mockResolvedValueOnce([conflict]);
+      mockConflictModel.countDocuments.mockResolvedValueOnce(1);
+      mockExtractedFactModel.find.mockResolvedValueOnce([
+        {
+          _id: factIdA,
+          value: { amount: 5.25, unit: 'percent' },
+          chunkId: 'chunk-xlsx',
+          documentVersionId: new Types.ObjectId(),
+          locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
+        },
+      ]);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      let caught: unknown;
+      try {
+        await service.list({ skip: 0, limit: 20 }, actorId);
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(InternalServerErrorException);
+      expect((caught as Error).message).toMatch(/references 2 fact\(s\), but only 1/);
     });
   });
 
