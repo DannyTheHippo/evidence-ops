@@ -121,4 +121,24 @@ describe('TemporalWorkflowEngine', () => {
 
     expect(mockClose).not.toHaveBeenCalled();
   });
+
+  it('should propagate a connection failure to the caller', async () => {
+    mockConnectionConnect.mockReset().mockRejectedValue(new Error('connect refused'));
+    const engine = new TemporalWorkflowEngine(config);
+
+    await expect(engine.start('a', {})).rejects.toThrow('connect refused');
+  });
+
+  it('should retry the connection on the next call after a rejection rather than reusing it', async () => {
+    mockConnectionConnect.mockReset().mockRejectedValueOnce(new Error('connect refused'));
+    mockConnectionConnect.mockResolvedValueOnce({ close: mockClose });
+    mockStart.mockResolvedValue({ workflowId: 'wf-1' });
+    const engine = new TemporalWorkflowEngine(config);
+
+    await expect(engine.start('a', {})).rejects.toThrow('connect refused');
+    const handle = await engine.start('b', {});
+
+    expect(mockConnectionConnect).toHaveBeenCalledTimes(2);
+    expect(handle).toEqual({ id: 'wf-1', status: 'running' });
+  });
 });

@@ -70,11 +70,24 @@ export class TemporalWorkflowEngine implements WorkflowEngine, OnModuleDestroy {
     await connection.close();
   }
 
-  // Cached alongside the connection: a fresh `Client` per call would also mean a fresh
-  // `OpenTelemetryPlugin` (and its `BatchSpanProcessor`/`OTLPTraceExporter`) per call, none of
-  // them ever shut down — this method is on the `start`/`status` hot path.
+  /**
+   * Cached alongside the connection: a fresh `Client` per call would also mean a fresh
+   * `OpenTelemetryPlugin` (and its `BatchSpanProcessor`/`OTLPTraceExporter`) per call, none of
+   * them ever shut down — this method is on the `start`/`status` hot path.
+   *
+   * A rejected `connectionPromise` clears itself before rethrowing: the calling `start`/`status`/
+   * `signal` invocation still fails, but the *next* call to `getClient` sees `connectionPromise`
+   * as `undefined` and opens a fresh connection instead of re-awaiting the same rejection forever.
+   * `clientPromise` needs no equivalent guard — `new Client(...)` is synchronous, so a construction
+   * failure throws before the `??=` assignment ever runs and nothing gets cached.
+   */
   private async getClient(): Promise<Client> {
-    this.connectionPromise ??= Connection.connect({ address: this.config.temporal.address });
+    this.connectionPromise ??= Connection.connect({ address: this.config.temporal.address }).catch(
+      (error: unknown) => {
+        this.connectionPromise = undefined;
+        throw error;
+      },
+    );
     const connection = await this.connectionPromise;
     this.clientPromise ??= Promise.resolve(
       new Client({
