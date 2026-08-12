@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react';
-import { decideApproval, listApprovals, type Approval, type ApprovalDecision } from '../api/client';
+import { useNavigate } from 'react-router-dom';
+import {
+  decideApproval,
+  listApprovals,
+  listWorkflowRuns,
+  type Approval,
+  type ApprovalDecision,
+} from '../api/client';
 
 function ApprovalRow({
   approval,
@@ -8,9 +15,12 @@ function ApprovalRow({
   approval: Approval;
   onDecided: (id: string) => void;
 }) {
+  const navigate = useNavigate();
   const [reason, setReason] = useState('');
   const [deciding, setDeciding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [viewingRun, setViewingRun] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
 
   async function decide(decision: ApprovalDecision) {
     setDeciding(true);
@@ -22,6 +32,26 @@ function ApprovalRow({
       setError(err instanceof Error ? err.message : 'Failed to record decision');
     } finally {
       setDeciding(false);
+    }
+  }
+
+  async function viewRun() {
+    const workflowId = approval.workflowId;
+    if (!workflowId) return;
+    setViewingRun(true);
+    setRunError(null);
+    try {
+      const { docs } = await listWorkflowRuns({ workflowId });
+      const run = docs[0];
+      if (!run) {
+        setRunError('No run found for this workflow.');
+        return;
+      }
+      navigate(`/workflow-runs/${run.id}`);
+    } catch (err: unknown) {
+      setRunError(err instanceof Error ? err.message : 'Failed to load workflow run');
+    } finally {
+      setViewingRun(false);
     }
   }
 
@@ -39,6 +69,7 @@ function ApprovalRow({
       <p className="cell-sub">
         {approval.subject.entityType} {approval.subject.entityId}
       </p>
+      <p className="cell-sub">Requested {new Date(approval.createdAt).toLocaleString()}</p>
 
       <div className="form">
         <label>
@@ -68,12 +99,27 @@ function ApprovalRow({
           >
             Reject
           </button>
+          {approval.workflowId && (
+            <button
+              type="button"
+              className="btn btn--ghost"
+              disabled={viewingRun}
+              onClick={() => void viewRun()}
+            >
+              {viewingRun ? 'Loading…' : 'View run'}
+            </button>
+          )}
         </div>
       </div>
 
       {error && (
         <p className="error" role="alert">
           {error}
+        </p>
+      )}
+      {runError && (
+        <p className="error" role="alert">
+          {runError}
         </p>
       )}
     </li>
@@ -113,6 +159,8 @@ export default function ApprovalsPage() {
           {error}
         </p>
       )}
+
+      {!approvals && !error && <p>Loading…</p>}
 
       {approvals && approvals.length === 0 && (
         <p className="notice notice--info">No pending approvals.</p>

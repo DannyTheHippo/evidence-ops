@@ -1,9 +1,21 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { getAnswerById, startQuestion, type Answer } from '../api/client';
+import {
+  getAnswerById,
+  listConflicts,
+  startQuestion,
+  type Answer,
+  type Locator,
+} from '../api/client';
 import CitationPanel from '../components/CitationPanel';
 import { buildDocumentVersionIndex, type ResolvedVersion } from '../lib/document-index';
+import { formatLocator } from '../lib/locator';
 
 const DEFAULT_POLL_INTERVAL_MS = 1500;
+
+interface ConflictChunkResolution {
+  documentVersionId: string;
+  locator: Locator;
+}
 
 interface AskPageProps {
   // Overridable so tests can poll on a short interval instead of stubbing timers.
@@ -34,6 +46,9 @@ export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: A
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [documentIndex, setDocumentIndex] = useState<Map<string, ResolvedVersion>>(new Map());
+  const [conflictChunkIndex, setConflictChunkIndex] = useState<
+    Map<string, ConflictChunkResolution>
+  >(new Map());
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -76,10 +91,14 @@ export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: A
     return () => clearInterval(timer);
   }, [answerId, answer?.runStatus, pollIntervalMs]);
 
-  // Resolves citation document titles/links once there is something to resolve. Failure here
-  // must not affect answer rendering — see document-index.ts.
+  // Resolves citation/conflict-value document titles once there is something to resolve — a
+  // conflicting_evidence outcome carries no citations, so that outcome alone must still trigger
+  // this. Failure here must not affect answer rendering — see document-index.ts.
   useEffect(() => {
-    if (answer?.runStatus !== 'completed' || answer.citations.length === 0) return;
+    if (answer?.runStatus !== 'completed') return;
+    const hasCitations = answer.citations.length > 0;
+    const hasConflict = answer.outcome?.kind === 'conflicting_evidence';
+    if (!hasCitations && !hasConflict) return;
     let cancelled = false;
 
     buildDocumentVersionIndex()
@@ -91,7 +110,39 @@ export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: A
     return () => {
       cancelled = true;
     };
-  }, [answer?.runStatus, answer?.citations]);
+  }, [answer?.runStatus, answer?.citations, answer?.outcome]);
+
+  // Resolves conflicting_evidence source chunks to a document title + locator. Narrowed to this
+  // answer's conflictIds; listConflicts({ limit: 100 }) is the API's max page size, so a chunk
+  // belonging to a conflict past the first 100 falls back to its raw sourceChunkId below —
+  // acceptable at demo scale, upgradeable to server-side enrichment without changing this contract.
+  useEffect(() => {
+    if (answer?.runStatus !== 'completed' || answer.outcome?.kind !== 'conflicting_evidence')
+      return;
+    if (answer.conflictIds.length === 0) return;
+    let cancelled = false;
+
+    listConflicts({ limit: 100 })
+      .then(({ docs }) => {
+        if (cancelled) return;
+        const index = new Map<string, ConflictChunkResolution>();
+        for (const conflict of docs) {
+          if (!answer.conflictIds.includes(conflict.id)) continue;
+          for (const value of conflict.values) {
+            index.set(value.sourceChunkId, {
+              documentVersionId: value.documentVersionId,
+              locator: value.locator,
+            });
+          }
+        }
+        setConflictChunkIndex(index);
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [answer?.runStatus, answer?.outcome, answer?.conflictIds]);
 
   const isPolling = answer?.runStatus === 'queued' || answer?.runStatus === 'running';
 
@@ -196,14 +247,22 @@ export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: A
                     {answer.outcome.factKey.period})
                   </p>
                   <ul className="value-compare">
-                    {answer.outcome.values.map((value, valueIndex) => (
-                      <li key={valueIndex} className="value-compare-item">
-                        <span className="mono">
-                          {value.value} {value.unit}
-                        </span>
-                        <span className="cell-sub">source: {value.sourceChunkId}</span>
-                      </li>
-                    ))}
+                    {answer.outcome.values.map((value, valueIndex) => {
+                      const chunkResolution = conflictChunkIndex.get(value.sourceChunkId);
+                      const resolvedVersion =
+                        chunkResolution && documentIndex.get(chunkResolution.documentVersionId);
+                      const sourceLabel = resolvedVersion
+                        ? `${resolvedVersion.documentTitle} — ${formatLocator(chunkResolution.locator)}`
+                        : value.sourceChunkId;
+                      return (
+                        <li key={valueIndex} className="value-compare-item">
+                          <span className="mono">
+                            {value.value} {value.unit}
+                          </span>
+                          <span className="cell-sub">{sourceLabel}</span>
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               )}

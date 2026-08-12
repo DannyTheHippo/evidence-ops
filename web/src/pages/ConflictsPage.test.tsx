@@ -1,4 +1,5 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ConflictsPage from './ConflictsPage';
 
@@ -9,34 +10,135 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+const documentVersion = {
+  id: 'docver-1',
+  versionNumber: 1,
+  sha256: 'abc',
+  sizeBytes: 10,
+  ingestionStatus: 'completed',
+  createdAt: new Date().toISOString(),
+};
+// Not named `document` — that shadows the jsdom global (see client.ts's own note on
+// `EvidenceDocument` for the same hazard).
+const documentFixture = {
+  id: 'doc-1',
+  title: 'Rent Roll Q1',
+  sourceKind: 'pdf',
+  mimeType: 'application/pdf',
+  currentVersion: documentVersion,
+  createdAt: new Date().toISOString(),
+};
+
+const openConflict = {
+  id: 'conflict-1',
+  factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+  factIds: ['fact-1', 'fact-2'],
+  values: [
+    {
+      factId: 'fact-1',
+      value: 6.1,
+      unit: 'percent',
+      sourceChunkId: 'chunk-a',
+      documentVersionId: 'docver-1',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+    },
+  ],
+  magnitude: 0.0085,
+  status: 'open',
+  createdAt: new Date().toISOString(),
+};
+
+function renderPage() {
+  render(
+    <MemoryRouter>
+      <Routes>
+        <Route path="/" element={<ConflictsPage />} />
+        {/* Static, not :id — pins the assertion to run.id ('run-1'), not run.workflowId
+            ('wf-1'), so a regression to the wrong field fails the test instead of matching
+            anything. */}
+        <Route path="/workflow-runs/run-1" element={<p>run page probe</p>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+// Interleaves the conflicts fetch, the document-index fetches, and (in some tests) the
+// resolution-request call — dispatch by URL rather than by call order.
+function fetchStub(resolution?: () => Response) {
+  return vi.fn((url: string, _init?: RequestInit) => {
+    if (url === '/api/v1/conflicts') {
+      return Promise.resolve(jsonResponse({ docs: [openConflict], count: 1 }));
+    }
+    if (url === '/api/v1/documents') {
+      return Promise.resolve(jsonResponse({ docs: [documentFixture], count: 1 }));
+    }
+    if (url === '/api/v1/documents/doc-1') {
+      return Promise.resolve(jsonResponse({ ...documentFixture, versions: [documentVersion] }));
+    }
+    if (url === '/api/v1/conflicts/conflict-1/resolution-requests' && resolution) {
+      return Promise.resolve(resolution());
+    }
+    return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+  });
+}
+
 describe('ConflictsPage', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
-  it('lists open conflicts with their fact key and status', async () => {
-    const conflicts = {
-      docs: [
-        {
-          id: 'conflict-1',
-          factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
-          factIds: ['fact-1', 'fact-2'],
-          magnitude: 0.0085,
-          status: 'open',
-          createdAt: new Date().toISOString(),
-        },
-      ],
-      count: 1,
-    };
+  it('lists an open conflict with its fact key, status, and resolved values', async () => {
+    vi.stubGlobal('fetch', fetchStub());
 
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(conflicts));
-    vi.stubGlobal('fetch', fetchMock);
+    renderPage();
 
-    render(<ConflictsPage />);
+    expect(screen.getByText('Loading…')).toBeInTheDocument();
 
     expect(await screen.findByText('Northgate Business Park')).toBeInTheDocument();
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
     expect(screen.getByText('cap_rate')).toBeInTheDocument();
     expect(screen.getByText('open')).toBeInTheDocument();
+    expect(screen.getByText('6.1 percent')).toBeInTheDocument();
+    expect(await screen.findByText('Rent Roll Q1 — p.2')).toBeInTheDocument();
+  });
+
+  it('requests a resolution for a value and navigates to the run timeline', async () => {
+    const fetchMock = fetchStub(() =>
+      jsonResponse({
+        id: 'run-1',
+        workflowId: 'wf-1',
+        status: 'running',
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Request resolution' }));
+
+    expect(await screen.findByText('run page probe')).toBeInTheDocument();
+
+    const resolutionCall = fetchMock.mock.calls.find(
+      ([url]) => url === '/api/v1/conflicts/conflict-1/resolution-requests',
+    );
+    expect(resolutionCall).toBeDefined();
+    expect(JSON.parse((resolutionCall![1] as RequestInit).body as string)).toEqual({
+      winningFactId: 'fact-1',
+    });
+  });
+
+  it('shows a per-row error when the resolution request fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      fetchStub(() => jsonResponse({ message: 'Fact already resolved' }, 409)),
+    );
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Request resolution' }));
+
+    expect(await screen.findByText('Fact already resolved')).toBeInTheDocument();
   });
 });

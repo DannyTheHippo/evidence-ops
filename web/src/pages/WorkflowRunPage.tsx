@@ -86,6 +86,8 @@ export default function WorkflowRunPage({
         </p>
       )}
 
+      {!run && !error && id && <p>Loading…</p>}
+
       {run && (
         <section className="card">
           <div className="card-head">

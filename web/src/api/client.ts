@@ -2,9 +2,12 @@ import { clearToken, getToken, setToken } from '../lib/auth';
 
 const API = '/api/v1';
 
+export type UserRole = 'admin' | 'member';
+
 export interface Me {
   id: string;
   email: string;
+  role: UserRole;
   createdAt: string;
 }
 
@@ -240,17 +243,39 @@ export function getAnswerById(id: string): Promise<Answer> {
 
 export type ConflictStatus = 'open' | 'resolved' | 'dismissed';
 
+export interface ConflictValue {
+  factId: string;
+  value: number;
+  unit: string;
+  sourceChunkId: string;
+  documentVersionId: string;
+  locator: Locator;
+}
+
 export interface Conflict {
   id: string;
   factKey: ConflictingFactKey;
   factIds: string[];
+  values: ConflictValue[];
   magnitude: number;
   status: ConflictStatus;
   createdAt: string;
 }
 
-export function listConflicts(): Promise<WithCount<Conflict>> {
-  return request<WithCount<Conflict>>('/conflicts');
+export function listConflicts(params?: { limit?: number }): Promise<WithCount<Conflict>> {
+  return request<WithCount<Conflict>>(
+    params?.limit !== undefined ? `/conflicts?limit=${params.limit}` : '/conflicts',
+  );
+}
+
+export function requestConflictResolution(
+  conflictId: string,
+  winningFactId: string,
+): Promise<WorkflowRun> {
+  return request<WorkflowRun>(`/conflicts/${conflictId}/resolution-requests`, {
+    method: 'POST',
+    ...jsonBody({ winningFactId }),
+  });
 }
 
 // ── Approvals ────────────────────────────────────────────────────────────
@@ -309,4 +334,10 @@ export interface WorkflowRun {
 
 export function getWorkflowRunById(id: string): Promise<WorkflowRun> {
   return request<WorkflowRun>(`/workflow-runs/${id}`);
+}
+
+export function listWorkflowRuns(params: { workflowId: string }): Promise<WithCount<WorkflowRun>> {
+  return request<WithCount<WorkflowRun>>(
+    `/workflow-runs?workflowId=${encodeURIComponent(params.workflowId)}`,
+  );
 }
