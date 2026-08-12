@@ -12,6 +12,46 @@ import manifest from '../../../../../fixtures/data-room/manifest.json';
 const FIXTURE_PATH = path.join(__dirname, '../../../../../fixtures/data-room/lease-summary.docx');
 const MANIFEST_PARAGRAPHS = manifest.files['lease-summary.docx'].paragraphs;
 
+const CENTRAL_DIRECTORY_SIGNATURE = Buffer.from([0x50, 0x4b, 0x01, 0x02]);
+const CENTRAL_DIRECTORY_UNCOMPRESSED_SIZE_OFFSET = 24;
+const CENTRAL_DIRECTORY_FILE_NAME_LENGTH_OFFSET = 28;
+const CENTRAL_DIRECTORY_FIXED_LENGTH = 46;
+
+/**
+ * Overwrites the declared uncompressed-size field in `buffer`'s central-directory record for
+ * `entryName`, leaving the compressed payload and every other byte untouched. Simulates the one
+ * thing `assertSafeArchive` cannot see through: a central directory that under-reports what an
+ * entry actually inflates to. JSZip reads an entry's real compressed bytes off the (unpatched)
+ * local file header using the central directory's compressed-size field, so the entry still
+ * decompresses to its true, larger content.
+ */
+function lieAboutDeclaredUncompressedSize(
+  buffer: Buffer,
+  entryName: string,
+  liedUncompressedSize: number,
+): Buffer {
+  const nameBytes = Buffer.from(entryName, 'utf8');
+  const patched = Buffer.from(buffer);
+
+  let recordStart = patched.indexOf(CENTRAL_DIRECTORY_SIGNATURE);
+  while (recordStart !== -1) {
+    const fileNameLength = patched.readUInt16LE(
+      recordStart + CENTRAL_DIRECTORY_FILE_NAME_LENGTH_OFFSET,
+    );
+    const nameStart = recordStart + CENTRAL_DIRECTORY_FIXED_LENGTH;
+    const recordName = patched.subarray(nameStart, nameStart + fileNameLength);
+    if (recordName.equals(nameBytes)) {
+      patched.writeUInt32LE(
+        liedUncompressedSize,
+        recordStart + CENTRAL_DIRECTORY_UNCOMPRESSED_SIZE_OFFSET,
+      );
+      return patched;
+    }
+    recordStart = patched.indexOf(CENTRAL_DIRECTORY_SIGNATURE, recordStart + 4);
+  }
+  throw new Error(`Fixture has no central-directory record for "${entryName}"`);
+}
+
 describe('DocxParser', () => {
   let parser: DocxParser;
 
@@ -115,6 +155,21 @@ describe('DocxParser', () => {
       const buffer = await zip.generateAsync({ type: 'nodebuffer' });
 
       await expect(parser.parse(buffer)).rejects.toBeInstanceOf(HostileArchiveException);
+    });
+
+    it('should reject an entry whose real inflated bytes exceed the archive budget even though its declared size passes assertSafeArchive', async () => {
+      const zip = new JSZip();
+      zip.file('word/document.xml', 'A'.repeat(8_500_000), {
+        compression: 'DEFLATE',
+        compressionOptions: { level: 9 },
+      });
+      const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+      // The central directory now declares 1024 uncompressed bytes for an entry that really
+      // inflates to 8.5MB — a mismatch assertSafeArchive's declared-size checks cannot detect,
+      // since they only ever read what the archive itself claims.
+      const hostileBuffer = lieAboutDeclaredUncompressedSize(buffer, 'word/document.xml', 1024);
+
+      await expect(parser.parse(hostileBuffer)).rejects.toBeInstanceOf(HostileArchiveException);
     });
 
     it('should reject a document.xml that declares a DOCTYPE', async () => {

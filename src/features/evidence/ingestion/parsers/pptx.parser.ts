@@ -2,7 +2,13 @@ import { xml2js, type Element } from 'xml-js';
 import JSZip from 'jszip';
 import type { PptxSlideLocator } from '../../../../database/schemas/evidence/evidence-chunk/evidence-locator.type';
 import { MalformedPptxException } from '../exceptions/ingestion.exception';
-import { assertSafeArchive, HostileArchiveException } from './safe-zip';
+import {
+  assertSafeArchive,
+  createInflateBudget,
+  HostileArchiveException,
+  readEntryTextBounded,
+  type InflateBudget,
+} from './safe-zip';
 import type { DocumentParser, ParsedDocument, ParsedElement } from './parsed-element.type';
 import { sanitizeEvidenceText } from '../sanitize-evidence-text';
 
@@ -87,13 +93,15 @@ function collectSlideText(spTree: Element): string {
  * Reads a single XML part out of the archive, rejecting a DOCTYPE and any parse failure before
  * handing the element tree back — every part gets this gate, not just the slide parts, since a
  * hostile presentation.xml or relationship file is exactly as dangerous as a hostile slide.
+ * `budget` is shared across every part read for one `parse()` call, so a deck with many slides
+ * cannot spend the inflate budget once per slide.
  */
-async function readXmlPart(zip: JSZip, partPath: string): Promise<Element> {
+async function readXmlPart(zip: JSZip, partPath: string, budget: InflateBudget): Promise<Element> {
   const entry = zip.file(partPath);
   if (!entry) {
     throw new MalformedPptxException(`Archive is missing ${partPath}`);
   }
-  const xml = await entry.async('text');
+  const xml = await readEntryTextBounded(entry, budget);
 
   // Reject outright rather than parse-and-ignore: even without external-entity resolution, a
   // DOCTYPE's internal subset can still define entities that expand at parse time (the
@@ -131,9 +139,10 @@ export class PptxParser implements DocumentParser {
       throw new MalformedPptxException('Could not open the file as a zip archive', error);
     }
     assertSafeArchive(zip);
+    const budget = createInflateBudget();
 
-    const presentationRoot = await readXmlPart(zip, 'ppt/presentation.xml');
-    const relsRoot = await readXmlPart(zip, 'ppt/_rels/presentation.xml.rels');
+    const presentationRoot = await readXmlPart(zip, 'ppt/presentation.xml', budget);
+    const relsRoot = await readXmlPart(zip, 'ppt/_rels/presentation.xml.rels', budget);
 
     const relationshipTargets = new Map<string, string>();
     const relationshipsElement = findFirst(relsRoot, 'Relationships');
@@ -173,7 +182,7 @@ export class PptxParser implements DocumentParser {
       // they start with a leading slash, in which case they are already package-root-relative.
       const slidePartPath = target.startsWith('/') ? target.slice(1) : `ppt/${target}`;
 
-      const slideRoot = await readXmlPart(zip, slidePartPath);
+      const slideRoot = await readXmlPart(zip, slidePartPath, budget);
       const spTree = findFirst(slideRoot, 'p:spTree');
       const text = spTree ? collectSlideText(spTree) : '';
 

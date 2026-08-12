@@ -3,7 +3,7 @@ import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import { BaseException } from '../../../../shared/exceptions/base.exception';
 import type { XlsxCellLocator } from '../../../../database/schemas/evidence/evidence-chunk/evidence-locator.type';
-import { assertSafeArchive } from './safe-zip';
+import { assertSafeArchive, HostileArchiveException } from './safe-zip';
 import type { DocumentParser, ParsedDocument, ParsedElement } from './parsed-element.type';
 import { sanitizeEvidenceText } from '../sanitize-evidence-text';
 
@@ -13,6 +13,23 @@ const XLSX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.spreadshee
 
 // Bump whenever a change here could shift the sheet/cell coordinates a stored citation points at.
 const EXTRACTOR_VERSION = 'xlsx-exceljs-2';
+
+/**
+ * A legitimate merge in a lease/comps-style workbook spans at most a modest header banner — a
+ * handful of columns, one or two rows. This sits far above that, so no real document trips it,
+ * while still refusing a `<mergeCell ref="A1:XFD1048576"/>`-style range before the row/column
+ * loop below would ever have to walk it cell by cell.
+ */
+const MAX_MERGE_RANGE_CELLS = 5_000;
+
+/**
+ * The finest granularity this parser emits is one element per non-empty or merge-covered cell, so
+ * this bounds the total memory and downstream chunking cost of one workbook regardless of whether
+ * the volume comes from a large cell count or from merge expansion. `assertSafeArchive` and
+ * `MAX_MERGE_RANGE_CELLS` bound the archive and any single merge; this is the backstop against
+ * exceljs's own load-time cell expansion, which is unbounded by anything in this file.
+ */
+const MAX_TOTAL_EMITTED_ELEMENTS = 20_000;
 
 export class MalformedXlsxException extends BaseException {
   constructor(message: string, cause?: unknown) {
@@ -131,16 +148,44 @@ function columnIndex(column: string): number {
   return index;
 }
 
+/**
+ * Fails CLOSED: a merge range whose bounding box covers more than `MAX_MERGE_RANGE_CELLS` cells is
+ * rejected here, before any caller loops over it — a compliant-looking archive can declare a merge
+ * spanning the entire addressable sheet, and the cost of that is the rectangle itself, not
+ * anything `assertSafeArchive`'s declared-size checks can see.
+ */
 function decodeMergeRange(range: string): MergeBounds {
   const [topLeft, bottomRight] = range.split(':');
   const start = parseCellAddress(topLeft);
   const end = parseCellAddress(bottomRight ?? topLeft);
-  return {
+  const bounds: MergeBounds = {
     top: start.row,
     left: columnIndex(start.column),
     bottom: end.row,
     right: columnIndex(end.column),
   };
+
+  const cellCount = (bounds.bottom - bounds.top + 1) * (bounds.right - bounds.left + 1);
+  if (cellCount > MAX_MERGE_RANGE_CELLS) {
+    throw new HostileArchiveException(
+      `Merge range "${range}" covers ${cellCount} cells, exceeding the ${MAX_MERGE_RANGE_CELLS} limit`,
+    );
+  }
+
+  return bounds;
+}
+
+/**
+ * Fails CLOSED: rejects the workbook once the running count of emitted elements exceeds
+ * `MAX_TOTAL_EMITTED_ELEMENTS`, whether the volume came from ordinary non-empty cells or from
+ * merge-range expansion.
+ */
+function assertWithinEmittedElementBudget(elementCount: number): void {
+  if (elementCount > MAX_TOTAL_EMITTED_ELEMENTS) {
+    throw new HostileArchiveException(
+      `Workbook emits more than ${MAX_TOTAL_EMITTED_ELEMENTS} elements`,
+    );
+  }
 }
 
 /**
@@ -208,6 +253,7 @@ export class XlsxParser implements DocumentParser {
             locator,
             headingPath: [],
           });
+          assertWithinEmittedElementBudget(elements.length);
         });
       });
 
@@ -246,6 +292,7 @@ export class XlsxParser implements DocumentParser {
               locator,
               headingPath: [],
             });
+            assertWithinEmittedElementBudget(elements.length);
           }
         }
       }

@@ -3,7 +3,12 @@ import JSZip from 'jszip';
 import { xml2js, type Element } from 'xml-js';
 import { BaseException } from '../../../../shared/exceptions/base.exception';
 import type { DocxParagraphLocator } from '../../../../database/schemas/evidence/evidence-chunk/evidence-locator.type';
-import { assertSafeArchive, HostileArchiveException } from './safe-zip';
+import {
+  assertSafeArchive,
+  createInflateBudget,
+  HostileArchiveException,
+  readEntryTextBounded,
+} from './safe-zip';
 import type { DocumentParser, ParsedDocument, ParsedElement } from './parsed-element.type';
 import { sanitizeEvidenceText } from '../sanitize-evidence-text';
 
@@ -93,7 +98,7 @@ export class DocxParser implements DocumentParser {
     if (!documentEntry) {
       throw new MalformedDocxException('Archive is missing word/document.xml');
     }
-    const xml = await documentEntry.async('text');
+    const xml = await readEntryTextBounded(documentEntry, createInflateBudget());
 
     // Reject outright rather than parse-and-ignore: even without external-entity resolution, a
     // DOCTYPE's internal subset can still define entities that expand at parse time (the

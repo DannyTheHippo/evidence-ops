@@ -242,6 +242,29 @@ describe('XlsxParser', () => {
 
       await expect(parser.parse(buffer)).rejects.toBeInstanceOf(HostileArchiveException);
     });
+
+    it('should reject a merge range whose rectangle exceeds the cell cap', async () => {
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('Sheet1');
+      sheet.getCell('A1').value = 'Title';
+      // 10 columns x 1000 rows = 10,000 covered cells, past the parser's merge-rectangle cap —
+      // a tiny declared archive that would otherwise expand to a large emitted-element cost.
+      sheet.mergeCells('A1:J1000');
+      const content = Buffer.from(await workbook.xlsx.writeBuffer());
+
+      await expect(parser.parse(content)).rejects.toBeInstanceOf(HostileArchiveException);
+    });
+
+    it('should reject a workbook whose total emitted elements exceed the cap', async () => {
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('Sheet1');
+      for (let row = 1; row <= 20_001; row += 1) {
+        sheet.getCell(row, 1).value = 'x';
+      }
+      const content = Buffer.from(await workbook.xlsx.writeBuffer());
+
+      await expect(parser.parse(content)).rejects.toBeInstanceOf(HostileArchiveException);
+    });
   });
 
   describe('parse — malformed input', () => {
