@@ -70,4 +70,18 @@ export const approvalsApiExamples: Record<string, ApiResponseOptions> = {
       },
     },
   },
+  forbidden: {
+    status: HttpStatus.FORBIDDEN,
+    description: 'Caller does not hold the admin role required to decide an approval.',
+    examples: {
+      example: {
+        summary: 'Insufficient role',
+        value: {
+          statusCode: HttpStatus.FORBIDDEN,
+          message: 'Insufficient role for this action',
+          error: 'Forbidden',
+        },
+      },
+    },
+  },
 };
