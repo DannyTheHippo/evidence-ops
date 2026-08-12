@@ -5,12 +5,14 @@ import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import bcrypt from 'bcryptjs';
 import type { StringValue } from 'ms';
+import { DEFAULT_TENANT_ID } from '../../../../src/database/constants/tenant.constant';
 import { User } from '../../../../src/database/schemas/administration/user/user.schema';
 import { AuthService } from '../../../../src/features/common/auth/auth.service';
 import {
   EmailAlreadyRegisteredException,
   InvalidCredentialsException,
 } from '../../../../src/features/common/auth/exceptions/auth.exception';
+import { UserRole } from '../../../../src/shared/enums/user-role.enum';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockConfig } from '../../../utils/get-mock-config';
 import { getMockLogger } from '../../../utils/get-mock-logger';
@@ -28,6 +30,8 @@ describe('AuthService', () => {
     _id: { toString: () => mockUserId },
     email: 'user@example.com',
     password: 'irrelevant-placeholder-hash',
+    tenantId: DEFAULT_TENANT_ID,
+    role: UserRole.Member,
     createdAt: new Date('2026-07-01T00:00:00.000Z'),
     ...overrides,
   });
@@ -91,6 +95,23 @@ describe('AuthService', () => {
       expect(createdDoc.email).toBe('user@example.com');
     });
 
+    it('should default to member role and the default tenant, leaving both to the schema default', async () => {
+      mockUserModel.findOne.mockResolvedValueOnce(null);
+      mockUserModel.create.mockImplementationOnce((doc: { email: string; password: string }) =>
+        Promise.resolve(buildMockUser(doc)),
+      );
+
+      const result = await service.register({ email: 'user@example.com', password: 'password123' });
+
+      // The service does not set tenantId/role itself — the User schema defaults them
+      // (DEFAULT_TENANT_ID / UserRole.Member). Asserting the create() call omits both fields
+      // proves the service relies on the schema default rather than hard-coding it here too.
+      const calls = mockUserModel.create.mock.calls as Array<[Record<string, unknown>]>;
+      expect(calls[0][0]).not.toHaveProperty('tenantId');
+      expect(calls[0][0]).not.toHaveProperty('role');
+      expect(result.role).toBe(UserRole.Member);
+    });
+
     it('should throw EmailAlreadyRegisteredException with 409 Conflict on a duplicate email', async () => {
       mockUserModel.findOne.mockResolvedValueOnce(buildMockUser());
 
@@ -130,7 +151,7 @@ describe('AuthService', () => {
       expect((error as InvalidCredentialsException).message).toBe('Invalid email or password');
     });
 
-    it('should return an accessToken carrying sub+email and the mapped user on success', async () => {
+    it('should return an accessToken carrying sub+email+tenantId+role and the mapped user on success', async () => {
       const storedHash = await bcrypt.hash('correct-password', 12);
       mockUserModel.findOne.mockResolvedValueOnce(buildMockUser({ password: storedHash }));
 
@@ -139,11 +160,19 @@ describe('AuthService', () => {
         password: 'correct-password',
       });
 
-      const decoded = jwtService.verify<{ sub: string; email: string }>(result.accessToken);
+      const decoded = jwtService.verify<{
+        sub: string;
+        email: string;
+        tenantId: string;
+        role: UserRole;
+      }>(result.accessToken);
       expect(decoded.sub).toBe(mockUserId);
       expect(decoded.email).toBe('user@example.com');
+      expect(decoded.tenantId).toBe(DEFAULT_TENANT_ID);
+      expect(decoded.role).toBe(UserRole.Member);
       expect(result.user.id).toBe(mockUserId);
       expect(result.user.email).toBe('user@example.com');
+      expect(result.user.role).toBe(UserRole.Member);
     });
   });
 

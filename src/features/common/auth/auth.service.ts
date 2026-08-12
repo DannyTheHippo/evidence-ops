@@ -65,6 +65,8 @@ export class AuthService {
     const accessToken = await this.jwtService.signAsync({
       sub: user._id.toString(),
       email: user.email,
+      tenantId: user.tenantId,
+      role: user.role,
     });
 
     this.logger.debug(`User logged in with the _id '${user._id.toString()}'`);
@@ -88,6 +90,9 @@ export class AuthService {
     return {
       id: user._id.toString(),
       email: user.email,
+      // role only — the SPA needs it to explain why an action is forbidden; tenantId has no
+      // client-side use and stays server-internal.
+      role: user.role,
       createdAt: user.createdAt,
     };
   }

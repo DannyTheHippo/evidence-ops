@@ -24,17 +24,20 @@ describe('Serialization (e2e)', () => {
     const response = await request(getTestServer(app))
       .post('/api/v1/auth/register')
       .send(credentials);
-    const body: unknown = response.body;
+    const body = response.body as Record<string, unknown>;
 
     expect(response.status).toBe(201);
     expect(JSON.stringify(body)).not.toMatch(/password|hash/i);
+    // Exact-key assertion: the only gate catching a MeResponseDto field missing @Expose().
+    expect(Object.keys(body).sort()).toEqual(['id', 'email', 'role', 'createdAt'].sort());
   });
 
   it('never exposes the password or its hash in the login response, including the nested user', async () => {
     const response = await request(getTestServer(app)).post('/api/v1/auth/login').send(credentials);
-    const body: unknown = response.body;
+    const body = response.body as { accessToken: string; user: Record<string, unknown> };
 
     expect(response.status).toBe(200);
     expect(JSON.stringify(body)).not.toMatch(/password|hash/i);
+    expect(Object.keys(body.user).sort()).toEqual(['id', 'email', 'role', 'createdAt'].sort());
   });
 });

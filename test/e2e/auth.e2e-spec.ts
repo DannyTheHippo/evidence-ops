@@ -5,6 +5,7 @@ import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test
 interface MeResponseBody {
   id: string;
   email: string;
+  role: string;
   createdAt: string;
 }
 
@@ -34,6 +35,8 @@ describe('Auth (e2e)', () => {
 
     expect(registerResponse.status).toBe(201);
     expect(registerBody.email).toBe(credentials.email);
+    // Exact-key assertion: the only gate catching a MeResponseDto field missing @Expose().
+    expect(Object.keys(registerBody).sort()).toEqual(['id', 'email', 'role', 'createdAt'].sort());
 
     const loginResponse = await request(getTestServer(app))
       .post('/api/v1/auth/login')
@@ -43,6 +46,7 @@ describe('Auth (e2e)', () => {
     expect(loginResponse.status).toBe(200);
     expect(typeof loginBody.accessToken).toBe('string');
     expect(loginBody.user.email).toBe(credentials.email);
+    expect(Object.keys(loginBody.user).sort()).toEqual(['id', 'email', 'role', 'createdAt'].sort());
 
     const meResponse = await request(getTestServer(app))
       .get('/api/v1/auth/me')
@@ -52,6 +56,8 @@ describe('Auth (e2e)', () => {
     expect(meResponse.status).toBe(200);
     expect(meBody.email).toBe(credentials.email);
     expect(meBody.id).toBe(registerBody.id);
+    expect(meBody.role).toBe('member');
+    expect(Object.keys(meBody).sort()).toEqual(['id', 'email', 'role', 'createdAt'].sort());
   });
 
   // Proves the global APP_GUARD JwtAuthGuard denies by default: only handlers explicitly

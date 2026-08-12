@@ -42,11 +42,27 @@ export class JwtAuthGuard implements CanActivate {
     try {
       const payload = await this.jwtService.verifyAsync<JwtPayload>(token);
 
-      request.user = { userId: payload.sub, email: payload.email };
+      // Fail closed on a pre-tenancy token: `tenantId`/`role` are required on JwtPayload, but a
+      // token signed before this deploy can still verify successfully with the old two-claim
+      // shape. JWT_EXPIRES_IN is 7 days with no refresh or revocation, so such tokens stay
+      // structurally valid for up to a week post-deploy. Rejecting them forces one re-login,
+      // which is the correct cost versus carrying a dual-shape payload type forever or
+      // defaulting a missing tenant — defaulting a security claim is how isolation bugs are born.
+      if (!payload.tenantId || !payload.role) {
+        throw new UnauthorizedException('Invalid or expired token');
+      }
+
+      request.user = {
+        userId: payload.sub,
+        email: payload.email,
+        tenantId: payload.tenantId,
+        role: payload.role,
+      };
 
       const store = this.als.getStore();
       if (store) {
         store.user = payload.sub;
+        store.tenant = payload.tenantId;
       }
 
       return true;
