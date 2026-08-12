@@ -1,6 +1,7 @@
 import { Inject, Injectable, InternalServerErrorException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { TypedConfigService } from '../../../config/environment/typed-config.service';
 import {
   DocumentVersion,
   DocumentVersionDocument,
@@ -24,12 +25,13 @@ import {
   type DocumentStore,
 } from '../../../providers/storage/document-store.interface';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
+import { mapWithConcurrency } from '../../../shared/utils/map-with-concurrency.util';
 import { groupKey } from '../conflicts/detect-conflicts';
 import { ParserRegistry } from '../ingestion/parser.registry';
 import type { ParsedElement } from '../ingestion/parsers/parsed-element.type';
 import { DocumentVersionNotFoundException } from './exceptions/facts.exception';
 import { METRIC_ONTOLOGY } from './metric-ontology';
-import { extractProseFacts } from './prose-fact-extractor';
+import { extractProseFacts, type ProseFactExtractionResult } from './prose-fact-extractor';
 import { findXlsxRegionChunk, parseRowFromCellAddress } from './resolve-xlsx-fact-chunk';
 import { extractXlsxFacts, type FactCandidate } from './xlsx-fact-extractor';
 
@@ -70,6 +72,8 @@ export class FactsService {
     private readonly modelProvider: ModelProvider,
 
     private readonly parserRegistry: ParserRegistry,
+
+    private readonly config: TypedConfigService,
 
     private readonly logger: AppLogger,
   ) {
@@ -267,17 +271,30 @@ export class FactsService {
       );
     }
 
-    const candidates: (FactCandidate & { chunkId: string })[] = [];
-    let skippedChunkCount = 0;
-    for (const chunk of chunks) {
-      const { accepted, rejected, successfulPassCount, skippedForInsufficientPasses } =
-        await extractProseFacts({
+    /**
+     * `mapWithConcurrency` writes each chunk's extraction result to the slot matching that
+     * chunk's own index, independent of which chunk's passes settle first — so zipping `chunks`
+     * back against `results` by index below is safe, and every candidate's `factKey`/`chunkId`
+     * stays tied to the chunk it was extracted from regardless of extraction order.
+     */
+    const results = await mapWithConcurrency<EvidenceChunkDocument, ProseFactExtractionResult>(
+      chunks,
+      this.config.extraction.chunkConcurrency,
+      (chunk) =>
+        extractProseFacts({
           chunkText: chunk.text,
           chunkLocator: chunk.locator,
           sourceElements: elements,
           modelProvider: this.modelProvider,
           ontology: METRIC_ONTOLOGY,
-        });
+        }),
+    );
+
+    const candidates: (FactCandidate & { chunkId: string })[] = [];
+    let skippedChunkCount = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const { accepted, rejected, successfulPassCount, skippedForInsufficientPasses } = results[i];
 
       if (skippedForInsufficientPasses) {
         // Fewer than 2 of the 3 extraction passes returned usable output — majority agreement

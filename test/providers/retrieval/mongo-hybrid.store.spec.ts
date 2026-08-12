@@ -125,7 +125,10 @@ async function buildStore(
       MongoHybridRetrievalStore,
       { provide: getConnectionToken(), useValue: connection },
       { provide: EMBEDDING_PROVIDER, useValue: embeddingProvider },
-      { provide: TypedConfigService, useValue: getMockTypedConfig({ retrieval: { fusion } }) },
+      {
+        provide: TypedConfigService,
+        useValue: getMockTypedConfig({ retrieval: { fusion, limit: 12 } }),
+      },
     ],
   }).compile();
 

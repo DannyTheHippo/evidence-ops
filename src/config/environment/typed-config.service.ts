@@ -6,6 +6,7 @@ import type {
   AuthConfig,
   CorsConfig,
   EnvironmentConfig,
+  ExtractionConfig,
   MongoConfig,
   RetrievalConfig,
   SourcesConfig,
@@ -55,5 +56,8 @@ export class TypedConfigService {
   }
   get sources(): SourcesConfig {
     return this.config.get('sources', { infer: true });
+  }
+  get extraction(): ExtractionConfig {
+    return this.config.get('extraction', { infer: true });
   }
 }

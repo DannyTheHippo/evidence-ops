@@ -1,6 +1,7 @@
 import { Inject, Injectable, InternalServerErrorException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { TypedConfigService } from '../../../config/environment/typed-config.service';
 import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
 import {
   DocumentVersion,
@@ -19,12 +20,6 @@ export interface RetrieveEvidenceInput {
   readonly tenantId?: string;
 }
 
-// Wide enough to give `synthesizeAnswer` real cross-document coverage for a typical question
-// without ballooning prompt size/cost; the same order of magnitude `PIPELINE_CANDIDATE_MULTIPLIER`
-// already applies one layer down in `MongoHybridRetrievalStore`. Revisit once an eval run
-// (`eval/`) has data on how coverage trades off against synthesis cost.
-const RETRIEVAL_LIMIT = 12;
-
 /**
  * Adapts `RetrievalStore` output (a generic `RetrievalHit`, id + metadata) into the
  * `RetrievedChunk` shape `GroundingGateService` needs to check citation containment
@@ -41,6 +36,8 @@ export class EvidenceRetrievalService {
     @InjectModel(DocumentVersion.name)
     private readonly documentVersionModel: Model<DocumentVersionDocument>,
 
+    private readonly config: TypedConfigService,
+
     private readonly logger: AppLogger,
   ) {
     this.logger.init(EvidenceRetrievalService.name);
@@ -52,7 +49,7 @@ export class EvidenceRetrievalService {
     const hits = await this.retrievalStore.search<HybridRetrievalHitMetadata>({
       text: input.questionText,
       filter: { tenantId },
-      limit: RETRIEVAL_LIMIT,
+      limit: this.config.retrieval.limit,
     });
 
     if (hits.length === 0) {

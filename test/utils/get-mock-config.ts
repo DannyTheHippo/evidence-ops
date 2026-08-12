@@ -50,6 +50,7 @@ export const getMockConfig = (): EnvironmentConfig => ({
 
   retrieval: {
     fusion: 'server',
+    limit: 12,
   },
 
   telemetry: {
@@ -60,5 +61,9 @@ export const getMockConfig = (): EnvironmentConfig => ({
   sources: {
     inboxDir: './inbox',
     syncIntervalMs: 300000,
+  },
+
+  extraction: {
+    chunkConcurrency: 2,
   },
 });

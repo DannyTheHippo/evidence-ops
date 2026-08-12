@@ -46,6 +46,7 @@ import { FakeWorkflowEngine } from '../../src/providers/workflow-engine/fake-wor
 import type { AppLogger } from '../../src/shared/services/logger/logger.service';
 import type { AuditService } from '../../src/shared/services/audit/audit.service';
 import { getMockLogger } from '../utils/get-mock-logger';
+import { getMockTypedConfig } from '../utils/get-mock-typed-config';
 
 /**
  * Proves the vertical slice the plan calls out as never having been exercised together: real
@@ -153,6 +154,7 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
       documentStore,
       modelProvider,
       parserRegistry,
+      getMockTypedConfig(),
       logger,
     );
     // This pipeline never resolves a conflict — it only detects one — so a real

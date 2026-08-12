@@ -3,23 +3,80 @@ import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { Types } from 'mongoose';
+import { TypedConfigService } from '../../../../src/config/environment/typed-config.service';
 import { DocumentVersion } from '../../../../src/database/schemas/evidence/document-version/document-version.schema';
 import { EvidenceChunk } from '../../../../src/database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
 import { ExtractedFact } from '../../../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import { DocumentVersionNotFoundException } from '../../../../src/features/evidence/facts/exceptions/facts.exception';
 import { FactsService } from '../../../../src/features/evidence/facts/facts.service';
+import { PASS_COUNT } from '../../../../src/features/evidence/facts/prose-fact-extractor';
 import { ParserRegistry } from '../../../../src/features/evidence/ingestion/parser.registry';
 import type {
   DocumentParser,
   ParsedElement,
 } from '../../../../src/features/evidence/ingestion/parsers/parsed-element.type';
-import { MODEL_PROVIDER } from '../../../../src/providers/model/model-provider.interface';
+import type { z } from 'zod/v4';
+import {
+  MODEL_PROVIDER,
+  type ModelProvider,
+  type ModelProviderInfo,
+  type ModelRequest,
+  type ModelResult,
+} from '../../../../src/providers/model/model-provider.interface';
 import { FakeModelProvider } from '../../../../src/providers/model/fake-model.provider';
 import { DOCUMENT_STORE } from '../../../../src/providers/storage/document-store.interface';
 import { FakeDocumentStore } from '../../../../src/providers/storage/fake-document.store';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
 import { getMockModel } from '../../../utils/get-mock-model';
+import { getMockTypedConfig } from '../../../utils/get-mock-typed-config';
+
+/**
+ * Lets every already-scheduled microtask and timer callback run, so an assertion made after it
+ * observes the extraction pool at rest rather than mid-flush.
+ */
+const flushMicrotasks = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+/**
+ * `ModelProvider` whose calls stay pending until `releaseAll()`, so a test can observe exactly
+ * which chunks the extraction pool has started before any of them settle. `FakeModelProvider`
+ * cannot serve this: it resolves synchronously, so every chunk's passes have already completed by
+ * the time a test regains control and the pool's width is unobservable.
+ */
+class GatedModelProvider implements ModelProvider {
+  readonly info: ModelProviderInfo = { provider: 'gated', model: 'gated-model' };
+  readonly calls: ModelRequest[] = [];
+
+  private readonly pending: (() => void)[] = [];
+
+  constructor(private readonly outputFor: (chunkText: string) => unknown) {}
+
+  async generate<TSchema extends z.ZodType | undefined = undefined>(
+    request: ModelRequest<TSchema>,
+  ): Promise<ModelResult<TSchema>> {
+    this.calls.push(request);
+    const chunkText = request.messages[0].content;
+
+    await new Promise<void>((resolve) => this.pending.push(resolve));
+
+    return {
+      output: this.outputFor(chunkText),
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+      },
+      costUsd: 0,
+    } as ModelResult<TSchema>;
+  }
+
+  releaseAll(): void {
+    for (const resolve of this.pending.splice(0)) {
+      resolve();
+    }
+  }
+}
 
 describe('FactsService', () => {
   let service: FactsService;
@@ -69,11 +126,9 @@ describe('FactsService', () => {
     buildXlsxElement('B2', '5.25%'),
   ];
 
-  beforeEach(async () => {
-    fakeDocumentStore = new FakeDocumentStore();
-    fakeModelProvider = new FakeModelProvider();
-    mockLogger = getMockLogger();
-
+  const buildService = async (
+    options: { chunkConcurrency?: number; modelProvider?: ModelProvider } = {},
+  ): Promise<FactsService> => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         FactsService,
@@ -81,13 +136,27 @@ describe('FactsService', () => {
         { provide: getModelToken(EvidenceChunk.name), useValue: mockEvidenceChunkModel },
         { provide: getModelToken(ExtractedFact.name), useValue: mockExtractedFactModel },
         { provide: DOCUMENT_STORE, useValue: fakeDocumentStore },
-        { provide: MODEL_PROVIDER, useValue: fakeModelProvider },
+        { provide: MODEL_PROVIDER, useValue: options.modelProvider ?? fakeModelProvider },
         { provide: ParserRegistry, useValue: mockParserRegistry },
+        {
+          provide: TypedConfigService,
+          useValue: getMockTypedConfig({
+            extraction: { chunkConcurrency: options.chunkConcurrency ?? 2 },
+          }),
+        },
         { provide: AppLogger, useValue: mockLogger },
       ],
     }).compile();
 
-    service = module.get<FactsService>(FactsService);
+    return module.get<FactsService>(FactsService);
+  };
+
+  beforeEach(async () => {
+    fakeDocumentStore = new FakeDocumentStore();
+    fakeModelProvider = new FakeModelProvider();
+    mockLogger = getMockLogger();
+
+    service = await buildService();
   });
 
   afterEach(() => {
@@ -447,6 +516,121 @@ describe('FactsService', () => {
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.stringContaining(`Chunk '${chunkId}' had only 1 of 3 successful extraction passes`),
       );
+    });
+
+    /**
+     * Chunk texts and the unanimous 3-pass model output for each, for the two multi-chunk tests
+     * below. Both chunks carry the same metric and differ by entity so neither can be mistaken
+     * for the other's candidate, and each quote is an exact substring of its own chunk's text —
+     * the grounding check is what decides whether a candidate survives.
+     */
+    const CHUNK_A = {
+      id: 'chunk-prose-a',
+      text: 'The cap rate is 5.25% per the offering memo.',
+      quote: 'cap rate is 5.25%',
+      entity: 'Northgate Business Park',
+      amount: 5.25,
+    };
+    const CHUNK_B = {
+      id: 'chunk-prose-b',
+      text: 'The cap rate is 6.10% for Southgate Plaza.',
+      quote: 'cap rate is 6.10%',
+      entity: 'Southgate Plaza',
+      amount: 6.1,
+    };
+
+    const buildProseOutput = (chunk: typeof CHUNK_A) => ({
+      output: {
+        facts: [
+          {
+            entity: chunk.entity,
+            metric: 'cap_rate',
+            periodText: '',
+            amount: chunk.amount,
+            unit: 'percent',
+            quote: chunk.quote,
+            confidence: 0.9,
+          },
+        ],
+      },
+    });
+
+    const arrangeTwoChunkVersion = async (): Promise<void> => {
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('%PDF-1.4 fixture bytes'),
+        contentType: PDF_MIME,
+        metadata: {},
+      });
+      mockDocumentVersionModel.findById.mockResolvedValueOnce(
+        buildVersion({ storageKey: stored.id }),
+      );
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+      mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser([buildProseElement()]));
+      mockEvidenceChunkModel.find.mockResolvedValueOnce([
+        { _id: CHUNK_A.id, text: CHUNK_A.text, locator: { kind: 'pdf-page', page: 1 } },
+        { _id: CHUNK_B.id, text: CHUNK_B.text, locator: { kind: 'pdf-page', page: 2 } },
+      ]);
+    };
+
+    it("should tie each chunk's facts to the chunk they were extracted from when chunks are extracted concurrently", async () => {
+      await arrangeTwoChunkVersion();
+      for (let pass = 0; pass < 3; pass++) {
+        fakeModelProvider.enqueueResult(buildProseOutput(CHUNK_A));
+      }
+      for (let pass = 0; pass < 3; pass++) {
+        fakeModelProvider.enqueueResult(buildProseOutput(CHUNK_B));
+      }
+      mockExtractedFactModel.insertMany.mockResolvedValueOnce([]);
+
+      const result = await service.extractFacts(versionId.toString());
+
+      const insertManyMock = mockExtractedFactModel.insertMany as jest.Mock<
+        Promise<unknown[]>,
+        [{ factKey: { entity: string }; rawText: string; chunkId: string }[]]
+      >;
+      const insertedFacts = insertManyMock.mock.calls[0][0];
+      expect(insertedFacts).toHaveLength(2);
+      const byChunkId = new Map(insertedFacts.map((fact) => [fact.chunkId, fact]));
+      expect(byChunkId.get(CHUNK_A.id)?.rawText).toBe(CHUNK_A.quote);
+      expect(byChunkId.get(CHUNK_A.id)?.factKey.entity).toBe(CHUNK_A.entity);
+      expect(byChunkId.get(CHUNK_B.id)?.rawText).toBe(CHUNK_B.quote);
+      expect(byChunkId.get(CHUNK_B.id)?.factKey.entity).toBe(CHUNK_B.entity);
+      expect(result.factsCreated).toBe(2);
+    });
+
+    it('should start no more chunks at once than config.extraction.chunkConcurrency allows', async () => {
+      const gatedProvider = new GatedModelProvider((chunkText) =>
+        chunkText === CHUNK_A.text
+          ? buildProseOutput(CHUNK_A).output
+          : buildProseOutput(CHUNK_B).output,
+      );
+      service = await buildService({ chunkConcurrency: 1, modelProvider: gatedProvider });
+      await arrangeTwoChunkVersion();
+      mockExtractedFactModel.insertMany.mockResolvedValueOnce([]);
+
+      const extraction = service.extractFacts(versionId.toString());
+      await flushMicrotasks();
+
+      /**
+       * With a pool of 1 the second chunk must not have been touched yet: every started call so
+       * far belongs to chunk A. A pool that ignored the configured limit would already have
+       * issued chunk B's passes here, because nothing has been released.
+       */
+      expect(gatedProvider.calls).toHaveLength(PASS_COUNT);
+      expect(gatedProvider.calls.every((call) => call.messages[0].content === CHUNK_A.text)).toBe(
+        true,
+      );
+
+      gatedProvider.releaseAll();
+      await flushMicrotasks();
+
+      expect(gatedProvider.calls).toHaveLength(PASS_COUNT * 2);
+      expect(
+        gatedProvider.calls.slice(PASS_COUNT).every((c) => c.messages[0].content === CHUNK_B.text),
+      ).toBe(true);
+
+      gatedProvider.releaseAll();
+      await expect(extraction).resolves.toMatchObject({ factsCreated: 2 });
     });
   });
 

@@ -89,6 +89,9 @@ export const environmentSchema = z
     TEMPORAL_TASK_QUEUE: z.string().default('evidence-ops'),
 
     RETRIEVAL_FUSION: z.enum(['server', 'app']).default('server'),
+    RETRIEVAL_LIMIT: zNum(12),
+
+    EXTRACTION_CHUNK_CONCURRENCY: zNum(2),
 
     OTEL_EXPORTER_OTLP_ENDPOINT: z.string().default('http://localhost:4318'),
     // Dev-only, OFF by default: attaches prompt/completion text as span *events* (never
@@ -170,6 +173,7 @@ export const environmentSchema = z
       },
       retrieval: {
         fusion: e.RETRIEVAL_FUSION,
+        limit: e.RETRIEVAL_LIMIT,
       },
       telemetry: {
         otlpEndpoint: e.OTEL_EXPORTER_OTLP_ENDPOINT,
@@ -178,6 +182,9 @@ export const environmentSchema = z
       sources: {
         inboxDir: e.SOURCES_INBOX_DIR,
         syncIntervalMs: e.SOURCE_SYNC_INTERVAL_MS,
+      },
+      extraction: {
+        chunkConcurrency: e.EXTRACTION_CHUNK_CONCURRENCY,
       },
     };
   });
@@ -194,6 +201,7 @@ export type TemporalConfig = EnvironmentConfig['temporal'];
 export type RetrievalConfig = EnvironmentConfig['retrieval'];
 export type TelemetryConfig = EnvironmentConfig['telemetry'];
 export type SourcesConfig = EnvironmentConfig['sources'];
+export type ExtractionConfig = EnvironmentConfig['extraction'];
 
 /**
  * `validate` hook for `ConfigModule.forRoot`. Throws a flattened, readable error

@@ -154,6 +154,7 @@ describe('validateEnvironment', () => {
           'retrieval',
           'telemetry',
           'sources',
+          'extraction',
         ].sort(),
       );
     });
@@ -172,6 +173,19 @@ describe('validateEnvironment', () => {
       expect(result.temporal.namespace).toBe('default');
       expect(result.temporal.taskQueue).toBe('evidence-ops');
       expect(result.retrieval.fusion).toBe('server');
+      expect(result.retrieval.limit).toBe(12);
+      expect(result.extraction.chunkConcurrency).toBe(2);
+    });
+
+    it('coerces RETRIEVAL_LIMIT and EXTRACTION_CHUNK_CONCURRENCY from string to number', () => {
+      const result = validateEnvironment({
+        ...validEnv,
+        RETRIEVAL_LIMIT: '20',
+        EXTRACTION_CHUNK_CONCURRENCY: '4',
+      });
+
+      expect(result.retrieval.limit).toBe(20);
+      expect(result.extraction.chunkConcurrency).toBe(4);
     });
 
     it.each([

@@ -3,6 +3,7 @@ import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { Types } from 'mongoose';
+import { TypedConfigService } from '../../../../src/config/environment/typed-config.service';
 import { DocumentVersion } from '../../../../src/database/schemas/evidence/document-version/document-version.schema';
 import { EvidenceRetrievalService } from '../../../../src/features/evidence/qa/evidence-retrieval.service';
 import type { HybridRetrievalHitMetadata } from '../../../../src/providers/retrieval/mongo-hybrid.store';
@@ -12,6 +13,7 @@ import { RETRIEVAL_STORE } from '../../../../src/providers/retrieval/retrieval-s
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
 import { getMockModel } from '../../../utils/get-mock-model';
+import { getMockTypedConfig } from '../../../utils/get-mock-typed-config';
 
 function buildHit(overrides: Partial<HybridRetrievalHitMetadata> = {}): RetrievalHit {
   return {
@@ -34,19 +36,29 @@ describe('EvidenceRetrievalService', () => {
   let fakeRetrievalStore: FakeRetrievalStore;
   const mockDocumentVersionModel = getMockModel();
 
-  beforeEach(async () => {
-    fakeRetrievalStore = new FakeRetrievalStore();
+  const buildService = async (
+    retrievalOverrides: Partial<ReturnType<typeof getMockTypedConfig>['retrieval']> = {},
+  ): Promise<EvidenceRetrievalService> => {
+    const config = getMockTypedConfig({
+      retrieval: { fusion: 'server', limit: 12, ...retrievalOverrides },
+    });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         EvidenceRetrievalService,
         { provide: RETRIEVAL_STORE, useValue: fakeRetrievalStore },
         { provide: getModelToken(DocumentVersion.name), useValue: mockDocumentVersionModel },
+        { provide: TypedConfigService, useValue: config },
         { provide: AppLogger, useValue: getMockLogger() },
       ],
     }).compile();
 
-    service = module.get<EvidenceRetrievalService>(EvidenceRetrievalService);
+    return module.get<EvidenceRetrievalService>(EvidenceRetrievalService);
+  };
+
+  beforeEach(async () => {
+    fakeRetrievalStore = new FakeRetrievalStore();
+    service = await buildService();
   });
 
   afterEach(() => {
@@ -76,6 +88,23 @@ describe('EvidenceRetrievalService', () => {
     await service.retrieve({ questionText: 'What is the cap rate?', tenantId: 'acme' });
 
     expect(fakeRetrievalStore.queries[0].filter).toEqual({ tenantId: 'acme' });
+  });
+
+  it("should pass config.retrieval.limit as the store query's limit", async () => {
+    fakeRetrievalStore.setHits([]);
+
+    await service.retrieve({ questionText: 'What is the cap rate?' });
+
+    expect(fakeRetrievalStore.queries[0].limit).toBe(12);
+  });
+
+  it('should drive the store query limit from config instead of a fixed value', async () => {
+    service = await buildService({ limit: 5 });
+    fakeRetrievalStore.setHits([]);
+
+    await service.retrieve({ questionText: 'What is the cap rate?' });
+
+    expect(fakeRetrievalStore.queries[0].limit).toBe(5);
   });
 
   it("should join a retrieval hit back to its document version's sha256", async () => {

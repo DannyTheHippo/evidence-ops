@@ -16,6 +16,8 @@ import { MODEL_PROVIDER, type ModelProvider } from './model/model-provider.inter
 import { TracingModelProvider } from './model/tracing-model.provider';
 import { MongoHybridRetrievalStore } from './retrieval/mongo-hybrid.store';
 import { RETRIEVAL_STORE } from './retrieval/retrieval-store.interface';
+import { LocalFolderSourceConnector } from './source-connector/local-folder-source.connector';
+import { SOURCE_CONNECTOR } from './source-connector/source-connector.interface';
 import { DOCUMENT_STORE } from './storage/document-store.interface';
 import { GridFsDocumentStore } from './storage/gridfs-document.store';
 import { LoggerTelemetry } from './telemetry/logger-telemetry';
@@ -62,6 +64,7 @@ const MODEL_CACHE_DEFAULT_OPTIONS: CachingModelProviderOptions = {
         ),
     },
     { provide: EMBEDDING_PROVIDER, useClass: VoyageEmbeddingProvider },
+    { provide: SOURCE_CONNECTOR, useClass: LocalFolderSourceConnector },
 
     // RETRIEVAL_STORE, DOCUMENT_STORE, WORKFLOW_ENGINE, and now APPROVAL_CHANNEL bind their real
     // implementations here — their fakes stay in the tree because unit tests still bind them
@@ -80,6 +83,7 @@ const MODEL_CACHE_DEFAULT_OPTIONS: CachingModelProviderOptions = {
   exports: [
     MODEL_PROVIDER,
     EMBEDDING_PROVIDER,
+    SOURCE_CONNECTOR,
     RETRIEVAL_STORE,
     DOCUMENT_STORE,
     WORKFLOW_ENGINE,
