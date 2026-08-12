@@ -5,8 +5,9 @@ import type { Config } from 'jest';
  * `mongodb-memory-server`) because these specs need a real `mongodb/mongodb-atlas-local`
  * container — `$search`/`$vectorSearch` index builds are not something `mongodb-memory-server`
  * can serve. Matched by `*.integration-spec.ts`, run only via `npm run test:integration`, never
- * by the default `npm test` (`testRegex` there is `.spec.ts$`, which this suffix does not hit)
- * and never by CI, which has no Docker.
+ * by the default `npm test` (`testRegex` there is `.spec.ts$`, which this suffix does not hit).
+ * Runs in CI via `.github/workflows/integration.yml`, which brings Mongo up with
+ * `docker compose`; it is still not part of `npm run checks`/`checks:ci`.
  */
 const config: Config = {
   testEnvironment: 'node',

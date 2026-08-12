@@ -1,0 +1,87 @@
+name: Integration
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+  push:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      NODE_ENV: test
+      # The three `*.integration-spec.ts` suites default to port 27018 (this developer's local
+      # override to dodge a port collision with other Mongo projects) — CI has no such collision,
+      # and `docker-compose.yml`'s `mongo` service publishes the standard 27017. Overriding here
+      # is mandatory, not cosmetic: without it every spec silently connects nowhere in CI.
+      MONGO_DB_URI: mongodb://localhost:27017/evidence-ops?directConnection=true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 26
+
+      - name: Cache node modules
+        uses: actions/cache@v5
+        with:
+          path: ./node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install backend dependencies
+        run: npm ci
+
+      # `docker compose up`, not a GitHub `services:` block: `docker-compose.yml`'s `mongo` service
+      # already encodes three load-bearing details a `services:` block would have to re-derive —
+      # the `isWritablePrimary` healthcheck (a bare `ping` reports healthy on a broken replica set),
+      # the pinned `hostname` (the Atlas Local image derives its replica-set name from it), and the
+      # `/data/mongot` volume that persists mongot's Lucene index files across restarts.
+      - name: Start Mongo
+        run: docker compose up -d --wait mongo
+
+      # The compose healthcheck proves mongod is a writable primary, not that mongot (the
+      # $search/$vectorSearch process) has finished starting — and `migrations/0003-search-indexes.ts`
+      # calls `createSearchIndexes` with no retry of its own. Retrying at the workflow level rather
+      # than patching the migration keeps that behavior identical to a local `migrate:up`.
+      - name: Run migrations
+        run: |
+          for attempt in 1 2 3; do
+            if npm run migrate:up; then
+              exit 0
+            fi
+            echo "migrate:up attempt $attempt failed, retrying in 10s..."
+            sleep 10
+          done
+          exit 1
+
+      - name: Run integration tests
+        run: npm run test:integration
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-results-${{ github.run_id }}
+          path: coverage
+          retention-days: 7
+          if-no-files-found: warn
