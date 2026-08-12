@@ -7,14 +7,17 @@ import {
   Param,
   Post,
   Query,
+  UnauthorizedException,
   UploadedFile,
   UseInterceptors,
   Version,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
 import { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
+import { AuthenticatedRequest } from '../../../shared/types/authenticated-request.type';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { documentsApiExamples } from './api-examples/documents.api-examples';
 import { MAX_FILE_SIZE_BYTES } from './documents.constant';
@@ -57,8 +60,18 @@ export class DocumentsController {
   async upload(
     @UploadedFile() file: UploadedFileLike | undefined,
     @Body() dto: UploadDocumentRequestDto,
+    @CurrentUser() user: AuthenticatedRequest['user'],
   ): Promise<DocumentResponseDto> {
-    return toResponseDto(DocumentResponseDto, await this.documentsService.upload(file, dto));
+    // JwtAuthGuard always sets request.user before a non-public handler runs; this guards
+    // the type only (request.user is optional because the same type covers public routes).
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    return toResponseDto(
+      DocumentResponseDto,
+      await this.documentsService.upload(file, dto, user.tenantId),
+    );
   }
 
   @Get()
@@ -67,8 +80,13 @@ export class DocumentsController {
   @ApiResponse(documentsApiExamples.list)
   async list(
     @Query() pagination: PaginationRequestDto,
+    @CurrentUser() user: AuthenticatedRequest['user'],
   ): Promise<WithCountResponseDto<DocumentResponseDto>> {
-    const { docs, count } = await this.documentsService.list(pagination);
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    const { docs, count } = await this.documentsService.list(pagination, user.tenantId);
 
     return { docs: docs.map((doc) => toResponseDto(DocumentResponseDto, doc)), count };
   }
@@ -78,7 +96,17 @@ export class DocumentsController {
   @HttpCode(HttpStatus.OK)
   @ApiResponse(documentsApiExamples.detail)
   @ApiResponse(documentsApiExamples.notFound)
-  async getById(@Param('id') id: string): Promise<DocumentWithVersionsResponseDto> {
-    return toResponseDto(DocumentWithVersionsResponseDto, await this.documentsService.getById(id));
+  async getById(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedRequest['user'],
+  ): Promise<DocumentWithVersionsResponseDto> {
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    return toResponseDto(
+      DocumentWithVersionsResponseDto,
+      await this.documentsService.getById(id, user.tenantId),
+    );
   }
 }

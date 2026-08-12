@@ -142,6 +142,7 @@ export async function ingestDocumentVersion(
       ? `Approve ingesting '${input.documentTitle}' (version '${input.documentVersionId}')`
       : `Approve ingesting document version '${input.documentVersionId}'`,
     subject: { entityType: 'DocumentVersion', entityId: input.documentVersionId },
+    tenantId: input.tenantId,
     // `workflowInfo()` is deterministic (this execution's own id never changes on replay) — see
     // `ApprovalRequest.workflowId`'s doc comment for why the HTTP decision endpoint needs it.
     workflowId: workflowInfo().workflowId,
@@ -168,7 +169,10 @@ export async function ingestDocumentVersion(
   // `rejected` for any state that isn't exactly `approved`
   // (`MongoApprovalChannel.getDecision`'s own doc comment), so this branch never needs to
   // special-case `pending`/unknown states itself.
-  const decision = await approvalDecisionActivities.getApprovalDecision(approval.id);
+  const decision = await approvalDecisionActivities.getApprovalDecision(
+    approval.id,
+    input.tenantId,
+  );
 
   if (decision.decision !== 'approved') {
     return { chunksCreated: 0, alreadyIngested: false, gateOutcome: 'rejected' };

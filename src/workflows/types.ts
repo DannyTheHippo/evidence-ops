@@ -15,11 +15,19 @@
  * `documentTitle` is optional and cosmetic only — it never changes the gate's behavior, only the
  * `summary` a human reviewer reads in the approval inbox (`ApprovalsService.listPending`). Absent
  * on a caller that doesn't have a title in hand; the workflow falls back to `documentVersionId`.
+ *
+ * `tenantId` is optional for the same reason `ResolveConflictWorkflowInput.tenantId` is below —
+ * single-tenant until multi-tenancy ships (`DEFAULT_TENANT_ID`), defaulted activity-side rather
+ * than imported here (that would pull `src/database/**` into `src/workflows/**`). Threaded to the
+ * approval request and to `getApprovalDecision` so the gate's tenant scoping
+ * (`MongoApprovalChannel.getDecision`) agrees with whichever tenant actually requested this
+ * ingest, rather than always falling back to the default.
  */
 export interface IngestDocumentVersionInput {
   readonly documentVersionId: string;
   readonly requireApproval?: boolean;
   readonly documentTitle?: string;
+  readonly tenantId?: string;
 }
 
 export type IngestApprovalGateOutcome = 'approved' | 'rejected' | 'timed_out';

@@ -56,6 +56,7 @@ const gatedInput: IngestDocumentVersionInput = {
   documentVersionId: 'version-1',
   requireApproval: true,
   documentTitle: 'Q3 Rent Roll',
+  tenantId: 'acme-corp',
 };
 
 let capturedHandler: SignalHandler | undefined;
@@ -111,10 +112,11 @@ describe('ingestDocumentVersion', () => {
         action: 'ingest_document_version',
         summary: "Approve ingesting 'Q3 Rent Roll' (version 'version-1')",
         subject: { entityType: 'DocumentVersion', entityId: 'version-1' },
+        tenantId: 'acme-corp',
         workflowId: 'wf-ingest-1',
       }),
     );
-    expect(activityStubs.getApprovalDecision).toHaveBeenCalledWith('approval-1');
+    expect(activityStubs.getApprovalDecision).toHaveBeenCalledWith('approval-1', 'acme-corp');
     expect(activityStubs.ingestDocumentVersion).toHaveBeenCalledWith('version-1');
     expect(activityStubs.extractFacts).toHaveBeenCalledWith('version-1');
     expect(activityStubs.scanForConflicts).toHaveBeenCalledWith();

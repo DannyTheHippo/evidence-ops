@@ -35,7 +35,7 @@ export class FakeApprovalChannel implements ApprovalChannel {
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await -- interface is async; the fake resolves synchronously
-  async getDecision(_approvalId: string): Promise<ApprovalResult> {
+  async getDecision(_approvalId: string, _tenantId?: string): Promise<ApprovalResult> {
     const next = this.queue.shift();
     if (!next) {
       throw new Error(

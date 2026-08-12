@@ -71,15 +71,18 @@ describe('MongoApprovalChannel', () => {
   describe('getDecision', () => {
     it('should return approved when the row exists with state approved', async () => {
       const approvalId = new Types.ObjectId();
-      mockApprovalModel.findById.mockResolvedValueOnce({
+      mockApprovalModel.findOne.mockResolvedValueOnce({
         state: 'approved',
         decidedBy: 'reviewer@example.com',
         decisionReason: 'evidence checks out',
       });
 
-      const result = await channel.getDecision(approvalId.toString());
+      const result = await channel.getDecision(approvalId.toString(), 'acme-corp');
 
-      expect(mockApprovalModel.findById).toHaveBeenCalledWith(approvalId.toString());
+      expect(mockApprovalModel.findOne).toHaveBeenCalledWith({
+        _id: approvalId.toString(),
+        tenantId: 'acme-corp',
+      });
       expect(result).toEqual({
         decision: 'approved',
         decidedBy: 'reviewer@example.com',
@@ -89,13 +92,13 @@ describe('MongoApprovalChannel', () => {
 
     it('should return rejected when the row exists with state rejected', async () => {
       const approvalId = new Types.ObjectId();
-      mockApprovalModel.findById.mockResolvedValueOnce({
+      mockApprovalModel.findOne.mockResolvedValueOnce({
         state: 'rejected',
         decidedBy: 'reviewer@example.com',
         decisionReason: 'insufficient evidence',
       });
 
-      const result = await channel.getDecision(approvalId.toString());
+      const result = await channel.getDecision(approvalId.toString(), 'acme-corp');
 
       expect(result).toEqual({
         decision: 'rejected',
@@ -106,9 +109,9 @@ describe('MongoApprovalChannel', () => {
 
     it('should return rejected when the row is still pending — a timeout denies, it does not wait', async () => {
       const approvalId = new Types.ObjectId();
-      mockApprovalModel.findById.mockResolvedValueOnce({ state: 'pending' });
+      mockApprovalModel.findOne.mockResolvedValueOnce({ state: 'pending' });
 
-      const result = await channel.getDecision(approvalId.toString());
+      const result = await channel.getDecision(approvalId.toString(), 'acme-corp');
 
       expect(result).toEqual({
         decision: 'rejected',
@@ -119,9 +122,9 @@ describe('MongoApprovalChannel', () => {
 
     it('should return rejected when no row exists for the given id', async () => {
       const approvalId = new Types.ObjectId();
-      mockApprovalModel.findById.mockResolvedValueOnce(null);
+      mockApprovalModel.findOne.mockResolvedValueOnce(null);
 
-      const result = await channel.getDecision(approvalId.toString());
+      const result = await channel.getDecision(approvalId.toString(), 'acme-corp');
 
       expect(result).toEqual({
         decision: 'rejected',
@@ -134,9 +137,9 @@ describe('MongoApprovalChannel', () => {
       // A hand-edited row or a future writer bug — the schema's own `enum` cannot protect a read
       // path against data that bypassed it, so `getDecision` must not trust a truthy-looking
       // value it does not recognize.
-      mockApprovalModel.findById.mockResolvedValueOnce({ state: 'APPROVED' });
+      mockApprovalModel.findOne.mockResolvedValueOnce({ state: 'APPROVED' });
 
-      const result = await channel.getDecision(approvalId.toString());
+      const result = await channel.getDecision(approvalId.toString(), 'acme-corp');
 
       expect(result).toEqual({
         decision: 'rejected',
@@ -148,10 +151,42 @@ describe('MongoApprovalChannel', () => {
     it('should return rejected without querying the model when the id is not a valid ObjectId', async () => {
       const result = await channel.getDecision('not-an-object-id');
 
-      expect(mockApprovalModel.findById).not.toHaveBeenCalled();
+      expect(mockApprovalModel.findOne).not.toHaveBeenCalled();
       expect(result).toEqual({
         decision: 'rejected',
         reason: "unknown approval id 'not-an-object-id'",
+      });
+    });
+
+    it('should default tenantId to DEFAULT_TENANT_ID when the caller omits it', async () => {
+      const approvalId = new Types.ObjectId();
+      mockApprovalModel.findOne.mockResolvedValueOnce({ state: 'approved' });
+
+      await channel.getDecision(approvalId.toString());
+
+      expect(mockApprovalModel.findOne).toHaveBeenCalledWith({
+        _id: approvalId.toString(),
+        tenantId: 'default',
+      });
+    });
+
+    it('should return rejected — never the real decision — when the approval id exists but under a different tenant', async () => {
+      // `findOne({ _id, tenantId })` never matches a row that exists under another tenant, so
+      // this must collapse to the same "no approval record found" branch as an unknown id — the
+      // fail-closed contract the class's own doc comment describes, exercised end to end rather
+      // than only asserted as a query argument.
+      const approvalId = new Types.ObjectId();
+      mockApprovalModel.findOne.mockResolvedValueOnce(null);
+
+      const result = await channel.getDecision(approvalId.toString(), 'other-tenant');
+
+      expect(mockApprovalModel.findOne).toHaveBeenCalledWith({
+        _id: approvalId.toString(),
+        tenantId: 'other-tenant',
+      });
+      expect(result).toEqual({
+        decision: 'rejected',
+        reason: `no approval record found for '${approvalId.toString()}'`,
       });
     });
   });

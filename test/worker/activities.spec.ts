@@ -730,15 +730,15 @@ describe('createActivities', () => {
     expect(result).toBe(handle);
   });
 
-  it('should delegate getApprovalDecision to ApprovalChannel.getDecision', async () => {
+  it('should delegate getApprovalDecision to ApprovalChannel.getDecision, threading the tenant through', async () => {
     const decision = { decision: 'approved' as const, decidedBy: 'reviewer@example.com' };
     const mockGetDecision = jest.fn().mockResolvedValue(decision);
     const app = buildApp({ getDecision: mockGetDecision });
 
     const activities = createActivities(app);
-    const result = await activities.getApprovalDecision('approval-1');
+    const result = await activities.getApprovalDecision('approval-1', 'acme-corp');
 
-    expect(mockGetDecision).toHaveBeenCalledWith('approval-1');
+    expect(mockGetDecision).toHaveBeenCalledWith('approval-1', 'acme-corp');
     expect(result).toBe(decision);
   });
 

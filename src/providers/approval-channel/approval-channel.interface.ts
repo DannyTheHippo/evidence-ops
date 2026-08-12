@@ -47,7 +47,12 @@ export interface ApprovalResult {
 
 export interface ApprovalChannel {
   requestApproval(request: ApprovalRequest): Promise<ApprovalHandle>;
-  getDecision(approvalId: string): Promise<ApprovalResult>;
+  /** `tenantId` omitted → the channel's own tenant default (`DEFAULT_TENANT_ID`), matching
+   *  `ApprovalRequest.tenantId`'s own omitted-means-default convention. See
+   *  `MongoApprovalChannel.getDecision`'s doc comment for why this parameter exists: the caller
+   *  (workflow code, via `getApprovalDecision`) now scopes the read to its own tenant rather than
+   *  trusting a bare id across tenants. */
+  getDecision(approvalId: string, tenantId?: string): Promise<ApprovalResult>;
 }
 
 export const APPROVAL_CHANNEL = Symbol('APPROVAL_CHANNEL');

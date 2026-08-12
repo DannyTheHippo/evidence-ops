@@ -120,7 +120,7 @@ describe('resolveConflict', () => {
         workflowId: 'wf-1',
       }),
     );
-    expect(activityStubs.getApprovalDecision).toHaveBeenCalledWith('approval-1');
+    expect(activityStubs.getApprovalDecision).toHaveBeenCalledWith('approval-1', 'acme-corp');
     expect(activityStubs.recordConflictResolution).toHaveBeenCalledWith({
       conflictId: 'conflict-1',
       outcome: 'resolved',

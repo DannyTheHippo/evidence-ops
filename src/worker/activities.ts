@@ -133,7 +133,7 @@ export interface Activities {
   // `recordConflictResolution`), so each workflow's `proxyActivities` group names exactly the
   // calls it makes rather than a name that says "conflict" to a caller that isn't one.
   requestIngestApproval(request: ApprovalRequest): Promise<ApprovalHandle>;
-  getApprovalDecision(approvalId: string): Promise<ApprovalResult>;
+  getApprovalDecision(approvalId: string, tenantId?: string): Promise<ApprovalResult>;
   recordConflictResolution(
     input: RecordConflictResolutionInput,
   ): Promise<RecordConflictResolutionResult>;
@@ -349,7 +349,8 @@ export function createActivities(app: INestApplicationContext): Activities {
 
     requestIngestApproval: (request) => approvalChannel.requestApproval(request),
 
-    getApprovalDecision: (approvalId) => approvalChannel.getDecision(approvalId),
+    getApprovalDecision: (approvalId, tenantId) =>
+      approvalChannel.getDecision(approvalId, tenantId),
 
     recordConflictResolution: (input) => conflictsService.recordResolution(input),
   };

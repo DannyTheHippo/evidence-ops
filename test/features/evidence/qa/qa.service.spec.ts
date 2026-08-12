@@ -46,20 +46,24 @@ describe('QaService', () => {
       const result = await service.startQuestion({
         questionText: 'What is the cap rate?',
         actorId,
+        tenantId: 'tenant-a',
       });
 
       expect(mockAnswerModel.create).toHaveBeenCalledWith({
         questionText: 'What is the cap rate?',
         runStatus: 'queued',
+        tenantId: 'tenant-a',
       });
       expect(mockWorkflowEngine.start).toHaveBeenCalledWith('answerQuestion', {
         answerId: answerId.toString(),
         questionText: 'What is the cap rate?',
+        tenantId: 'tenant-a',
       });
       expect(mockAuditService.record).toHaveBeenCalledWith({
         action: 'qa.question.started',
         actorId,
         subject: { entityType: 'Answer', entityId: answerId.toString() },
+        tenantId: 'tenant-a',
       });
       expect(result).toEqual({ id: answerId.toString(), runStatus: 'queued' });
     });
@@ -67,19 +71,32 @@ describe('QaService', () => {
 
   describe('getAnswerById', () => {
     it('should throw AnswerNotFoundException for a syntactically invalid id', async () => {
-      await expect(service.getAnswerById('not-an-object-id', 'actor')).rejects.toBeInstanceOf(
-        AnswerNotFoundException,
-      );
-      expect(mockAnswerModel.findById).not.toHaveBeenCalled();
+      await expect(
+        service.getAnswerById('not-an-object-id', 'actor', 'tenant-a'),
+      ).rejects.toBeInstanceOf(AnswerNotFoundException);
+      expect(mockAnswerModel.findOne).not.toHaveBeenCalled();
     });
 
     it('should throw AnswerNotFoundException when no Answer document exists for a valid id', async () => {
       const id = new Types.ObjectId().toString();
-      mockAnswerModel.findById.mockResolvedValueOnce(null);
+      mockAnswerModel.findOne.mockResolvedValueOnce(null);
 
-      await expect(service.getAnswerById(id, 'actor')).rejects.toBeInstanceOf(
+      await expect(service.getAnswerById(id, 'actor', 'tenant-a')).rejects.toBeInstanceOf(
         AnswerNotFoundException,
       );
+    });
+
+    it('should throw AnswerNotFoundException when the Answer belongs to another tenant', async () => {
+      const id = new Types.ObjectId().toString();
+      // The mock model does not filter by predicate — the not-found outcome here asserts that
+      // `getAnswerById` queries with the tenant predicate at all, not that a real Mongo would
+      // exclude the row; that scoping-is-correctness argument lives in the query call assertion.
+      mockAnswerModel.findOne.mockResolvedValueOnce(null);
+
+      await expect(service.getAnswerById(id, 'actor', 'tenant-b')).rejects.toBeInstanceOf(
+        AnswerNotFoundException,
+      );
+      expect(mockAnswerModel.findOne).toHaveBeenCalledWith({ _id: id, tenantId: 'tenant-b' });
     });
 
     it('should present outcome and citations for a completed answer and record an audit event', async () => {
@@ -97,7 +114,7 @@ describe('QaService', () => {
         kind: 'answered' as const,
         claims: [{ statement: 's', citations: [citation] }],
       };
-      mockAnswerModel.findById.mockResolvedValueOnce({
+      mockAnswerModel.findOne.mockResolvedValueOnce({
         _id: answerId,
         questionText: 'What is the cap rate?',
         runStatus: 'completed',
@@ -109,12 +126,13 @@ describe('QaService', () => {
       });
       mockAuditService.record.mockResolvedValueOnce(undefined);
 
-      const result = await service.getAnswerById(answerId.toString(), actorId);
+      const result = await service.getAnswerById(answerId.toString(), actorId, 'tenant-a');
 
       expect(mockAuditService.record).toHaveBeenCalledWith({
         action: 'qa.answer.viewed',
         actorId,
         subject: { entityType: 'Answer', entityId: answerId.toString() },
+        tenantId: 'tenant-a',
       });
       expect(result).toEqual({
         id: answerId.toString(),
@@ -130,7 +148,7 @@ describe('QaService', () => {
 
     it('should omit outcome for a non-completed answer even when one is present on the document', async () => {
       const answerId = new Types.ObjectId();
-      mockAnswerModel.findById.mockResolvedValueOnce({
+      mockAnswerModel.findOne.mockResolvedValueOnce({
         _id: answerId,
         questionText: 'What is the cap rate?',
         runStatus: 'queued',
@@ -142,7 +160,7 @@ describe('QaService', () => {
       });
       mockAuditService.record.mockResolvedValueOnce(undefined);
 
-      const result = await service.getAnswerById(answerId.toString(), 'actor');
+      const result = await service.getAnswerById(answerId.toString(), 'actor', 'tenant-a');
 
       expect(result.outcome).toBeUndefined();
       expect(result.citations).toEqual([]);

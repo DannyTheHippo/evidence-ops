@@ -29,6 +29,7 @@ export class QaController {
   @Version('1')
   @HttpCode(HttpStatus.CREATED)
   @ApiResponse(qaApiExamples.started)
+  @ApiResponse(qaApiExamples.validationError)
   async startQuestion(
     @Body() dto: StartQuestionRequestDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
@@ -41,7 +42,11 @@ export class QaController {
 
     return toResponseDto(
       StartQuestionResponseDto,
-      await this.qaService.startQuestion({ questionText: dto.questionText, actorId: user.userId }),
+      await this.qaService.startQuestion({
+        questionText: dto.questionText,
+        actorId: user.userId,
+        tenantId: user.tenantId,
+      }),
     );
   }
 
@@ -58,6 +63,9 @@ export class QaController {
       throw new UnauthorizedException('No token provided');
     }
 
-    return toResponseDto(AnswerResponseDto, await this.qaService.getAnswerById(id, user.userId));
+    return toResponseDto(
+      AnswerResponseDto,
+      await this.qaService.getAnswerById(id, user.userId, user.tenantId),
+    );
   }
 }

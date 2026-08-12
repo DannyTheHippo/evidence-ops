@@ -14,6 +14,7 @@ import { AnswerNotFoundException } from './exceptions/qa.exception';
 export interface StartQuestionInput {
   readonly questionText: string;
   readonly actorId: string;
+  readonly tenantId: string;
 }
 
 export interface StartQuestionResult {
@@ -66,17 +67,20 @@ export class QaService {
     const answer = await this.answerModel.create({
       questionText: input.questionText,
       runStatus: 'queued',
+      tenantId: input.tenantId,
     });
 
     await this.workflowEngine.start(ANSWER_QUESTION_WORKFLOW_TYPE, {
       answerId: answer._id.toString(),
       questionText: input.questionText,
+      tenantId: input.tenantId,
     } satisfies AnswerQuestionInput);
 
     await this.auditService.record({
       action: 'qa.question.started',
       actorId: input.actorId,
       subject: { entityType: 'Answer', entityId: answer._id.toString() },
+      tenantId: input.tenantId,
     });
 
     this.logger.debug(`Started question as answer '${answer._id.toString()}'`);
@@ -84,12 +88,15 @@ export class QaService {
     return { id: answer._id.toString(), runStatus: answer.runStatus };
   }
 
-  async getAnswerById(id: string, actorId: string): Promise<AnswerEnvelope> {
+  async getAnswerById(id: string, actorId: string, tenantId: string): Promise<AnswerEnvelope> {
     if (!Types.ObjectId.isValid(id)) {
       throw new AnswerNotFoundException(`Answer '${id}' not found`);
     }
 
-    const answer = await this.answerModel.findById(id);
+    // Cross-tenant id must be indistinguishable from a missing one — `findOne` with the tenant
+    // predicate, not `findById` + a separate ownership check, so a wrong-tenant id 404s the same
+    // way a nonexistent one does rather than confirming existence via a different error shape.
+    const answer = await this.answerModel.findOne({ _id: id, tenantId });
     if (!answer) {
       throw new AnswerNotFoundException(`Answer '${id}' not found`);
     }
@@ -98,6 +105,7 @@ export class QaService {
       action: 'qa.answer.viewed',
       actorId,
       subject: { entityType: 'Answer', entityId: answer._id.toString() },
+      tenantId,
     });
 
     return this.toAnswerEnvelope(answer);

@@ -83,6 +83,7 @@ export class DocumentsService {
   async upload(
     file: UploadedFileLike | undefined,
     dto: UploadDocumentRequestDto,
+    tenantId: string = DEFAULT_TENANT_ID,
   ): Promise<DocumentResponseDto> {
     if (!file) {
       throw new MissingFileException('A file is required');
@@ -100,8 +101,8 @@ export class DocumentsService {
     const sha256 = createHash('sha256').update(file.buffer).digest('hex');
 
     const { document, currentVersion, isNewVersion } = dto.documentId
-      ? await this.addVersion(dto.documentId, sha256, file)
-      : await this.createDocument(dto, sourceKind, sha256, file);
+      ? await this.addVersion(dto.documentId, sha256, file, tenantId)
+      : await this.createDocument(dto, sourceKind, sha256, file, tenantId);
 
     // Fire-and-forget, mirroring `QaService.startQuestion`: a slow parse/embed must never block
     // the upload response, which is the entire point of running ingestion as a durable workflow
@@ -117,6 +118,12 @@ export class DocumentsService {
         // ungated path at all.
         requireApproval: dto.requireApproval,
         documentTitle: document.title,
+        // The uploader's tenant, not the default: the workflow's approval gate reads the durable
+        // `Approval` row through `MongoApprovalChannel.getDecision`, which is now tenant-scoped and
+        // fails closed to `rejected` on a mismatch. Leaving this unset would have left every gated
+        // ingest looking up its own approval in the default tenant while the row was written in the
+        // uploader's — a gate that denies correctly for the wrong reason.
+        tenantId,
       } satisfies IngestDocumentVersionInput);
     }
 
@@ -129,8 +136,9 @@ export class DocumentsService {
 
   async list(
     pagination: PaginationRequestDto,
+    tenantId: string = DEFAULT_TENANT_ID,
   ): Promise<DocumentResultWithCount<DocumentResponseDto>> {
-    const filter = { tenantId: DEFAULT_TENANT_ID };
+    const filter = { tenantId };
 
     const [documents, count] = await Promise.all([
       this.documentModel.find(filter, null, {
@@ -157,18 +165,23 @@ export class DocumentsService {
     return { docs, count };
   }
 
-  async getById(id: string): Promise<DocumentWithVersionsResponseDto> {
+  async getById(
+    id: string,
+    tenantId: string = DEFAULT_TENANT_ID,
+  ): Promise<DocumentWithVersionsResponseDto> {
     if (!Types.ObjectId.isValid(id)) {
       throw new DocumentNotFoundException(`Document '${id}' not found`);
     }
 
-    const document = await this.documentModel.findById(id);
+    // Cross-tenant id must be indistinguishable from a missing one — `findOne` with the tenant
+    // predicate rather than `findById` plus a separate ownership check.
+    const document = await this.documentModel.findOne({ _id: id, tenantId });
     if (!document) {
       throw new DocumentNotFoundException(`Document '${id}' not found`);
     }
 
     const versions = await this.documentVersionModel
-      .find({ documentId: document._id })
+      .find({ documentId: document._id, tenantId })
       .sort({ versionNumber: 1 });
 
     const currentVersion = versions.find(
@@ -185,12 +198,17 @@ export class DocumentsService {
     documentId: string,
     sha256: string,
     file: UploadedFileLike,
+    tenantId: string,
   ): Promise<UploadResult> {
     if (!Types.ObjectId.isValid(documentId)) {
       throw new DocumentNotFoundException(`Document '${documentId}' not found`);
     }
 
-    const document = await this.documentModel.findById(documentId);
+    // The cross-tenant attach this scoping exists to close: `documentId` arrives in the upload
+    // body from the caller, so without the tenant predicate here a caller could attach a new
+    // version to another tenant's document. `findOne` with the predicate, not `findById` plus a
+    // separate ownership check, keeps a cross-tenant id indistinguishable from a missing one.
+    const document = await this.documentModel.findOne({ _id: documentId, tenantId });
     if (!document) {
       throw new DocumentNotFoundException(`Document '${documentId}' not found`);
     }
@@ -198,6 +216,7 @@ export class DocumentsService {
     const existingVersion = await this.documentVersionModel.findOne({
       documentId: document._id,
       sha256,
+      tenantId,
     });
     if (existingVersion) {
       // Content-addressed no-op: unchanged bytes never inflate the version chain, and the
@@ -209,11 +228,15 @@ export class DocumentsService {
 
     const versionCount = await this.documentVersionModel.countDocuments({
       documentId: document._id,
+      tenantId,
     });
+    // GridFS is a driver-level bucket, not a Mongoose model, so the tenant-scope plugin
+    // structurally cannot reach it — the storage key is only discoverable through the
+    // now-scoped `document_versions` row, and this metadata is the defence-in-depth marker.
     const stored = await this.documentStore.put({
       content: file.buffer,
       contentType: file.mimetype,
-      metadata: {},
+      metadata: { tenantId },
     });
 
     const version = await this.documentVersionModel.create({
@@ -222,7 +245,7 @@ export class DocumentsService {
       sha256,
       sizeBytes: file.size,
       storageKey: stored.id,
-      tenantId: DEFAULT_TENANT_ID,
+      tenantId,
     });
 
     document.currentVersionId = version._id;
@@ -236,6 +259,7 @@ export class DocumentsService {
     sourceKind: DocumentSourceKind,
     sha256: string,
     file: UploadedFileLike,
+    tenantId: string,
   ): Promise<UploadResult> {
     // Guards the type only: `UploadDocumentRequestDto.title` is required by `@ValidateIf`
     // whenever `documentId` is absent, so the global ValidationPipe already rejects a request
@@ -248,13 +272,14 @@ export class DocumentsService {
       title: dto.title,
       sourceKind,
       mimeType: file.mimetype,
-      tenantId: DEFAULT_TENANT_ID,
+      tenantId,
     });
 
+    // See the identical GridFS metadata comment in `addVersion` above.
     const stored = await this.documentStore.put({
       content: file.buffer,
       contentType: file.mimetype,
-      metadata: {},
+      metadata: { tenantId },
     });
 
     const version = await this.documentVersionModel.create({
@@ -263,7 +288,7 @@ export class DocumentsService {
       sha256,
       sizeBytes: file.size,
       storageKey: stored.id,
-      tenantId: DEFAULT_TENANT_ID,
+      tenantId,
     });
 
     document.currentVersionId = version._id;

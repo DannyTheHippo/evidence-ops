@@ -149,7 +149,10 @@ export async function resolveConflict(
   // `rejected` for any state that isn't exactly `approved`
   // (`MongoApprovalChannel.getDecision`'s own doc comment), so this branch never needs to
   // special-case `pending`/unknown states itself.
-  const decision = await approvalDecisionActivities.getApprovalDecision(approval.id);
+  const decision = await approvalDecisionActivities.getApprovalDecision(
+    approval.id,
+    input.tenantId,
+  );
 
   if (decision.decision !== 'approved') {
     await resolutionActivities.recordConflictResolution({

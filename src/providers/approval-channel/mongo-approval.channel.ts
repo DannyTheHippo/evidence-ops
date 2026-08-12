@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { DEFAULT_TENANT_ID } from '../../database/constants/tenant.constant';
 import {
   Approval,
   type ApprovalDocument,
@@ -51,13 +52,26 @@ export class MongoApprovalChannel implements ApprovalChannel {
    * A caller waking from a 24-hour `condition()` timeout (ADR-0003) rather than a decision signal
    * finds the row still `pending` here, which this collapses to `rejected` — a timeout denies,
    * it does not leave the caller hanging.
+   *
+   * Tenant-scoped: `ApprovalsService.decide` (the HTTP decision path) already scopes its own read
+   * to `{ _id, tenantId }` — see that method's own doc comment for why D1 originally left this
+   * query unscoped (its only caller held an id it had just minted) and why that trust doesn't
+   * extend to a cross-tenant id. `getDecision` now agrees with `decide` about the same collection:
+   * `tenantId` omitted defaults to `DEFAULT_TENANT_ID`, matching every other write path here. The
+   * fail-closed contract above still holds for the mismatch case — a `_id` that exists but under a
+   * different tenant simply doesn't match this filter, so `approval` comes back `null` and falls
+   * into the same "no approval record found" branch as a genuinely unknown id, collapsing to
+   * `rejected` rather than leaking another tenant's decision.
    */
-  async getDecision(approvalId: string): Promise<ApprovalResult> {
+  async getDecision(approvalId: string, tenantId?: string): Promise<ApprovalResult> {
     if (!Types.ObjectId.isValid(approvalId)) {
       return { decision: 'rejected', reason: `unknown approval id '${approvalId}'` };
     }
 
-    const approval = await this.approvalModel.findById(approvalId);
+    const approval = await this.approvalModel.findOne({
+      _id: approvalId,
+      tenantId: tenantId ?? DEFAULT_TENANT_ID,
+    });
     if (!approval) {
       return { decision: 'rejected', reason: `no approval record found for '${approvalId}'` };
     }

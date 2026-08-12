@@ -139,15 +139,22 @@ describe('DocumentsService', () => {
       const version = buildMockVersion({ versionNumber: 1, sha256: expectedSha256 });
       mockDocumentVersionModel.create.mockResolvedValueOnce(version);
 
-      const result = await service.upload(file, { title: 'Q3 Rent Roll' });
+      const result = await service.upload(file, { title: 'Q3 Rent Roll' }, 'tenant-a');
 
       expect(mockDocumentModel.create).toHaveBeenCalledWith(
-        expect.objectContaining({ title: 'Q3 Rent Roll', sourceKind: 'xlsx', mimeType: XLSX_MIME }),
+        expect.objectContaining({
+          title: 'Q3 Rent Roll',
+          sourceKind: 'xlsx',
+          mimeType: XLSX_MIME,
+          tenantId: 'tenant-a',
+        }),
       );
+      // GridFS is a driver-level bucket the tenant-scope plugin cannot reach — this metadata is
+      // the defence-in-depth marker for the storage layer.
       expect(mockDocumentStore.put).toHaveBeenCalledWith({
         content: file.buffer,
         contentType: file.mimetype,
-        metadata: {},
+        metadata: { tenantId: 'tenant-a' },
       });
       expect(mockDocumentVersionModel.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -156,6 +163,7 @@ describe('DocumentsService', () => {
           sha256: expectedSha256,
           sizeBytes: file.size,
           storageKey: 'gridfs-id-1',
+          tenantId: 'tenant-a',
         }),
       );
       expect(mockDocument.save).toHaveBeenCalled();
@@ -169,6 +177,10 @@ describe('DocumentsService', () => {
         documentVersionId: versionId.toString(),
         requireApproval: undefined,
         documentTitle: 'Q3 Rent Roll',
+        // The uploader's tenant, not the default: the gated ingest path resolves its approval row
+        // through the now tenant-scoped `MongoApprovalChannel.getDecision`, which fails closed on a
+        // mismatch — so a default here would deny every gated ingest for the wrong reason.
+        tenantId: 'tenant-a',
       });
     });
 
@@ -204,7 +216,7 @@ describe('DocumentsService', () => {
     });
 
     it('should throw DocumentNotFoundException when the document does not exist', async () => {
-      mockDocumentModel.findById.mockResolvedValueOnce(null);
+      mockDocumentModel.findOne.mockResolvedValueOnce(null);
       const file = buildFile();
 
       await expect(
@@ -212,9 +224,26 @@ describe('DocumentsService', () => {
       ).rejects.toBeInstanceOf(DocumentNotFoundException);
     });
 
+    it('should throw DocumentNotFoundException when the document belongs to another tenant — the cross-tenant attach this scoping closes', async () => {
+      // The mock model does not filter by predicate — this asserts `addVersion` queries with the
+      // caller's tenant predicate at all (so a wrong-tenant `documentId` can't be attached to),
+      // not that a real Mongo would exclude the row.
+      mockDocumentModel.findOne.mockResolvedValueOnce(null);
+      const file = buildFile();
+
+      await expect(
+        service.upload(file, { documentId: documentId.toString() }, 'tenant-b'),
+      ).rejects.toBeInstanceOf(DocumentNotFoundException);
+      expect(mockDocumentModel.findOne).toHaveBeenCalledWith({
+        _id: documentId.toString(),
+        tenantId: 'tenant-b',
+      });
+      expect(mockDocumentStore.put).not.toHaveBeenCalled();
+    });
+
     it('should not write a new version when the sha256 already exists for the document', async () => {
       const mockDocument = buildMockDocument();
-      mockDocumentModel.findById.mockResolvedValueOnce(mockDocument);
+      mockDocumentModel.findOne.mockResolvedValueOnce(mockDocument);
       const existingVersion = buildMockVersion();
       mockDocumentVersionModel.findOne.mockResolvedValueOnce(existingVersion);
       const file = buildFile();
@@ -231,7 +260,7 @@ describe('DocumentsService', () => {
 
     it('should create version 2 when the uploaded bytes are new for the document', async () => {
       const mockDocument = buildMockDocument();
-      mockDocumentModel.findById.mockResolvedValueOnce(mockDocument);
+      mockDocumentModel.findOne.mockResolvedValueOnce(mockDocument);
       mockDocumentVersionModel.findOne.mockResolvedValueOnce(null);
       mockDocumentVersionModel.countDocuments.mockResolvedValueOnce(1);
       mockDocumentStore.put.mockResolvedValueOnce({
@@ -245,11 +274,21 @@ describe('DocumentsService', () => {
       mockDocumentVersionModel.create.mockResolvedValueOnce(newVersion);
       const file = buildFile({ buffer: Buffer.from('different-bytes') });
 
-      const result = await service.upload(file, { documentId: documentId.toString() });
+      const result = await service.upload(file, { documentId: documentId.toString() }, 'tenant-a');
 
       expect(mockDocumentVersionModel.create).toHaveBeenCalledWith(
-        expect.objectContaining({ documentId, versionNumber: 2, storageKey: 'gridfs-id-2' }),
+        expect.objectContaining({
+          documentId,
+          versionNumber: 2,
+          storageKey: 'gridfs-id-2',
+          tenantId: 'tenant-a',
+        }),
       );
+      expect(mockDocumentStore.put).toHaveBeenCalledWith({
+        content: file.buffer,
+        contentType: file.mimetype,
+        metadata: { tenantId: 'tenant-a' },
+      });
       expect(mockDocument.save).toHaveBeenCalled();
       expect(mockDocument.currentVersionId).toEqual(newVersionId);
       expect(result.currentVersion.versionNumber).toBe(2);
@@ -257,6 +296,7 @@ describe('DocumentsService', () => {
         documentVersionId: newVersionId.toString(),
         requireApproval: undefined,
         documentTitle: 'Q3 Rent Roll',
+        tenantId: 'tenant-a',
       });
     });
   });
@@ -302,16 +342,30 @@ describe('DocumentsService', () => {
     });
 
     it('should throw DocumentNotFoundException when the document does not exist', async () => {
-      mockDocumentModel.findById.mockResolvedValueOnce(null);
+      mockDocumentModel.findOne.mockResolvedValueOnce(null);
 
       await expect(service.getById(documentId.toString())).rejects.toBeInstanceOf(
         DocumentNotFoundException,
       );
     });
 
+    it('should throw DocumentNotFoundException when the document belongs to another tenant', async () => {
+      // The mock model does not filter by predicate — this asserts `getById` queries with the
+      // tenant predicate at all, not that a real Mongo would exclude the row.
+      mockDocumentModel.findOne.mockResolvedValueOnce(null);
+
+      await expect(service.getById(documentId.toString(), 'tenant-b')).rejects.toBeInstanceOf(
+        DocumentNotFoundException,
+      );
+      expect(mockDocumentModel.findOne).toHaveBeenCalledWith({
+        _id: documentId.toString(),
+        tenantId: 'tenant-b',
+      });
+    });
+
     it('should return the full version history with the current version identified', async () => {
       const mockDocument = buildMockDocument();
-      mockDocumentModel.findById.mockResolvedValueOnce(mockDocument);
+      mockDocumentModel.findOne.mockResolvedValueOnce(mockDocument);
       const v1 = buildMockVersion({ _id: new Types.ObjectId(), versionNumber: 1 });
       const v2 = buildMockVersion({ _id: versionId, versionNumber: 2 });
       mockDocumentVersionModel.find.mockReturnValueOnce({
@@ -320,6 +374,10 @@ describe('DocumentsService', () => {
 
       const result = await service.getById(documentId.toString());
 
+      expect(mockDocumentVersionModel.find).toHaveBeenCalledWith({
+        documentId,
+        tenantId: 'default',
+      });
       expect(result.versions).toHaveLength(2);
       expect(result.currentVersion.id).toBe(versionId.toString());
       expect(result.currentVersion.versionNumber).toBe(2);
@@ -327,7 +385,7 @@ describe('DocumentsService', () => {
 
     it('should throw when the current version id matches none of the fetched versions', async () => {
       const mockDocument = buildMockDocument({ currentVersionId: undefined });
-      mockDocumentModel.findById.mockResolvedValueOnce(mockDocument);
+      mockDocumentModel.findOne.mockResolvedValueOnce(mockDocument);
       mockDocumentVersionModel.find.mockReturnValueOnce({
         sort: jest.fn().mockResolvedValueOnce([buildMockVersion()]),
       });
