@@ -417,3 +417,54 @@ export function listAuditEvents(params?: {
   const qs = query.toString();
   return request<WithCount<AuditEventView>>(`/audit-events${qs ? `?${qs}` : ''}`);
 }
+
+// ── Sources ──────────────────────────────────────────────────────────────
+
+export type SourceKind = 'local-folder';
+
+export interface Source {
+  id: string;
+  name: string;
+  kind: SourceKind;
+  path: string;
+  enabled: boolean;
+  intervalMs?: number;
+  lastSyncAt?: string;
+  lastSyncStatus?: string;
+  lastSyncError?: string;
+  fileCount: number;
+  createdAt: string;
+}
+
+export function createSource(input: {
+  name: string;
+  kind: SourceKind;
+  path: string;
+  intervalMs?: number;
+  enabled?: boolean;
+}): Promise<Source> {
+  return request<Source>('/sources', { method: 'POST', ...jsonBody(input) });
+}
+
+export function listSources(pagination?: {
+  skip?: number;
+  limit?: number;
+}): Promise<WithCount<Source>> {
+  const query = new URLSearchParams();
+  if (pagination?.skip !== undefined) query.set('skip', String(pagination.skip));
+  if (pagination?.limit !== undefined) query.set('limit', String(pagination.limit));
+  const qs = query.toString();
+  return request<WithCount<Source>>(`/sources${qs ? `?${qs}` : ''}`);
+}
+
+export function getSourceById(id: string): Promise<Source> {
+  return request<Source>(`/sources/${id}`);
+}
+
+export function setSourceEnabled(id: string, enabled: boolean): Promise<Source> {
+  return request<Source>(`/sources/${id}`, { method: 'PATCH', ...jsonBody({ enabled }) });
+}
+
+export function requestSourceSync(id: string): Promise<WorkflowRun> {
+  return request<WorkflowRun>(`/sources/${id}/sync`, { method: 'POST' });
+}
