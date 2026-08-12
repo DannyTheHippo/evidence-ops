@@ -30,6 +30,7 @@ import { WORKFLOW_ENGINE } from '../../src/providers/workflow-engine/workflow-en
 import { UserRole } from '../../src/shared/enums/user-role.enum';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
 import { readSseEvent } from '../utils/read-sse-event';
+import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts';
 
 interface ApprovalBody {
   id: string;
@@ -104,6 +105,11 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
   const seedConflictWithFacts = async () => {
     const factLow = await extractedFactModel.create({
       factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+      groupKeyNormalized: groupKey({
+        entity: 'Northgate Business Park',
+        metric: 'cap_rate',
+        period: '2025-03',
+      }),
       value: { amount: 5.25, unit: 'percent' },
       rawText: 'cap rate of 5.25%',
       confidence: 0.9,
@@ -114,6 +120,11 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
     });
     const factHigh = await extractedFactModel.create({
       factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+      groupKeyNormalized: groupKey({
+        entity: 'Northgate Business Park',
+        metric: 'cap_rate',
+        period: '2025-03',
+      }),
       value: { amount: 6.1, unit: 'percent' },
       rawText: 'cap rate of 6.10%',
       confidence: 0.9,
@@ -124,6 +135,11 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
     });
     const conflict = await conflictModel.create({
       factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+      groupKeyNormalized: groupKey({
+        entity: 'Northgate Business Park',
+        metric: 'cap_rate',
+        period: '2025-03',
+      }),
       factIds: [factLow._id, factHigh._id],
       magnitude: 0.0085,
       status: 'open',

@@ -21,6 +21,21 @@
         }
       ]
     },
+    "noi-summary.csv": {
+      "sha256": "c91f629db61c5cb6cc9183434b6c29b1f00ac4442a283f390c1aaa96066c8198",
+      "sheets": [
+        {
+          "name": "CSV",
+          "headerRow": [
+            "Property Name",
+            "Sale Date",
+            "Net Operating Income (USD)"
+          ],
+          "rowCount": 10,
+          "usedRange": "A1:C11"
+        }
+      ]
+    },
     "valuation-memo.pdf": {
       "sha256": "e28104d39a2cd79e85ee9640960ab0ccaa6bb06bd229060c67f35d0e87a1ed5e",
       "pageCount": 4
@@ -159,26 +174,49 @@
       ]
     }
   },
-  "conflict": {
-    "id": "cap-rate-conflict-northgate",
-    "property": "Northgate Business Park",
-    "locations": [
-      {
-        "file": "comps.xlsx",
-        "sheet": "Comps",
-        "cell": "F2",
-        "value": 0.0525,
-        "display": "5.25%"
-      },
-      {
-        "file": "valuation-memo.pdf",
-        "page": 2,
-        "display": "6.10%",
-        "context": "Comparable Transactions Overview: \"...at a cap rate of approximately 6.10%, consistent with prevailing suburban office cap rates at the time the asset was first underwritten.\""
-      }
-    ],
-    "note": "comps.xlsx reflects the current underwriting cap rate; valuation-memo.pdf page 2 still quotes the pre-re-trade figure from an earlier draft. The two disagree and neither is a typo."
-  },
+  "conflicts": [
+    {
+      "id": "cap-rate-conflict-northgate",
+      "property": "Northgate Business Park",
+      "locations": [
+        {
+          "file": "comps.xlsx",
+          "sheet": "Comps",
+          "cell": "F2",
+          "value": 0.0525,
+          "display": "5.25%"
+        },
+        {
+          "file": "valuation-memo.pdf",
+          "page": 2,
+          "display": "6.10%",
+          "context": "Comparable Transactions Overview: \"...at a cap rate of approximately 6.10%, consistent with prevailing suburban office cap rates at the time the asset was first underwritten.\""
+        }
+      ],
+      "note": "comps.xlsx reflects the current underwriting cap rate; valuation-memo.pdf page 2 still quotes the pre-re-trade figure from an earlier draft. The two disagree and neither is a typo."
+    },
+    {
+      "id": "noi-conflict-fenwick",
+      "property": "Fenwick Distribution Hub",
+      "locations": [
+        {
+          "file": "comps.xlsx",
+          "sheet": "Comps",
+          "cell": "G7",
+          "value": 3891300,
+          "display": "$3,891,300"
+        },
+        {
+          "file": "noi-summary.csv",
+          "sheet": "CSV",
+          "cell": "C7",
+          "value": 4150000,
+          "display": "4150000"
+        }
+      ],
+      "note": "comps.xlsx reflects the net operating income recorded at underwriting; noi-summary.csv reflects a later reconciliation figure that was never fed back into the underwriting sheet. The two disagree by roughly 6.2%, well outside the 1% tolerance for this metric, and neither is a typo."
+    }
+  ],
   "canaries": [
     {
       "id": "canary-xlsx-001",

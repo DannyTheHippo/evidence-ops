@@ -21,6 +21,7 @@ import { FakeModelProvider } from '../../src/providers/model/fake-model.provider
 import { MODEL_PROVIDER } from '../../src/providers/model/model-provider.interface';
 import { AppLogger } from '../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../utils/get-mock-logger';
+import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts';
 
 /**
  * `test/fixtures/synthetic-content.spec.ts` sweeps for a different property (no real-world
@@ -297,6 +298,11 @@ describe('canary security suite', () => {
         output: {
           kind: 'conflicting_evidence',
           factKey: { entity: CANARY_MARKERS.xlsx.token, metric: 'revenue', period: 'Q1 2025' },
+          groupKeyNormalized: groupKey({
+            entity: CANARY_MARKERS.xlsx.token,
+            metric: 'revenue',
+            period: 'Q1 2025',
+          }),
           values: [
             { value: 1, unit: CANARY_MARKERS.pdf.token, sourceChunkId: 'chunk-1' },
             { value: 2, unit: 'usd', sourceChunkId: 'chunk-2' },

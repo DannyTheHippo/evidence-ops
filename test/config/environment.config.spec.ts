@@ -153,6 +153,7 @@ describe('validateEnvironment', () => {
           'temporal',
           'retrieval',
           'telemetry',
+          'sources',
         ].sort(),
       );
     });

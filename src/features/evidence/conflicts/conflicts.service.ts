@@ -1,5 +1,6 @@
 import { Inject, Injectable, InternalServerErrorException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import type { QueryFilter } from 'mongoose';
 import { Model, Types } from 'mongoose';
 import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
 import {
@@ -11,6 +12,7 @@ import {
   ExtractedFact,
   ExtractedFactDocument,
   type FactKey,
+  type FactValue,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import {
   WORKFLOW_ENGINE,
@@ -28,7 +30,7 @@ import {
 } from '../workflow-runs/workflow-runs.service';
 import type { ConflictValueShape } from './dtos/response/conflict.response.dto';
 import { ConflictResponseDto } from './dtos/response/conflict.response.dto';
-import { detectConflicts, groupKey } from './detect-conflicts';
+import { detectConflicts, groupKey, type FactForConflictScan } from './detect-conflicts';
 import {
   ConflictNotFoundException,
   InvalidConflictResolutionException,
@@ -186,26 +188,73 @@ export class ConflictsService {
   }
 
   /**
-   * Scans every `ExtractedFact` for one tenant, groups by `(entity, metric, period)`, and
-   * persists a `Conflict` for each group whose normalized values disagree by more than the
-   * metric's tolerance.
+   * Scans `ExtractedFact`s for one tenant, groups by `(entity, metric, period)`, and persists a
+   * `Conflict` for each group whose normalized values disagree by more than the metric's
+   * tolerance.
+   *
+   * Two paths over the identical `detectConflicts` core, chosen by whether `factKeys` is
+   * `undefined` (not by emptiness — `factKeys: []` is a real "this ingest produced zero facts"
+   * result, and must run the cheap incremental path with an empty `$in`, never silently fall back
+   * to a full scan):
+   *
+   * - **Incremental** (`factKeys` given): a document re-ingest re-scans only the groups its own
+   *   facts belong to — via `groupKeyNormalized`, the denormalized case-insensitive grouping key
+   *   `migrations/0013-fact-group-key-normalized.ts` backfilled and indexed alongside
+   *   `{tenantId, status, groupKeyNormalized}` for the idempotency check below. This is the path
+   *   `ingest-document-version.workflow.ts` calls on every ingest.
+   * - **Full scan** (`factKeys` omitted): every `ExtractedFact` for the tenant, streamed via a
+   *   Mongoose cursor rather than one `find()` materializing the whole collection — the
+   *   maintenance/eval path (`npm run eval`, an admin re-scan), not the per-ingest hot path.
    *
    * Idempotent by factKey rather than by a run identifier: a group that already has an `open`
-   * `Conflict` is skipped, so re-running the scan after new evidence arrives only creates
+   * `Conflict` is skipped, so re-running either path after new evidence arrives only creates
    * conflicts for keys that did not already have one — it never duplicates an existing one, and it
    * never re-opens or touches a conflict a reviewer already resolved or dismissed (those statuses
    * are read as "already handled", not as "needs a fresh Conflict record").
    */
-  async scanForConflicts(tenantId: string = DEFAULT_TENANT_ID): Promise<ConflictScanResult> {
-    const facts = await this.extractedFactModel.find({ tenantId });
-    const { conflicts: candidates, skipped } = detectConflicts(
-      facts.map((fact) => ({
-        id: fact._id.toString(),
-        factKey: fact.factKey,
-        value: fact.value,
-      })),
-      METRIC_ONTOLOGY,
-    );
+  async scanForConflicts(
+    tenantId: string = DEFAULT_TENANT_ID,
+    factKeys?: readonly FactKey[],
+  ): Promise<ConflictScanResult> {
+    if (factKeys !== undefined) {
+      const groupKeys = [...new Set(factKeys.map(groupKey))];
+      const facts = await this.extractedFactModel.find(
+        { tenantId, groupKeyNormalized: { $in: groupKeys } },
+        { factKey: 1, value: 1 },
+      );
+      return this.detectAndPersist(
+        tenantId,
+        facts.map((fact) => this.toFactForScan(fact)),
+        {
+          tenantId,
+          status: 'open',
+          groupKeyNormalized: { $in: groupKeys },
+        },
+      );
+    }
+
+    const facts: FactForConflictScan[] = [];
+    const cursor = this.extractedFactModel.find({ tenantId }, { factKey: 1, value: 1 }).cursor();
+    for await (const fact of cursor) {
+      facts.push(this.toFactForScan(fact));
+    }
+    return this.detectAndPersist(tenantId, facts, { tenantId, status: 'open' });
+  }
+
+  private toFactForScan(fact: {
+    _id: Types.ObjectId;
+    factKey: FactKey;
+    value: FactValue;
+  }): FactForConflictScan {
+    return { id: fact._id.toString(), factKey: fact.factKey, value: fact.value };
+  }
+
+  private async detectAndPersist(
+    tenantId: string,
+    facts: readonly FactForConflictScan[],
+    openConflictFilter: QueryFilter<ConflictDocument>,
+  ): Promise<ConflictScanResult> {
+    const { conflicts: candidates, skipped } = detectConflicts(facts, METRIC_ONTOLOGY);
 
     // A silently-dropped fact is a fact that can never conflict — the quiet correctness loss this
     // whole scan exists to prevent — so every skip is logged individually with the context (fact
@@ -221,7 +270,7 @@ export class ConflictsService {
       return { conflictsCreated: 0, skippedFactCount: skipped.length };
     }
 
-    const openConflicts = await this.conflictModel.find({ tenantId, status: 'open' });
+    const openConflicts = await this.conflictModel.find(openConflictFilter);
     const alreadyOpenKeys = new Set(openConflicts.map((conflict) => groupKey(conflict.factKey)));
     const newCandidates = candidates.filter(
       (candidate) => !alreadyOpenKeys.has(groupKey(candidate.factKey)),
@@ -235,6 +284,7 @@ export class ConflictsService {
     await this.conflictModel.insertMany(
       newCandidates.map((candidate) => ({
         factKey: candidate.factKey,
+        groupKeyNormalized: groupKey(candidate.factKey),
         factIds: candidate.factIds.map((id) => new Types.ObjectId(id)),
         magnitude: candidate.magnitude,
         status: 'open',

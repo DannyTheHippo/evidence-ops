@@ -61,6 +61,13 @@ const gatedInput: IngestDocumentVersionInput = {
 
 let capturedHandler: SignalHandler | undefined;
 
+// Real `FactKey`-shaped values, not `[]` — `extractFacts`'s no-op branch loads and returns the
+// existing facts' keys (see `FactsExtractionResult.factKeys`'s own doc comment), so a stub
+// resolving `[]` here would hide the exact regression that field exists to prevent.
+const extractedFactKeys = [
+  { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+];
+
 describe('ingestDocumentVersion', () => {
   beforeEach(() => {
     capturedHandler = undefined;
@@ -70,6 +77,12 @@ describe('ingestDocumentVersion', () => {
     activityStubs.ingestDocumentVersion.mockResolvedValue({
       chunksCreated: 4,
       alreadyIngested: false,
+    });
+    activityStubs.extractFacts.mockResolvedValue({
+      factsCreated: 4,
+      alreadyExtracted: false,
+      skippedChunkCount: 0,
+      factKeys: extractedFactKeys,
     });
     activityStubs.requestIngestApproval.mockResolvedValue({ id: 'approval-1' });
     // `resetAllMocks()` below wipes `jest.mock`'s factory-time implementation every test — must be
@@ -86,7 +99,7 @@ describe('ingestDocumentVersion', () => {
 
     expect(activityStubs.ingestDocumentVersion).toHaveBeenCalledWith('version-1');
     expect(activityStubs.extractFacts).toHaveBeenCalledWith('version-1');
-    expect(activityStubs.scanForConflicts).toHaveBeenCalledWith();
+    expect(activityStubs.scanForConflicts).toHaveBeenCalledWith(undefined, extractedFactKeys);
     expect(activityStubs.requestIngestApproval).not.toHaveBeenCalled();
     expect(setHandler).not.toHaveBeenCalled();
     expect(condition).not.toHaveBeenCalled();
@@ -119,7 +132,7 @@ describe('ingestDocumentVersion', () => {
     expect(activityStubs.getApprovalDecision).toHaveBeenCalledWith('approval-1', 'acme-corp');
     expect(activityStubs.ingestDocumentVersion).toHaveBeenCalledWith('version-1');
     expect(activityStubs.extractFacts).toHaveBeenCalledWith('version-1');
-    expect(activityStubs.scanForConflicts).toHaveBeenCalledWith();
+    expect(activityStubs.scanForConflicts).toHaveBeenCalledWith('acme-corp', extractedFactKeys);
     expect(result).toEqual({ chunksCreated: 4, alreadyIngested: false, gateOutcome: 'approved' });
   });
 

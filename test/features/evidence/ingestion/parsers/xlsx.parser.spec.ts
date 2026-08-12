@@ -14,7 +14,7 @@ import rawManifest from '../../../../../fixtures/data-room/manifest.json';
 const FIXTURE_PATH = path.join(__dirname, '../../../../../fixtures/data-room/comps.xlsx');
 
 /**
- * The manifest's `conflict.locations` and `canaries` are heterogeneous — a spreadsheet entry
+ * The manifest's `conflicts[].locations` and `canaries` are heterogeneous — a spreadsheet entry
  * carries sheet/cell, a PDF entry carries a page — and TypeScript's structural inference over an
  * imported JSON literal turns that into optional properties on a merged shape, which no amount of
  * narrowing recovers cleanly. Declaring the contract once and asserting it at the import boundary
@@ -26,12 +26,12 @@ interface XlsxCellAddress {
 }
 
 interface DataRoomManifest {
-  readonly conflict: {
+  readonly conflicts: readonly {
     readonly locations: readonly ({ readonly file: string } & Partial<XlsxCellAddress> & {
         readonly value?: number;
         readonly display?: string;
       })[];
-  };
+  }[];
   readonly canaries: readonly {
     readonly file: string;
     readonly token: string;
@@ -42,7 +42,7 @@ interface DataRoomManifest {
 const manifest = rawManifest as DataRoomManifest;
 
 const isXlsxConflict = (
-  location: DataRoomManifest['conflict']['locations'][number],
+  location: DataRoomManifest['conflicts'][number]['locations'][number],
 ): location is typeof location & XlsxCellAddress & { display: string; value: number } =>
   location.sheet !== undefined &&
   location.cell !== undefined &&
@@ -76,9 +76,9 @@ describe('XlsxParser', () => {
 
   describe('parse — comps.xlsx fixture', () => {
     it('should render the seeded conflict cell as the displayed percentage, not the raw fraction', async () => {
-      const conflict = manifest.conflict.locations.find(isXlsxConflict);
+      const conflict = manifest.conflicts[0].locations.find(isXlsxConflict);
       if (!conflict) {
-        throw new Error('manifest.conflict.locations has no spreadsheet-side entry');
+        throw new Error('manifest.conflicts[0].locations has no spreadsheet-side entry');
       }
       const content = await readFile(FIXTURE_PATH);
 

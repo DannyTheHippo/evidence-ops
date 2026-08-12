@@ -45,12 +45,13 @@ describe('extractXlsxFacts — real comps.xlsx fixture', () => {
   it('should derive the seeded conflict cell as a cap_rate fact with the manifest value and locator', async () => {
     const content = await readFile(FIXTURE_PATH);
     const parsed = await new XlsxParser().parse(content);
-    const conflictLocation = rawManifest.conflict.locations[0];
+    const conflictLocation = rawManifest.conflicts[0].locations[0];
 
     const { accepted } = extractXlsxFacts(parsed.elements, METRIC_ONTOLOGY);
     const capRateFact = accepted.find(
       (fact) =>
-        fact.factKey.entity === rawManifest.conflict.property && fact.factKey.metric === 'cap_rate',
+        fact.factKey.entity === rawManifest.conflicts[0].property &&
+        fact.factKey.metric === 'cap_rate',
     );
 
     expect(capRateFact).toBeDefined();

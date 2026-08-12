@@ -9,6 +9,11 @@ interface MockQueryChain {
   skip?: jest.Mock;
   limit?: jest.Mock;
   toObject?: jest.Mock;
+  // Not a `jest.Mock` — a cursor-batched `for await` caller (`ConflictsService.scanForConflicts`'s
+  // full-scan path) needs `.cursor()` to return something directly async-iterable, and a bare
+  // `jest.fn()` doesn't implement `Symbol.asyncIterator`. A test stubs this as
+  // `() => (async function* () { yield* facts; })()`.
+  cursor?: () => AsyncIterable<unknown>;
 }
 
 export interface MockModel<T = unknown> {

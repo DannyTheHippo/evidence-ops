@@ -56,4 +56,9 @@ export const getMockConfig = (): EnvironmentConfig => ({
     otlpEndpoint: 'http://localhost:4318',
     captureModelContent: false,
   },
+
+  sources: {
+    inboxDir: './inbox',
+    syncIntervalMs: 300000,
+  },
 });

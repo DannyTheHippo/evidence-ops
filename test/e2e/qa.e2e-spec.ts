@@ -19,6 +19,7 @@ import {
 import type { Citation } from '../../src/features/evidence/qa/contracts/answer.contract';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
 import { readSseEvent } from '../utils/read-sse-event';
+import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts';
 
 interface AnswerUsageBody {
   promptTokens: number;
@@ -313,6 +314,7 @@ describe('QA and Conflicts (e2e)', () => {
       const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
       const factLow = await extractedFactModel.create({
         factKey,
+        groupKeyNormalized: groupKey(factKey),
         value: { amount: 5.25, unit: 'percent' },
         rawText: 'cap rate of 5.25%',
         confidence: 0.9,
@@ -323,6 +325,7 @@ describe('QA and Conflicts (e2e)', () => {
       });
       const factHigh = await extractedFactModel.create({
         factKey,
+        groupKeyNormalized: groupKey(factKey),
         value: { amount: 6.1, unit: 'percent' },
         rawText: 'cap rate of 6.10%',
         confidence: 0.9,
@@ -333,6 +336,7 @@ describe('QA and Conflicts (e2e)', () => {
       });
       await conflictModel.create({
         factKey,
+        groupKeyNormalized: groupKey(factKey),
         factIds: [factLow._id, factHigh._id],
         magnitude: 0.0085,
         status: 'open',

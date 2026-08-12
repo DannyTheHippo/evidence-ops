@@ -36,6 +36,7 @@ import { WORKFLOW_ENGINE } from '../../src/providers/workflow-engine/workflow-en
 import { UserRole } from '../../src/shared/enums/user-role.enum';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
 import { readSseEvent } from '../utils/read-sse-event';
+import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts';
 
 const FIXTURES = path.join(__dirname, '../../fixtures/data-room');
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -583,6 +584,7 @@ describe('Documents (e2e)', () => {
       const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
       const deletedFact = await extractedFactModel.create({
         factKey,
+        groupKeyNormalized: groupKey(factKey),
         value: { amount: 5.25, unit: 'percent' },
         rawText: 'cap rate of 5.25%',
         confidence: 0.9,
@@ -593,6 +595,7 @@ describe('Documents (e2e)', () => {
       });
       const survivingFact = await extractedFactModel.create({
         factKey,
+        groupKeyNormalized: groupKey(factKey),
         value: { amount: 6.1, unit: 'percent' },
         rawText: 'cap rate of 6.10%',
         confidence: 0.9,
@@ -603,6 +606,7 @@ describe('Documents (e2e)', () => {
       });
       const conflict = await conflictModel.create({
         factKey,
+        groupKeyNormalized: groupKey(factKey),
         factIds: [deletedFact._id, survivingFact._id],
         magnitude: 0.0085,
         status: 'open',
@@ -686,6 +690,7 @@ describe('Documents (e2e)', () => {
       };
       const deletedFact = await extractedFactModel.create({
         factKey,
+        groupKeyNormalized: groupKey(factKey),
         value: { amount: 5.25, unit: 'percent' },
         rawText: 'cap rate of 5.25%',
         confidence: 0.9,
@@ -696,6 +701,7 @@ describe('Documents (e2e)', () => {
       });
       const survivingFactA = await extractedFactModel.create({
         factKey,
+        groupKeyNormalized: groupKey(factKey),
         value: { amount: 6.1, unit: 'percent' },
         rawText: 'cap rate of 6.10%',
         confidence: 0.9,
@@ -706,6 +712,7 @@ describe('Documents (e2e)', () => {
       });
       const survivingFactB = await extractedFactModel.create({
         factKey,
+        groupKeyNormalized: groupKey(factKey),
         value: { amount: 5.8, unit: 'percent' },
         rawText: 'cap rate of 5.80%',
         confidence: 0.9,
@@ -716,6 +723,7 @@ describe('Documents (e2e)', () => {
       });
       const conflict = await conflictModel.create({
         factKey,
+        groupKeyNormalized: groupKey(factKey),
         factIds: [deletedFact._id, survivingFactA._id, survivingFactB._id],
         magnitude: 0.011,
         status: 'open',

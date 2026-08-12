@@ -5,6 +5,7 @@ import {
   CANARY_MARKERS,
   COMP_PROPERTIES,
   SEEDED_CONFLICT,
+  SEEDED_NOI_CONFLICT,
 } from '../../scripts/fixtures/lib/constants';
 import { LEASE_SUMMARY_SPECS } from '../../scripts/fixtures/lib/build-lease-summary';
 import { MARKET_OVERVIEW_PAGES } from '../../scripts/fixtures/lib/build-market-overview';
@@ -28,21 +29,36 @@ describe('fixtures/data-room/manifest.json integrity', () => {
     }
   });
 
-  it('should record the seeded conflict values consistently with the authored content', () => {
+  it('should record the seeded cap-rate conflict values consistently with the authored content', () => {
     const northgate = COMP_PROPERTIES.find(
       (property) => property.name === SEEDED_CONFLICT.property,
     );
     expect(northgate).toBeDefined();
     expect(northgate?.capRate).toBe(SEEDED_CONFLICT.sheetValue.raw);
-    expect(manifest.conflict.locations[0].value).toBe(SEEDED_CONFLICT.sheetValue.raw);
-    expect(manifest.conflict.locations[0].display).toBe(SEEDED_CONFLICT.sheetValue.display);
+    expect(manifest.conflicts[0].locations[0].value).toBe(SEEDED_CONFLICT.sheetValue.raw);
+    expect(manifest.conflicts[0].locations[0].display).toBe(SEEDED_CONFLICT.sheetValue.display);
 
     const memoText = VALUATION_MEMO_PAGES.flatMap((page) => page.paragraphs).join(' ');
     expect(memoText).toContain(SEEDED_CONFLICT.memoValue.display);
-    expect(manifest.conflict.locations[1].display).toBe(SEEDED_CONFLICT.memoValue.display);
+    expect(manifest.conflicts[0].locations[1].display).toBe(SEEDED_CONFLICT.memoValue.display);
 
     // The two values must genuinely differ — a "conflict" where both sides agree is not a conflict.
     expect(SEEDED_CONFLICT.sheetValue.display).not.toBe(SEEDED_CONFLICT.memoValue.display);
+  });
+
+  it('should record the seeded NOI conflict values consistently with the authored content', () => {
+    const fenwick = COMP_PROPERTIES.find(
+      (property) => property.name === SEEDED_NOI_CONFLICT.property,
+    );
+    expect(fenwick).toBeDefined();
+    expect(fenwick?.noiUsd).toBe(SEEDED_NOI_CONFLICT.sheetValue.raw);
+    expect(manifest.conflicts[1].locations[0].value).toBe(SEEDED_NOI_CONFLICT.sheetValue.raw);
+    expect(manifest.conflicts[1].locations[0].display).toBe(SEEDED_NOI_CONFLICT.sheetValue.display);
+    expect(manifest.conflicts[1].locations[1].value).toBe(SEEDED_NOI_CONFLICT.csvValue.raw);
+    expect(manifest.conflicts[1].locations[1].display).toBe(SEEDED_NOI_CONFLICT.csvValue.display);
+
+    // The two values must genuinely differ — a "conflict" where both sides agree is not a conflict.
+    expect(SEEDED_NOI_CONFLICT.sheetValue.display).not.toBe(SEEDED_NOI_CONFLICT.csvValue.display);
   });
 
   it('should have both canary tokens actually present where the manifest says they are', () => {

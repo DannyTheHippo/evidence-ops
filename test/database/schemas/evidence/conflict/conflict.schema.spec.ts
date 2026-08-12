@@ -10,11 +10,16 @@ jest.setTimeout(60000);
 
 const factKey = { entity: 'Acme Corp', metric: 'revenue', period: 'Q3-2025' };
 
+// Required, not optional: the incremental conflict scan looks conflicts up by
+// `{tenantId, status, groupKeyNormalized}`, so one persisted without it is invisible to every
+// keyed scan and to the idempotency check that stops duplicates being opened.
+const groupKeyNormalized = 'acme corp::revenue::Q3-2025';
+
 describe('Conflict schema', () => {
   describe('validation (offline — no database connection)', () => {
     const ConflictModel = mongoose.model<Conflict>('ConflictValidationOnly', ConflictSchema);
 
-    it('requires factKey, factIds, and magnitude', () => {
+    it('requires factKey, factIds, magnitude, and groupKeyNormalized', () => {
       const conflict = new ConflictModel({});
 
       const error = conflict.validateSync();
@@ -22,11 +27,13 @@ describe('Conflict schema', () => {
       expect(error?.errors.factKey).toBeDefined();
       expect(error?.errors.factIds).toBeDefined();
       expect(error?.errors.magnitude).toBeDefined();
+      expect(error?.errors.groupKeyNormalized).toBeDefined();
     });
 
     it('rejects fewer than two conflicting factIds', () => {
       const conflict = new ConflictModel({
         factKey,
+        groupKeyNormalized,
         factIds: [new mongoose.Types.ObjectId()],
         magnitude: 0.04,
       });
@@ -39,6 +46,7 @@ describe('Conflict schema', () => {
     it('accepts two or more conflicting factIds and defaults status to open', () => {
       const conflict = new ConflictModel({
         factKey,
+        groupKeyNormalized,
         factIds: [new mongoose.Types.ObjectId(), new mongoose.Types.ObjectId()],
         magnitude: 0.04,
       });
@@ -68,7 +76,12 @@ describe('Conflict schema', () => {
     it('persists and rehydrates a conflict between two facts', async () => {
       const factIds = [new mongoose.Types.ObjectId(), new mongoose.Types.ObjectId()];
 
-      const created = await ConflictModel.create({ factKey, factIds, magnitude: 0.04 });
+      const created = await ConflictModel.create({
+        factKey,
+        groupKeyNormalized,
+        factIds,
+        magnitude: 0.04,
+      });
 
       const found = await ConflictModel.findById(created._id);
 

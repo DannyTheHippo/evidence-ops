@@ -30,4 +30,4 @@ Miss any one of these and you get either a silent default or a project-wide type
 ## Scoped notes
 
 - **zod is env-validation only.** Request validation is class-validator; response shaping is class-transformer. Do not reach for zod in feature code.
-- **Temporal is scaffolded, not wired.** The `@temporalio/*` packages and the `config.temporal` namespace exist, but there are no `@temporalio` imports in `src/`, no `src/worker/`, and `worker:dev` is a placeholder that exits 1.
+- **Temporal is wired** (ADR-0003). `src/worker/main.ts` boots `WorkerModule` and starts a `@temporalio/worker` polling `config.temporal.taskQueue`; `ProvidersModule` binds `WORKFLOW_ENGINE` to `TemporalWorkflowEngine`. The live path needs both `docker compose up -d mongo` and `npm run temporal:dev`. Unit and e2e specs need neither — `test/utils/create-test-app.ts` overrides `WORKFLOW_ENGINE` back to `FakeWorkflowEngine`.

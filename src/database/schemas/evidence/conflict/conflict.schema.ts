@@ -65,6 +65,12 @@ export class Conflict extends AuditableDocument {
   })
   factKey: FactKey;
 
+  // Same denormalized grouping key as `ExtractedFact.groupKeyNormalized` — see that field's doc
+  // comment. Lets `ConflictsService.scanForConflicts`'s incremental path scope its open-conflict
+  // idempotency check to `{tenantId, status, groupKeyNormalized}` instead of the whole tenant.
+  @Prop({ type: String, required: true })
+  groupKeyNormalized: string;
+
   // A conflict is by definition a disagreement between two or more facts — one fact cannot
   // conflict with itself. Data-integrity gate, fails closed: rejects the document rather than
   // silently persisting a degenerate "conflict" of one.

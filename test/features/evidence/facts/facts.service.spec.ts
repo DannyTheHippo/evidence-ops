@@ -109,14 +109,27 @@ describe('FactsService', () => {
     );
   });
 
-  it('should skip extraction and leave the store untouched when facts already exist for the version', async () => {
+  it("should skip extraction and leave the store untouched, returning the existing facts' keys, when facts already exist for the version", async () => {
     mockDocumentVersionModel.findById.mockResolvedValueOnce(buildVersion());
-    mockExtractedFactModel.countDocuments.mockResolvedValueOnce(3);
+    const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+    mockExtractedFactModel.find.mockResolvedValueOnce([{ factKey }]);
     const getSpy = jest.spyOn(fakeDocumentStore, 'get');
 
     const result = await service.extractFacts(versionId.toString());
 
-    expect(result).toEqual({ factsCreated: 0, alreadyExtracted: true, skippedChunkCount: 0 });
+    // The tenant predicate is explicit because extraction runs in worker context, where
+    // `tenantScopePlugin` does not backstop a missing one. Without it, this query would return
+    // another tenant's facts for the same version id and hand their keys to the conflict scan.
+    expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
+      { documentVersionId: versionId, tenantId: 'default' },
+      { factKey: 1 },
+    );
+    expect(result).toEqual({
+      factsCreated: 0,
+      alreadyExtracted: true,
+      skippedChunkCount: 0,
+      factKeys: [factKey],
+    });
     expect(getSpy).not.toHaveBeenCalled();
     expect(mockExtractedFactModel.insertMany).not.toHaveBeenCalled();
   });
@@ -125,7 +138,7 @@ describe('FactsService', () => {
     mockDocumentVersionModel.findById.mockResolvedValueOnce(
       buildVersion({ storageKey: 'missing-key' }),
     );
-    mockExtractedFactModel.countDocuments.mockResolvedValueOnce(0);
+    mockExtractedFactModel.find.mockResolvedValueOnce([]);
 
     await expect(service.extractFacts(versionId.toString())).rejects.toBeInstanceOf(
       InternalServerErrorException,
@@ -142,7 +155,7 @@ describe('FactsService', () => {
       mockDocumentVersionModel.findById.mockResolvedValueOnce(
         buildVersion({ storageKey: stored.id }),
       );
-      mockExtractedFactModel.countDocuments.mockResolvedValueOnce(0);
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
       mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser(xlsxElements));
       mockEvidenceChunkModel.find.mockResolvedValueOnce([]);
 
@@ -160,7 +173,7 @@ describe('FactsService', () => {
       mockDocumentVersionModel.findById.mockResolvedValueOnce(
         buildVersion({ storageKey: stored.id }),
       );
-      mockExtractedFactModel.countDocuments.mockResolvedValueOnce(0);
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
       mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser(xlsxElements));
       const chunkId = 'chunk-xlsx-region-1';
       mockEvidenceChunkModel.find.mockResolvedValueOnce([
@@ -200,7 +213,12 @@ describe('FactsService', () => {
       // check and rollback filters (both scoped by this field) never match anything they wrote.
       expect(insertedFacts[0].documentVersionId).toBe(versionId);
       expect(insertedFacts[0].tenantId).toBe('default');
-      expect(result).toEqual({ factsCreated: 1, alreadyExtracted: false, skippedChunkCount: 0 });
+      expect(result).toEqual({
+        factsCreated: 1,
+        alreadyExtracted: false,
+        skippedChunkCount: 0,
+        factKeys: [insertedFacts[0].factKey],
+      });
     });
 
     it('should drop a candidate whose cell falls outside every ingested chunk region', async () => {
@@ -212,7 +230,7 @@ describe('FactsService', () => {
       mockDocumentVersionModel.findById.mockResolvedValueOnce(
         buildVersion({ storageKey: stored.id }),
       );
-      mockExtractedFactModel.countDocuments.mockResolvedValueOnce(0);
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
       mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser(xlsxElements));
       // Region covers rows 20-30; the candidate cell is on row 2 — no chunk contains it.
       mockEvidenceChunkModel.find.mockResolvedValueOnce([
@@ -224,7 +242,12 @@ describe('FactsService', () => {
 
       const result = await service.extractFacts(versionId.toString());
 
-      expect(result).toEqual({ factsCreated: 0, alreadyExtracted: false, skippedChunkCount: 0 });
+      expect(result).toEqual({
+        factsCreated: 0,
+        alreadyExtracted: false,
+        skippedChunkCount: 0,
+        factKeys: [],
+      });
       expect(mockExtractedFactModel.insertMany).not.toHaveBeenCalled();
     });
   });
@@ -245,7 +268,7 @@ describe('FactsService', () => {
       mockDocumentVersionModel.findById.mockResolvedValueOnce(
         buildVersion({ storageKey: stored.id }),
       );
-      mockExtractedFactModel.countDocuments.mockResolvedValueOnce(0);
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
       mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser([buildProseElement()]));
       mockEvidenceChunkModel.find.mockResolvedValueOnce([]);
 
@@ -266,7 +289,7 @@ describe('FactsService', () => {
       mockDocumentVersionModel.findById.mockResolvedValueOnce(
         buildVersion({ storageKey: stored.id }),
       );
-      mockExtractedFactModel.countDocuments.mockResolvedValueOnce(0);
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
       mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser([buildProseElement()]));
       const chunkId = 'chunk-prose-1';
       const chunkText = 'The cap rate is 5.25% per the offering memo.';
@@ -331,7 +354,12 @@ describe('FactsService', () => {
       expect(mockLogger.debug).toHaveBeenCalledWith(
         expect.stringContaining(`Dropped fact candidate for chunk '${chunkId}'`),
       );
-      expect(result).toEqual({ factsCreated: 1, alreadyExtracted: false, skippedChunkCount: 0 });
+      expect(result).toEqual({
+        factsCreated: 1,
+        alreadyExtracted: false,
+        skippedChunkCount: 0,
+        factKeys: [insertedFacts[0].factKey],
+      });
     });
 
     it('should treat a version with zero parsed elements as prose and produce no facts when the model returns none', async () => {
@@ -343,7 +371,7 @@ describe('FactsService', () => {
       mockDocumentVersionModel.findById.mockResolvedValueOnce(
         buildVersion({ storageKey: stored.id }),
       );
-      mockExtractedFactModel.countDocuments.mockResolvedValueOnce(0);
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
       mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser([]));
       const chunkId = new Types.ObjectId();
       mockEvidenceChunkModel.find.mockResolvedValueOnce([
@@ -362,7 +390,12 @@ describe('FactsService', () => {
       const result = await service.extractFacts(versionId.toString());
 
       expect(fakeModelProvider.calls).toHaveLength(3);
-      expect(result).toEqual({ factsCreated: 0, alreadyExtracted: false, skippedChunkCount: 0 });
+      expect(result).toEqual({
+        factsCreated: 0,
+        alreadyExtracted: false,
+        skippedChunkCount: 0,
+        factKeys: [],
+      });
       expect(mockExtractedFactModel.insertMany).not.toHaveBeenCalled();
     });
 
@@ -375,7 +408,7 @@ describe('FactsService', () => {
       mockDocumentVersionModel.findById.mockResolvedValueOnce(
         buildVersion({ storageKey: stored.id }),
       );
-      mockExtractedFactModel.countDocuments.mockResolvedValueOnce(0);
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
       mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser([buildProseElement()]));
       const chunkId = 'chunk-prose-flaky';
       const chunkText = 'The cap rate is 5.25% per the offering memo.';
@@ -404,7 +437,12 @@ describe('FactsService', () => {
       const result = await service.extractFacts(versionId.toString());
 
       expect(fakeModelProvider.calls).toHaveLength(3);
-      expect(result).toEqual({ factsCreated: 0, alreadyExtracted: false, skippedChunkCount: 1 });
+      expect(result).toEqual({
+        factsCreated: 0,
+        alreadyExtracted: false,
+        skippedChunkCount: 1,
+        factKeys: [],
+      });
       expect(mockExtractedFactModel.insertMany).not.toHaveBeenCalled();
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.stringContaining(`Chunk '${chunkId}' had only 1 of 3 successful extraction passes`),
@@ -464,7 +502,7 @@ describe('FactsService', () => {
     mockDocumentVersionModel.findById.mockResolvedValueOnce(
       buildVersion({ storageKey: stored.id }),
     );
-    mockExtractedFactModel.countDocuments.mockResolvedValueOnce(0);
+    mockExtractedFactModel.find.mockResolvedValueOnce([]);
     mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser(xlsxElements));
     mockEvidenceChunkModel.find.mockResolvedValueOnce([
       {

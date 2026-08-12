@@ -1,5 +1,6 @@
 import type { INestApplicationContext } from '@nestjs/common';
 import { DEFAULT_TENANT_ID } from '../database/constants/tenant.constant';
+import type { FactKey } from '../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import {
   ConflictsService,
   type ConflictedFactGroup,
@@ -123,7 +124,7 @@ export interface GroundingCheckActivityResult {
 export interface Activities {
   ingestDocumentVersion(documentVersionId: string): Promise<IngestDocumentVersionResult>;
   extractFacts(documentVersionId: string): Promise<FactsExtractionResult>;
-  scanForConflicts(tenantId?: string): Promise<ConflictScanResult>;
+  scanForConflicts(tenantId?: string, factKeys?: readonly FactKey[]): Promise<ConflictScanResult>;
   retrieveEvidence(input: RetrieveEvidenceInput): Promise<RetrievedChunk[]>;
   synthesizeAnswer(input: SynthesizeAnswerActivityInput): Promise<SynthesizeAnswerResult>;
   groundingCheck(input: GroundingCheckActivityInput): Promise<GroundingCheckActivityResult>;
@@ -163,7 +164,7 @@ export function createActivities(app: INestApplicationContext): Activities {
 
     extractFacts: (documentVersionId) => factsService.extractFacts(documentVersionId),
 
-    scanForConflicts: (tenantId) => conflictsService.scanForConflicts(tenantId),
+    scanForConflicts: (tenantId, factKeys) => conflictsService.scanForConflicts(tenantId, factKeys),
 
     retrieveEvidence: (input) => evidenceRetrievalService.retrieve(input),
 

@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { CsvParser } from '../src/features/evidence/ingestion/parsers/csv.parser';
 import { DocxParser } from '../src/features/evidence/ingestion/parsers/docx.parser';
 import type { ParsedElement } from '../src/features/evidence/ingestion/parsers/parsed-element.type';
 import { PdfParser } from '../src/features/evidence/ingestion/parsers/pdf.parser';
@@ -34,7 +35,9 @@ function parseFixture(file: string): Promise<readonly ParsedElement[]> {
       ? new PdfParser()
       : file.endsWith('.docx')
         ? new DocxParser()
-        : new XlsxParser();
+        : file.endsWith('.csv')
+          ? new CsvParser(',', ['text/csv'])
+          : new XlsxParser();
 
     return (await parser.parse(content)).elements;
   })();

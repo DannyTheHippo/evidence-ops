@@ -33,7 +33,15 @@ export function detectHeaderRow(cells: readonly HeaderDetectionCell[]): number {
 
   const scannedRows = occupiedRows.slice(0, MAX_SCANNED_ROWS);
   for (const rowNumber of scannedRows) {
-    const rowTexts = cells.filter((cell) => cell.row === rowNumber).map((cell) => cell.text);
+    /**
+     * Blank text is filtered here rather than assumed away. Both parsers that feed this today skip
+     * empty cells, so in practice nothing is dropped — but the two conditions below are stated in
+     * terms of non-empty cells, and a future caller that passes blanks would otherwise satisfy
+     * them with a row that is mostly empty.
+     */
+    const rowTexts = cells
+      .filter((cell) => cell.row === rowNumber && cell.text.trim().length > 0)
+      .map((cell) => cell.text);
     const distinctValues = new Set(rowTexts).size;
     const hasOccupiedRowAfter = occupiedRows.some((row) => row > rowNumber);
 

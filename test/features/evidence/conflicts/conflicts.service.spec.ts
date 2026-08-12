@@ -37,6 +37,18 @@ describe('ConflictsService', () => {
     value,
   });
 
+  /** `ConflictsService.scanForConflicts`'s full-scan path reads via a Mongoose `.cursor()`, not a
+   * plain awaited `find()` — the mock model's `find` has to return something whose `.cursor()`
+   * itself returns an async-iterable, matching what `for await` needs (see `get-mock-model.ts`'s
+   * own `MockQueryChain.cursor` doc comment). */
+  const asCursor = (facts: readonly unknown[]) => ({
+    cursor: () =>
+      // eslint-disable-next-line @typescript-eslint/require-await -- `MockQueryChain.cursor` is typed as `AsyncIterable`, matching the real Mongoose cursor, and a sync generator does not satisfy that type; yielding a fixed array needs no await.
+      (async function* () {
+        yield* facts;
+      })(),
+  });
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -57,12 +69,15 @@ describe('ConflictsService', () => {
     jest.resetAllMocks();
   });
 
-  it('should default tenantId to the shared tenant constant when none is provided', async () => {
-    mockExtractedFactModel.find.mockResolvedValueOnce([]);
+  it('should default tenantId to the shared tenant constant and full-scan via a cursor when factKeys is omitted', async () => {
+    mockExtractedFactModel.find.mockReturnValueOnce(asCursor([]));
 
     const result = await service.scanForConflicts();
 
-    expect(mockExtractedFactModel.find).toHaveBeenCalledWith({ tenantId: DEFAULT_TENANT_ID });
+    expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
+      { tenantId: DEFAULT_TENANT_ID },
+      { factKey: 1, value: 1 },
+    );
     expect(mockConflictModel.find).not.toHaveBeenCalled();
     expect(result).toEqual({ conflictsCreated: 0, skippedFactCount: 0 });
   });
@@ -75,11 +90,14 @@ describe('ConflictsService', () => {
       buildFact(factKey, { amount: 5.25, unit: 'percent' }),
       buildFact(factKey, { amount: 5.3, unit: 'percent' }),
     ];
-    mockExtractedFactModel.find.mockResolvedValueOnce(facts);
+    mockExtractedFactModel.find.mockReturnValueOnce(asCursor(facts));
 
     const result = await service.scanForConflicts(tenantId);
 
-    expect(mockExtractedFactModel.find).toHaveBeenCalledWith({ tenantId });
+    expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
+      { tenantId },
+      { factKey: 1, value: 1 },
+    );
     expect(mockConflictModel.find).not.toHaveBeenCalled();
     expect(mockConflictModel.insertMany).not.toHaveBeenCalled();
     expect(result).toEqual({ conflictsCreated: 0, skippedFactCount: 0 });
@@ -91,7 +109,7 @@ describe('ConflictsService', () => {
     // 5.25% vs 6.10% is an 85bp spread — well past cap_rate's 25bp absolute tolerance.
     const factLow = buildFact(factKey, { amount: 5.25, unit: 'percent' });
     const factHigh = buildFact(factKey, { amount: 6.1, unit: 'percent' });
-    mockExtractedFactModel.find.mockResolvedValueOnce([factLow, factHigh]);
+    mockExtractedFactModel.find.mockReturnValueOnce(asCursor([factLow, factHigh]));
     mockConflictModel.find.mockResolvedValueOnce([]);
     mockConflictModel.insertMany.mockResolvedValueOnce([]);
 
@@ -104,6 +122,7 @@ describe('ConflictsService', () => {
       [
         {
           factKey: { entity: string; metric: string; period: string };
+          groupKeyNormalized: string;
           factIds: Types.ObjectId[];
           magnitude: number;
           status: string;
@@ -114,6 +133,9 @@ describe('ConflictsService', () => {
     const insertedConflicts = insertManyMock.mock.calls[0][0];
     expect(insertedConflicts).toHaveLength(1);
     expect(insertedConflicts[0].factKey).toEqual(factKey);
+    expect(insertedConflicts[0].groupKeyNormalized).toBe(
+      'northgate business park::cap_rate::2025-03',
+    );
     expect(insertedConflicts[0].factIds.map((id) => id.toString())).toEqual([
       factLow._id.toString(),
       factHigh._id.toString(),
@@ -129,7 +151,7 @@ describe('ConflictsService', () => {
     const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
     const factLow = buildFact(factKey, { amount: 5.25, unit: 'percent' });
     const factHigh = buildFact(factKey, { amount: 6.1, unit: 'percent' });
-    mockExtractedFactModel.find.mockResolvedValueOnce([factLow, factHigh]);
+    mockExtractedFactModel.find.mockReturnValueOnce(asCursor([factLow, factHigh]));
     mockConflictModel.find.mockResolvedValueOnce([{ factKey }]);
 
     const result = await service.scanForConflicts(tenantId);
@@ -147,7 +169,9 @@ describe('ConflictsService', () => {
     // group carries an ontology-unrecognized unit ('usd' is not one of cap_rate's declared units)
     // and must not abort detection of the genuine factLow/factHigh conflict alongside it.
     const unnormalizableFact = buildFact(factKey, { amount: 250, unit: 'usd' });
-    mockExtractedFactModel.find.mockResolvedValueOnce([factLow, factHigh, unnormalizableFact]);
+    mockExtractedFactModel.find.mockReturnValueOnce(
+      asCursor([factLow, factHigh, unnormalizableFact]),
+    );
     mockConflictModel.find.mockResolvedValueOnce([]);
     mockConflictModel.insertMany.mockResolvedValueOnce([]);
 
@@ -159,6 +183,83 @@ describe('ConflictsService', () => {
     );
     expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining("metric 'cap_rate'"));
     expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining("unit 'usd'"));
+  });
+
+  describe('incremental scan (factKeys given)', () => {
+    const tenantId = 'acme-corp';
+    const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+    const groupKeyNormalized = 'northgate business park::cap_rate::2025-03';
+
+    it('should query only the affected groups via a plain find, scoped to tenant and the normalized keys', async () => {
+      const factLow = buildFact(factKey, { amount: 5.25, unit: 'percent' });
+      const factHigh = buildFact(factKey, { amount: 6.1, unit: 'percent' });
+      mockExtractedFactModel.find.mockResolvedValueOnce([factLow, factHigh]);
+      mockConflictModel.find.mockResolvedValueOnce([]);
+      mockConflictModel.insertMany.mockResolvedValueOnce([]);
+
+      const result = await service.scanForConflicts(tenantId, [factKey]);
+
+      expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
+        { tenantId, groupKeyNormalized: { $in: [groupKeyNormalized] } },
+        { factKey: 1, value: 1 },
+      );
+      expect(mockConflictModel.find).toHaveBeenCalledWith({
+        tenantId,
+        status: 'open',
+        groupKeyNormalized: { $in: [groupKeyNormalized] },
+      });
+      expect(result).toEqual({ conflictsCreated: 1, skippedFactCount: 0 });
+    });
+
+    it('should dedupe repeated factKeys into one normalized group before querying', async () => {
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+
+      await service.scanForConflicts(tenantId, [factKey, factKey]);
+
+      expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
+        { tenantId, groupKeyNormalized: { $in: [groupKeyNormalized] } },
+        { factKey: 1, value: 1 },
+      );
+    });
+
+    it('should run the incremental (cheap, no-op) path — never fall back to a full scan — when factKeys is an empty array', async () => {
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+
+      const result = await service.scanForConflicts(tenantId, []);
+
+      // `factKeys: []` is a real "this ingest produced zero facts" result, not "no factKeys given"
+      // — it must still take the incremental branch (an `$in: []` query, resolving no facts) and
+      // never the cursor-based full-scan path a `factKeys === undefined` check would fall back to.
+      expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
+        { tenantId, groupKeyNormalized: { $in: [] } },
+        { factKey: 1, value: 1 },
+      );
+      expect(result).toEqual({ conflictsCreated: 0, skippedFactCount: 0 });
+    });
+
+    it('should produce the identical insertMany payload as a full scan over the same data', async () => {
+      const factLow = buildFact(factKey, { amount: 5.25, unit: 'percent' });
+      const factHigh = buildFact(factKey, { amount: 6.1, unit: 'percent' });
+
+      mockExtractedFactModel.find.mockReturnValueOnce(asCursor([factLow, factHigh]));
+      mockConflictModel.find.mockResolvedValueOnce([]);
+      mockConflictModel.insertMany.mockResolvedValueOnce([]);
+      await service.scanForConflicts(tenantId);
+      const fullScanPayload = (
+        mockConflictModel.insertMany as jest.Mock<Promise<unknown[]>, [unknown[]]>
+      ).mock.calls[0][0];
+
+      jest.resetAllMocks();
+      mockExtractedFactModel.find.mockResolvedValueOnce([factLow, factHigh]);
+      mockConflictModel.find.mockResolvedValueOnce([]);
+      mockConflictModel.insertMany.mockResolvedValueOnce([]);
+      await service.scanForConflicts(tenantId, [factKey]);
+      const incrementalPayload = (
+        mockConflictModel.insertMany as jest.Mock<Promise<unknown[]>, [unknown[]]>
+      ).mock.calls[0][0];
+
+      expect(incrementalPayload).toEqual(fullScanPayload);
+    });
   });
 
   describe('findConflictedFactGroupsForChunks', () => {

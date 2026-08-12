@@ -13,6 +13,7 @@ import type { XlsxCellLocator } from '../../../database/schemas/evidence/evidenc
 import {
   ExtractedFact,
   ExtractedFactDocument,
+  type FactKey,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import {
   MODEL_PROVIDER,
@@ -23,6 +24,7 @@ import {
   type DocumentStore,
 } from '../../../providers/storage/document-store.interface';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
+import { groupKey } from '../conflicts/detect-conflicts';
 import { ParserRegistry } from '../ingestion/parser.registry';
 import type { ParsedElement } from '../ingestion/parsers/parsed-element.type';
 import { DocumentVersionNotFoundException } from './exceptions/facts.exception';
@@ -40,6 +42,13 @@ export interface FactsExtractionResult {
    * silent zero, so an operator can tell "this version genuinely has no facts" apart from "the
    * model was too unreliable on some of it to trust". Always 0 for a spreadsheet version. */
   readonly skippedChunkCount: number;
+  /** The `factKey`s this call's facts belong to — real keys on every branch, including the
+   * `alreadyExtracted` no-op (loaded via a `{factKey: 1}`-projected query, never `[]`): an
+   * activity-timeout retry that lands on the no-op branch still needs to hand
+   * `ConflictsService.scanForConflicts`'s incremental path something to scan, or the retried
+   * ingest silently scans nothing and a conflict goes undetected. `ingest-document-version
+   * .workflow.ts` threads this straight into the `scanForConflicts` activity call. */
+  readonly factKeys: readonly FactKey[];
 }
 
 @Injectable()
@@ -92,14 +101,29 @@ export class FactsService {
       );
     }
 
-    const existingFactCount = await this.extractedFactModel.countDocuments({
-      documentVersionId: version._id,
-    });
-    if (existingFactCount > 0) {
+    // Loaded, not just counted: the no-op branch below must hand back the existing facts'
+    // `factKey`s so a retried ingest (an activity-timeout retry landing on this branch, or a
+    // second upload of the same version) still gives `scanForConflicts` real groups to scan —
+    // returning `[]` here would make a retry silently scan nothing (see this method's own
+    // `factKeys` field doc comment on `FactsExtractionResult`).
+    const existingFacts = await this.extractedFactModel.find(
+      { documentVersionId: version._id, tenantId: version.tenantId },
+      { factKey: 1 },
+    );
+    if (existingFacts.length > 0) {
       this.logger.debug(
-        `Document version '${documentVersionId}' already has ${existingFactCount} facts; skipping`,
+        `Document version '${documentVersionId}' already has ${existingFacts.length} facts; skipping`,
       );
-      return { factsCreated: 0, alreadyExtracted: true, skippedChunkCount: 0 };
+      return {
+        factsCreated: 0,
+        alreadyExtracted: true,
+        skippedChunkCount: 0,
+        factKeys: existingFacts.map((fact) => ({
+          entity: fact.factKey.entity,
+          metric: fact.factKey.metric,
+          period: fact.factKey.period,
+        })),
+      };
     }
 
     const stored = await this.documentStore.get(version.storageKey);
@@ -128,13 +152,14 @@ export class FactsService {
 
     if (candidates.length === 0) {
       this.logger.debug(`Document version '${documentVersionId}' produced no facts`);
-      return { factsCreated: 0, alreadyExtracted: false, skippedChunkCount };
+      return { factsCreated: 0, alreadyExtracted: false, skippedChunkCount, factKeys: [] };
     }
 
     try {
       await this.extractedFactModel.insertMany(
         candidates.map((candidate) => ({
           factKey: candidate.factKey,
+          groupKeyNormalized: groupKey(candidate.factKey),
           value: candidate.value,
           rawText: candidate.rawText,
           confidence: candidate.confidence,
@@ -154,7 +179,12 @@ export class FactsService {
       `Document version '${documentVersionId}' produced ${candidates.length} facts`,
     );
 
-    return { factsCreated: candidates.length, alreadyExtracted: false, skippedChunkCount };
+    return {
+      factsCreated: candidates.length,
+      alreadyExtracted: false,
+      skippedChunkCount,
+      factKeys: candidates.map((candidate) => candidate.factKey),
+    };
   }
 
   /**

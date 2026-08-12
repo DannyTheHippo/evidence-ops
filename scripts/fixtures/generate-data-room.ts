@@ -5,6 +5,7 @@ import { buildCompsSheet } from './lib/build-comps-sheet';
 import { buildLeaseSummary } from './lib/build-lease-summary';
 import { buildManifest } from './lib/build-manifest';
 import { buildMarketOverview } from './lib/build-market-overview';
+import { buildNoiSummaryCsv } from './lib/build-noi-summary-csv';
 import { buildValuationMemo } from './lib/build-valuation-memo';
 
 /**
@@ -15,17 +16,25 @@ import { buildValuationMemo } from './lib/build-valuation-memo';
 export async function generateDataRoom(targetDir: string): Promise<void> {
   await mkdir(targetDir, { recursive: true });
 
-  const [comps, valuationMemo, marketOverview, leaseSummary] = await Promise.all([
+  const [comps, noiSummaryCsv, valuationMemo, marketOverview, leaseSummary] = await Promise.all([
     buildCompsSheet(),
+    buildNoiSummaryCsv(),
     buildValuationMemo(),
     buildMarketOverview(),
     buildLeaseSummary(),
   ]);
 
-  const manifest = buildManifest({ comps, valuationMemo, marketOverview, leaseSummary });
+  const manifest = buildManifest({
+    comps,
+    noiSummaryCsv,
+    valuationMemo,
+    marketOverview,
+    leaseSummary,
+  });
 
   await Promise.all([
     writeFile(path.join(targetDir, 'comps.xlsx'), comps.buffer),
+    writeFile(path.join(targetDir, 'noi-summary.csv'), noiSummaryCsv.buffer),
     writeFile(path.join(targetDir, 'valuation-memo.pdf'), valuationMemo.buffer),
     writeFile(path.join(targetDir, 'market-overview.pdf'), marketOverview.buffer),
     writeFile(path.join(targetDir, 'lease-summary.docx'), leaseSummary.buffer),

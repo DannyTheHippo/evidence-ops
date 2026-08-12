@@ -8,6 +8,7 @@ import type {
   EnvironmentConfig,
   MongoConfig,
   RetrievalConfig,
+  SourcesConfig,
   TelemetryConfig,
   TemporalConfig,
   ThrottleConfig,
@@ -51,5 +52,8 @@ export class TypedConfigService {
   }
   get telemetry(): TelemetryConfig {
     return this.config.get('telemetry', { infer: true });
+  }
+  get sources(): SourcesConfig {
+    return this.config.get('sources', { infer: true });
   }
 }

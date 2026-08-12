@@ -93,11 +93,20 @@ const APPROVAL_TIMEOUT = '24 hours';
 /** Chunk+embed → extract facts → scan for conflicts, unconditionally — the same three-call chain
  *  this workflow always ran before the approval gate existed. Factored out so both the gated and
  *  ungated paths in `ingestDocumentVersion` below call exactly one copy of it, rather than the
- *  gate's `if` duplicating the chain. */
-async function runIngestPipeline(documentVersionId: string): Promise<IngestDocumentVersionResult> {
+ *  gate's `if` duplicating the chain.
+ *
+ *  `scanForConflicts` is called with `extractFacts`'s own `factKeys` (real on every branch,
+ *  including its no-op — see `FactsExtractionResult.factKeys`'s doc comment), scoping the scan to
+ *  the groups this ingest actually touched instead of re-scanning the whole tenant on every
+ *  document. Both `factKeys` and `tenantId` are activity-result/input data, not an import from
+ *  `src/database/**`/`src/features/**`, so threading them stays inside the determinism fence. */
+async function runIngestPipeline(
+  documentVersionId: string,
+  tenantId: string | undefined,
+): Promise<IngestDocumentVersionResult> {
   const result = await ingestActivities.ingestDocumentVersion(documentVersionId);
-  await factsActivities.extractFacts(documentVersionId);
-  await conflictsActivities.scanForConflicts();
+  const factsResult = await factsActivities.extractFacts(documentVersionId);
+  await conflictsActivities.scanForConflicts(tenantId, factsResult.factKeys);
   return result;
 }
 
@@ -133,7 +142,7 @@ export async function ingestDocumentVersion(
   input: IngestDocumentVersionInput,
 ): Promise<IngestDocumentVersionResult> {
   if (!input.requireApproval) {
-    return runIngestPipeline(input.documentVersionId);
+    return runIngestPipeline(input.documentVersionId, input.tenantId);
   }
 
   const approval = await approvalRequestActivities.requestIngestApproval({
@@ -178,6 +187,6 @@ export async function ingestDocumentVersion(
     return { chunksCreated: 0, alreadyIngested: false, gateOutcome: 'rejected' };
   }
 
-  const result = await runIngestPipeline(input.documentVersionId);
+  const result = await runIngestPipeline(input.documentVersionId, input.tenantId);
   return { ...result, gateOutcome: 'approved' };
 }

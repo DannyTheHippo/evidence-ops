@@ -84,4 +84,20 @@ describe('detectHeaderRow', () => {
   it('should return row 1 for an empty cell list without throwing', () => {
     expect(detectHeaderRow([])).toBe(1);
   });
+
+  it('should not count blank-text cells toward the two-non-empty-cells bar', () => {
+    // Both parsers feeding this skip empty cells today, so this pins the rule rather than current
+    // behaviour: row 1 has two cells but only one carries text, so it must not qualify as the
+    // header on a technicality. Row 2 is the first row with two genuinely non-empty values.
+    const cells = [
+      cell(1, 'Quarterly Summary'),
+      cell(1, '   '),
+      cell(2, 'Property Name'),
+      cell(2, 'Sale Date'),
+      cell(3, 'Acme Tower'),
+      cell(3, '2025-01-15'),
+    ];
+
+    expect(detectHeaderRow(cells)).toBe(2);
+  });
 });

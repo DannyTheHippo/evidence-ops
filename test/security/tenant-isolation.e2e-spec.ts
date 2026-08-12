@@ -25,6 +25,7 @@ import {
 import { User, UserDocument } from '../../src/database/schemas/administration/user/user.schema';
 import { UserRole } from '../../src/shared/enums/user-role.enum';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
+import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts';
 
 const FIXTURES = path.join(__dirname, '../../fixtures/data-room');
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -122,6 +123,11 @@ describe('Tenant isolation (e2e)', () => {
 
     const factLow = await extractedFactModel.create({
       factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+      groupKeyNormalized: groupKey({
+        entity: 'Northgate Business Park',
+        metric: 'cap_rate',
+        period: '2025-03',
+      }),
       value: { amount: 5.25, unit: 'percent' },
       rawText: 'cap rate of 5.25%',
       confidence: 0.9,
@@ -133,6 +139,11 @@ describe('Tenant isolation (e2e)', () => {
     });
     const factHigh = await extractedFactModel.create({
       factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+      groupKeyNormalized: groupKey({
+        entity: 'Northgate Business Park',
+        metric: 'cap_rate',
+        period: '2025-03',
+      }),
       value: { amount: 6.1, unit: 'percent' },
       rawText: 'cap rate of 6.10%',
       confidence: 0.9,
@@ -144,6 +155,11 @@ describe('Tenant isolation (e2e)', () => {
     });
     const conflict = await conflictModel.create({
       factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+      groupKeyNormalized: groupKey({
+        entity: 'Northgate Business Park',
+        metric: 'cap_rate',
+        period: '2025-03',
+      }),
       factIds: [factLow._id, factHigh._id],
       magnitude: 0.0085,
       status: 'open',

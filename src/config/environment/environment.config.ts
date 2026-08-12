@@ -96,6 +96,9 @@ export const environmentSchema = z
     // backend is document content leaving the trust boundary; only turn this on locally against
     // a trace backend you control.
     OTEL_CAPTURE_MODEL_CONTENT: zBool(false),
+
+    SOURCES_INBOX_DIR: z.string().default('./inbox'),
+    SOURCE_SYNC_INTERVAL_MS: zNum(300_000),
   })
   .superRefine((e, ctx) => {
     if (!isProdLike(e.NODE_ENV)) {
@@ -172,6 +175,10 @@ export const environmentSchema = z
         otlpEndpoint: e.OTEL_EXPORTER_OTLP_ENDPOINT,
         captureModelContent: e.OTEL_CAPTURE_MODEL_CONTENT,
       },
+      sources: {
+        inboxDir: e.SOURCES_INBOX_DIR,
+        syncIntervalMs: e.SOURCE_SYNC_INTERVAL_MS,
+      },
     };
   });
 
@@ -186,6 +193,7 @@ export type VoyageConfig = EnvironmentConfig['voyage'];
 export type TemporalConfig = EnvironmentConfig['temporal'];
 export type RetrievalConfig = EnvironmentConfig['retrieval'];
 export type TelemetryConfig = EnvironmentConfig['telemetry'];
+export type SourcesConfig = EnvironmentConfig['sources'];
 
 /**
  * `validate` hook for `ConfigModule.forRoot`. Throws a flattened, readable error

@@ -10,6 +10,10 @@ jest.setTimeout(60000);
 
 const buildFactInput = () => ({
   factKey: { entity: 'Acme Corp', metric: 'revenue', period: 'Q3-2025' },
+  // Required, not optional: the incremental conflict scan queries facts by
+  // `{tenantId, groupKeyNormalized}`, so a fact persisted without it is invisible to every keyed
+  // scan. Both production write paths derive it with `groupKey()`; this fixture mirrors that.
+  groupKeyNormalized: 'acme corp::revenue::Q3-2025',
   value: { amount: 12_000_000, unit: 'usd' },
   rawText: 'Revenue for Q3 2025 was $12.0M',
   confidence: 0.92,

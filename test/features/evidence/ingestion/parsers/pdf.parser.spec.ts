@@ -62,7 +62,7 @@ describe('PdfParser', () => {
   });
 
   it('should find the seeded cap-rate figure on the page manifest.json records', async () => {
-    const conflictLocation = manifest.conflict.locations.find(
+    const conflictLocation = manifest.conflicts[0].locations.find(
       (location) => location.file === 'valuation-memo.pdf',
     );
     if (!conflictLocation || conflictLocation.page === undefined || !conflictLocation.display) {

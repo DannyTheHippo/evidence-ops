@@ -162,3 +162,23 @@ export const SEEDED_CONFLICT = {
     'comps.xlsx reflects the current underwriting cap rate; valuation-memo.pdf page 2 still ' +
     'quotes the pre-re-trade figure from an earlier draft. The two disagree and neither is a typo.',
 } as const;
+
+/**
+ * A second seeded conflict, this one cross-format between a spreadsheet source (comps.xlsx) and
+ * a delimited-text source (noi-summary.csv) rather than between spreadsheet and prose: Fenwick
+ * Distribution Hub's net operating income is $3,891,300 in the underwriting sheet but 4150000
+ * (unformatted) in the NOI summary — a ~6.2% spread against the metric's 1% relative tolerance
+ * (metric-ontology.ts), and regex-deterministic on both sides. Exact locations are recorded in
+ * manifest.json by the generator.
+ */
+export const SEEDED_NOI_CONFLICT = {
+  id: 'noi-conflict-fenwick',
+  property: 'Fenwick Distribution Hub',
+  sheetValue: { raw: 3_891_300, display: '$3,891,300' },
+  csvValue: { raw: 4_150_000, display: '4150000' },
+  note:
+    'comps.xlsx reflects the net operating income recorded at underwriting; noi-summary.csv ' +
+    'reflects a later reconciliation figure that was never fed back into the underwriting ' +
+    'sheet. The two disagree by roughly 6.2%, well outside the 1% tolerance for this metric, ' +
+    'and neither is a typo.',
+} as const;

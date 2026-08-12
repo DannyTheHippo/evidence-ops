@@ -149,14 +149,15 @@ describe('createActivities', () => {
     expect(result).toEqual({ factsCreated: 2, alreadyExtracted: false });
   });
 
-  it('should delegate scanForConflicts to ConflictsService.scanForConflicts', async () => {
+  it('should delegate scanForConflicts to ConflictsService.scanForConflicts, threading factKeys through', async () => {
     const mockScanForConflicts = jest.fn().mockResolvedValue({ conflictsCreated: 1 });
     const app = buildApp({ scanForConflicts: mockScanForConflicts });
+    const factKeys = [{ entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' }];
 
     const activities = createActivities(app);
-    const result = await activities.scanForConflicts('acme-corp');
+    const result = await activities.scanForConflicts('acme-corp', factKeys);
 
-    expect(mockScanForConflicts).toHaveBeenCalledWith('acme-corp');
+    expect(mockScanForConflicts).toHaveBeenCalledWith('acme-corp', factKeys);
     expect(result).toEqual({ conflictsCreated: 1 });
   });
 
