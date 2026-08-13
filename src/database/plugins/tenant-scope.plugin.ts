@@ -1,5 +1,5 @@
-import type { AsyncLocalStorage } from 'node:async_hooks';
 import type { Document, Query, Schema } from 'mongoose';
+import type { AsyncLocalStorage } from 'node:async_hooks';
 import { AlsContext } from '../../shared/types/als-context.type';
 
 /**
@@ -63,13 +63,6 @@ export const tenantScopePlugin =
       return;
     }
 
-    const scopeQuery = function (this: Query<unknown, unknown>): void {
-      const tenantId = als.getStore()?.tenant;
-      if (tenantId) {
-        this.setQuery({ $and: [this.getFilter(), { tenantId }] });
-      }
-    };
-
     schema.pre(
       [
         'find',
@@ -85,7 +78,12 @@ export const tenantScopePlugin =
         'deleteMany',
         'replaceOne',
       ],
-      scopeQuery,
+      function (this: Query<unknown, unknown>): void {
+        const tenantId = als.getStore()?.tenant;
+        if (tenantId) {
+          this.setQuery({ $and: [this.getFilter(), { tenantId }] });
+        }
+      },
     );
 
     schema.pre('save', function (this: Document): void {

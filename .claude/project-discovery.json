@@ -53,8 +53,8 @@
     "checks:web": "npm --prefix web run lint && npm --prefix web run typecheck && npm --prefix web run test",
     "format": "prettier --write \"{src,test,migrations}/**/*.ts\"",
     "format:check": "prettier --check \"{src,test,migrations}/**/*.ts\"",
-    "lint": "eslint \"{src,test,migrations}/**/*.ts\" --fix",
-    "lint:check": "eslint \"{src,test,migrations}/**/*.ts\"",
+    "lint": "eslint \"{src,test,migrations,scripts,eval}/**/*.ts\" --fix && markdownlint-cli2 --fix",
+    "lint:check": "eslint \"{src,test,migrations,scripts,eval}/**/*.ts\" && markdownlint-cli2",
     "tsc": "tsc --noEmit",
     "test": "jest --coverage",
     "test:e2e": "jest --config ./jest.e2e.config.ts",
@@ -71,7 +71,7 @@
     "ci": "checks:ci",
     "web": "checks:web",
     "typecheck": "tsc",
-    "notes": "`format` and `lint` are mutating (prettier --write / eslint --fix) and can never fail as a gate. Use `checks:ci` (format:check + lint:check) wherever failure must be possible. `checks:web` also uses the mutating `lint`; CI's frontend job runs `lint:check`, `typecheck`, `test`, `build`."
+    "notes": "`format` and `lint` are mutating (prettier --write / eslint --fix / markdownlint-cli2 --fix) and can never fail as a gate. Use `checks:ci` (format:check + lint:check) wherever failure must be possible. `checks:web` also uses the mutating `lint`; CI's frontend job runs `lint:check`, `typecheck`, `test`, `build`. Prettier does not run on Markdown; `markdownlint-cli2` does."
   },
   "packages": [
     {

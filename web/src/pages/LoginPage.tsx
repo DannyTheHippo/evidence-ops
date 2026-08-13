@@ -22,7 +22,7 @@ export default function LoginPage() {
         await register(email, password);
       }
       await login(email, password);
-      navigate('/');
+      await navigate('/');
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Authentication failed');
     } finally {

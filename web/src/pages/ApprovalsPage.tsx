@@ -47,7 +47,7 @@ function ApprovalRow({
         setRunError('No run found for this workflow.');
         return;
       }
-      navigate(`/workflow-runs/${run.id}`);
+      await navigate(`/workflow-runs/${run.id}`);
     } catch (err: unknown) {
       setRunError(err instanceof Error ? err.message : 'Failed to load workflow run');
     } finally {

@@ -20,3 +20,10 @@ process.env.MONGO_MEMORY_SERVER = 'true';
  * separately by the environment config's own spec, which this override does not reach.
  */
 process.env.THROTTLE_LIMIT = '30';
+
+/**
+ * Pins CORS origin for e2e so a developer `.env` (`CORS_ORIGIN` in `.env.example` is the Vite
+ * preview port) cannot change what `CsrfOriginMiddleware` accepts. The auth e2e asserts against
+ * this value.
+ */
+process.env.CORS_ORIGIN = 'http://localhost:5173';

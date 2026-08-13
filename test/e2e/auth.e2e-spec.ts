@@ -203,8 +203,7 @@ describe('Auth (e2e)', () => {
         expect(response.status).toBe(200);
       });
 
-      // 'http://localhost:5173' is CORS_ORIGIN's default (environment.config.ts) — setup-env.ts
-      // does not override it for the e2e run.
+      // 'http://localhost:5173' is pinned in setup-env.ts so a local `.env` cannot change it.
       it('passes a login request whose Origin matches the configured origin', async () => {
         const response = await request(getTestServer(app))
           .post('/api/v1/auth/login')

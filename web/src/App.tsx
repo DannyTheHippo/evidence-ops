@@ -57,7 +57,7 @@ export default function App() {
     } catch {
       // Already handled: logout()'s own finally cleared the session regardless of this failure.
     } finally {
-      navigate('/login');
+      await navigate('/login');
     }
   }
 

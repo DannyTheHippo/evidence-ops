@@ -363,8 +363,8 @@ recovery is `docker compose down -v` and a re-run of the migrations.
 | `npm run test:e2e`                    | end-to-end suites against `mongodb-memory-server`                                                                                   |
 | `npm run test:integration`            | live-Mongo suites against `mongodb/mongodb-atlas-local` — runs in CI via `.github/workflows/integration.yml`; still not in `checks` |
 | `npm run migrate:up` / `migrate:down` | apply/roll back migrations in `migrations/`                                                                                         |
-| `npm run format` / `format:check`     | prettier `--write` / `--check` on `src`, `test`, `migrations`, `scripts`, `eval`                                                    |
-| `npm run lint` / `lint:check`         | eslint `--fix` / read-only on the same paths                                                                                        |
+| `npm run format` / `format:check`     | prettier `--write` / `--check` on TypeScript in `src`, `test`, `migrations`, `scripts`, `eval`                                      |
+| `npm run lint` / `lint:check`         | eslint `--fix` / read-only on the same paths; markdownlint-cli2 `--fix` / read-only on `*.md`                                       |
 | `npm run tsc`                         | `tsc --noEmit`                                                                                                                      |
 | `npm run temporal:dev`                | local Temporal dev server (`temporal server start-dev`)                                                                             |
 | `npm run worker:dev`                  | Temporal worker (`src/worker/main.ts`); needs a running Temporal server                                                             |

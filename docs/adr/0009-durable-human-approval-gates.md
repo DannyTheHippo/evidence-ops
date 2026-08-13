@@ -183,4 +183,3 @@ but harmless double-entry in the inbox.
 > second workflow — document ingestion — behind a plain opt-in flag defaulting to off, because the
 > thing worth proving wasn't that ingestion needs gating, it's that the same durable discipline
 > works twice without a third primitive.
-

@@ -120,7 +120,7 @@ Detail: `rules/jest-tests.md` (API), `rules/react.md` § SPA Testing (web).
 
 ## Validation
 
-`format` and `lint` are **mutating** (`prettier --write`, `eslint --fix`). Use them locally; use the `:check` variants anywhere a gate must be able to fail.
+`format` and `lint` are **mutating** (`prettier --write` on TypeScript, `eslint --fix`, `markdownlint-cli2 --fix` on Markdown). Use them locally; use the `:check` variants anywhere a gate must be able to fail. Prettier does not run on Markdown.
 
 | Command                | Use                                                                       |
 | ---------------------- | ------------------------------------------------------------------------- |

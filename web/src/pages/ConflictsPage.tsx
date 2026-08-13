@@ -52,7 +52,7 @@ export default function ConflictsPage() {
     });
     try {
       const run = await requestConflictResolution(conflictId, factId);
-      navigate(`/workflow-runs/${run.id}`);
+      await navigate(`/workflow-runs/${run.id}`);
     } catch (err: unknown) {
       setRowErrors((current) => ({
         ...current,

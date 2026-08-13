@@ -1,0 +1,13 @@
+{
+  "globs": ["**/*.md"],
+  "ignores": ["**/node_modules/**", "eval/results/**"],
+  "gitignore": true,
+  "config": {
+    "default": true,
+    "line-length": false,
+    "fenced-code-language": false,
+    "first-line-h1": false,
+    "table-column-style": false,
+    "no-space-in-code": false
+  }
+}
