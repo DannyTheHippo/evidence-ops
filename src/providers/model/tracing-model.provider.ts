@@ -1,12 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import type { z } from 'zod/v4';
-import type { Telemetry } from '../telemetry/telemetry.interface';
 import {
   EVIDENCE_ATTRIBUTES,
   GEN_AI_ATTRIBUTES,
   GEN_AI_CONTENT_EVENTS,
 } from '../telemetry/span-attributes.constants';
+import type { Telemetry } from '../telemetry/telemetry.interface';
 import type {
   ModelProvider,
   ModelProviderInfo,
@@ -25,7 +25,7 @@ export class TracingModelProvider implements ModelProvider {
     private readonly inner: ModelProvider,
     private readonly telemetry: Telemetry,
     // Dev-only (`OTEL_CAPTURE_MODEL_CONTENT`, default false — see environment.config.ts and
-    // docs/threat-model.md). Evidence text reaching a trace backend is document content leaving
+    // docs/global/threat-model.md). Evidence text reaching a trace backend is document content leaving
     // the trust boundary, so this must default OFF and never attach content as a span
     // *attribute* (attributes are far more likely to be indexed/sampled by a backend than events).
     private readonly captureModelContent: boolean = false,

@@ -620,10 +620,8 @@ export class DocumentsService {
     canonicalMimeType: string,
     tenantId: string,
   ): Promise<UploadResult> {
-    // Guards the type only: `UploadDocumentRequestDto.title` is required by `@ValidateIf`
-    // whenever `documentId` is absent, so the global ValidationPipe already rejects a request
-    // that reaches here without one (mirrors `AuthController.me()`'s guard-clause pattern).
-    if (!dto.title) {
+    const title = dto.title ?? file.originalname;
+    if (!title.trim()) {
       throw new BadRequestException('title is required when creating a new document');
     }
 
@@ -631,7 +629,7 @@ export class DocumentsService {
     // `documentStore.put` call below; the document row and the stored bytes must agree on the
     // disambiguated MIME, not the browser's raw (possibly ambiguous) one.
     const document = await this.documentModel.create({
-      title: dto.title,
+      title,
       sourceKind,
       mimeType: canonicalMimeType,
       tenantId,

@@ -157,6 +157,14 @@ describe('Documents (e2e)', () => {
     expect(response.status).toBe(401);
   });
 
+  it('titles a new document from the uploaded filename when title is omitted', async () => {
+    const response = await upload(comps, 'comps.xlsx', XLSX_MIME, {});
+    const body = response.body as DocumentBody;
+
+    expect(response.status).toBe(201);
+    expect(body.title).toBe('comps.xlsx');
+  });
+
   it('stores an upload and pins the version to the sha256 of the bytes', async () => {
     const response = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Comparables' });
     const body = response.body as DocumentBody;

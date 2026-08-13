@@ -1,13 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import {
-  IsBoolean,
-  IsMongoId,
-  IsNotEmpty,
-  IsOptional,
-  IsString,
-  ValidateIf,
-} from 'class-validator';
+import { IsBoolean, IsMongoId, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
 export class UploadDocumentRequestDto {
   @ApiProperty({
@@ -22,11 +15,10 @@ export class UploadDocumentRequestDto {
 
   @ApiProperty({
     example: 'Q3 Rent Roll',
-    description: 'Document title. Required when documentId is omitted (new document).',
+    description: 'Document title or filename. Ignored when documentId is set.',
     required: false,
   })
-  // Only required on the new-document path; a version upload keeps the document's existing title.
-  @ValidateIf((dto: UploadDocumentRequestDto) => !dto.documentId)
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
   title?: string;

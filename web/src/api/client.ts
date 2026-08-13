@@ -148,7 +148,7 @@ export function uploadDocument(
   const formData = new FormData();
   formData.append('file', file);
   if (options?.documentId) formData.append('documentId', options.documentId);
-  if (options?.title) formData.append('title', options.title);
+  else formData.append('title', options?.title?.trim() || file.name);
   return request<EvidenceDocument>('/documents', { method: 'POST', body: formData });
 }
 

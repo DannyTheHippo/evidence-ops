@@ -24,8 +24,8 @@ wrong or adversarially steered:
   suite plants injection markers in the fixture corpus and asserts where they can and cannot reach —
   including two tests that exist to _record_ the bounds rather than claim they are closed.
 
-Read [`docs/threat-model.md`](docs/threat-model.md) for the controls and, more usefully, the
-residual risks. Read [`docs/architecture.md`](docs/architecture.md) for the component shape.
+Read [`docs/global/threat-model.md`](docs/global/threat-model.md) for the controls and, more usefully, the
+residual risks. Read [`docs/global/architecture.md`](docs/global/architecture.md) for the component shape.
 
 ## What runs where
 
@@ -275,7 +275,7 @@ Not shown, and not claimed:
   can still be found on one recording and missed on the next. The replay cache makes the measurement
   reproducible, not the pipeline deterministic.
 - **No tenant isolation.** Authentication is enforced; authorization is not. See
-  [`docs/threat-model.md`](docs/threat-model.md) §5.
+  [`docs/global/threat-model.md`](docs/global/threat-model.md) §5.
 - **No alerting.** Tracing is real OpenTelemetry (`src/instrumentation.ts` registers http/express/
   mongoose instrumentations, spans export to Jaeger and to `artifacts/traces/`), and `TELEMETRY`
   still binds to a logger — the two are complementary, not alternatives, one for traces and one for

@@ -157,8 +157,29 @@ describe('DocumentsService', () => {
   });
 
   describe('upload — new document (no documentId)', () => {
-    it('should throw BadRequestException when title is omitted', async () => {
+    it('should title a new document from the uploaded filename when title is omitted', async () => {
       const file = buildFile();
+      const mockDocument = buildMockDocument({ title: 'comps.xlsx' });
+      mockDocumentModel.create.mockResolvedValueOnce(mockDocument);
+      mockDocumentStore.put.mockResolvedValueOnce({
+        id: 'gridfs-id-1',
+        content: file.buffer,
+        contentType: file.mimetype,
+        metadata: {},
+      });
+      const expectedSha256 = createHash('sha256').update(file.buffer).digest('hex');
+      const version = buildMockVersion({ versionNumber: 1, sha256: expectedSha256 });
+      mockDocumentVersionModel.create.mockResolvedValueOnce(version);
+
+      await service.upload(file, {}, 'tenant-a');
+
+      expect(mockDocumentModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'comps.xlsx' }),
+      );
+    });
+
+    it('should throw BadRequestException when title and originalname are both empty', async () => {
+      const file = buildFile({ originalname: '' });
 
       await expect(service.upload(file, {})).rejects.toBeInstanceOf(BadRequestException);
       expect(mockDocumentModel.create).not.toHaveBeenCalled();

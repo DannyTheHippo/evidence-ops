@@ -165,6 +165,11 @@ describe('DataRoomPage', () => {
         ([, init]) => init?.method === 'POST' && init.body instanceof FormData,
       );
       expect(uploadCalls).toHaveLength(files.length);
+      for (const [i, file] of files.entries()) {
+        const body = uploadCalls[i][1]?.body;
+        if (!(body instanceof FormData)) throw new Error('Upload body was not FormData');
+        expect(body.get('title')).toBe(file.name);
+      }
     });
   });
 });

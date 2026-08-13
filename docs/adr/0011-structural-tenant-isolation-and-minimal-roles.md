@@ -6,7 +6,7 @@
 
 ## Context
 
-`docs/threat-model.md` §5 named this gap plainly before it was closed: `QaService.getAnswerById`
+`docs/global/threat-model.md` §5 named this gap plainly before it was closed: `QaService.getAnswerById`
 and `DocumentsService.getById` read by id with no owner and no tenant predicate, and
 `DEFAULT_TENANT_ID` was a compile-time constant every write path shared. Any authenticated user who
 guessed or enumerated an id could read another tenant's evidence. "RBAC" did not exist at all —

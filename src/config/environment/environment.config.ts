@@ -95,7 +95,7 @@ export const environmentSchema = z
 
     OTEL_EXPORTER_OTLP_ENDPOINT: z.string().default('http://localhost:4318'),
     // Dev-only, OFF by default: attaches prompt/completion text as span *events* (never
-    // attributes — see `docs/threat-model.md` residual risks). Evidence text reaching a trace
+    // attributes — see `docs/global/threat-model.md` residual risks). Evidence text reaching a trace
     // backend is document content leaving the trust boundary; only turn this on locally against
     // a trace backend you control.
     OTEL_CAPTURE_MODEL_CONTENT: zBool(false),

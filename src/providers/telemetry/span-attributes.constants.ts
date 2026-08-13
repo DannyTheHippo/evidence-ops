@@ -17,7 +17,7 @@ export const GEN_AI_ATTRIBUTES = {
 
 /** Event names for the dev-only prompt/completion capture (`TracingModelProvider`) — span
  *  *events*, never attributes, so a backend that samples/indexes attributes by default doesn't
- *  index evidence text (see `docs/threat-model.md` residual risks). */
+ *  index evidence text (see `docs/global/threat-model.md` residual risks). */
 export const GEN_AI_CONTENT_EVENTS = {
   PROMPT: 'gen_ai.content.prompt',
   COMPLETION: 'gen_ai.content.completion',
