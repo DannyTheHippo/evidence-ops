@@ -16,7 +16,6 @@ import {
   takeWhile,
   timer,
 } from 'rxjs';
-import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
 import {
   WorkflowRun,
   WorkflowRunDocument,
@@ -113,11 +112,7 @@ export class WorkflowRunsService {
    * so a GET here stays a read, and the persisted row remains whatever the workflow's own
    * activities last recorded.
    */
-  async findById(
-    id: string,
-    actorId: string,
-    tenantId: string = DEFAULT_TENANT_ID,
-  ): Promise<WorkflowRunResult> {
+  async findById(id: string, actorId: string, tenantId: string): Promise<WorkflowRunResult> {
     const result = await this.peekRun(id, tenantId);
 
     await this.auditService.record({
@@ -138,7 +133,7 @@ export class WorkflowRunsService {
    * refresh `findById` documented above — the SSE `run` event must match the polled GET
    * byte-for-byte, so this cannot skip that step.
    */
-  async peekRun(id: string, tenantId: string = DEFAULT_TENANT_ID): Promise<WorkflowRunResult> {
+  async peekRun(id: string, tenantId: string): Promise<WorkflowRunResult> {
     if (!Types.ObjectId.isValid(id)) {
       throw new WorkflowRunNotFoundException(`WorkflowRun '${id}' not found`);
     }
@@ -175,11 +170,7 @@ export class WorkflowRunsService {
    * independent timers — nothing here audits per tick (`peekRun`/`ApprovalsService.peekPending`
    * don't), so there is no cost to reading them on separate schedules.
    */
-  streamRun(
-    id: string,
-    actorId: string,
-    tenantId: string = DEFAULT_TENANT_ID,
-  ): Observable<MessageEvent> {
+  streamRun(id: string, actorId: string, tenantId: string): Observable<MessageEvent> {
     // One audit row per stream OPEN, not per tick. The initial peek here also gates the audit on
     // existence — matching `findById`'s own audit-after-confirmation order.
     const opened$ = defer(() => this.peekRun(id, tenantId)).pipe(
@@ -259,7 +250,7 @@ export class WorkflowRunsService {
   async listByWorkflowId(
     dto: ListWorkflowRunsRequestDto,
     actorId: string,
-    tenantId: string = DEFAULT_TENANT_ID,
+    tenantId: string,
   ): Promise<DocumentResultWithCount<WorkflowRunResult>> {
     const filter = { workflowId: dto.workflowId, tenantId };
 
@@ -293,7 +284,7 @@ export class WorkflowRunsService {
    */
   async findRunByWorkflowId(
     workflowId: string,
-    tenantId: string = DEFAULT_TENANT_ID,
+    tenantId: string,
   ): Promise<WorkflowRunResult | null> {
     const run = await this.workflowRunModel.findOne({ workflowId, tenantId });
     return run ? this.toResult(run) : null;

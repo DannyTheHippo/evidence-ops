@@ -29,6 +29,7 @@ import { mapWithConcurrency } from '../../../shared/utils/map-with-concurrency.u
 import { groupKey } from '../conflicts/detect-conflicts';
 import { ParserRegistry } from '../ingestion/parser.registry';
 import type { ParsedElement } from '../ingestion/parsers/parsed-element.type';
+import { CanonicalEntityService } from './canonical-entity.service';
 import { DocumentVersionNotFoundException } from './exceptions/facts.exception';
 import { METRIC_ONTOLOGY } from './metric-ontology';
 import { extractProseFacts, type ProseFactExtractionResult } from './prose-fact-extractor';
@@ -73,6 +74,8 @@ export class FactsService {
 
     private readonly parserRegistry: ParserRegistry,
 
+    private readonly canonicalEntityService: CanonicalEntityService,
+
     private readonly config: TypedConfigService,
 
     private readonly logger: AppLogger,
@@ -91,14 +94,17 @@ export class FactsService {
    * `ExtractedFact.chunkId` reference), so a version with no ingested chunks yet is a precondition
    * failure, not an empty result.
    */
-  async extractFacts(documentVersionId: string): Promise<FactsExtractionResult> {
+  async extractFacts(documentVersionId: string, tenantId: string): Promise<FactsExtractionResult> {
     if (!Types.ObjectId.isValid(documentVersionId)) {
       throw new DocumentVersionNotFoundException(
         `Document version '${documentVersionId}' not found`,
       );
     }
 
-    const version = await this.documentVersionModel.findById(documentVersionId);
+    const version = await this.documentVersionModel.findOne({
+      _id: documentVersionId,
+      tenantId,
+    });
     if (!version) {
       throw new DocumentVersionNotFoundException(
         `Document version '${documentVersionId}' not found`,
@@ -147,9 +153,9 @@ export class FactsService {
     let candidates: (FactCandidate & { chunkId: string })[];
     let skippedChunkCount = 0;
     if (isSpreadsheet) {
-      candidates = await this.buildXlsxCandidates(version._id, parsed.elements);
+      candidates = await this.buildXlsxCandidates(version._id, parsed.elements, tenantId);
     } else {
-      const prose = await this.buildProseCandidates(version._id, parsed.elements);
+      const prose = await this.buildProseCandidates(version._id, parsed.elements, tenantId);
       candidates = prose.candidates;
       skippedChunkCount = prose.skippedChunkCount;
     }
@@ -159,9 +165,13 @@ export class FactsService {
       return { factsCreated: 0, alreadyExtracted: false, skippedChunkCount, factKeys: [] };
     }
 
+    // Both branches above converge here before a single canonicalization pass, so the xlsx and
+    // prose paths cannot drift into resolving entities differently from one another.
+    const canonicalizedCandidates = await this.canonicalizeCandidateEntities(candidates, tenantId);
+
     try {
       await this.extractedFactModel.insertMany(
-        candidates.map((candidate) => ({
+        canonicalizedCandidates.map((candidate) => ({
           factKey: candidate.factKey,
           groupKeyNormalized: groupKey(candidate.factKey),
           value: candidate.value,
@@ -172,23 +182,54 @@ export class FactsService {
           documentVersionId: version._id,
           locator: candidate.locator,
           tenantId: version.tenantId,
+          observedAt: candidate.observedAt,
+          entityMatched: candidate.entityMatched,
         })),
       );
     } catch (error) {
-      await this.extractedFactModel.deleteMany({ documentVersionId: version._id });
+      await this.extractedFactModel.deleteMany({ documentVersionId: version._id, tenantId });
       throw error;
     }
 
     this.logger.debug(
-      `Document version '${documentVersionId}' produced ${candidates.length} facts`,
+      `Document version '${documentVersionId}' produced ${canonicalizedCandidates.length} facts`,
     );
 
     return {
-      factsCreated: candidates.length,
+      factsCreated: canonicalizedCandidates.length,
       alreadyExtracted: false,
       skippedChunkCount,
-      factKeys: candidates.map((candidate) => candidate.factKey),
+      factKeys: canonicalizedCandidates.map((candidate) => candidate.factKey),
     };
+  }
+
+  /**
+   * Resolves every candidate's `factKey.entity` against the tenant's `CanonicalEntity` registry
+   * and swaps in the canonical name wherever one matches — before `insertMany` and before
+   * `groupKey()` computes `groupKeyNormalized`, so two facts naming the same entity under
+   * different registered spellings land in the same conflict-detection group instead of two
+   * invisible singletons. A single batched lookup (`CanonicalEntityService.resolveMany`) covers
+   * every candidate regardless of how many facts this document produced. An unmatched name is
+   * never dropped or guessed at: `factKey.entity` stays exactly as extracted and `entityMatched`
+   * records the miss so a human can find the registry's gap later.
+   */
+  private async canonicalizeCandidateEntities<T extends { factKey: FactKey }>(
+    candidates: readonly T[],
+    tenantId: string,
+  ): Promise<(T & { entityMatched: boolean })[]> {
+    const resolutions = await this.canonicalEntityService.resolveMany(
+      candidates.map((candidate) => candidate.factKey.entity),
+      tenantId,
+    );
+
+    return candidates.map((candidate, index) => {
+      const resolution = resolutions[index];
+      return {
+        ...candidate,
+        factKey: { ...candidate.factKey, entity: resolution.name },
+        entityMatched: resolution.matched,
+      };
+    });
   }
 
   /**
@@ -218,8 +259,9 @@ export class FactsService {
   private async buildXlsxCandidates(
     versionId: Types.ObjectId,
     elements: readonly ParsedElement[],
+    tenantId: string,
   ): Promise<(FactCandidate & { chunkId: string })[]> {
-    const chunks = await this.evidenceChunkModel.find({ documentVersionId: versionId });
+    const chunks = await this.evidenceChunkModel.find({ documentVersionId: versionId, tenantId });
     if (chunks.length === 0) {
       throw new InternalServerErrorException(
         `Document version '${versionId.toString()}' has no ingested chunks — run ingestion before fact extraction`,
@@ -260,11 +302,12 @@ export class FactsService {
   private async buildProseCandidates(
     versionId: Types.ObjectId,
     elements: readonly ParsedElement[],
+    tenantId: string,
   ): Promise<{
     readonly candidates: (FactCandidate & { chunkId: string })[];
     readonly skippedChunkCount: number;
   }> {
-    const chunks = await this.evidenceChunkModel.find({ documentVersionId: versionId });
+    const chunks = await this.evidenceChunkModel.find({ documentVersionId: versionId, tenantId });
     if (chunks.length === 0) {
       throw new InternalServerErrorException(
         `Document version '${versionId.toString()}' has no ingested chunks — run ingestion before fact extraction`,
@@ -287,6 +330,7 @@ export class FactsService {
           sourceElements: elements,
           modelProvider: this.modelProvider,
           ontology: METRIC_ONTOLOGY,
+          tenantId,
         }),
     );
 

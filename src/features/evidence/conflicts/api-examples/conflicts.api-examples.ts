@@ -26,6 +26,10 @@ const exampleConflict = {
   magnitude: 0.0085,
   status: 'open',
   createdAt: '2026-07-01T00:00:00.000Z',
+  // `cap_rate` has no configured `authorityOrder` (see `metric-ontology.ts`), so the survivorship
+  // policy declines to propose a winner and `proposedWinnerFactId` is absent.
+  ruleFired: 'none',
+  explanation: 'No authorityOrder is configured for this metric.',
 };
 
 const exampleResolutionRequestedRun = {

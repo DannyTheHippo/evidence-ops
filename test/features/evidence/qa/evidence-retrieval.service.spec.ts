@@ -10,6 +10,7 @@ import type { HybridRetrievalHitMetadata } from '../../../../src/providers/retri
 import { FakeRetrievalStore } from '../../../../src/providers/retrieval/fake-retrieval.store';
 import type { RetrievalHit } from '../../../../src/providers/retrieval/retrieval-store.interface';
 import { RETRIEVAL_STORE } from '../../../../src/providers/retrieval/retrieval-store.interface';
+import { emptyRetrievalCounter } from '../../../../src/providers/telemetry/domain-metrics';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
 import { getMockModel } from '../../../utils/get-mock-model';
@@ -40,7 +41,7 @@ describe('EvidenceRetrievalService', () => {
     retrievalOverrides: Partial<ReturnType<typeof getMockTypedConfig>['retrieval']> = {},
   ): Promise<EvidenceRetrievalService> => {
     const config = getMockTypedConfig({
-      retrieval: { fusion: 'server', limit: 12, ...retrievalOverrides },
+      retrieval: { fusion: 'server', limit: 12, strategy: 'single-shot', ...retrievalOverrides },
     });
 
     const module: TestingModule = await Test.createTestingModule({
@@ -66,23 +67,33 @@ describe('EvidenceRetrievalService', () => {
   });
 
   it('should return an empty array without querying document versions when the store returns no hits', async () => {
+    const emptyRetrievalSpy = jest.spyOn(emptyRetrievalCounter, 'add');
     fakeRetrievalStore.setHits([]);
 
-    const result = await service.retrieve({ questionText: 'What is the cap rate?' });
+    const result = await service.retrieve({
+      questionText: 'What is the cap rate?',
+      tenantId: 'default',
+    });
 
     expect(result).toEqual([]);
     expect(mockDocumentVersionModel.find).not.toHaveBeenCalled();
+    expect(emptyRetrievalSpy).toHaveBeenCalledWith(1);
   });
 
-  it('should default tenantId to the single-tenant default and pass it through the retrieval filter', async () => {
-    fakeRetrievalStore.setHits([]);
+  it('should not increment the empty-retrieval counter when the store returns hits', async () => {
+    const emptyRetrievalSpy = jest.spyOn(emptyRetrievalCounter, 'add');
+    const versionId = new Types.ObjectId();
+    fakeRetrievalStore.setHits([buildHit({ documentVersionId: versionId.toString() })]);
+    mockDocumentVersionModel.find.mockResolvedValueOnce([
+      { _id: versionId, sha256: 'a'.repeat(64) },
+    ]);
 
-    await service.retrieve({ questionText: 'What is the cap rate?' });
+    await service.retrieve({ questionText: 'What is the cap rate?', tenantId: 'default' });
 
-    expect(fakeRetrievalStore.queries[0].filter).toEqual({ tenantId: 'default' });
+    expect(emptyRetrievalSpy).not.toHaveBeenCalled();
   });
 
-  it('should pass an explicit tenantId through the retrieval filter instead of the default', async () => {
+  it('should pass the tenantId through the retrieval filter', async () => {
     fakeRetrievalStore.setHits([]);
 
     await service.retrieve({ questionText: 'What is the cap rate?', tenantId: 'acme' });
@@ -93,7 +104,7 @@ describe('EvidenceRetrievalService', () => {
   it("should pass config.retrieval.limit as the store query's limit", async () => {
     fakeRetrievalStore.setHits([]);
 
-    await service.retrieve({ questionText: 'What is the cap rate?' });
+    await service.retrieve({ questionText: 'What is the cap rate?', tenantId: 'default' });
 
     expect(fakeRetrievalStore.queries[0].limit).toBe(12);
   });
@@ -102,7 +113,7 @@ describe('EvidenceRetrievalService', () => {
     service = await buildService({ limit: 5 });
     fakeRetrievalStore.setHits([]);
 
-    await service.retrieve({ questionText: 'What is the cap rate?' });
+    await service.retrieve({ questionText: 'What is the cap rate?', tenantId: 'default' });
 
     expect(fakeRetrievalStore.queries[0].limit).toBe(5);
   });
@@ -115,7 +126,10 @@ describe('EvidenceRetrievalService', () => {
       { _id: versionId, sha256: 'a'.repeat(64) },
     ]);
 
-    const result = await service.retrieve({ questionText: 'What is the cap rate?' });
+    const result = await service.retrieve({
+      questionText: 'What is the cap rate?',
+      tenantId: 'default',
+    });
 
     expect(result).toEqual([
       {
@@ -152,7 +166,7 @@ describe('EvidenceRetrievalService', () => {
     mockDocumentVersionModel.find.mockResolvedValueOnce([]);
 
     await expect(
-      service.retrieve({ questionText: 'What is the cap rate?' }),
+      service.retrieve({ questionText: 'What is the cap rate?', tenantId: 'default' }),
     ).rejects.toBeInstanceOf(InternalServerErrorException);
   });
 });

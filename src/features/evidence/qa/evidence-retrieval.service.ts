@@ -2,7 +2,6 @@ import { Inject, Injectable, InternalServerErrorException } from '@nestjs/common
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { TypedConfigService } from '../../../config/environment/typed-config.service';
-import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
 import {
   DocumentVersion,
   DocumentVersionDocument,
@@ -12,12 +11,13 @@ import {
   RETRIEVAL_STORE,
   type RetrievalStore,
 } from '../../../providers/retrieval/retrieval-store.interface';
+import { emptyRetrievalCounter } from '../../../providers/telemetry/domain-metrics';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { RetrievedChunk } from './types/retrieved-chunk.type';
 
 export interface RetrieveEvidenceInput {
   readonly questionText: string;
-  readonly tenantId?: string;
+  readonly tenantId: string;
 }
 
 /**
@@ -44,15 +44,14 @@ export class EvidenceRetrievalService {
   }
 
   async retrieve(input: RetrieveEvidenceInput): Promise<RetrievedChunk[]> {
-    const tenantId = input.tenantId ?? DEFAULT_TENANT_ID;
-
     const hits = await this.retrievalStore.search<HybridRetrievalHitMetadata>({
       text: input.questionText,
-      filter: { tenantId },
+      filter: { tenantId: input.tenantId },
       limit: this.config.retrieval.limit,
     });
 
     if (hits.length === 0) {
+      emptyRetrievalCounter.add(1);
       return [];
     }
 
@@ -61,7 +60,7 @@ export class EvidenceRetrievalService {
     // where the ALS-backed `tenantScopePlugin` never ran, so nothing else scopes this query.
     const versions = await this.documentVersionModel.find({
       _id: { $in: versionIds.map((id) => new Types.ObjectId(id)) },
-      tenantId,
+      tenantId: input.tenantId,
     });
     const sha256ByVersionId = new Map(
       versions.map((version) => [version._id.toString(), version.sha256]),

@@ -10,13 +10,15 @@ import { createHash } from 'node:crypto';
 import { Model, Types } from 'mongoose';
 import type { Observable } from 'rxjs';
 import { catchError, concatMap, distinctUntilChanged, map, merge, of, timer } from 'rxjs';
-import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
 import {
   Conflict,
   ConflictDocument,
   MIN_CONFLICTING_FACTS,
 } from '../../../database/schemas/evidence/conflict/conflict.schema';
-import type { DocumentSourceKind } from '../../../database/schemas/evidence/document/document.schema';
+import type {
+  DocumentSourceClass,
+  DocumentSourceKind,
+} from '../../../database/schemas/evidence/document/document.schema';
 import {
   Document,
   DocumentDocument,
@@ -144,7 +146,11 @@ export class DocumentsService {
   async upload(
     file: UploadedFileLike | undefined,
     dto: UploadDocumentRequestDto,
-    tenantId: string = DEFAULT_TENANT_ID,
+    tenantId: string,
+    // Not on `UploadDocumentRequestDto`: a browser upload has no source to inherit a class from,
+    // only a connector sync (`SourcesService.syncOneFile`) knows the originating `Source`'s
+    // `sourceClass` and passes it here for a new document to inherit.
+    sourceClass?: DocumentSourceClass,
   ): Promise<DocumentResponseDto> {
     if (!file) {
       throw new MissingFileException('A file is required');
@@ -177,7 +183,15 @@ export class DocumentsService {
 
     const { document, currentVersion, isNewVersion } = dto.documentId
       ? await this.addVersion(dto.documentId, sha256, file, canonicalMimeType, tenantId)
-      : await this.createDocument(dto, sourceKind, sha256, file, canonicalMimeType, tenantId);
+      : await this.createDocument(
+          dto,
+          sourceKind,
+          sha256,
+          file,
+          canonicalMimeType,
+          tenantId,
+          sourceClass,
+        );
 
     // Fire-and-forget, mirroring `QaService.startQuestion`: a slow parse/embed must never block
     // the upload response, which is the entire point of running ingestion as a durable workflow
@@ -211,7 +225,7 @@ export class DocumentsService {
 
   async list(
     pagination: PaginationRequestDto,
-    tenantId: string = DEFAULT_TENANT_ID,
+    tenantId: string,
   ): Promise<DocumentResultWithCount<DocumentResponseDto>> {
     const filter = { tenantId };
 
@@ -256,7 +270,7 @@ export class DocumentsService {
    * state to close the connection on — it stays open until the client disconnects, which Nest's
    * `SseStream` already tears down via its own socket-close handling.
    */
-  streamList(tenantId: string = DEFAULT_TENANT_ID): Observable<MessageEvent> {
+  streamList(tenantId: string): Observable<MessageEvent> {
     const documents$: Observable<DocumentsStreamEvent> = timer(
       0,
       DOCUMENTS_STREAM_INTERVAL_MS,
@@ -293,10 +307,7 @@ export class DocumentsService {
     );
   }
 
-  async getById(
-    id: string,
-    tenantId: string = DEFAULT_TENANT_ID,
-  ): Promise<DocumentWithVersionsResponseDto> {
+  async getById(id: string, tenantId: string): Promise<DocumentWithVersionsResponseDto> {
     if (!Types.ObjectId.isValid(id)) {
       throw new DocumentNotFoundException(`Document '${id}' not found`);
     }
@@ -336,7 +347,7 @@ export class DocumentsService {
   async getVersionContent(
     versionId: string,
     actorId: string,
-    tenantId: string = DEFAULT_TENANT_ID,
+    tenantId: string,
   ): Promise<DocumentVersionContent> {
     if (!Types.ObjectId.isValid(versionId)) {
       throw new DocumentVersionNotFoundException(`Document version '${versionId}' not found`);
@@ -401,7 +412,7 @@ export class DocumentsService {
   async listVersionChunks(
     versionId: string,
     actorId: string,
-    tenantId: string = DEFAULT_TENANT_ID,
+    tenantId: string,
   ): Promise<DocumentResultWithCount<EvidenceChunkResponseDto>> {
     if (!Types.ObjectId.isValid(versionId)) {
       throw new DocumentVersionNotFoundException(`Document version '${versionId}' not found`);
@@ -451,7 +462,7 @@ export class DocumentsService {
    * backstop it — this is the one path in the codebase where a missed predicate deletes another
    * tenant's evidence, not just leaks it.
    */
-  async remove(id: string, actorId: string, tenantId: string = DEFAULT_TENANT_ID): Promise<void> {
+  async remove(id: string, actorId: string, tenantId: string): Promise<void> {
     if (!Types.ObjectId.isValid(id)) {
       throw new DocumentNotFoundException(`Document '${id}' not found`);
     }
@@ -619,6 +630,7 @@ export class DocumentsService {
     file: UploadedFileLike,
     canonicalMimeType: string,
     tenantId: string,
+    sourceClass?: DocumentSourceClass,
   ): Promise<UploadResult> {
     const title = dto.title ?? file.originalname;
     if (!title.trim()) {
@@ -628,11 +640,14 @@ export class DocumentsService {
     // `canonicalMimeType`, not `file.mimetype` — see the identical `contentType` comment on the
     // `documentStore.put` call below; the document row and the stored bytes must agree on the
     // disambiguated MIME, not the browser's raw (possibly ambiguous) one.
+    // `sourceClass` omitted (not `undefined`-assigned) when the caller has none — the schema's own
+    // `default: 'unclassified'` applies only when the key is absent from the create payload.
     const document = await this.documentModel.create({
       title,
       sourceKind,
       mimeType: canonicalMimeType,
       tenantId,
+      ...(sourceClass ? { sourceClass } : {}),
     });
 
     // See the identical GridFS metadata comment in `addVersion` above.

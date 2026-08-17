@@ -1,3 +1,5 @@
+import type { DocumentSourceClass } from '../../../database/schemas/evidence/document/document.schema';
+
 /**
  * The allowlist of valuation metrics fact extraction is permitted to produce. An open-ended
  * extractor would invent its own metric names per document ("cap rate" vs "capitalization rate"
@@ -54,6 +56,22 @@ export interface MetricDefinition {
    * small one.
    */
   readonly tolerance: number;
+  /**
+   * Most-authoritative-first ranking of source classes for this metric. When two facts about the
+   * same `FactKey` disagree, a survivorship policy prefers the value from whichever conflicting
+   * fact's document has the highest-ranked `sourceClass` here. Optional, and left absent by
+   * default: a metric with no configured order gives the policy nothing to rank by, so it must
+   * produce no preferred value for that metric rather than a guessed one. Never includes
+   * `'unclassified'` — an unclassified document has no claim to authority over any other source.
+   */
+  readonly authorityOrder?: readonly DocumentSourceClass[];
+  /**
+   * How long an observed value stays current for this metric, in milliseconds, measured from
+   * `ExtractedFact.observedAt`. Optional: a metric with no configured window has no staleness
+   * check applied to it — appropriate for a metric whose value is a fixed historical fact (e.g. a
+   * closed sale price) rather than one that drifts with the market or with property operations.
+   */
+  readonly stalenessWindowMs?: number;
 }
 
 export const METRIC_ONTOLOGY: readonly MetricDefinition[] = [
@@ -71,6 +89,9 @@ export const METRIC_ONTOLOGY: readonly MetricDefinition[] = [
     // 25 basis points — tight enough that the seeded 85bp Northgate conflict (5.25% vs 6.10%)
     // clears it many times over, loose enough to absorb a document rounding to the nearest 5bp.
     tolerance: 0.0025,
+    // 180 days — market cap rates move with lending conditions; an observation older than about
+    // two quarters no longer reflects current pricing.
+    stalenessWindowMs: 180 * 24 * 60 * 60 * 1000,
   },
   {
     id: 'sale_price',
@@ -87,6 +108,10 @@ export const METRIC_ONTOLOGY: readonly MetricDefinition[] = [
     // 1% absorbs prose rounding ("$41.0 million" for $41,000,000) without absorbing a genuinely
     // different reported price.
     tolerance: 0.01,
+    // Deliberately unconfigured: a closed sale price is a negotiated transaction term, and none of
+    // this ontology's source classes is the transaction's own record — a CRM tracks the deal as a
+    // broker saw it, a spreadsheet compiles it secondhand, a memo narrates it. No staleness window
+    // either — a historical sale price does not change after the fact.
   },
   {
     id: 'price_per_sf',
@@ -97,6 +122,9 @@ export const METRIC_ONTOLOGY: readonly MetricDefinition[] = [
     units: [{ id: 'usd_per_sf', toCanonicalFactor: 1 }],
     toleranceKind: 'relative',
     tolerance: 0.01,
+    // Deliberately unconfigured: a per-square-foot price is derived from sale_price and
+    // building_area_sf, so it inherits whichever source reported those two figures rather than
+    // carrying an authority ranking of its own.
   },
   {
     id: 'building_area_sf',
@@ -116,6 +144,12 @@ export const METRIC_ONTOLOGY: readonly MetricDefinition[] = [
     ],
     toleranceKind: 'relative',
     tolerance: 0.01,
+    // A property-management export carries building area as an operational rent-roll figure; a
+    // comps spreadsheet is a structured secondhand compilation of that same figure; a CRM deal
+    // export cites area from marketing/offering materials, the least independently verified of
+    // the three. No staleness window — a building's square footage is a physical fact that does
+    // not decay with time the way a market rate does.
+    authorityOrder: ['pm-export', 'spreadsheet', 'crm-export'],
   },
   {
     id: 'net_operating_income',
@@ -130,6 +164,13 @@ export const METRIC_ONTOLOGY: readonly MetricDefinition[] = [
     ],
     toleranceKind: 'relative',
     tolerance: 0.01,
+    // A property-management export reports NOI as the operational actual (income less expenses
+    // from the records it administers); a comps spreadsheet's NOI is normally an underwriting
+    // figure recomputed one step removed from that operational source.
+    authorityOrder: ['pm-export', 'spreadsheet'],
+    // 365 days — NOI is customarily reported on a trailing-twelve-month basis, so a figure inside
+    // one operating year is still the current trailing figure.
+    stalenessWindowMs: 365 * 24 * 60 * 60 * 1000,
   },
   {
     id: 'base_rent_psf',
@@ -140,6 +181,12 @@ export const METRIC_ONTOLOGY: readonly MetricDefinition[] = [
     units: [{ id: 'usd_per_sf_per_year', toCanonicalFactor: 1 }],
     toleranceKind: 'relative',
     tolerance: 0.01,
+    // Deliberately unconfigured: market asking/base rent is quoted by whoever is marketing the
+    // space (broker, landlord, memo author) with no single source class more reliably the rent's
+    // own record than another.
+    // 180 days — asking rents move with the leasing market; treat an observation older than about
+    // two quarters as no longer reflecting current asking rates.
+    stalenessWindowMs: 180 * 24 * 60 * 60 * 1000,
   },
   {
     id: 'lease_term_years',
@@ -155,6 +202,10 @@ export const METRIC_ONTOLOGY: readonly MetricDefinition[] = [
     // A lease term is a negotiated integer, not a measurement with rounding error — any
     // disagreement at all is a real conflict, so the tolerance is zero rather than merely small.
     tolerance: 0,
+    // Deliberately unconfigured: a signed lease term is fixed once executed, so it neither has a
+    // source-class authority a practitioner would agree on (a CRM tracks the deal as negotiated, a
+    // PM export tracks it as administered — genuinely disputable which is "more true") nor a
+    // staleness window (the term does not change after signing).
   },
   {
     id: 'tenant_occupancy_share',
@@ -175,6 +226,14 @@ export const METRIC_ONTOLOGY: readonly MetricDefinition[] = [
     toleranceKind: 'absolute',
     // One percentage point.
     tolerance: 0.01,
+    // Occupancy is tracked in a property-management system's rent roll as the actual leased-versus
+    // -vacant state; a comps spreadsheet's occupancy figure is a compiled snapshot of that same
+    // rent roll, one step removed.
+    authorityOrder: ['pm-export', 'spreadsheet'],
+    // 90 days — a rent roll is normally reconciled at least quarterly, and tenants move in and out
+    // in between; an observation older than a quarter no longer reflects who is actually in the
+    // building.
+    stalenessWindowMs: 90 * 24 * 60 * 60 * 1000,
   },
 ];
 

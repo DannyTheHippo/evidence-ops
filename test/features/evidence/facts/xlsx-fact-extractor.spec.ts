@@ -98,6 +98,10 @@ describe('extractXlsxFacts — real comps.xlsx fixture', () => {
     expect(new Set(northgateFacts.map((fact) => fact.factKey.period))).toEqual(
       new Set(['2025-03']),
     );
+    // The fixture's only date column is "Sale Date" — it feeds `factKey.period` (the coarsened
+    // "2025-03" above), never `observedAt`; with no dedicated as-of/recorded column, every fact on
+    // the row leaves `observedAt` absent rather than borrowing the sale date.
+    expect(northgateFacts.every((fact) => fact.observedAt === undefined)).toBe(true);
   });
 
   it('should not produce a fact for the Notes column', async () => {
@@ -129,6 +133,14 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
     'Notes',
   ] as const;
 
+  const asOfHeaderRow = [
+    'Property Name',
+    'Sale Date',
+    'As Of',
+    'Building Area (SF)',
+    'Sale Price (USD)',
+  ] as const;
+
   it('should parse a magnitude-suffixed currency cell into the matching unit', () => {
     const elements = buildRow(
       'Sheet1',
@@ -141,6 +153,9 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
     const salePrice = accepted.find((fact) => fact.factKey.metric === 'sale_price');
 
     expect(salePrice?.value).toEqual({ amount: 12, unit: 'usd_millions' });
+    // "Sale Date" feeds `factKey.period` only; this sheet has no as-of column, so observedAt
+    // stays absent.
+    expect(salePrice?.observedAt).toBeUndefined();
   });
 
   it("should resolve a bare currency cell to its metric's own declared unit, not a hardcoded usd", () => {
@@ -179,6 +194,57 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
 
     expect(accepted).toHaveLength(1);
     expect(accepted[0].factKey.period).toBe('undated');
+    // No date column to read from — observedAt stays absent rather than defaulting to anything.
+    expect(accepted[0].observedAt).toBeUndefined();
+  });
+
+  it('should leave observedAt absent when the sheet has only a period column, even though period is still derived', () => {
+    const elements = buildRow(
+      'Sheet1',
+      headerRow,
+      ['Acme Tower', '2025-01-15', '100,000', '$1,000', ''],
+      2,
+    );
+
+    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const buildingArea = accepted.find((fact) => fact.factKey.metric === 'building_area_sf');
+
+    // "Sale Date" only feeds `factKey.period` (still derived below) — with no dedicated as-of
+    // column, observedAt has nothing to derive from.
+    expect(buildingArea?.factKey.period).toBe('2025-01');
+    expect(buildingArea?.observedAt).toBeUndefined();
+  });
+
+  it('should parse observedAt from a distinct as-of column, separate from the period column', () => {
+    const elements = buildRow(
+      'Sheet1',
+      asOfHeaderRow,
+      ['Acme Tower', '2025-01-15', '2025-02-01', '100,000', '$1,000'],
+      2,
+    );
+
+    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const buildingArea = accepted.find((fact) => fact.factKey.metric === 'building_area_sf');
+
+    expect(buildingArea?.factKey.period).toBe('2025-01');
+    expect(buildingArea?.observedAt?.toISOString()).toBe('2025-02-01T00:00:00.000Z');
+  });
+
+  it('should leave observedAt absent when the as-of column value is not a real calendar date', () => {
+    const elements = buildRow(
+      'Sheet1',
+      asOfHeaderRow,
+      ['Acme Tower', '2025-01-15', '2025-02-30', '100,000', '$1,000'],
+      2,
+    );
+
+    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const buildingArea = accepted.find((fact) => fact.factKey.metric === 'building_area_sf');
+
+    // February has no 30th — the same parseCalendarDate round-trip guard the period column relies
+    // on rejects it here too; the period itself still derives fine from "Sale Date".
+    expect(buildingArea?.factKey.period).toBe('2025-01');
+    expect(buildingArea?.observedAt).toBeUndefined();
   });
 
   it('should drop a cell that cannot be parsed as a number for its metric type', () => {

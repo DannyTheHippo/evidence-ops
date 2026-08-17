@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
 import {
   Answer,
   AnswerDocument,
@@ -14,7 +13,7 @@ import { AnswerNotFoundException } from './exceptions/qa.exception';
 export interface PersistAnswerInput {
   readonly answerId: string;
   readonly questionText: string;
-  readonly tenantId?: string;
+  readonly tenantId: string;
   readonly retrievedChunkIds: readonly string[];
   readonly outcome: AnswerContract;
   readonly claims: readonly Claim[];
@@ -41,18 +40,22 @@ export interface PersistAnswerResult {
 /**
  * Updates the `queued` `Answer` row `QaService.startQuestion` created and threaded through as
  * `AnswerQuestionInput.answerId` — this is the "later step" the class used to describe itself as
- * waiting for. Loaded with `findById` and mutated via `.save()`, not `findByIdAndUpdate`: the
- * schema's `pre('validate')` invariant (`outcome` only alongside `runStatus: 'completed'`) is
- * document middleware, keyed off `this.invalidate(...)`, and only fires reliably on the
- * document-level save path (see `DocumentsService.addVersion` for the same
- * findById-then-mutate-then-save shape elsewhere in the codebase).
+ * waiting for. Loaded with `findOne({ _id, tenantId })`, not `findById`, and mutated via
+ * `.save()`, not `findByIdAndUpdate`: this runs in worker context (Temporal activity), where the
+ * ALS-backed `tenantScopePlugin` never ran, so an id-only lookup would let any caller's tenant load
+ * (and then relabel, via `.save()`) another tenant's row. `.save()` over `findByIdAndUpdate` is
+ * also what the schema's `pre('validate')` invariant (`outcome` only alongside
+ * `runStatus: 'completed'`) needs — that document middleware is keyed off `this.invalidate(...)`
+ * and only fires reliably on the document-level save path (see `DocumentsService.addVersion` for
+ * the same findOne-then-mutate-then-save shape elsewhere in the codebase).
  *
- * Fails closed when the row is missing: a run that fails before reaching this activity leaves the
- * row `queued` forever rather than writing nothing (per ADR-0003, Temporal — not a hand-rolled
- * `runStatus: 'failed'` row — remains the system of record for a still-retrying run), but a
- * missing row at this point means the API-side create either never ran or wrote to a different id.
- * Silently creating a replacement row here would just reintroduce the original bug (two unrelated
- * answer rows) under a different id, so this throws instead.
+ * Fails closed both when the row is missing and when it belongs to another tenant — both surface
+ * as the same `AnswerNotFoundException`, indistinguishable to the caller, per the tenant-scoping
+ * contract elsewhere in this codebase (`tenantScopePlugin`'s own doc comment). A run that fails
+ * before reaching this activity leaves the row `queued` forever rather than writing nothing (per
+ * ADR-0003, Temporal — not a hand-rolled `runStatus: 'failed'` row — remains the system of record
+ * for a still-retrying run); silently creating a replacement row here would just reintroduce the
+ * original bug (two unrelated answer rows) under a different id, so this throws instead.
  */
 @Injectable()
 export class AnswerPersistenceService {
@@ -66,7 +69,10 @@ export class AnswerPersistenceService {
   }
 
   async persist(input: PersistAnswerInput): Promise<PersistAnswerResult> {
-    const answer = await this.answerModel.findById(input.answerId);
+    const answer = await this.answerModel.findOne({
+      _id: input.answerId,
+      tenantId: input.tenantId,
+    });
     if (!answer) {
       throw new AnswerNotFoundException(`Answer '${input.answerId}' not found`);
     }
@@ -87,7 +93,6 @@ export class AnswerPersistenceService {
     // coercion is not the chunk-id bug `retrievedChunkIds`'s doc comment warns about.
     answer.conflictIds = (input.conflictIds ?? []).map((id) => new Types.ObjectId(id));
     answer.usage = input.usage;
-    answer.tenantId = input.tenantId ?? DEFAULT_TENANT_ID;
 
     await answer.save();
 

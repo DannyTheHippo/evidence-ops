@@ -17,6 +17,7 @@ import { EMBEDDING_PROVIDER } from '../../../../src/providers/embedding/embeddin
 import { FakeEmbeddingProvider } from '../../../../src/providers/embedding/fake-embedding.provider';
 import { DOCUMENT_STORE } from '../../../../src/providers/storage/document-store.interface';
 import { FakeDocumentStore } from '../../../../src/providers/storage/fake-document.store';
+import { workflowRunFailedCounter } from '../../../../src/providers/telemetry/domain-metrics';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger, type MockLogger } from '../../../utils/get-mock-logger';
 import { getMockModel } from '../../../utils/get-mock-model';
@@ -150,27 +151,33 @@ describe('IngestionService', () => {
   });
 
   it('should throw DocumentVersionNotFoundException for a malformed id, without querying the model', async () => {
-    await expect(service.ingestVersion('not-an-object-id')).rejects.toBeInstanceOf(
+    await expect(service.ingestVersion('not-an-object-id', 'tenant-a')).rejects.toBeInstanceOf(
       DocumentVersionNotFoundException,
     );
-    expect(mockDocumentVersionModel.findById).not.toHaveBeenCalled();
+    expect(mockDocumentVersionModel.findOne).not.toHaveBeenCalled();
   });
 
-  it('should throw DocumentVersionNotFoundException when the version does not exist', async () => {
-    mockDocumentVersionModel.findById.mockResolvedValueOnce(null);
+  it('should throw DocumentVersionNotFoundException, scoped to the given tenantId, when no version matches', async () => {
+    mockDocumentVersionModel.findOne.mockResolvedValueOnce(null);
 
-    await expect(service.ingestVersion(versionId.toString())).rejects.toBeInstanceOf(
+    await expect(service.ingestVersion(versionId.toString(), 'tenant-a')).rejects.toBeInstanceOf(
       DocumentVersionNotFoundException,
     );
+    // Same "no row for this filter" branch a cross-tenant id would fall into: the id could exist
+    // under a different tenant and this lookup would still — correctly — see nothing.
+    expect(mockDocumentVersionModel.findOne).toHaveBeenCalledWith({
+      _id: versionId.toString(),
+      tenantId: 'tenant-a',
+    });
   });
 
   it('should skip re-ingestion and leave the store untouched when the version is already marked completed', async () => {
-    mockDocumentVersionModel.findById.mockResolvedValueOnce(
+    mockDocumentVersionModel.findOne.mockResolvedValueOnce(
       buildVersion({ ingestionStatus: 'completed' }),
     );
     const getSpy = jest.spyOn(fakeDocumentStore, 'get');
 
-    const result = await service.ingestVersion(versionId.toString());
+    const result = await service.ingestVersion(versionId.toString(), 'tenant-a');
 
     expect(result).toEqual({ chunksCreated: 0, alreadyIngested: true });
     expect(getSpy).not.toHaveBeenCalled();
@@ -179,17 +186,18 @@ describe('IngestionService', () => {
   });
 
   it('should throw InternalServerErrorException when the store has no bytes for a recorded storageKey', async () => {
-    mockDocumentVersionModel.findById.mockResolvedValueOnce(
+    mockDocumentVersionModel.findOne.mockResolvedValueOnce(
       buildVersion({ storageKey: 'missing-key' }),
     );
 
-    await expect(service.ingestVersion(versionId.toString())).rejects.toBeInstanceOf(
+    await expect(service.ingestVersion(versionId.toString(), 'tenant-a')).rejects.toBeInstanceOf(
       InternalServerErrorException,
     );
     // Recovery runs before the store read: a not-`completed` version is cleared of any
     // half-ingested chunks unconditionally, regardless of what fails afterward.
     expect(mockEvidenceChunkModel.deleteMany).toHaveBeenCalledWith({
       documentVersionId: versionId,
+      tenantId: 'tenant-a',
     });
   });
 
@@ -200,10 +208,10 @@ describe('IngestionService', () => {
       metadata: {},
     });
     const version = buildVersion({ storageKey: stored.id });
-    mockDocumentVersionModel.findById.mockResolvedValueOnce(version);
+    mockDocumentVersionModel.findOne.mockResolvedValueOnce(version);
     mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser([]));
 
-    const result = await service.ingestVersion(versionId.toString());
+    const result = await service.ingestVersion(versionId.toString(), 'tenant-a');
 
     expect(result).toEqual({ chunksCreated: 0, alreadyIngested: false });
     expect(fakeEmbeddingProvider.calls).toHaveLength(0);
@@ -225,7 +233,7 @@ describe('IngestionService', () => {
       metadata: {},
     });
     const version = buildVersion({ storageKey: stored.id });
-    mockDocumentVersionModel.findById.mockResolvedValueOnce(version);
+    mockDocumentVersionModel.findOne.mockResolvedValueOnce(version);
     mockParserRegistry.resolve.mockReturnValueOnce(
       buildStubParser([
         {
@@ -241,7 +249,7 @@ describe('IngestionService', () => {
       ]),
     );
 
-    const result = await service.ingestVersion(versionId.toString());
+    const result = await service.ingestVersion(versionId.toString(), 'tenant-a');
 
     expect(mockParserRegistry.resolve).toHaveBeenCalledWith(PDF_MIME);
     expect(fakeEmbeddingProvider.calls).toHaveLength(1);
@@ -313,7 +321,7 @@ describe('IngestionService', () => {
         contentType: PDF_MIME,
         metadata: {},
       });
-      mockDocumentVersionModel.findById.mockResolvedValueOnce(
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
         buildVersion({ storageKey: stored.id }),
       );
       mockParserRegistry.resolve.mockReturnValueOnce(
@@ -338,7 +346,7 @@ describe('IngestionService', () => {
         .mockResolvedValueOnce({ converged: false }) // search
         .mockResolvedValueOnce({ converged: true }); // vector
 
-      const result = await service.ingestVersion(versionId.toString());
+      const result = await service.ingestVersion(versionId.toString(), 'tenant-a');
 
       expect(result).toEqual({ chunksCreated: 1, alreadyIngested: false });
       expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -350,7 +358,7 @@ describe('IngestionService', () => {
       await seedFreshVersion();
       mockWaitForIndexConvergence.mockRejectedValue(new Error('Mongo connection reset'));
 
-      const result = await service.ingestVersion(versionId.toString());
+      const result = await service.ingestVersion(versionId.toString(), 'tenant-a');
 
       expect(result).toEqual({ chunksCreated: 1, alreadyIngested: false });
       expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -365,7 +373,7 @@ describe('IngestionService', () => {
       await seedFreshVersion();
       mockWaitForIndexConvergence.mockRejectedValue('boom');
 
-      const result = await service.ingestVersion(versionId.toString());
+      const result = await service.ingestVersion(versionId.toString(), 'tenant-a');
 
       expect(result).toEqual({ chunksCreated: 1, alreadyIngested: false });
       expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -383,7 +391,7 @@ describe('IngestionService', () => {
         .mockResolvedValueOnce({ converged: true }) // search
         .mockRejectedValueOnce(new Error('vector probe socket reset')); // vector
 
-      const result = await service.ingestVersion(versionId.toString());
+      const result = await service.ingestVersion(versionId.toString(), 'tenant-a');
 
       expect(result).toEqual({ chunksCreated: 1, alreadyIngested: false });
       expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -402,7 +410,7 @@ describe('IngestionService', () => {
         throw new Error('failed to build vector probe');
       });
 
-      const result = await service.ingestVersion(versionId.toString());
+      const result = await service.ingestVersion(versionId.toString(), 'tenant-a');
 
       expect(result).toEqual({ chunksCreated: 1, alreadyIngested: false });
       expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -413,7 +421,7 @@ describe('IngestionService', () => {
     it('should probe the search and vector indexes with the ingested chunk count, tenant, and known chunk id/embedding', async () => {
       await seedFreshVersion();
 
-      await service.ingestVersion(versionId.toString());
+      await service.ingestVersion(versionId.toString(), 'tenant-a');
 
       expect(mockCreateSearchChunkCountProbe).toHaveBeenCalledWith(
         expect.anything(),
@@ -468,11 +476,11 @@ describe('IngestionService', () => {
         headingPath: ['Section Two'],
       },
     ];
-    mockDocumentVersionModel.findById.mockResolvedValueOnce(version).mockResolvedValueOnce(version);
+    mockDocumentVersionModel.findOne.mockResolvedValueOnce(version).mockResolvedValueOnce(version);
     mockParserRegistry.resolve.mockReturnValue(buildStubParser(elements));
 
-    await service.ingestVersion(versionId.toString());
-    await service.ingestVersion(versionId.toString());
+    await service.ingestVersion(versionId.toString(), 'tenant-a');
+    await service.ingestVersion(versionId.toString(), 'tenant-a');
 
     const insertManyMock = mockEvidenceChunkModel.insertMany as jest.Mock<
       Promise<unknown[]>,
@@ -493,10 +501,10 @@ describe('IngestionService', () => {
     // attempt can start while a first, timed-out-from-Temporal's-perspective attempt is still
     // running. Reading `pending` is stale the instant a concurrent attempt finishes — only an
     // atomic claim (not the earlier plain read) may authorize the recovery `deleteMany` below.
-    mockDocumentVersionModel.findById.mockResolvedValueOnce(buildVersion());
+    mockDocumentVersionModel.findOne.mockResolvedValueOnce(buildVersion());
     mockDocumentVersionModel.findOneAndUpdate.mockResolvedValueOnce(null);
 
-    const result = await service.ingestVersion(versionId.toString());
+    const result = await service.ingestVersion(versionId.toString(), 'tenant-a');
 
     expect(result).toEqual({ chunksCreated: 0, alreadyIngested: true });
 
@@ -517,13 +525,13 @@ describe('IngestionService', () => {
       metadata: {},
     });
     const version = buildVersion({ storageKey: stored.id });
-    mockDocumentVersionModel.findById.mockResolvedValueOnce(version);
+    mockDocumentVersionModel.findOne.mockResolvedValueOnce(version);
     mockDocumentVersionModel.findOneAndUpdate
       .mockResolvedValueOnce(version) // claim succeeds
       .mockResolvedValueOnce(null); // finalize loses the race to a newer attempt
     mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser([]));
 
-    const result = await service.ingestVersion(versionId.toString());
+    const result = await service.ingestVersion(versionId.toString(), 'tenant-a');
 
     expect(result).toEqual({ chunksCreated: 0, alreadyIngested: true });
     // Only the pre-ingest recovery cleanup — nothing was inserted this attempt, so there is
@@ -542,7 +550,7 @@ describe('IngestionService', () => {
       metadata: {},
     });
     const version = buildVersion({ storageKey: stored.id });
-    mockDocumentVersionModel.findById.mockResolvedValueOnce(version);
+    mockDocumentVersionModel.findOne.mockResolvedValueOnce(version);
     mockDocumentVersionModel.findOneAndUpdate
       .mockResolvedValueOnce(version) // claim succeeds
       .mockResolvedValueOnce(null); // finalize loses the race to a newer attempt
@@ -556,7 +564,7 @@ describe('IngestionService', () => {
       ]),
     );
 
-    const result = await service.ingestVersion(versionId.toString());
+    const result = await service.ingestVersion(versionId.toString(), 'tenant-a');
 
     expect(result).toEqual({ chunksCreated: 0, alreadyIngested: true });
     expect(mockEvidenceChunkModel.insertMany).toHaveBeenCalledTimes(1);
@@ -573,14 +581,24 @@ describe('IngestionService', () => {
 
     const deleteManyMock = mockEvidenceChunkModel.deleteMany as jest.Mock<
       Promise<unknown>,
-      [{ documentVersionId?: Types.ObjectId; ingestionAttemptToken?: Types.ObjectId }]
+      [
+        {
+          documentVersionId?: Types.ObjectId;
+          ingestionAttemptToken?: Types.ObjectId;
+          tenantId?: string;
+        },
+      ]
     >;
-    expect(deleteManyMock.mock.calls[0][0]).toEqual({ documentVersionId: versionId });
+    expect(deleteManyMock.mock.calls[0][0]).toEqual({
+      documentVersionId: versionId,
+      tenantId: 'tenant-a',
+    });
     // Rolled back by this attempt's own lease token, not by id — a concurrent, winning attempt's
     // own rows (tagged with a different token) must survive this call even if they share an `_id`.
     expect(deleteManyMock.mock.calls[1][0]).toEqual({
       documentVersionId: versionId,
       ingestionAttemptToken: leaseToken,
+      tenantId: 'tenant-a',
     });
   });
 
@@ -591,7 +609,7 @@ describe('IngestionService', () => {
       metadata: {},
     });
     const version = buildVersion({ storageKey: stored.id });
-    mockDocumentVersionModel.findById.mockResolvedValueOnce(version);
+    mockDocumentVersionModel.findOne.mockResolvedValueOnce(version);
     mockParserRegistry.resolve.mockReturnValueOnce(
       buildStubParser([
         {
@@ -607,7 +625,7 @@ describe('IngestionService', () => {
       ]),
     );
 
-    const result = await service.ingestVersion(versionId.toString());
+    const result = await service.ingestVersion(versionId.toString(), 'tenant-a');
 
     expect(fakeEmbeddingProvider.calls).toHaveLength(1);
     expect(fakeEmbeddingProvider.calls[0].inputs).toEqual([
@@ -632,7 +650,7 @@ describe('IngestionService', () => {
       metadata: {},
     });
     const version = buildVersion({ storageKey: stored.id });
-    mockDocumentVersionModel.findById.mockResolvedValueOnce(version);
+    mockDocumentVersionModel.findOne.mockResolvedValueOnce(version);
     mockParserRegistry.resolve.mockReturnValueOnce(
       buildStubParser([
         {
@@ -643,7 +661,7 @@ describe('IngestionService', () => {
       ]),
     );
 
-    const result = await service.ingestVersion(versionId.toString());
+    const result = await service.ingestVersion(versionId.toString(), 'tenant-a');
 
     expect(result).toEqual({ chunksCreated: 0, alreadyIngested: false });
     expect(fakeEmbeddingProvider.calls).toHaveLength(0);
@@ -661,7 +679,7 @@ describe('IngestionService', () => {
       metadata: {},
     });
     const version = buildVersion({ storageKey: stored.id });
-    mockDocumentVersionModel.findById.mockResolvedValueOnce(version);
+    mockDocumentVersionModel.findOne.mockResolvedValueOnce(version);
     mockParserRegistry.resolve.mockReturnValueOnce(
       buildStubParser([
         {
@@ -675,7 +693,9 @@ describe('IngestionService', () => {
     const writeFailure = new Error('write concern failed');
     mockEvidenceChunkModel.insertMany.mockRejectedValueOnce(writeFailure);
 
-    await expect(service.ingestVersion(versionId.toString())).rejects.toBe(writeFailure);
+    await expect(service.ingestVersion(versionId.toString(), 'tenant-a')).rejects.toBe(
+      writeFailure,
+    );
 
     // Called twice for this version: once as the pre-ingest recovery cleanup (scoped to the whole
     // version), once as the post-failure rollback (scoped to this attempt's own
@@ -691,12 +711,22 @@ describe('IngestionService', () => {
 
     const deleteManyMock = mockEvidenceChunkModel.deleteMany as jest.Mock<
       Promise<unknown>,
-      [{ documentVersionId?: Types.ObjectId; ingestionAttemptToken?: Types.ObjectId }]
+      [
+        {
+          documentVersionId?: Types.ObjectId;
+          ingestionAttemptToken?: Types.ObjectId;
+          tenantId?: string;
+        },
+      ]
     >;
-    expect(deleteManyMock.mock.calls[0][0]).toEqual({ documentVersionId: versionId });
+    expect(deleteManyMock.mock.calls[0][0]).toEqual({
+      documentVersionId: versionId,
+      tenantId: 'tenant-a',
+    });
     expect(deleteManyMock.mock.calls[1][0]).toEqual({
       documentVersionId: versionId,
       ingestionAttemptToken: leaseToken,
+      tenantId: 'tenant-a',
     });
 
     const [failureFilter, failureUpdate] = getFindOneAndUpdateCall(2);
@@ -715,17 +745,20 @@ describe('IngestionService', () => {
     });
 
     it('should record a failed status and reason through the same lease-gated CAS the success path uses, then rethrow', async () => {
+      const workflowRunFailedSpy = jest.spyOn(workflowRunFailedCounter, 'add');
       const stored = await fakeDocumentStore.put({
         content: Buffer.from('%PDF-corrupt'),
         contentType: PDF_MIME,
         metadata: {},
       });
       const version = buildVersion({ storageKey: stored.id });
-      mockDocumentVersionModel.findById.mockResolvedValueOnce(version);
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(version);
       const parseFailure = new MalformedPdfException('Could not parse the file as a PDF document');
       mockParserRegistry.resolve.mockReturnValueOnce(buildFailingParser(parseFailure));
 
-      await expect(service.ingestVersion(versionId.toString())).rejects.toBe(parseFailure);
+      await expect(service.ingestVersion(versionId.toString(), 'tenant-a')).rejects.toBe(
+        parseFailure,
+      );
 
       expect(mockEvidenceChunkModel.insertMany).not.toHaveBeenCalled();
       // Same shape as `finalizeCompletion`'s CAS (see the fresh-ingest test above), except the
@@ -737,6 +770,7 @@ describe('IngestionService', () => {
         $set: { ingestionStatus: 'failed', ingestionFailureReason: parseFailure.message },
         $unset: { ingestionLeaseToken: '' },
       });
+      expect(workflowRunFailedSpy).toHaveBeenCalledWith(1);
     });
 
     // Regression: `ingestVersion` used to record a failure only for a `BaseException` thrown by
@@ -756,10 +790,12 @@ describe('IngestionService', () => {
           metadata: {},
         });
         const version = buildVersion({ storageKey: stored.id });
-        mockDocumentVersionModel.findById.mockResolvedValueOnce(version);
+        mockDocumentVersionModel.findOne.mockResolvedValueOnce(version);
         mockParserRegistry.resolve.mockReturnValueOnce(buildFailingParser(genericFailure));
 
-        await expect(service.ingestVersion(versionId.toString())).rejects.toBe(genericFailure);
+        await expect(service.ingestVersion(versionId.toString(), 'tenant-a')).rejects.toBe(
+          genericFailure,
+        );
 
         expect(mockEvidenceChunkModel.insertMany).not.toHaveBeenCalled();
         const [failureFilter, failureUpdate] = getFindOneAndUpdateCall(2);
@@ -781,14 +817,16 @@ describe('IngestionService', () => {
         metadata: {},
       });
       const version = buildVersion({ storageKey: stored.id });
-      mockDocumentVersionModel.findById.mockResolvedValueOnce(version);
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(version);
       mockDocumentVersionModel.findOneAndUpdate
         .mockResolvedValueOnce(version) // claim succeeds
         .mockRejectedValueOnce(new Error('Mongo connection reset')); // failure-recording write itself throws
       const genericFailure = new Error('unexpected parser crash');
       mockParserRegistry.resolve.mockReturnValueOnce(buildFailingParser(genericFailure));
 
-      await expect(service.ingestVersion(versionId.toString())).rejects.toBe(genericFailure);
+      await expect(service.ingestVersion(versionId.toString(), 'tenant-a')).rejects.toBe(
+        genericFailure,
+      );
 
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.stringContaining('failed to record ingestion failure: Mongo connection reset'),
@@ -802,14 +840,16 @@ describe('IngestionService', () => {
         metadata: {},
       });
       const version = buildVersion({ storageKey: stored.id });
-      mockDocumentVersionModel.findById.mockResolvedValueOnce(version);
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(version);
       mockDocumentVersionModel.findOneAndUpdate
         .mockResolvedValueOnce(version) // claim succeeds
         .mockResolvedValueOnce(null); // failure-recording CAS loses the race to a newer attempt
       const parseFailure = new MalformedPdfException('Could not parse the file as a PDF document');
       mockParserRegistry.resolve.mockReturnValueOnce(buildFailingParser(parseFailure));
 
-      await expect(service.ingestVersion(versionId.toString())).rejects.toBe(parseFailure);
+      await expect(service.ingestVersion(versionId.toString(), 'tenant-a')).rejects.toBe(
+        parseFailure,
+      );
 
       expect(mockLogger.debug).toHaveBeenCalledWith(
         expect.stringContaining('failure recording superseded by a newer attempt'),

@@ -22,6 +22,7 @@ import {
   DOCUMENT_STORE,
   type DocumentStore,
 } from '../../../providers/storage/document-store.interface';
+import { workflowRunFailedCounter } from '../../../providers/telemetry/domain-metrics';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import {
   createSearchChunkCountProbe,
@@ -125,14 +126,17 @@ export class IngestionService {
    * specifically so that case (and a failed `insertMany` generally) never deletes rows a
    * concurrent, winning attempt already committed under a different token.
    */
-  async ingestVersion(documentVersionId: string): Promise<IngestionResult> {
+  async ingestVersion(documentVersionId: string, tenantId: string): Promise<IngestionResult> {
     if (!Types.ObjectId.isValid(documentVersionId)) {
       throw new DocumentVersionNotFoundException(
         `Document version '${documentVersionId}' not found`,
       );
     }
 
-    const version = await this.documentVersionModel.findById(documentVersionId);
+    const version = await this.documentVersionModel.findOne({
+      _id: documentVersionId,
+      tenantId,
+    });
     if (!version) {
       throw new DocumentVersionNotFoundException(
         `Document version '${documentVersionId}' not found`,
@@ -164,7 +168,7 @@ export class IngestionService {
       // attempt's own `finalizeCompletion` can no longer succeed once this claim has overwritten
       // its token. `deleteMany` against zero matching documents is a cheap, indexed no-op on the
       // ordinary first-ingest path.
-      await this.evidenceChunkModel.deleteMany({ documentVersionId: version._id });
+      await this.evidenceChunkModel.deleteMany({ documentVersionId: version._id, tenantId });
 
       const stored = await this.documentStore.get(version.storageKey);
       if (!stored) {
@@ -243,7 +247,7 @@ export class IngestionService {
       try {
         await this.evidenceChunkModel.insertMany(chunkDocs);
       } catch (error) {
-        await this.rollbackChunks(version._id, leaseToken);
+        await this.rollbackChunks(version._id, leaseToken, tenantId);
         throw error;
       }
 
@@ -253,7 +257,7 @@ export class IngestionService {
         // are stale. Temporal already discards a superseded attempt's return value in favor of the
         // retry that actually finalizes, so the exact result shape here is inert; `alreadyIngested:
         // true` just avoids implying this attempt itself finished the job.
-        await this.rollbackChunks(version._id, leaseToken);
+        await this.rollbackChunks(version._id, leaseToken, tenantId);
         this.logger.debug(
           `Document version '${documentVersionId}' ingest superseded by a newer attempt; rolled back up to ${chunkDocs.length} chunk(s)`,
         );
@@ -463,6 +467,10 @@ export class IngestionService {
     documentVersionId: string,
     error: unknown,
   ): Promise<void> {
+    // Counts the failure itself, not whether the bookkeeping write below succeeds — matches this
+    // method's own FAIL OPEN direction: the run genuinely failed regardless of whether recording
+    // that fact in Mongo also succeeds.
+    workflowRunFailedCounter.add(1);
     try {
       const recorded = await this.finalizeFailure(versionId, leaseToken, describeError(error));
       if (!recorded) {
@@ -482,14 +490,17 @@ export class IngestionService {
    * id (`computeChunkId`) means two concurrent attempts over the same version's bytes compute the
    * *same* ids, so an id-scoped delete here would remove a concurrent winning attempt's rows the
    * instant this attempt's own write lost that race. Scoping by this attempt's own lease token
-   * instead guarantees the delete only ever touches rows this attempt wrote. */
+   * instead guarantees the delete only ever touches rows this attempt wrote. `tenantId` is an
+   * additional predicate, not a substitute — it keeps the delete inside the caller's own tenant. */
   private async rollbackChunks(
     versionId: Types.ObjectId,
     leaseToken: Types.ObjectId,
+    tenantId: string,
   ): Promise<void> {
     await this.evidenceChunkModel.deleteMany({
       documentVersionId: versionId,
       ingestionAttemptToken: leaseToken,
+      tenantId,
     });
   }
 }

@@ -7,6 +7,7 @@ const validCandidate = {
   entity: 'Northgate Business Park',
   metric: 'cap_rate',
   periodText: 'March 2025',
+  observedAtText: '2025-03-14',
   amount: 6.1,
   unit: 'percent',
   quote: 'at a cap rate of approximately 6.10%',
@@ -51,6 +52,18 @@ describe('factCandidateSchema', () => {
 
   it('should accept an empty periodText for a source that states no period', () => {
     expect(factCandidateSchema.safeParse({ ...validCandidate, periodText: '' }).success).toBe(true);
+  });
+
+  it('should accept an empty observedAtText for a source that states no observation date', () => {
+    expect(factCandidateSchema.safeParse({ ...validCandidate, observedAtText: '' }).success).toBe(
+      true,
+    );
+  });
+
+  it('should reject a candidate missing observedAtText entirely', () => {
+    expect(
+      factCandidateSchema.safeParse({ ...validCandidate, observedAtText: undefined }).success,
+    ).toBe(false);
   });
 });
 

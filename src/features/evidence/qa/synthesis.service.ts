@@ -20,6 +20,7 @@ import type { RetrievedChunk } from './types/retrieved-chunk.type';
 export interface SynthesizeAnswerInput {
   readonly question: string;
   readonly chunks: readonly RetrievedChunk[];
+  readonly tenantId: string;
 }
 
 export interface SynthesizeAnswerResult {
@@ -232,6 +233,7 @@ export class SynthesisService {
       outputSchema: modelAnswerContractSchema,
       maxTokens: MAX_OUTPUT_TOKENS,
       maxCostUsd: MAX_COST_USD,
+      tenantId: input.tenantId,
     });
 
     return {

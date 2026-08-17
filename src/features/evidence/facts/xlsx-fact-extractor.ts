@@ -9,6 +9,7 @@ import type {
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import { derivePeriodFromDateText } from './derive-period';
 import { findMetricByAlias, type MetricDefinition } from './metric-ontology';
+import { parseCalendarDate } from './parse-calendar-date';
 import type { ParsedElement } from '../ingestion/parsers/parsed-element.type';
 import { detectHeaderRow } from '../ingestion/sheet-header';
 
@@ -19,6 +20,12 @@ export interface FactCandidate {
   readonly confidence: number;
   readonly extractionMethod: ExtractionMethod;
   readonly locator: EvidenceLocator;
+  /** When the row has a dedicated as-of/recorded-date column (`AS_OF_HEADER_ALIASES`, distinct
+   * from the period column `factKey.period` derives from) and that cell's text is a complete,
+   * parseable calendar date — see `parseCalendarDate` (`parse-calendar-date.ts`). Absent whenever
+   * the sheet has no such column, or the cell's text does not parse to a real date; never derived
+   * from the period column, and never substituted with the current time or any other fallback. */
+  readonly observedAt?: Date;
 }
 
 /** A cell that named a valid metric and parsed to a numeric value, but whose parsed unit is not
@@ -45,6 +52,13 @@ export interface XlsxFactExtractionResult {
 const ENTITY_HEADER_ALIASES = ['property name', 'entity', 'asset name', 'property'];
 const PERIOD_HEADER_ALIASES = ['sale date', 'date', 'period', 'transaction date'];
 
+// Deliberately disjoint from `PERIOD_HEADER_ALIASES`: a sale/transaction date describes what the
+// row's value *is about* (`factKey.period`), not when someone recorded it (`observedAt`) — see
+// `ExtractedFact.observedAt`'s own doc comment for that distinction. Only a column whose header
+// names an as-of/recorded moment feeds `observedAt`; a sheet with no such column leaves it absent
+// rather than borrowing the period column's value.
+const AS_OF_HEADER_ALIASES = ['as of', 'as of date', 'recorded', 'recorded date', 'report date'];
+
 function normalizeHeader(text: string): string {
   return text.trim().toLowerCase();
 }
@@ -55,6 +69,10 @@ function isEntityHeader(header: string | undefined): boolean {
 
 function isPeriodHeader(header: string | undefined): boolean {
   return header !== undefined && PERIOD_HEADER_ALIASES.includes(normalizeHeader(header));
+}
+
+function isAsOfHeader(header: string | undefined): boolean {
+  return header !== undefined && AS_OF_HEADER_ALIASES.includes(normalizeHeader(header));
 }
 
 // Mirrors chunker.ts's own local A1-notation helpers — duplicated by design (see e.g.
@@ -201,6 +219,11 @@ function extractSheetFacts(
     }
     const periodCell = rowCells.find((cell) => isPeriodHeader(headerByColumn.get(cell.column)));
     const period = derivePeriodFromDateText(periodCell?.text ?? '');
+    // A distinct column from `periodCell` above (see `AS_OF_HEADER_ALIASES`'s own comment) —
+    // `parseCalendarDate` only resolves a complete `YYYY-MM-DD` cell and leaves `observedAt`
+    // absent for anything coarser or invalid, same as it would for the period column.
+    const asOfCell = rowCells.find((cell) => isAsOfHeader(headerByColumn.get(cell.column)));
+    const observedAt = asOfCell ? parseCalendarDate(asOfCell.text) : undefined;
 
     for (const cell of rowCells) {
       const header = headerByColumn.get(cell.column);
@@ -239,6 +262,7 @@ function extractSheetFacts(
         confidence: 1,
         extractionMethod: 'regex',
         locator: cell.locator,
+        observedAt,
       });
     }
   }

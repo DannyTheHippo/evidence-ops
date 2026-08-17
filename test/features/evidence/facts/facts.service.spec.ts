@@ -7,6 +7,8 @@ import { TypedConfigService } from '../../../../src/config/environment/typed-con
 import { DocumentVersion } from '../../../../src/database/schemas/evidence/document-version/document-version.schema';
 import { EvidenceChunk } from '../../../../src/database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
 import { ExtractedFact } from '../../../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import type { CanonicalEntityResolution } from '../../../../src/features/evidence/facts/canonical-entity.service';
+import { CanonicalEntityService } from '../../../../src/features/evidence/facts/canonical-entity.service';
 import { DocumentVersionNotFoundException } from '../../../../src/features/evidence/facts/exceptions/facts.exception';
 import { FactsService } from '../../../../src/features/evidence/facts/facts.service';
 import { PASS_COUNT } from '../../../../src/features/evidence/facts/prose-fact-extractor';
@@ -15,6 +17,7 @@ import type {
   DocumentParser,
   ParsedElement,
 } from '../../../../src/features/evidence/ingestion/parsers/parsed-element.type';
+import { EVIDENCE_DELIMITER_TAG } from '../../../../src/features/evidence/ingestion/sanitize-evidence-text';
 import type { z } from 'zod/v4';
 import {
   MODEL_PROVIDER,
@@ -91,6 +94,13 @@ describe('FactsService', () => {
     keyof Pick<ParserRegistry, 'resolve'>,
     jest.Mock
   >;
+  // Every real assertion this suite makes is about extraction, not canonicalization —
+  // `beforeEach` defaults every name to unmatched-and-unchanged so those assertions
+  // (`factKey.entity` equal to the raw extracted name) hold without each test arranging the
+  // registry itself. Tests that care about canonicalization override the implementation per-call.
+  const mockCanonicalEntityService = {
+    resolveMany: jest.fn(),
+  } satisfies Record<keyof Pick<CanonicalEntityService, 'resolveMany'>, jest.Mock>;
 
   const versionId = new Types.ObjectId();
   const documentId = new Types.ObjectId();
@@ -138,6 +148,7 @@ describe('FactsService', () => {
         { provide: DOCUMENT_STORE, useValue: fakeDocumentStore },
         { provide: MODEL_PROVIDER, useValue: options.modelProvider ?? fakeModelProvider },
         { provide: ParserRegistry, useValue: mockParserRegistry },
+        { provide: CanonicalEntityService, useValue: mockCanonicalEntityService },
         {
           provide: TypedConfigService,
           useValue: getMockTypedConfig({
@@ -155,6 +166,13 @@ describe('FactsService', () => {
     fakeDocumentStore = new FakeDocumentStore();
     fakeModelProvider = new FakeModelProvider();
     mockLogger = getMockLogger();
+    // `resetAllMocks` (afterEach, below) wipes this implementation along with every other mock's,
+    // so it is re-armed here rather than only at declaration.
+    mockCanonicalEntityService.resolveMany.mockImplementation((rawNames: readonly string[]) =>
+      Promise.resolve(
+        rawNames.map((name): CanonicalEntityResolution => ({ name, matched: false })),
+      ),
+    );
 
     service = await buildService();
   });
@@ -164,27 +182,33 @@ describe('FactsService', () => {
   });
 
   it('should throw DocumentVersionNotFoundException for a malformed id, without querying the model', async () => {
-    await expect(service.extractFacts('not-an-object-id')).rejects.toBeInstanceOf(
+    await expect(service.extractFacts('not-an-object-id', 'default')).rejects.toBeInstanceOf(
       DocumentVersionNotFoundException,
     );
-    expect(mockDocumentVersionModel.findById).not.toHaveBeenCalled();
+    expect(mockDocumentVersionModel.findOne).not.toHaveBeenCalled();
   });
 
-  it('should throw DocumentVersionNotFoundException when the version does not exist', async () => {
-    mockDocumentVersionModel.findById.mockResolvedValueOnce(null);
+  it('should throw DocumentVersionNotFoundException, scoped to the given tenantId, when no version matches', async () => {
+    mockDocumentVersionModel.findOne.mockResolvedValueOnce(null);
 
-    await expect(service.extractFacts(versionId.toString())).rejects.toBeInstanceOf(
+    await expect(service.extractFacts(versionId.toString(), 'default')).rejects.toBeInstanceOf(
       DocumentVersionNotFoundException,
     );
+    // Same "no row for this filter" branch a cross-tenant id would fall into: the id could exist
+    // under a different tenant and this lookup would still — correctly — see nothing.
+    expect(mockDocumentVersionModel.findOne).toHaveBeenCalledWith({
+      _id: versionId.toString(),
+      tenantId: 'default',
+    });
   });
 
   it("should skip extraction and leave the store untouched, returning the existing facts' keys, when facts already exist for the version", async () => {
-    mockDocumentVersionModel.findById.mockResolvedValueOnce(buildVersion());
+    mockDocumentVersionModel.findOne.mockResolvedValueOnce(buildVersion());
     const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
     mockExtractedFactModel.find.mockResolvedValueOnce([{ factKey }]);
     const getSpy = jest.spyOn(fakeDocumentStore, 'get');
 
-    const result = await service.extractFacts(versionId.toString());
+    const result = await service.extractFacts(versionId.toString(), 'default');
 
     // The tenant predicate is explicit because extraction runs in worker context, where
     // `tenantScopePlugin` does not backstop a missing one. Without it, this query would return
@@ -204,12 +228,12 @@ describe('FactsService', () => {
   });
 
   it('should throw InternalServerErrorException when the store has no bytes for a recorded storageKey', async () => {
-    mockDocumentVersionModel.findById.mockResolvedValueOnce(
+    mockDocumentVersionModel.findOne.mockResolvedValueOnce(
       buildVersion({ storageKey: 'missing-key' }),
     );
     mockExtractedFactModel.find.mockResolvedValueOnce([]);
 
-    await expect(service.extractFacts(versionId.toString())).rejects.toBeInstanceOf(
+    await expect(service.extractFacts(versionId.toString(), 'default')).rejects.toBeInstanceOf(
       InternalServerErrorException,
     );
   });
@@ -221,14 +245,14 @@ describe('FactsService', () => {
         contentType: XLSX_MIME,
         metadata: {},
       });
-      mockDocumentVersionModel.findById.mockResolvedValueOnce(
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
         buildVersion({ storageKey: stored.id }),
       );
       mockExtractedFactModel.find.mockResolvedValueOnce([]);
       mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser(xlsxElements));
       mockEvidenceChunkModel.find.mockResolvedValueOnce([]);
 
-      await expect(service.extractFacts(versionId.toString())).rejects.toThrow(
+      await expect(service.extractFacts(versionId.toString(), 'default')).rejects.toThrow(
         /no ingested chunks/,
       );
     });
@@ -239,7 +263,7 @@ describe('FactsService', () => {
         contentType: XLSX_MIME,
         metadata: {},
       });
-      mockDocumentVersionModel.findById.mockResolvedValueOnce(
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
         buildVersion({ storageKey: stored.id }),
       );
       mockExtractedFactModel.find.mockResolvedValueOnce([]);
@@ -253,9 +277,16 @@ describe('FactsService', () => {
       ]);
       mockExtractedFactModel.insertMany.mockResolvedValueOnce([]);
 
-      const result = await service.extractFacts(versionId.toString());
+      const result = await service.extractFacts(versionId.toString(), 'default');
 
       expect(mockParserRegistry.resolve).toHaveBeenCalledWith(XLSX_MIME);
+      // The chunk lookup that resolves each candidate's containing region must carry the same
+      // tenant predicate the version lookup did — an unscoped `find` here would let a candidate
+      // resolve against another tenant's chunks sharing the same `documentVersionId`.
+      expect(mockEvidenceChunkModel.find).toHaveBeenCalledWith({
+        documentVersionId: versionId,
+        tenantId: 'default',
+      });
       expect(mockExtractedFactModel.insertMany).toHaveBeenCalledTimes(1);
       const insertManyMock = mockExtractedFactModel.insertMany as jest.Mock<
         Promise<unknown[]>,
@@ -290,13 +321,51 @@ describe('FactsService', () => {
       });
     });
 
+    it('should persist observedAt from a row whose as-of column states a complete calendar date', async () => {
+      const datedXlsxElements: ParsedElement[] = [
+        buildXlsxElement('A1', 'Property Name'),
+        buildXlsxElement('B1', 'As Of'),
+        buildXlsxElement('C1', 'Cap Rate'),
+        buildXlsxElement('A2', 'Northgate Business Park'),
+        buildXlsxElement('B2', '2025-03-14'),
+        buildXlsxElement('C2', '5.25%'),
+      ];
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('workbook-bytes'),
+        contentType: XLSX_MIME,
+        metadata: {},
+      });
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
+        buildVersion({ storageKey: stored.id }),
+      );
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+      mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser(datedXlsxElements));
+      mockEvidenceChunkModel.find.mockResolvedValueOnce([
+        {
+          _id: 'chunk-xlsx-region-dated',
+          locator: { kind: 'xlsx-region', sheetName: SHEET_NAME, range: 'A1:C10' },
+        },
+      ]);
+      mockExtractedFactModel.insertMany.mockResolvedValueOnce([]);
+
+      await service.extractFacts(versionId.toString(), 'default');
+
+      const insertManyMock = mockExtractedFactModel.insertMany as jest.Mock<
+        Promise<unknown[]>,
+        [{ observedAt?: Date }[]]
+      >;
+      const insertedFacts = insertManyMock.mock.calls[0][0];
+      expect(insertedFacts).toHaveLength(1);
+      expect(insertedFacts[0].observedAt?.toISOString()).toBe('2025-03-14T00:00:00.000Z');
+    });
+
     it('should drop a candidate whose cell falls outside every ingested chunk region', async () => {
       const stored = await fakeDocumentStore.put({
         content: Buffer.from('workbook-bytes'),
         contentType: XLSX_MIME,
         metadata: {},
       });
-      mockDocumentVersionModel.findById.mockResolvedValueOnce(
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
         buildVersion({ storageKey: stored.id }),
       );
       mockExtractedFactModel.find.mockResolvedValueOnce([]);
@@ -309,7 +378,7 @@ describe('FactsService', () => {
         },
       ]);
 
-      const result = await service.extractFacts(versionId.toString());
+      const result = await service.extractFacts(versionId.toString(), 'default');
 
       expect(result).toEqual({
         factsCreated: 0,
@@ -334,14 +403,14 @@ describe('FactsService', () => {
         contentType: PDF_MIME,
         metadata: {},
       });
-      mockDocumentVersionModel.findById.mockResolvedValueOnce(
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
         buildVersion({ storageKey: stored.id }),
       );
       mockExtractedFactModel.find.mockResolvedValueOnce([]);
       mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser([buildProseElement()]));
       mockEvidenceChunkModel.find.mockResolvedValueOnce([]);
 
-      await expect(service.extractFacts(versionId.toString())).rejects.toThrow(
+      await expect(service.extractFacts(versionId.toString(), 'default')).rejects.toThrow(
         /no ingested chunks/,
       );
     });
@@ -355,7 +424,7 @@ describe('FactsService', () => {
         contentType: PDF_MIME,
         metadata: {},
       });
-      mockDocumentVersionModel.findById.mockResolvedValueOnce(
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
         buildVersion({ storageKey: stored.id }),
       );
       mockExtractedFactModel.find.mockResolvedValueOnce([]);
@@ -372,6 +441,7 @@ describe('FactsService', () => {
               entity: 'Northgate Business Park',
               metric: 'cap_rate',
               periodText: '',
+              observedAtText: '',
               amount: 5.25,
               unit: 'percent',
               quote: 'cap rate is 5.25%',
@@ -381,6 +451,7 @@ describe('FactsService', () => {
               entity: 'Northgate Business Park',
               metric: 'cap_rate',
               periodText: '',
+              observedAtText: '',
               amount: 6.0,
               unit: 'percent',
               quote: 'a quote that does not appear anywhere in the chunk',
@@ -396,11 +467,19 @@ describe('FactsService', () => {
       fakeModelProvider.enqueueResult(modelOutput);
       mockExtractedFactModel.insertMany.mockResolvedValueOnce([]);
 
-      const result = await service.extractFacts(versionId.toString());
+      const result = await service.extractFacts(versionId.toString(), 'default');
 
+      // Same tenant predicate the xlsx path's chunk lookup carries — the prose builder queries
+      // the same `EvidenceChunk` collection and must not fall back to an unscoped read.
+      expect(mockEvidenceChunkModel.find).toHaveBeenCalledWith({
+        documentVersionId: versionId,
+        tenantId: 'default',
+      });
       expect(fakeModelProvider.calls).toHaveLength(3);
       expect(fakeModelProvider.calls[0].taskClass).toBe('fact_extraction');
-      expect(fakeModelProvider.calls[0].messages[0].content).toBe(chunkText);
+      expect(fakeModelProvider.calls[0].messages[0].content).toBe(
+        `<${EVIDENCE_DELIMITER_TAG}>\n${chunkText}\n</${EVIDENCE_DELIMITER_TAG}>`,
+      );
       const insertManyMock = mockExtractedFactModel.insertMany as jest.Mock<
         Promise<unknown[]>,
         [
@@ -437,7 +516,7 @@ describe('FactsService', () => {
         contentType: PDF_MIME,
         metadata: {},
       });
-      mockDocumentVersionModel.findById.mockResolvedValueOnce(
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
         buildVersion({ storageKey: stored.id }),
       );
       mockExtractedFactModel.find.mockResolvedValueOnce([]);
@@ -456,7 +535,7 @@ describe('FactsService', () => {
       fakeModelProvider.enqueueResult({ output: { facts: [] } });
       fakeModelProvider.enqueueResult({ output: { facts: [] } });
 
-      const result = await service.extractFacts(versionId.toString());
+      const result = await service.extractFacts(versionId.toString(), 'default');
 
       expect(fakeModelProvider.calls).toHaveLength(3);
       expect(result).toEqual({
@@ -474,7 +553,7 @@ describe('FactsService', () => {
         contentType: PDF_MIME,
         metadata: {},
       });
-      mockDocumentVersionModel.findById.mockResolvedValueOnce(
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
         buildVersion({ storageKey: stored.id }),
       );
       mockExtractedFactModel.find.mockResolvedValueOnce([]);
@@ -494,6 +573,7 @@ describe('FactsService', () => {
               entity: 'Northgate Business Park',
               metric: 'cap_rate',
               periodText: '',
+              observedAtText: '',
               amount: 5.25,
               unit: 'percent',
               quote: 'cap rate is 5.25%',
@@ -503,7 +583,7 @@ describe('FactsService', () => {
         },
       });
 
-      const result = await service.extractFacts(versionId.toString());
+      const result = await service.extractFacts(versionId.toString(), 'default');
 
       expect(fakeModelProvider.calls).toHaveLength(3);
       expect(result).toEqual({
@@ -546,6 +626,7 @@ describe('FactsService', () => {
             entity: chunk.entity,
             metric: 'cap_rate',
             periodText: '',
+            observedAtText: '',
             amount: chunk.amount,
             unit: 'percent',
             quote: chunk.quote,
@@ -561,7 +642,7 @@ describe('FactsService', () => {
         contentType: PDF_MIME,
         metadata: {},
       });
-      mockDocumentVersionModel.findById.mockResolvedValueOnce(
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
         buildVersion({ storageKey: stored.id }),
       );
       mockExtractedFactModel.find.mockResolvedValueOnce([]);
@@ -582,7 +663,7 @@ describe('FactsService', () => {
       }
       mockExtractedFactModel.insertMany.mockResolvedValueOnce([]);
 
-      const result = await service.extractFacts(versionId.toString());
+      const result = await service.extractFacts(versionId.toString(), 'default');
 
       const insertManyMock = mockExtractedFactModel.insertMany as jest.Mock<
         Promise<unknown[]>,
@@ -599,8 +680,10 @@ describe('FactsService', () => {
     });
 
     it('should start no more chunks at once than config.extraction.chunkConcurrency allows', async () => {
+      // Containment, not equality: the user turn arrives fenced in evidence delimiters, and this
+      // callback only needs to identify which chunk it was handed.
       const gatedProvider = new GatedModelProvider((chunkText) =>
-        chunkText === CHUNK_A.text
+        chunkText.includes(CHUNK_A.text)
           ? buildProseOutput(CHUNK_A).output
           : buildProseOutput(CHUNK_B).output,
       );
@@ -608,7 +691,7 @@ describe('FactsService', () => {
       await arrangeTwoChunkVersion();
       mockExtractedFactModel.insertMany.mockResolvedValueOnce([]);
 
-      const extraction = service.extractFacts(versionId.toString());
+      const extraction = service.extractFacts(versionId.toString(), 'default');
       await flushMicrotasks();
 
       /**
@@ -617,7 +700,8 @@ describe('FactsService', () => {
        * issued chunk B's passes here, because nothing has been released.
        */
       expect(gatedProvider.calls).toHaveLength(PASS_COUNT);
-      expect(gatedProvider.calls.every((call) => call.messages[0].content === CHUNK_A.text)).toBe(
+      const fencedChunkA = `<${EVIDENCE_DELIMITER_TAG}>\n${CHUNK_A.text}\n</${EVIDENCE_DELIMITER_TAG}>`;
+      expect(gatedProvider.calls.every((call) => call.messages[0].content === fencedChunkA)).toBe(
         true,
       );
 
@@ -626,11 +710,162 @@ describe('FactsService', () => {
 
       expect(gatedProvider.calls).toHaveLength(PASS_COUNT * 2);
       expect(
-        gatedProvider.calls.slice(PASS_COUNT).every((c) => c.messages[0].content === CHUNK_B.text),
+        gatedProvider.calls
+          .slice(PASS_COUNT)
+          .every(
+            (c) =>
+              c.messages[0].content ===
+              `<${EVIDENCE_DELIMITER_TAG}>\n${CHUNK_B.text}\n</${EVIDENCE_DELIMITER_TAG}>`,
+          ),
       ).toBe(true);
 
       gatedProvider.releaseAll();
       await expect(extraction).resolves.toMatchObject({ factsCreated: 2 });
+    });
+  });
+
+  describe('entity canonicalization', () => {
+    const buildProseElement = (): ParsedElement => ({
+      text: 'Full source paragraph text.',
+      locator: { kind: 'pdf-page', page: 1, extractorVersion: 'pdf-1' },
+      headingPath: [],
+    });
+
+    const buildProseOutput = (entity: string, amount: number, quote: string) => ({
+      output: {
+        facts: [
+          {
+            entity,
+            metric: 'cap_rate',
+            periodText: '',
+            observedAtText: '',
+            amount,
+            unit: 'percent',
+            quote,
+            confidence: 0.9,
+          },
+        ],
+      },
+    });
+
+    it('should canonicalize an aliased entity name so it groups with the same entity extracted under its canonical spelling', async () => {
+      // Reproduces the exact bug this feature exists to fix: two facts about the same property,
+      // one naming it by a registered alias and one by its canonical name, must resolve to one
+      // `factKey.entity` — otherwise they never share a `groupKeyNormalized` and their
+      // disagreement is invisible to conflict detection.
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('%PDF-1.4 fixture bytes'),
+        contentType: PDF_MIME,
+        metadata: {},
+      });
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
+        buildVersion({ storageKey: stored.id }),
+      );
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+      mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser([buildProseElement()]));
+      const aliasChunk = {
+        id: 'chunk-kestrel-alias',
+        text: 'The cap rate for Kestrel Point Logistics Ctr was 5.25%.',
+        quote: 'was 5.25%',
+        rawEntity: 'Kestrel Point Logistics Ctr',
+        amount: 5.25,
+      };
+      const canonicalChunk = {
+        id: 'chunk-kestrel-canonical',
+        text: 'Kestrel Point Logistics Center reported a cap rate of 6.10%.',
+        quote: 'cap rate of 6.10%',
+        rawEntity: 'Kestrel Point Logistics Center',
+        amount: 6.1,
+      };
+      mockEvidenceChunkModel.find.mockResolvedValueOnce([
+        { _id: aliasChunk.id, text: aliasChunk.text, locator: { kind: 'pdf-page', page: 1 } },
+        {
+          _id: canonicalChunk.id,
+          text: canonicalChunk.text,
+          locator: { kind: 'pdf-page', page: 2 },
+        },
+      ]);
+      for (let pass = 0; pass < 3; pass++) {
+        fakeModelProvider.enqueueResult(
+          buildProseOutput(aliasChunk.rawEntity, aliasChunk.amount, aliasChunk.quote),
+        );
+      }
+      for (let pass = 0; pass < 3; pass++) {
+        fakeModelProvider.enqueueResult(
+          buildProseOutput(canonicalChunk.rawEntity, canonicalChunk.amount, canonicalChunk.quote),
+        );
+      }
+      const canonicalName = 'Kestrel Point Logistics Center';
+      mockCanonicalEntityService.resolveMany.mockImplementationOnce((rawNames: readonly string[]) =>
+        Promise.resolve(rawNames.map(() => ({ name: canonicalName, matched: true }))),
+      );
+      mockExtractedFactModel.insertMany.mockResolvedValueOnce([]);
+
+      await service.extractFacts(versionId.toString(), 'default');
+
+      // One batched call for both candidates, not one lookup per fact.
+      expect(mockCanonicalEntityService.resolveMany).toHaveBeenCalledTimes(1);
+      expect(mockCanonicalEntityService.resolveMany).toHaveBeenCalledWith(
+        [aliasChunk.rawEntity, canonicalChunk.rawEntity],
+        'default',
+      );
+      const insertManyMock = mockExtractedFactModel.insertMany as jest.Mock<
+        Promise<unknown[]>,
+        [
+          {
+            factKey: { entity: string };
+            groupKeyNormalized: string;
+            chunkId: string;
+            entityMatched: boolean;
+          }[],
+        ]
+      >;
+      const insertedFacts = insertManyMock.mock.calls[0][0];
+      expect(insertedFacts).toHaveLength(2);
+      const byChunkId = new Map(insertedFacts.map((fact) => [fact.chunkId, fact]));
+      const aliasFact = byChunkId.get(aliasChunk.id);
+      const canonicalFact = byChunkId.get(canonicalChunk.id);
+      expect(aliasFact?.factKey.entity).toBe(canonicalName);
+      expect(canonicalFact?.factKey.entity).toBe(canonicalName);
+      expect(aliasFact?.entityMatched).toBe(true);
+      expect(canonicalFact?.entityMatched).toBe(true);
+      // The actual proof: both facts now share one conflict-detection group.
+      expect(aliasFact?.groupKeyNormalized).toBe(canonicalFact?.groupKeyNormalized);
+    });
+
+    it('should keep an unregistered entity name unchanged and mark entityMatched: false', async () => {
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('workbook-bytes'),
+        contentType: XLSX_MIME,
+        metadata: {},
+      });
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
+        buildVersion({ storageKey: stored.id }),
+      );
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+      mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser(xlsxElements));
+      const chunkId = 'chunk-xlsx-region-unmatched';
+      mockEvidenceChunkModel.find.mockResolvedValueOnce([
+        { _id: chunkId, locator: { kind: 'xlsx-region', sheetName: SHEET_NAME, range: 'A1:C10' } },
+      ]);
+      mockExtractedFactModel.insertMany.mockResolvedValueOnce([]);
+      // `beforeEach` already arms `resolveMany` to return `matched: false` for every name — this
+      // test asserts that default explicitly rather than relying on it silently.
+
+      await service.extractFacts(versionId.toString(), 'default');
+
+      expect(mockCanonicalEntityService.resolveMany).toHaveBeenCalledWith(
+        ['Northgate Business Park'],
+        'default',
+      );
+      const insertManyMock = mockExtractedFactModel.insertMany as jest.Mock<
+        Promise<unknown[]>,
+        [{ factKey: { entity: string }; entityMatched: boolean }[]]
+      >;
+      const insertedFacts = insertManyMock.mock.calls[0][0];
+      expect(insertedFacts).toHaveLength(1);
+      expect(insertedFacts[0].factKey.entity).toBe('Northgate Business Park');
+      expect(insertedFacts[0].entityMatched).toBe(false);
     });
   });
 
@@ -683,9 +918,7 @@ describe('FactsService', () => {
       contentType: XLSX_MIME,
       metadata: {},
     });
-    mockDocumentVersionModel.findById.mockResolvedValueOnce(
-      buildVersion({ storageKey: stored.id }),
-    );
+    mockDocumentVersionModel.findOne.mockResolvedValueOnce(buildVersion({ storageKey: stored.id }));
     mockExtractedFactModel.find.mockResolvedValueOnce([]);
     mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser(xlsxElements));
     mockEvidenceChunkModel.find.mockResolvedValueOnce([
@@ -697,10 +930,11 @@ describe('FactsService', () => {
     const writeFailure = new Error('write concern failed');
     mockExtractedFactModel.insertMany.mockRejectedValueOnce(writeFailure);
 
-    await expect(service.extractFacts(versionId.toString())).rejects.toBe(writeFailure);
+    await expect(service.extractFacts(versionId.toString(), 'default')).rejects.toBe(writeFailure);
 
     expect(mockExtractedFactModel.deleteMany).toHaveBeenCalledWith({
       documentVersionId: versionId,
+      tenantId: 'default',
     });
   });
 });

@@ -2,18 +2,32 @@ import { Inject, Injectable, InternalServerErrorException } from '@nestjs/common
 import { InjectModel } from '@nestjs/mongoose';
 import type { QueryFilter } from 'mongoose';
 import { Model, Types } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
 import {
   Conflict,
   ConflictDocument,
   type ConflictResolutionOutcome,
+  type ConflictRuleFired,
 } from '../../../database/schemas/evidence/conflict/conflict.schema';
+import {
+  DocumentVersion,
+  DocumentVersionDocument,
+} from '../../../database/schemas/evidence/document-version/document-version.schema';
+import {
+  Document,
+  DocumentDocument,
+  type DocumentSourceClass,
+} from '../../../database/schemas/evidence/document/document.schema';
 import {
   ExtractedFact,
   ExtractedFactDocument,
   type FactKey,
   type FactValue,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import {
+  Approval,
+  type ApprovalDocument,
+} from '../../../database/schemas/workflow/approval/approval.schema';
+import { approvalTimeoutCounter } from '../../../providers/telemetry/domain-metrics';
 import {
   WORKFLOW_ENGINE,
   type WorkflowEngine,
@@ -23,7 +37,7 @@ import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
 import type { ResolveConflictWorkflowInput } from '../../../workflows/types';
-import { METRIC_ONTOLOGY } from '../facts/metric-ontology';
+import { findMetricById, METRIC_ONTOLOGY } from '../facts/metric-ontology';
 import {
   WorkflowRunsService,
   type WorkflowRunResult,
@@ -33,8 +47,14 @@ import { ConflictResponseDto } from './dtos/response/conflict.response.dto';
 import { detectConflicts, groupKey, type FactForConflictScan } from './detect-conflicts';
 import {
   ConflictNotFoundException,
+  ConflictResolutionAlreadyPendingException,
   InvalidConflictResolutionException,
 } from './exceptions/conflicts.exception';
+import {
+  resolveConflictPolicy,
+  type ConflictingFactForResolution,
+  type ResolveConflictProposal,
+} from './resolve-conflict-policy';
 
 export interface ConflictScanResult {
   readonly conflictsCreated: number;
@@ -97,7 +117,13 @@ export interface RecordConflictResolutionInput {
   readonly winningFactId?: string;
   readonly decidedBy?: string;
   readonly reason?: string;
-  readonly tenantId?: string;
+  readonly tenantId: string;
+  /** The survivorship policy's proposal, captured by `requestResolution` at approval-request time
+   * and carried through `ResolveConflictWorkflowInput` — never recomputed here (see
+   * `recordResolution`'s own doc comment). Absent only when replaying a `resolveConflict` execution
+   * that started before this capture existed. */
+  readonly ruleFired?: ConflictRuleFired;
+  readonly proposedWinnerFactId?: string;
 }
 
 export interface RecordConflictResolutionResult {
@@ -109,10 +135,19 @@ export interface RequestConflictResolutionInput {
   readonly conflictId: string;
   readonly winningFactId: string;
   readonly actorId: string;
-  /** Threaded into `ResolveConflictWorkflowInput.requestedBy` and, eventually, `Approval.requestedBy`
-   *  — an opaque string (an email), not the account id, matching those fields' own doc comments. */
+  /** Threaded into `ResolveConflictWorkflowInput.requestedBy` and, eventually,
+   *  `Approval.requestedBy` — the identity shown to the human deciding the proposal. An email when
+   *  the caller has one to give (`ConflictsController` reads it from the session; the MCP surface
+   *  reads it from the verified PAT's `ToolExecutionContext.email`), otherwise the account id. */
   readonly requestedBy: string;
-  readonly tenantId?: string;
+  /** Which surface proposed this resolution — `'api'` for the interactive REST path, `'mcp'` for
+   *  `request_resolution` (`src/mcp/mcp-tools.ts`). Threaded to `ResolveConflictWorkflowInput
+   *  .requestedByOrigin` and rendered into the approval summary a reviewer reads, so "a colleague
+   *  proposed this" and "an AI client holding a PAT proposed this" are never indistinguishable —
+   *  see ADR-0016 § Approvals. Optional: an absent origin renders as an unlabeled proposal in the
+   *  summary rather than defaulting to either surface. */
+  readonly origin?: 'api' | 'mcp';
+  readonly tenantId: string;
 }
 
 /**
@@ -133,6 +168,15 @@ export class ConflictsService {
     @InjectModel(Conflict.name)
     private readonly conflictModel: Model<ConflictDocument>,
 
+    @InjectModel(DocumentVersion.name)
+    private readonly documentVersionModel: Model<DocumentVersionDocument>,
+
+    @InjectModel(Document.name)
+    private readonly documentModel: Model<DocumentDocument>,
+
+    @InjectModel(Approval.name)
+    private readonly approvalModel: Model<ApprovalDocument>,
+
     @Inject(WORKFLOW_ENGINE)
     private readonly workflowEngine: WorkflowEngine,
 
@@ -152,7 +196,7 @@ export class ConflictsService {
   async list(
     pagination: PaginationRequestDto,
     actorId: string,
-    tenantId: string = DEFAULT_TENANT_ID,
+    tenantId: string,
   ): Promise<DocumentResultWithCount<ConflictResponseDto>> {
     const filter = { tenantId };
 
@@ -166,12 +210,14 @@ export class ConflictsService {
     ]);
 
     let factById = new Map<string, ExtractedFactDocument>();
+    let sourceClassByFactId = new Map<string, DocumentSourceClass>();
     if (conflicts.length > 0) {
       const everyFactId = [
         ...new Set(conflicts.flatMap((conflict) => conflict.factIds.map((id) => id.toString()))),
       ].map((id) => new Types.ObjectId(id));
-      const facts = await this.extractedFactModel.find({ _id: { $in: everyFactId } });
+      const facts = await this.extractedFactModel.find({ _id: { $in: everyFactId }, tenantId });
       factById = new Map(facts.map((fact) => [fact._id.toString(), fact]));
+      sourceClassByFactId = await this.loadSourceClassByFactId(facts, tenantId);
     }
 
     await this.auditService.record({
@@ -182,7 +228,9 @@ export class ConflictsService {
     });
 
     return {
-      docs: conflicts.map((conflict) => this.toConflictDto(conflict, factById)),
+      docs: conflicts.map((conflict) =>
+        this.toConflictDto(conflict, factById, sourceClassByFactId),
+      ),
       count,
     };
   }
@@ -213,7 +261,7 @@ export class ConflictsService {
    * are read as "already handled", not as "needs a fresh Conflict record").
    */
   async scanForConflicts(
-    tenantId: string = DEFAULT_TENANT_ID,
+    tenantId: string,
     factKeys?: readonly FactKey[],
   ): Promise<ConflictScanResult> {
     if (factKeys !== undefined) {
@@ -333,7 +381,10 @@ export class ConflictsService {
     const everyFactId = [
       ...new Set(conflicts.flatMap((conflict) => conflict.factIds.map((id) => id.toString()))),
     ].map((id) => new Types.ObjectId(id));
-    const conflictingFacts = await this.extractedFactModel.find({ _id: { $in: everyFactId } });
+    const conflictingFacts = await this.extractedFactModel.find({
+      _id: { $in: everyFactId },
+      tenantId,
+    });
     const factById = new Map(conflictingFacts.map((fact) => [fact._id.toString(), fact]));
 
     return conflicts.map((conflict) => {
@@ -387,7 +438,7 @@ export class ConflictsService {
   async loadConflictForResolution(
     conflictId: string,
     winningFactId: string,
-    tenantId: string = DEFAULT_TENANT_ID,
+    tenantId: string,
   ): Promise<ConflictResolutionCandidate> {
     if (!Types.ObjectId.isValid(conflictId)) {
       throw new ConflictNotFoundException(`Conflict '${conflictId}' not found`);
@@ -413,7 +464,10 @@ export class ConflictsService {
       );
     }
 
-    const facts = await this.extractedFactModel.find({ _id: { $in: conflict.factIds } });
+    const facts = await this.extractedFactModel.find({
+      _id: { $in: conflict.factIds },
+      tenantId,
+    });
     if (facts.length < conflict.factIds.length) {
       throw new InternalServerErrorException(
         `Conflict '${conflictId}' references ${conflict.factIds.length} fact(s), but only ${facts.length} still resolve to an ExtractedFact`,
@@ -427,7 +481,11 @@ export class ConflictsService {
         metric: conflict.factKey.metric,
         period: conflict.factKey.period,
       },
-      winningFactId,
+      // Normalized to the canonical lowercase hex form: `Types.ObjectId.isValid` and
+      // `factId.equals()` above both accept uppercase hex, but `values[].factId` below is always
+      // `_id.toString()` (lowercase). A caller's uppercase `winningFactId` would otherwise survive
+      // validation here and then fail every downstream `===` comparison against `factId`.
+      winningFactId: new Types.ObjectId(winningFactId).toString(),
       values: facts.map((fact) => ({
         factId: fact._id.toString(),
         value: fact.value.amount,
@@ -442,21 +500,59 @@ export class ConflictsService {
    * proposal via `loadConflictForResolution` (the same fail-closed checks `resolveConflict`'s own
    * `loadConflict` activity applies) before ever starting a workflow — no point starting a
    * `resolveConflict` execution, and no point creating a `WorkflowRun` row for it, for a proposal
-   * that can't be honored. `workflowEngine.start` never chooses the winner (see
-   * `ResolveConflictWorkflowInput`'s own doc comment); it only starts the gate. The returned
-   * `WorkflowRunResult` — from `WorkflowRunsService.create`, this collection's first writer — gives
-   * the caller an id to poll `GET /workflow-runs/:id` with.
+   * that can't be honored. Also refuses when a pending `Approval` already exists for this conflict
+   * (`ConflictResolutionAlreadyPendingException`) — a conflict stays `open` for its entire
+   * 24-hour approval wait, so without this check every call in that window starts its own
+   * `resolveConflict` execution and its own pending row, each independently approvable; two
+   * approvals could then name different `winningFactId`s and both reach `recordResolution`.
+   * `workflowEngine.start` never chooses the winner (see `ResolveConflictWorkflowInput`'s own doc
+   * comment); it only starts the gate. The returned `WorkflowRunResult` — from
+   * `WorkflowRunsService.create`, this collection's first writer — gives the caller an id to poll
+   * `GET /workflow-runs/:id` with.
+   *
+   * `computeProposalForConflict` runs here, once, before the workflow's 24-hour approval wait
+   * begins — the resulting `ruleFired`/`proposedWinnerFactId` travel through
+   * `ResolveConflictWorkflowInput` to `recordResolution` unchanged (see that method's own doc
+   * comment for why it never recomputes them itself).
    */
   async requestResolution(input: RequestConflictResolutionInput): Promise<WorkflowRunResult> {
-    const tenantId = input.tenantId ?? DEFAULT_TENANT_ID;
+    const tenantId = input.tenantId;
 
-    await this.loadConflictForResolution(input.conflictId, input.winningFactId, tenantId);
+    const candidate = await this.loadConflictForResolution(
+      input.conflictId,
+      input.winningFactId,
+      tenantId,
+    );
+
+    const alreadyPending = await this.approvalModel.exists({
+      tenantId,
+      state: 'pending',
+      'subject.entityType': 'Conflict',
+      'subject.entityId': new Types.ObjectId(input.conflictId),
+    });
+    if (alreadyPending) {
+      throw new ConflictResolutionAlreadyPendingException(
+        `Conflict '${input.conflictId}' already has a pending resolution approval`,
+      );
+    }
+
+    const proposal = await this.computeProposalForConflict(
+      {
+        factIds: candidate.values.map((value) => new Types.ObjectId(value.factId)),
+        factKey: candidate.factKey,
+      },
+      tenantId,
+    );
 
     const handle = await this.workflowEngine.start(RESOLVE_CONFLICT_WORKFLOW_TYPE, {
       conflictId: input.conflictId,
       winningFactId: input.winningFactId,
       requestedBy: input.requestedBy,
+      requestedByOrigin: input.origin,
       tenantId,
+      ruleFired: proposal.ruleFired,
+      proposedWinnerFactId:
+        proposal.ruleFired === 'none' ? undefined : proposal.proposedWinnerFactId,
     } satisfies ResolveConflictWorkflowInput);
 
     const run = await this.workflowRunsService.create({
@@ -489,11 +585,21 @@ export class ConflictsService {
    * happened. Fails closed on a missing conflict — same reasoning as
    * `AnswerPersistenceService.persist`: a missing row here means the id this activity was called
    * with doesn't match a real conflict, and silently no-op-ing would hide that.
+   *
+   * `ruleFired`/`followedProposal` are never recomputed here — `input.ruleFired` and
+   * `input.proposedWinnerFactId` are exactly what `requestResolution` captured before the
+   * workflow's 24-hour approval wait began (carried through `ResolveConflictWorkflowInput`), so a
+   * reclassification or any other change to the conflict's facts during that wait can't retroactively
+   * rewrite what was actually proposed to the reviewer. `followedProposal` is set only when the
+   * outcome is `resolved` and a proposal was actually captured (`input.proposedWinnerFactId` is
+   * present) — `rejected`/`timed_out`, a `'none'` proposal, and a stale pre-capture history (see
+   * `ResolveConflictWorkflowInput`'s own doc comment) all leave it absent rather than fabricate a
+   * `false`.
    */
   async recordResolution(
     input: RecordConflictResolutionInput,
   ): Promise<RecordConflictResolutionResult> {
-    const tenantId = input.tenantId ?? DEFAULT_TENANT_ID;
+    const tenantId = input.tenantId;
     if (!Types.ObjectId.isValid(input.conflictId)) {
       throw new ConflictNotFoundException(`Conflict '${input.conflictId}' not found`);
     }
@@ -503,16 +609,29 @@ export class ConflictsService {
       throw new ConflictNotFoundException(`Conflict '${input.conflictId}' not found`);
     }
 
+    const followedProposal =
+      input.outcome === 'resolved' && input.proposedWinnerFactId !== undefined
+        ? input.proposedWinnerFactId === input.winningFactId
+        : undefined;
+
     conflict.resolution = {
       outcome: input.outcome,
       winningFactId: input.winningFactId ? new Types.ObjectId(input.winningFactId) : undefined,
       decidedBy: input.decidedBy,
       reason: input.reason,
       resolvedAt: new Date(),
+      ruleFired: input.ruleFired,
+      followedProposal,
     };
 
     if (input.outcome === 'resolved') {
       conflict.status = 'resolved';
+    }
+
+    if (input.outcome === 'timed_out') {
+      // `ruleFired` is the fixed three-value `ConflictRuleFired` `requestResolution` captured
+      // before the approval wait began — an operational fact (a human never came), not an error.
+      approvalTimeoutCounter.add(1, { ruleFired: input.ruleFired ?? 'none' });
     }
 
     await conflict.save();
@@ -524,11 +643,120 @@ export class ConflictsService {
     return { conflictId: input.conflictId, outcome: input.outcome };
   }
 
+  /**
+   * Batch-resolves each fact's document `sourceClass` via its `documentVersionId` — two `$in`
+   * queries total (`DocumentVersion` then `Document`), never one per fact, so a page of conflicts
+   * costs the same two extra round-trips regardless of how many facts it touches. Every query is
+   * scoped to `tenantId` explicitly, not left to `tenantScopePlugin`'s ALS backstop alone: the
+   * plugin is a backstop by its own doc comment, not the primary control, and this method's
+   * result flows into a response payload — the same reasoning `list`'s own explicit-tenantId
+   * queries apply to theirs.
+   *
+   * Fails OPEN to `'unclassified'` when a fact's `documentVersionId` or that version's `documentId`
+   * no longer resolves — this is enrichment for a proposal a human still has to approve, not the
+   * factIds/values integrity check `toConflictDto` applies to its own data; a fact's document
+   * missing is exactly what `'unclassified'` already means (`Document.sourceClass`'s own doc
+   * comment: "no authority information"), not a data-integrity fault worth aborting the read for.
+   */
+  private async loadSourceClassByFactId(
+    facts: readonly Pick<ExtractedFactDocument, '_id' | 'documentVersionId'>[],
+    tenantId: string,
+  ): Promise<Map<string, DocumentSourceClass>> {
+    if (facts.length === 0) {
+      return new Map();
+    }
+
+    const versionIds = [...new Set(facts.map((fact) => fact.documentVersionId.toString()))].map(
+      (id) => new Types.ObjectId(id),
+    );
+    const versions = await this.documentVersionModel.find(
+      { _id: { $in: versionIds }, tenantId },
+      { documentId: 1 },
+    );
+    const documentIdByVersionId = new Map(
+      versions.map((version) => [version._id.toString(), version.documentId.toString()]),
+    );
+
+    const documentIds = [...new Set(versions.map((version) => version.documentId.toString()))].map(
+      (id) => new Types.ObjectId(id),
+    );
+    const documents =
+      documentIds.length === 0
+        ? []
+        : await this.documentModel.find(
+            { _id: { $in: documentIds }, tenantId },
+            { sourceClass: 1 },
+          );
+    const sourceClassByDocumentId = new Map(
+      documents.map((document) => [document._id.toString(), document.sourceClass]),
+    );
+
+    const sourceClassByFactId = new Map<string, DocumentSourceClass>();
+    for (const fact of facts) {
+      const documentId = documentIdByVersionId.get(fact.documentVersionId.toString());
+      const sourceClass = documentId ? sourceClassByDocumentId.get(documentId) : undefined;
+      sourceClassByFactId.set(fact._id.toString(), sourceClass ?? 'unclassified');
+    }
+    return sourceClassByFactId;
+  }
+
+  /**
+   * Pure given its inputs: looks up `metricId` in `METRIC_ONTOLOGY` and calls
+   * `resolveConflictPolicy`. `stalenessWindowMs` defaults to `Infinity` when the metric leaves it
+   * unconfigured — matching `MetricDefinition.stalenessWindowMs`'s own doc comment ("a metric whose
+   * value ... does not drift"): with no window, no `observedAt` gap between authority-tied facts
+   * can ever exceed it, so recency never breaks a tie the metric's own ontology entry says recency
+   * should not be deciding.
+   */
+  private computeConflictProposal(
+    candidates: readonly ConflictingFactForResolution[],
+    metricId: string,
+  ): ResolveConflictProposal {
+    const metric = findMetricById(METRIC_ONTOLOGY, metricId);
+    return resolveConflictPolicy(candidates, {
+      authorityOrder: metric?.authorityOrder,
+      stalenessWindowMs: metric?.stalenessWindowMs ?? Number.POSITIVE_INFINITY,
+    });
+  }
+
+  /**
+   * `requestResolution`'s own proposal computation, run once at approval-request time (see that
+   * method's doc comment for why the result then travels through the workflow rather than being
+   * recomputed later) — loads this one conflict's current facts and reduces to
+   * `computeConflictProposal`. Takes the minimal shape a proposal needs, not a full
+   * `ConflictDocument`, so a caller that only has a `ConflictResolutionCandidate` in hand (as
+   * `requestResolution` does) doesn't need a second full conflict read to supply this. A fact that
+   * no longer resolves just narrows the candidate set `resolveConflictPolicy` sees, which already
+   * degrades to `ruleFired: 'none'` on its own — this never throws, unlike `toConflictDto`'s
+   * read-path integrity check.
+   */
+  private async computeProposalForConflict(
+    conflict: { readonly factIds: readonly Types.ObjectId[]; readonly factKey: FactKey },
+    tenantId: string,
+  ): Promise<ResolveConflictProposal> {
+    const facts = await this.extractedFactModel.find({
+      _id: { $in: conflict.factIds },
+      tenantId,
+    });
+    const sourceClassByFactId = await this.loadSourceClassByFactId(facts, tenantId);
+    // `loadSourceClassByFactId` sets an entry for every fact in the array it was given, and
+    // `facts` is that exact array — the lookup below can never miss, so `as` (not `??`) keeps
+    // TypeScript satisfied without an untestable fallback branch.
+    const candidates: ConflictingFactForResolution[] = facts.map((fact) => ({
+      id: fact._id.toString(),
+      sourceClass: sourceClassByFactId.get(fact._id.toString()) as DocumentSourceClass,
+      observedAt: fact.observedAt,
+    }));
+    return this.computeConflictProposal(candidates, conflict.factKey.metric);
+  }
+
   private toConflictDto(
     conflict: ConflictDocument,
     factById: Map<string, ExtractedFactDocument>,
+    sourceClassByFactId: Map<string, DocumentSourceClass>,
   ): ConflictResponseDto {
     const values: ConflictValueShape[] = [];
+    const candidates: ConflictingFactForResolution[] = [];
     for (const id of conflict.factIds) {
       const fact = factById.get(id.toString());
       if (!fact) {
@@ -542,6 +770,14 @@ export class ConflictsService {
         documentVersionId: fact.documentVersionId.toString(),
         locator: fact.locator,
       });
+      // Same guarantee as `computeProposalForConflict`'s identical lookup: `sourceClassByFactId`
+      // is built (in `list`) from the same batch of facts `factById` was, so a fact resolving
+      // above always has an entry here too.
+      candidates.push({
+        id: fact._id.toString(),
+        sourceClass: sourceClassByFactId.get(fact._id.toString()) as DocumentSourceClass,
+        observedAt: fact.observedAt,
+      });
     }
 
     if (values.length < conflict.factIds.length) {
@@ -554,6 +790,11 @@ export class ConflictsService {
         `Conflict '${conflict._id.toString()}' references ${conflict.factIds.length} fact(s), but only ${values.length} still resolve to an ExtractedFact`,
       );
     }
+
+    // Computed fresh on every read, never persisted: the ontology's `authorityOrder` and a
+    // document's `sourceClass` both change over time, so a stored proposal would silently go stale
+    // and a reviewer could act on a rule that no longer applies.
+    const proposal = this.computeConflictProposal(candidates, conflict.factKey.metric);
 
     return {
       id: conflict._id.toString(),
@@ -571,6 +812,10 @@ export class ConflictsService {
       magnitude: conflict.magnitude,
       status: conflict.status,
       createdAt: conflict.createdAt,
+      proposedWinnerFactId:
+        proposal.ruleFired === 'none' ? undefined : proposal.proposedWinnerFactId,
+      ruleFired: proposal.ruleFired,
+      explanation: proposal.explanation,
     };
   }
 }

@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 import { Model, Types } from 'mongoose';
 import { TypedConfigService } from '../../../config/environment/typed-config.service';
-import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
+import type { DocumentSourceClass } from '../../../database/schemas/evidence/document/document.schema';
 import {
   Source,
   SourceDocument,
@@ -30,6 +30,7 @@ import { DocumentsService } from '../documents/documents.service';
 import type { UploadedFileLike } from '../documents/types/uploaded-file.type';
 import type { WorkflowRunResult } from '../workflow-runs/workflow-runs.service';
 import { WorkflowRunsService } from '../workflow-runs/workflow-runs.service';
+import type { SourceFileStateStatus } from './dtos/response/source-file-state.response.dto';
 import {
   SourceNameConflictException,
   SourceNotFoundException,
@@ -42,7 +43,7 @@ export interface CreateSourceInput {
   readonly enabled?: boolean;
   readonly intervalMs?: number;
   readonly actorId: string;
-  readonly tenantId?: string;
+  readonly tenantId: string;
 }
 
 export interface SourceResult {
@@ -58,6 +59,17 @@ export interface SourceResult {
   readonly lastSyncError?: string;
   readonly fileCount: number;
   readonly createdAt: Date;
+}
+
+export interface SourceFileStateResult {
+  readonly path: string;
+  readonly status: SourceFileStateStatus;
+  readonly lastError?: string;
+  readonly mtimeMs: number;
+}
+
+export interface SourceWithFileStatesResult extends SourceResult {
+  readonly fileStates: SourceFileStateResult[];
 }
 
 /** Return of `runSync` — see `SyncSourceActivityResult`'s doc comment (`workflows/types.ts`), which
@@ -101,7 +113,7 @@ export class SourcesService {
    *  the application-layer surface for a race the index itself already prevents at the driver
    *  level. */
   async create(input: CreateSourceInput): Promise<SourceResult> {
-    const tenantId = input.tenantId ?? DEFAULT_TENANT_ID;
+    const tenantId = input.tenantId;
 
     let source: SourceDocument;
     try {
@@ -136,7 +148,7 @@ export class SourcesService {
   async list(
     pagination: PaginationRequestDto,
     actorId: string,
-    tenantId: string = DEFAULT_TENANT_ID,
+    tenantId: string,
   ): Promise<DocumentResultWithCount<SourceResult>> {
     const filter = { tenantId };
 
@@ -162,8 +174,8 @@ export class SourcesService {
   async getById(
     id: string,
     actorId: string,
-    tenantId: string = DEFAULT_TENANT_ID,
-  ): Promise<SourceResult> {
+    tenantId: string,
+  ): Promise<SourceWithFileStatesResult> {
     const source = await this.findOwnedSource(id, tenantId);
 
     await this.auditService.record({
@@ -173,14 +185,14 @@ export class SourcesService {
       tenantId,
     });
 
-    return this.toResult(source);
+    return this.toResultWithFileStates(source);
   }
 
   async setEnabled(
     id: string,
     enabled: boolean,
     actorId: string,
-    tenantId: string = DEFAULT_TENANT_ID,
+    tenantId: string,
   ): Promise<SourceResult> {
     if (!Types.ObjectId.isValid(id)) {
       throw new SourceNotFoundException(`Source '${id}' not found`);
@@ -220,11 +232,7 @@ export class SourcesService {
    * source's `syncWorkflowId` outlived the projection it names, which is data corruption rather
    * than a client error.
    */
-  async requestSync(
-    id: string,
-    actorId: string,
-    tenantId: string = DEFAULT_TENANT_ID,
-  ): Promise<WorkflowRunResult> {
+  async requestSync(id: string, actorId: string, tenantId: string): Promise<WorkflowRunResult> {
     const source = await this.findOwnedSource(id, tenantId);
 
     let run: WorkflowRunResult | null;
@@ -308,7 +316,7 @@ export class SourcesService {
 
     const fileStates = [...source.fileStates];
     for (const file of files) {
-      await this.syncOneFile(file, fileStates, source.tenantId);
+      await this.syncOneFile(file, fileStates, source.tenantId, source.sourceClass);
     }
 
     const finalized = await this.finalizeSync(source._id, leaseToken, fileStates, 'ok');
@@ -349,6 +357,7 @@ export class SourcesService {
     file: SourceConnectorFile,
     fileStates: SourceFileState[],
     tenantId: string,
+    sourceClass: DocumentSourceClass,
   ): Promise<void> {
     const index = fileStates.findIndex((state) => state.path === file.relativePath);
     const existing = index === -1 ? undefined : fileStates[index];
@@ -399,13 +408,21 @@ export class SourcesService {
         buffer: content,
       };
 
+      // `sourceClass` only matters on the document-creation branch below — `addVersion` (existing
+      // branch) writes bytes onto a document that already has a `sourceClass`, unrelated to this
+      // sync attempt's source.
       const response = existing
         ? await this.documentsService.upload(
             uploadedFile,
             { documentId: existing.documentId.toString() },
             tenantId,
           )
-        : await this.documentsService.upload(uploadedFile, { title: filename }, tenantId);
+        : await this.documentsService.upload(
+            uploadedFile,
+            { title: filename },
+            tenantId,
+            sourceClass,
+          );
 
       const newState: SourceFileState = {
         path: file.relativePath,
@@ -515,6 +532,18 @@ export class SourcesService {
       lastSyncError: source.lastSyncError,
       fileCount: source.fileStates.length,
       createdAt: source.createdAt,
+    };
+  }
+
+  private toResultWithFileStates(source: SourceDocument): SourceWithFileStatesResult {
+    return {
+      ...this.toResult(source),
+      fileStates: source.fileStates.map((state) => ({
+        path: state.path,
+        status: state.lastError ? 'failed' : 'ok',
+        lastError: state.lastError,
+        mtimeMs: state.mtimeMs,
+      })),
     };
   }
 }

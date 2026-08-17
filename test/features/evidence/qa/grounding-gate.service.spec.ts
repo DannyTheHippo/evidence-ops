@@ -9,6 +9,7 @@ import type {
 import { GroundingGateService } from '../../../../src/features/evidence/qa/grounding-gate.service';
 import type { RetrievedChunk } from '../../../../src/features/evidence/qa/types/retrieved-chunk.type';
 import type { GroundingCellFact } from '../../../../src/features/evidence/qa/verify-claim';
+import { groundingClaimsDroppedCounter } from '../../../../src/providers/telemetry/domain-metrics';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
 
@@ -90,6 +91,7 @@ describe('GroundingGateService', () => {
   });
 
   it('should return "answered" with reduced coverage when some claims are dropped, and log each drop', () => {
+    const droppedCounterSpy = jest.spyOn(groundingClaimsDroppedCounter, 'add');
     const survivingClaim = buildClaim();
     const droppedClaim = buildClaim({
       statement: 'Sablewood Retail Court traded at a cap rate of approximately 5.90%.',
@@ -106,6 +108,10 @@ describe('GroundingGateService', () => {
     expect(report.claimCoverage).toBe(0.5);
     expect(report.violations.length).toBeGreaterThan(0);
     expect(mockLogger.debug).toHaveBeenCalledWith(expect.stringContaining(droppedClaim.statement));
+    // `chunk-fabricated` was never retrieved, so check 1 (retrieval containment) is what drops
+    // this claim — the metric attribute must name that rule, never the claim's free-text reason.
+    expect(droppedCounterSpy).toHaveBeenCalledTimes(1);
+    expect(droppedCounterSpy).toHaveBeenCalledWith(1, { rule: 'chunk-not-retrieved' });
   });
 
   it('should degrade to "insufficient_evidence" with zero coverage when every claim drops', () => {

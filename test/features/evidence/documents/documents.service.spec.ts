@@ -125,13 +125,15 @@ describe('DocumentsService', () => {
 
   describe('upload — input gates', () => {
     it('should throw MissingFileException when no file is provided', async () => {
-      await expect(service.upload(undefined, {})).rejects.toBeInstanceOf(MissingFileException);
+      await expect(service.upload(undefined, {}, 'tenant-a')).rejects.toBeInstanceOf(
+        MissingFileException,
+      );
     });
 
     it('should throw UnsupportedContentTypeException for a disallowed content type', async () => {
       const file = buildFile({ mimetype: 'image/png', originalname: 'comps.png' });
 
-      await expect(service.upload(file, {})).rejects.toBeInstanceOf(
+      await expect(service.upload(file, {}, 'tenant-a')).rejects.toBeInstanceOf(
         UnsupportedContentTypeException,
       );
       expect(mockDocumentStore.put).not.toHaveBeenCalled();
@@ -140,7 +142,7 @@ describe('DocumentsService', () => {
     it('should throw UnresolvableContentTypeException — a 400, not a 415 — for an ambiguous MIME type with a disallowed extension: the browser-lied .xls case', async () => {
       const file = buildFile({ mimetype: 'application/vnd.ms-excel', originalname: 'legacy.xls' });
 
-      await expect(service.upload(file, {})).rejects.toBeInstanceOf(
+      await expect(service.upload(file, {}, 'tenant-a')).rejects.toBeInstanceOf(
         UnresolvableContentTypeException,
       );
       expect(mockDocumentStore.put).not.toHaveBeenCalled();
@@ -149,7 +151,7 @@ describe('DocumentsService', () => {
     it('should throw UnresolvableContentTypeException for an ambiguous MIME type with no usable extension at all', async () => {
       const file = buildFile({ mimetype: 'application/octet-stream', originalname: 'archive.zip' });
 
-      await expect(service.upload(file, {})).rejects.toBeInstanceOf(
+      await expect(service.upload(file, {}, 'tenant-a')).rejects.toBeInstanceOf(
         UnresolvableContentTypeException,
       );
       expect(mockDocumentStore.put).not.toHaveBeenCalled();
@@ -181,7 +183,9 @@ describe('DocumentsService', () => {
     it('should throw BadRequestException when title and originalname are both empty', async () => {
       const file = buildFile({ originalname: '' });
 
-      await expect(service.upload(file, {})).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.upload(file, {}, 'tenant-a')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
       expect(mockDocumentModel.create).not.toHaveBeenCalled();
     });
 
@@ -280,6 +284,26 @@ describe('DocumentsService', () => {
       });
     });
 
+    it('should thread the caller-supplied sourceClass onto a newly created document', async () => {
+      const file = buildFile();
+      const mockDocument = buildMockDocument({ sourceClass: 'crm-export' });
+      mockDocumentModel.create.mockResolvedValueOnce(mockDocument);
+      mockDocumentStore.put.mockResolvedValueOnce({
+        id: 'gridfs-id-1',
+        content: file.buffer,
+        contentType: file.mimetype,
+        metadata: {},
+      });
+      const version = buildMockVersion();
+      mockDocumentVersionModel.create.mockResolvedValueOnce(version);
+
+      await service.upload(file, { title: 'Q3 Rent Roll' }, 'tenant-a', 'crm-export');
+
+      expect(mockDocumentModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceClass: 'crm-export' }),
+      );
+    });
+
     it('should thread requireApproval through to the ingest workflow input when set on the upload dto', async () => {
       const file = buildFile();
       const mockDocument = buildMockDocument();
@@ -293,7 +317,7 @@ describe('DocumentsService', () => {
       const version = buildMockVersion();
       mockDocumentVersionModel.create.mockResolvedValueOnce(version);
 
-      await service.upload(file, { title: 'Q3 Rent Roll', requireApproval: true });
+      await service.upload(file, { title: 'Q3 Rent Roll', requireApproval: true }, 'tenant-a');
 
       expect(mockWorkflowEngine.start).toHaveBeenCalledWith(
         'ingestDocumentVersion',
@@ -306,9 +330,9 @@ describe('DocumentsService', () => {
     it('should throw DocumentNotFoundException for a malformed documentId', async () => {
       const file = buildFile();
 
-      await expect(service.upload(file, { documentId: 'not-an-object-id' })).rejects.toBeInstanceOf(
-        DocumentNotFoundException,
-      );
+      await expect(
+        service.upload(file, { documentId: 'not-an-object-id' }, 'tenant-a'),
+      ).rejects.toBeInstanceOf(DocumentNotFoundException);
     });
 
     it('should throw DocumentNotFoundException when the document does not exist', async () => {
@@ -316,7 +340,7 @@ describe('DocumentsService', () => {
       const file = buildFile();
 
       await expect(
-        service.upload(file, { documentId: documentId.toString() }),
+        service.upload(file, { documentId: documentId.toString() }, 'tenant-a'),
       ).rejects.toBeInstanceOf(DocumentNotFoundException);
     });
 
@@ -344,7 +368,7 @@ describe('DocumentsService', () => {
       mockDocumentVersionModel.findOne.mockResolvedValueOnce(existingVersion);
       const file = buildFile();
 
-      const result = await service.upload(file, { documentId: documentId.toString() });
+      const result = await service.upload(file, { documentId: documentId.toString() }, 'tenant-a');
 
       expect(mockDocumentStore.put).not.toHaveBeenCalled();
       expect(mockDocumentVersionModel.create).not.toHaveBeenCalled();
@@ -405,23 +429,23 @@ describe('DocumentsService', () => {
       const version = buildMockVersion();
       mockDocumentVersionModel.find.mockResolvedValueOnce([version]);
 
-      const result = await service.list({ skip: 0, limit: 20 });
+      const result = await service.list({ skip: 0, limit: 20 }, 'tenant-a');
 
-      expect(mockDocumentModel.find).toHaveBeenCalledWith({ tenantId: 'default' }, null, {
+      expect(mockDocumentModel.find).toHaveBeenCalledWith({ tenantId: 'tenant-a' }, null, {
         sort: { createdAt: -1 },
         skip: 0,
         limit: 20,
       });
       expect(mockDocumentVersionModel.find).toHaveBeenCalledWith({
         _id: { $in: [versionId] },
-        tenantId: 'default',
+        tenantId: 'tenant-a',
       });
       expect(result.count).toBe(1);
       expect(result.docs).toHaveLength(1);
       expect(result.docs[0].currentVersion.id).toBe(versionId.toString());
     });
 
-    it('should scope the version lookup to the caller tenant, not the default', async () => {
+    it('should scope the version lookup to the caller tenant', async () => {
       const mockDocument = buildMockDocument();
       mockDocumentModel.find.mockResolvedValueOnce([mockDocument]);
       mockDocumentModel.countDocuments.mockResolvedValueOnce(1);
@@ -442,7 +466,7 @@ describe('DocumentsService', () => {
       mockDocumentModel.countDocuments.mockResolvedValueOnce(1);
       mockDocumentVersionModel.find.mockResolvedValueOnce([]);
 
-      await expect(service.list({ skip: 0, limit: 20 })).rejects.toBeInstanceOf(
+      await expect(service.list({ skip: 0, limit: 20 }, 'tenant-a')).rejects.toBeInstanceOf(
         InternalServerErrorException,
       );
     });
@@ -450,7 +474,7 @@ describe('DocumentsService', () => {
 
   describe('getById', () => {
     it('should throw DocumentNotFoundException for a malformed id', async () => {
-      await expect(service.getById('not-an-object-id')).rejects.toBeInstanceOf(
+      await expect(service.getById('not-an-object-id', 'tenant-a')).rejects.toBeInstanceOf(
         DocumentNotFoundException,
       );
     });
@@ -458,7 +482,7 @@ describe('DocumentsService', () => {
     it('should throw DocumentNotFoundException when the document does not exist', async () => {
       mockDocumentModel.findOne.mockResolvedValueOnce(null);
 
-      await expect(service.getById(documentId.toString())).rejects.toBeInstanceOf(
+      await expect(service.getById(documentId.toString(), 'tenant-a')).rejects.toBeInstanceOf(
         DocumentNotFoundException,
       );
     });
@@ -486,11 +510,11 @@ describe('DocumentsService', () => {
         sort: jest.fn().mockResolvedValueOnce([v1, v2]),
       });
 
-      const result = await service.getById(documentId.toString());
+      const result = await service.getById(documentId.toString(), 'tenant-a');
 
       expect(mockDocumentVersionModel.find).toHaveBeenCalledWith({
         documentId,
-        tenantId: 'default',
+        tenantId: 'tenant-a',
       });
       expect(result.versions).toHaveLength(2);
       expect(result.currentVersion.id).toBe(versionId.toString());
@@ -504,7 +528,7 @@ describe('DocumentsService', () => {
         sort: jest.fn().mockResolvedValueOnce([buildMockVersion()]),
       });
 
-      await expect(service.getById(documentId.toString())).rejects.toBeInstanceOf(
+      await expect(service.getById(documentId.toString(), 'tenant-a')).rejects.toBeInstanceOf(
         InternalServerErrorException,
       );
     });
@@ -520,9 +544,9 @@ describe('DocumentsService', () => {
     };
 
     it('should throw DocumentVersionNotFoundException for a malformed versionId', async () => {
-      await expect(service.getVersionContent('not-an-object-id', actorId)).rejects.toBeInstanceOf(
-        DocumentVersionNotFoundException,
-      );
+      await expect(
+        service.getVersionContent('not-an-object-id', actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(DocumentVersionNotFoundException);
       expect(mockDocumentVersionModel.findOne).not.toHaveBeenCalled();
     });
 
@@ -645,9 +669,9 @@ describe('DocumentsService', () => {
     });
 
     it('should throw DocumentVersionNotFoundException for a malformed versionId', async () => {
-      await expect(service.listVersionChunks('not-an-object-id', actorId)).rejects.toBeInstanceOf(
-        DocumentVersionNotFoundException,
-      );
+      await expect(
+        service.listVersionChunks('not-an-object-id', actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(DocumentVersionNotFoundException);
       expect(mockDocumentVersionModel.findOne).not.toHaveBeenCalled();
     });
 
@@ -776,9 +800,7 @@ describe('DocumentsService', () => {
     const actorId = new Types.ObjectId().toString();
 
     it('should throw DocumentNotFoundException for a malformed id', async () => {
-      // 2-arg call (no tenantId) — covers the default-tenant-parameter branch even though the
-      // early throw never reads it.
-      await expect(service.remove('not-an-object-id', actorId)).rejects.toBeInstanceOf(
+      await expect(service.remove('not-an-object-id', actorId, 'tenant-a')).rejects.toBeInstanceOf(
         DocumentNotFoundException,
       );
       expect(mockDocumentModel.findOne).not.toHaveBeenCalled();
@@ -1000,20 +1022,6 @@ describe('DocumentsService', () => {
         limit: 20,
       });
       expect(mockAuditService.record).not.toHaveBeenCalled();
-
-      subscription.unsubscribe();
-    });
-
-    it('should default to the default tenant when none is provided', async () => {
-      primeOneDocumentTick();
-      const subscription = service.streamList().subscribe();
-      await jest.advanceTimersByTimeAsync(0);
-
-      expect(mockDocumentModel.find).toHaveBeenCalledWith({ tenantId: 'default' }, null, {
-        sort: { createdAt: -1 },
-        skip: 0,
-        limit: 20,
-      });
 
       subscription.unsubscribe();
     });

@@ -73,6 +73,7 @@ export class ConflictsController {
         winningFactId: dto.winningFactId,
         actorId: user.userId,
         requestedBy: user.email,
+        origin: 'api',
         tenantId: user.tenantId,
       }),
     );

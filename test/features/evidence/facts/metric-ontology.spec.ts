@@ -27,6 +27,20 @@ describe('METRIC_ONTOLOGY', () => {
     expect(METRIC_ONTOLOGY.length).toBeGreaterThanOrEqual(6);
     expect(METRIC_ONTOLOGY.length).toBeLessThanOrEqual(8);
   });
+
+  it('should never rank an unclassified document as authoritative for any metric', () => {
+    for (const metric of METRIC_ONTOLOGY) {
+      expect(metric.authorityOrder ?? []).not.toContain('unclassified');
+    }
+  });
+
+  it('should declare a positive stalenessWindowMs for every metric that configures one', () => {
+    for (const metric of METRIC_ONTOLOGY) {
+      if (metric.stalenessWindowMs !== undefined) {
+        expect(metric.stalenessWindowMs).toBeGreaterThan(0);
+      }
+    }
+  });
 });
 
 describe('findMetricByAlias', () => {

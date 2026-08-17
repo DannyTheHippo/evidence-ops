@@ -22,6 +22,7 @@ import { sourcesApiExamples } from './api-examples/sources.api-examples';
 import { CreateSourceRequestDto } from './dtos/request/create-source.request.dto';
 import { UpdateSourceEnabledRequestDto } from './dtos/request/update-source-enabled.request.dto';
 import { SourceResponseDto } from './dtos/response/source.response.dto';
+import { SourceWithFileStatesResponseDto } from './dtos/response/source-with-file-states.response.dto';
 import { SourcesService } from './sources.service';
 
 @Controller('sources')
@@ -77,18 +78,18 @@ export class SourcesController {
   @Get(':id')
   @Version('1')
   @HttpCode(HttpStatus.OK)
-  @ApiResponse(sourcesApiExamples.found)
+  @ApiResponse(sourcesApiExamples.detail)
   @ApiResponse(sourcesApiExamples.notFound)
   async getById(
     @Param('id') id: string,
     @CurrentUser() user: AuthenticatedRequest['user'],
-  ): Promise<SourceResponseDto> {
+  ): Promise<SourceWithFileStatesResponseDto> {
     if (!user) {
       throw new UnauthorizedException('No token provided');
     }
 
     return toResponseDto(
-      SourceResponseDto,
+      SourceWithFileStatesResponseDto,
       await this.sourcesService.getById(id, user.userId, user.tenantId),
     );
   }

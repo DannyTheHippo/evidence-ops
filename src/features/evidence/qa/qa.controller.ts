@@ -49,6 +49,7 @@ export class QaController {
       await this.qaService.startQuestion({
         questionText: dto.questionText,
         actorId: user.userId,
+        role: user.role,
         tenantId: user.tenantId,
       }),
     );

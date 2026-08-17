@@ -23,6 +23,14 @@ export const factCandidateSchema = z.object({
    * granularity is `derivePeriodFromDateText`'s job (`derive-period.ts`) — the one place that
    * logic lives, rather than trusting the model to reproduce it. */
   periodText: z.string(),
+  /** An ISO `YYYY-MM-DD` date the source text explicitly states as when this value was observed
+   * or recorded, or an empty string when the source states no observation date. Never inferred,
+   * guessed, or derived from surrounding context — an invented observation date is worse than
+   * none, because a recency rule would then fire on evidence that never actually carried one.
+   * Parsed and calendar-validated by `prose-fact-extractor.ts`, never trusted as-is: an empty or
+   * malformed string, or one that names a date the calendar has no such day for, leaves the fact's
+   * observation date absent rather than defaulted to anything. */
+  observedAtText: z.string(),
   amount: z.number(),
   unit: z.string().min(1),
   /** Verbatim substring of the chunk the value comes from — the grounding gate rejects any

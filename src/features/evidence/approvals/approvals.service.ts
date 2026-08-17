@@ -1,7 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
 import {
   Approval,
   type ApprovalDocument,
@@ -32,7 +31,7 @@ export interface DecideApprovalInput {
    *  schema's own doc comment). */
   readonly actorId: string;
   readonly decidedBy: string;
-  readonly tenantId?: string;
+  readonly tenantId: string;
 }
 
 /**
@@ -67,7 +66,7 @@ export class ApprovalsService {
   async listPending(
     pagination: PaginationRequestDto,
     actorId: string,
-    tenantId: string = DEFAULT_TENANT_ID,
+    tenantId: string,
   ): Promise<DocumentResultWithCount<ApprovalResponseDto>> {
     const result = await this.peekPending(pagination, tenantId);
 
@@ -89,7 +88,7 @@ export class ApprovalsService {
    */
   async peekPending(
     pagination: PaginationRequestDto,
-    tenantId: string = DEFAULT_TENANT_ID,
+    tenantId: string,
   ): Promise<DocumentResultWithCount<ApprovalResponseDto>> {
     const filter = { tenantId, state: 'pending' as const };
 
@@ -118,7 +117,7 @@ export class ApprovalsService {
    * workflow, the row it will read already holds the real decision.
    */
   async decide(id: string, input: DecideApprovalInput): Promise<ApprovalResponseDto> {
-    const tenantId = input.tenantId ?? DEFAULT_TENANT_ID;
+    const tenantId = input.tenantId;
     if (!Types.ObjectId.isValid(id)) {
       throw new ApprovalNotFoundException(`Approval '${id}' not found`);
     }

@@ -3,7 +3,6 @@ import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { Types } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../../src/database/constants/tenant.constant';
 import { WorkflowRun } from '../../../../src/database/schemas/workflow/workflow-run/workflow-run.schema';
 import { ApprovalsService } from '../../../../src/features/evidence/approvals/approvals.service';
 import { WorkflowRunNotFoundException } from '../../../../src/features/evidence/workflow-runs/exceptions/workflow-runs.exception';
@@ -84,23 +83,10 @@ describe('WorkflowRunsService', () => {
 
   describe('findById', () => {
     it('should throw WorkflowRunNotFoundException without querying when id is not a valid ObjectId', async () => {
-      await expect(service.findById('not-an-id', 'actor')).rejects.toBeInstanceOf(
+      await expect(service.findById('not-an-id', 'actor', 'tenant-a')).rejects.toBeInstanceOf(
         WorkflowRunNotFoundException,
       );
       expect(mockWorkflowRunModel.findOne).not.toHaveBeenCalled();
-    });
-
-    it('should throw WorkflowRunNotFoundException, tenant-scoped to the default tenant, when no run matches', async () => {
-      const id = new Types.ObjectId().toString();
-      mockWorkflowRunModel.findOne.mockResolvedValueOnce(null);
-
-      await expect(service.findById(id, 'actor')).rejects.toBeInstanceOf(
-        WorkflowRunNotFoundException,
-      );
-      expect(mockWorkflowRunModel.findOne).toHaveBeenCalledWith({
-        _id: id,
-        tenantId: DEFAULT_TENANT_ID,
-      });
     });
 
     it('should scope the lookup to an explicit tenantId when provided', async () => {
@@ -131,14 +117,14 @@ describe('WorkflowRunsService', () => {
       mockWorkflowEngine.status.mockResolvedValueOnce({ id: 'wf-1', status: 'completed' });
       mockAuditService.record.mockResolvedValueOnce(undefined);
 
-      const result = await service.findById(id.toString(), actorId);
+      const result = await service.findById(id.toString(), actorId, 'tenant-a');
 
       expect(mockWorkflowEngine.status).toHaveBeenCalledWith('wf-1');
       expect(mockAuditService.record).toHaveBeenCalledWith({
         action: 'workflow-runs.viewed',
         actorId,
         subject: { entityType: 'WorkflowRun', entityId: id.toString() },
-        tenantId: DEFAULT_TENANT_ID,
+        tenantId: 'tenant-a',
       });
       expect(result.status).toBe('completed');
       expect(mockWorkflowRunModel.findOne.mock.calls).toHaveLength(1);
@@ -158,7 +144,7 @@ describe('WorkflowRunsService', () => {
       mockWorkflowEngine.status.mockRejectedValueOnce(new Error('temporal unreachable'));
       mockAuditService.record.mockResolvedValueOnce(undefined);
 
-      const result = await service.findById(id.toString(), 'actor');
+      const result = await service.findById(id.toString(), 'actor', 'tenant-a');
 
       expect(result.status).toBe('running');
       expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining(id.toString()));
@@ -166,7 +152,7 @@ describe('WorkflowRunsService', () => {
   });
 
   describe('listByWorkflowId', () => {
-    it('should page runs by workflowId for the default tenant, never refreshing from the live engine, and record an audit event scoped to the actor', async () => {
+    it('should page runs by workflowId, never refreshing from the live engine, and record an audit event scoped to the actor', async () => {
       const actorId = new Types.ObjectId().toString();
       const id = new Types.ObjectId();
       const run = {
@@ -184,22 +170,23 @@ describe('WorkflowRunsService', () => {
       const result = await service.listByWorkflowId(
         { workflowId: 'wf-1', skip: 0, limit: 20 },
         actorId,
+        'tenant-a',
       );
 
       expect(mockWorkflowRunModel.find).toHaveBeenCalledWith(
-        { workflowId: 'wf-1', tenantId: DEFAULT_TENANT_ID },
+        { workflowId: 'wf-1', tenantId: 'tenant-a' },
         null,
         { sort: { createdAt: -1 }, skip: 0, limit: 20 },
       );
       expect(mockWorkflowRunModel.countDocuments).toHaveBeenCalledWith({
         workflowId: 'wf-1',
-        tenantId: DEFAULT_TENANT_ID,
+        tenantId: 'tenant-a',
       });
       expect(mockAuditService.record).toHaveBeenCalledWith({
         action: 'workflow-runs.listed',
         actorId,
         subject: { entityType: 'User', entityId: actorId },
-        tenantId: DEFAULT_TENANT_ID,
+        tenantId: 'tenant-a',
       });
       expect(mockWorkflowEngine.status).not.toHaveBeenCalled();
       expect(result).toEqual({
@@ -271,14 +258,14 @@ describe('WorkflowRunsService', () => {
       });
     });
 
-    it('should return null and default the tenant when no row matches', async () => {
+    it('should return null when no row matches', async () => {
       mockWorkflowRunModel.findOne.mockResolvedValueOnce(null);
 
-      const result = await service.findRunByWorkflowId('wf-1');
+      const result = await service.findRunByWorkflowId('wf-1', 'tenant-a');
 
       expect(mockWorkflowRunModel.findOne).toHaveBeenCalledWith({
         workflowId: 'wf-1',
-        tenantId: DEFAULT_TENANT_ID,
+        tenantId: 'tenant-a',
       });
       expect(result).toBeNull();
     });
@@ -298,7 +285,7 @@ describe('WorkflowRunsService', () => {
       mockWorkflowRunModel.findOne.mockResolvedValueOnce(run);
       mockWorkflowEngine.status.mockResolvedValueOnce({ id: 'wf-1', status: 'completed' });
 
-      const result = await service.peekRun(id.toString());
+      const result = await service.peekRun(id.toString(), 'tenant-a');
 
       expect(mockWorkflowEngine.status).toHaveBeenCalledWith('wf-1');
       expect(result.status).toBe('completed');
@@ -326,27 +313,6 @@ describe('WorkflowRunsService', () => {
     });
 
     const emptyApprovalsPage = { docs: [], count: 0 };
-
-    it('should default to the default tenant when none is provided', async () => {
-      const run = buildRun();
-      mockWorkflowRunModel.findOne.mockResolvedValue(run);
-      mockWorkflowEngine.status.mockRejectedValue(new Error('no live handle'));
-      mockApprovalsService.peekPending.mockResolvedValue(emptyApprovalsPage);
-      mockAuditService.record.mockResolvedValue(undefined);
-
-      const subscription = service.streamRun(run._id.toString(), 'actor-1').subscribe();
-      await jest.advanceTimersByTimeAsync(0);
-
-      expect(mockAuditService.record).toHaveBeenCalledWith(
-        expect.objectContaining({ tenantId: DEFAULT_TENANT_ID }),
-      );
-      expect(mockApprovalsService.peekPending).toHaveBeenCalledWith(
-        { skip: 0, limit: 20 },
-        DEFAULT_TENANT_ID,
-      );
-
-      subscription.unsubscribe();
-    });
 
     it('should record one audit row on open, then emit the first run and approvals events', async () => {
       const run = buildRun();

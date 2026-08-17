@@ -16,3 +16,14 @@ export class InvalidConflictResolutionException extends BaseException {
     super(message, HttpStatus.CONFLICT, cause);
   }
 }
+
+/** Thrown by `ConflictsService.requestResolution` when a pending `Approval` already exists for the
+ * same conflict — a conflict stays `open` for its whole 24-hour approval wait, so without this
+ * guard a second call starts a second `resolveConflict` execution and a second pending row for the
+ * same disagreement, each independently approvable, and two approvals naming different
+ * `winningFactId`s could both reach `recordResolution`. */
+export class ConflictResolutionAlreadyPendingException extends BaseException {
+  constructor(message: string, cause?: unknown) {
+    super(message, HttpStatus.CONFLICT, cause);
+  }
+}

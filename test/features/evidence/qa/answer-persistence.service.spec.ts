@@ -23,8 +23,8 @@ const CHUNK_ID = computeChunkId({
   locator: { kind: 'pdf-page', page: 3, extractorVersion: 'v1' },
 });
 
-/** A stand-in for the `AnswerDocument` `findById` resolves — mutable fields plus a `save` mock,
- * mirroring the findById-then-mutate-then-save shape `AnswerPersistenceService.persist` now uses
+/** A stand-in for the `AnswerDocument` `findOne` resolves — mutable fields plus a `save` mock,
+ * mirroring the findOne-then-mutate-then-save shape `AnswerPersistenceService.persist` now uses
  * (see `DocumentsService.addVersion`'s sibling test for the same document-mock pattern). */
 function buildAnswerDoc(overrides: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
   return {
@@ -73,6 +73,7 @@ describe('AnswerPersistenceService', () => {
       service.persist({
         answerId,
         questionText: 'What is the vacancy rate?',
+        tenantId: 'default',
         retrievedChunkIds: [],
         outcome: { kind: 'insufficient_evidence', reason: 'no supporting evidence' },
         claims: [],
@@ -81,22 +82,45 @@ describe('AnswerPersistenceService', () => {
     expect(mockAnswerModel.create).not.toHaveBeenCalled();
   });
 
-  it('should update the existing row to runStatus completed with default tenantId for an insufficient_evidence outcome', async () => {
+  it('should throw AnswerNotFoundException instead of loading the row when it belongs to another tenant', async () => {
+    // Regression for the cross-tenant write primitive: a scoped lookup that misses because the
+    // row belongs to a different tenant must be indistinguishable from a missing row, and must
+    // never fall through to loading (and then relabeling, via `.save()`) that foreign row.
+    const answerId = new Types.ObjectId().toString();
+    mockAnswerModel.findOne.mockResolvedValueOnce(null);
+
+    await expect(
+      service.persist({
+        answerId,
+        questionText: 'What is the vacancy rate?',
+        tenantId: 'acme',
+        retrievedChunkIds: [],
+        outcome: { kind: 'insufficient_evidence', reason: 'no supporting evidence' },
+        claims: [],
+      }),
+    ).rejects.toBeInstanceOf(AnswerNotFoundException);
+    expect(mockAnswerModel.findOne).toHaveBeenCalledWith({ _id: answerId, tenantId: 'acme' });
+    expect(mockAnswerModel.create).not.toHaveBeenCalled();
+  });
+
+  it('should update the existing row to runStatus completed for an insufficient_evidence outcome', async () => {
     const outcome = { kind: 'insufficient_evidence' as const, reason: 'no supporting evidence' };
     const answerDoc = buildAnswerDoc();
-    mockAnswerModel.findById.mockResolvedValueOnce(answerDoc);
+    mockAnswerModel.findOne.mockResolvedValueOnce(answerDoc);
 
     const result = await service.persist({
       answerId: (answerDoc._id as Types.ObjectId).toString(),
       questionText: 'What is the vacancy rate?',
+      tenantId: 'default',
       retrievedChunkIds: [],
       outcome,
       claims: [],
     });
 
-    expect(mockAnswerModel.findById).toHaveBeenCalledWith(
-      (answerDoc._id as Types.ObjectId).toString(),
-    );
+    expect(mockAnswerModel.findOne).toHaveBeenCalledWith({
+      _id: (answerDoc._id as Types.ObjectId).toString(),
+      tenantId: 'default',
+    });
     expect(answerDoc).toMatchObject({
       runStatus: 'completed',
       tenantId: 'default',
@@ -129,11 +153,12 @@ describe('AnswerPersistenceService', () => {
       ],
     };
     const answerDoc = buildAnswerDoc();
-    mockAnswerModel.findById.mockResolvedValueOnce(answerDoc);
+    mockAnswerModel.findOne.mockResolvedValueOnce(answerDoc);
 
     await service.persist({
       answerId: (answerDoc._id as Types.ObjectId).toString(),
       questionText: 'What is the cap rate?',
+      tenantId: 'default',
       retrievedChunkIds: [],
       outcome,
       claims: [],
@@ -145,7 +170,7 @@ describe('AnswerPersistenceService', () => {
     ]);
   });
 
-  it('should persist retrievedChunkIds as-is (content-addressed strings) and pass an explicit tenantId and gate fields through for an answered outcome', async () => {
+  it('should persist retrievedChunkIds as-is (content-addressed strings), scope the load to the input tenant, and pass gate fields through for an answered outcome', async () => {
     const outcome = {
       kind: 'answered' as const,
       claims: [
@@ -168,8 +193,8 @@ describe('AnswerPersistenceService', () => {
       totalClaimCount: 1,
       droppedClaims: [],
     };
-    const answerDoc = buildAnswerDoc();
-    mockAnswerModel.findById.mockResolvedValueOnce(answerDoc);
+    const answerDoc = buildAnswerDoc({ tenantId: 'acme' });
+    mockAnswerModel.findOne.mockResolvedValueOnce(answerDoc);
 
     const result = await service.persist({
       answerId: (answerDoc._id as Types.ObjectId).toString(),
@@ -182,11 +207,17 @@ describe('AnswerPersistenceService', () => {
       verificationReport,
     });
 
+    expect(mockAnswerModel.findOne).toHaveBeenCalledWith({
+      _id: (answerDoc._id as Types.ObjectId).toString(),
+      tenantId: 'acme',
+    });
     // Regression: `EvidenceChunk._id` is content-addressed (`computeChunkId`), not an ObjectId —
     // `AnswerPersistenceService.persist` used to coerce this array through `new Types.ObjectId(id)`,
     // which throws `BSONError` on a 64-character sha256 hex string (only a 24-character hex string
     // is a valid `ObjectId`). Asserting the exact string round-trips confirms no such coercion runs.
     expect(answerDoc).toMatchObject({
+      // Not reassigned — the scoped `findOne` load above already guarantees the row is this
+      // tenant's, so `persist` must leave `tenantId` exactly as loaded rather than writing over it.
       tenantId: 'acme',
       retrievedChunkIds: [CHUNK_ID],
       claimCoverage: 1,
@@ -204,11 +235,12 @@ describe('AnswerPersistenceService', () => {
     const outcome = { kind: 'insufficient_evidence' as const, reason: 'no supporting evidence' };
     const usage = { promptTokens: 875, completionTokens: 120, costUsd: 0.0234 };
     const answerDoc = buildAnswerDoc();
-    mockAnswerModel.findById.mockResolvedValueOnce(answerDoc);
+    mockAnswerModel.findOne.mockResolvedValueOnce(answerDoc);
 
     await service.persist({
       answerId: (answerDoc._id as Types.ObjectId).toString(),
       questionText: 'What is the cap rate?',
+      tenantId: 'default',
       retrievedChunkIds: [],
       outcome,
       claims: [],
@@ -226,11 +258,12 @@ describe('AnswerPersistenceService', () => {
     const answerDoc = buildAnswerDoc({
       usage: { promptTokens: 500, completionTokens: 50, costUsd: 0.01 },
     });
-    mockAnswerModel.findById.mockResolvedValueOnce(answerDoc);
+    mockAnswerModel.findOne.mockResolvedValueOnce(answerDoc);
 
     await service.persist({
       answerId: (answerDoc._id as Types.ObjectId).toString(),
       questionText: 'What is the cap rate?',
+      tenantId: 'default',
       retrievedChunkIds: [],
       outcome,
       claims: [],

@@ -1,5 +1,6 @@
 import { HttpStatus } from '@nestjs/common';
 import type { ApiResponseOptions } from '@nestjs/swagger';
+import { SourceWithFileStatesResponseDto } from '../dtos/response/source-with-file-states.response.dto';
 
 const exampleSource = {
   id: '65f1c2e4a1b2c3d4e5f6a7b8',
@@ -12,6 +13,13 @@ const exampleSource = {
   lastSyncStatus: 'ok',
   fileCount: 42,
   createdAt: '2026-07-01T00:00:00.000Z',
+};
+
+const exampleFileState = {
+  path: 'contracts/lease-agreement.pdf',
+  status: 'failed',
+  lastError: "Could not resolve a document type for 'contracts/lease-agreement.pdf'",
+  mtimeMs: 1753920000000,
 };
 
 const exampleWorkflowRun = {
@@ -49,6 +57,17 @@ export const sourcesApiExamples: Record<string, ApiResponseOptions> = {
       example: {
         summary: 'Existing source',
         value: exampleSource,
+      },
+    },
+  },
+  detail: {
+    status: HttpStatus.OK,
+    description: 'The requested source, with per-file sync state.',
+    type: SourceWithFileStatesResponseDto,
+    examples: {
+      example: {
+        summary: 'Source with one failed file',
+        value: { ...exampleSource, fileStates: [exampleFileState] },
       },
     },
   },

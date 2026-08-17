@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { FactKey } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import { groundingClaimsDroppedCounter } from '../../../providers/telemetry/domain-metrics';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { AnsweredOutcome, Claim, DroppedClaim } from './contracts/answer.contract';
 import type { GroundingReport, GroundingViolation } from './types/grounding-report.type';
@@ -71,6 +72,10 @@ export class GroundingGateService {
       if (result.kind === 'dropped') {
         droppedClaims.push(result.dropped);
         this.logger.debug(`Dropped claim '${claim.statement}': ${result.dropped.reason}`);
+        // `result.violations[0].kind` — the bounded `GroundingViolationKind`, never
+        // `result.dropped.reason` (free text quoting claim/chunk content, unsafe as a metric
+        // attribute). `verifyClaim` never returns `kind: 'dropped'` with an empty `violations`.
+        groundingClaimsDroppedCounter.add(1, { rule: result.violations[0].kind });
         continue;
       }
 

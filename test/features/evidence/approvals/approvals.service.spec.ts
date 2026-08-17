@@ -2,7 +2,6 @@ import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { Types } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../../src/database/constants/tenant.constant';
 import { Approval } from '../../../../src/database/schemas/workflow/approval/approval.schema';
 import { ApprovalsService } from '../../../../src/features/evidence/approvals/approvals.service';
 import {
@@ -73,29 +72,29 @@ describe('ApprovalsService', () => {
   });
 
   describe('listPending', () => {
-    it('should page pending approvals for the default tenant and record an audit event scoped to the actor', async () => {
+    it('should page pending approvals for a tenant and record an audit event scoped to the actor', async () => {
       const actorId = new Types.ObjectId().toString();
       const approval = buildApproval();
       mockApprovalModel.find.mockResolvedValueOnce([approval]);
       mockApprovalModel.countDocuments.mockResolvedValueOnce(1);
       mockAuditService.record.mockResolvedValueOnce(undefined);
 
-      const result = await service.listPending({ skip: 0, limit: 20 }, actorId);
+      const result = await service.listPending({ skip: 0, limit: 20 }, actorId, 'tenant-a');
 
       expect(mockApprovalModel.find).toHaveBeenCalledWith(
-        { tenantId: DEFAULT_TENANT_ID, state: 'pending' },
+        { tenantId: 'tenant-a', state: 'pending' },
         null,
         { sort: { createdAt: -1 }, skip: 0, limit: 20 },
       );
       expect(mockApprovalModel.countDocuments).toHaveBeenCalledWith({
-        tenantId: DEFAULT_TENANT_ID,
+        tenantId: 'tenant-a',
         state: 'pending',
       });
       expect(mockAuditService.record).toHaveBeenCalledWith({
         action: 'approvals.listed',
         actorId,
         subject: { entityType: 'User', entityId: actorId },
-        tenantId: DEFAULT_TENANT_ID,
+        tenantId: 'tenant-a',
       });
       expect(result).toEqual({
         docs: [
@@ -138,15 +137,15 @@ describe('ApprovalsService', () => {
   });
 
   describe('peekPending', () => {
-    it('should page pending approvals for the default tenant without recording an audit event', async () => {
+    it('should page pending approvals for a tenant without recording an audit event', async () => {
       const approval = buildApproval();
       mockApprovalModel.find.mockResolvedValueOnce([approval]);
       mockApprovalModel.countDocuments.mockResolvedValueOnce(1);
 
-      const result = await service.peekPending({ skip: 0, limit: 20 });
+      const result = await service.peekPending({ skip: 0, limit: 20 }, 'tenant-a');
 
       expect(mockApprovalModel.find).toHaveBeenCalledWith(
-        { tenantId: DEFAULT_TENANT_ID, state: 'pending' },
+        { tenantId: 'tenant-a', state: 'pending' },
         null,
         { sort: { createdAt: -1 }, skip: 0, limit: 20 },
       );
@@ -175,6 +174,7 @@ describe('ApprovalsService', () => {
       reason: 'Evidence checks out.',
       actorId: new Types.ObjectId().toString(),
       decidedBy: 'reviewer@example.com',
+      tenantId: 'acme-corp',
     };
 
     it('should throw ApprovalNotFoundException without querying when id is not a valid ObjectId', async () => {
@@ -184,7 +184,7 @@ describe('ApprovalsService', () => {
       expect(mockApprovalModel.findOne).not.toHaveBeenCalled();
     });
 
-    it('should throw ApprovalNotFoundException, tenant-scoped, when no approval matches', async () => {
+    it('should throw ApprovalNotFoundException, scoped to the given tenantId, when no approval matches', async () => {
       const id = new Types.ObjectId().toString();
       mockApprovalModel.findOne.mockResolvedValueOnce(null);
 
@@ -193,18 +193,18 @@ describe('ApprovalsService', () => {
       );
       expect(mockApprovalModel.findOne).toHaveBeenCalledWith({
         _id: id,
-        tenantId: DEFAULT_TENANT_ID,
+        tenantId: 'acme-corp',
       });
     });
 
-    it('should scope the lookup to an explicit tenantId when provided', async () => {
+    it('should return rejected — never the real decision — when the approval exists under a different tenant', async () => {
       const id = new Types.ObjectId().toString();
       mockApprovalModel.findOne.mockResolvedValueOnce(null);
 
       await expect(
-        service.decide(id, { ...decideInput, tenantId: 'acme-corp' }),
+        service.decide(id, { ...decideInput, tenantId: 'other-tenant' }),
       ).rejects.toBeInstanceOf(ApprovalNotFoundException);
-      expect(mockApprovalModel.findOne).toHaveBeenCalledWith({ _id: id, tenantId: 'acme-corp' });
+      expect(mockApprovalModel.findOne).toHaveBeenCalledWith({ _id: id, tenantId: 'other-tenant' });
     });
 
     it('should throw ApprovalAlreadyDecidedException when the approval is not pending', async () => {

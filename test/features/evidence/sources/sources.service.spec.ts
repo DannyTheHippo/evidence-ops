@@ -81,6 +81,7 @@ describe('SourcesService', () => {
     lastSyncError: undefined,
     fileStates: [],
     tenantId: DEFAULT_TENANT_ID,
+    sourceClass: 'unclassified',
     createdAt: new Date('2026-07-01T00:00:00.000Z'),
     save: jest.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -149,7 +150,7 @@ describe('SourcesService', () => {
       expect(result.id).toBe(sourceId.toString());
     });
 
-    it('should default the tenant to DEFAULT_TENANT_ID and respect an explicit enabled/intervalMs', async () => {
+    it('should respect an explicit enabled/intervalMs override', async () => {
       mockSourceModel.create.mockResolvedValueOnce(buildMockSource());
 
       await service.create({
@@ -159,17 +160,18 @@ describe('SourcesService', () => {
         enabled: false,
         intervalMs: 60000,
         actorId,
+        tenantId: 'tenant-b',
       });
 
       expect(mockSourceModel.create).toHaveBeenCalledWith(
         expect.objectContaining({
           enabled: false,
           intervalMs: 60000,
-          tenantId: DEFAULT_TENANT_ID,
+          tenantId: 'tenant-b',
         }),
       );
       expect(mockAuditService.record).toHaveBeenCalledWith(
-        expect.objectContaining({ tenantId: DEFAULT_TENANT_ID }),
+        expect.objectContaining({ tenantId: 'tenant-b' }),
       );
     });
 
@@ -182,6 +184,7 @@ describe('SourcesService', () => {
           kind: 'local-folder',
           path: 'deal-room',
           actorId,
+          tenantId: 'tenant-a',
         }),
       ).rejects.toBeInstanceOf(SourceNameConflictException);
     });
@@ -196,6 +199,7 @@ describe('SourcesService', () => {
           kind: 'local-folder',
           path: 'deal-room',
           actorId,
+          tenantId: 'tenant-a',
         }),
       ).rejects.toBe(error);
     });
@@ -210,6 +214,7 @@ describe('SourcesService', () => {
           kind: 'local-folder',
           path: 'deal-room',
           actorId,
+          tenantId: 'tenant-a',
         }),
       ).rejects.toBe(error);
     });
@@ -223,6 +228,7 @@ describe('SourcesService', () => {
           kind: 'local-folder',
           path: 'deal-room',
           actorId,
+          tenantId: 'tenant-a',
         }),
       ).rejects.toBe('boom');
     });
@@ -236,6 +242,7 @@ describe('SourcesService', () => {
           kind: 'local-folder',
           path: 'deal-room',
           actorId,
+          tenantId: 'tenant-a',
         }),
       ).rejects.toBe(null);
     });
@@ -262,24 +269,11 @@ describe('SourcesService', () => {
       expect(result.count).toBe(1);
       expect(result.docs).toHaveLength(1);
     });
-
-    it('should default the tenant to DEFAULT_TENANT_ID when omitted', async () => {
-      mockSourceModel.find.mockResolvedValueOnce([]);
-      mockSourceModel.countDocuments.mockResolvedValueOnce(0);
-
-      await service.list({ skip: 0, limit: 20 }, actorId);
-
-      expect(mockSourceModel.find).toHaveBeenCalledWith(
-        { tenantId: DEFAULT_TENANT_ID },
-        null,
-        expect.anything(),
-      );
-    });
   });
 
   describe('getById', () => {
     it('should throw SourceNotFoundException for a malformed id', async () => {
-      await expect(service.getById('not-an-id', actorId)).rejects.toBeInstanceOf(
+      await expect(service.getById('not-an-id', actorId, 'tenant-a')).rejects.toBeInstanceOf(
         SourceNotFoundException,
       );
       expect(mockSourceModel.findOne).not.toHaveBeenCalled();
@@ -306,13 +300,46 @@ describe('SourcesService', () => {
       });
       expect(result.name).toBe('Deal Room Inbox');
     });
+
+    it('should derive a per-file status from whether lastError is set', async () => {
+      const okState: SourceFileState = {
+        path: 'contracts/lease.pdf',
+        sha256: 'a'.repeat(64),
+        sizeBytes: 1024,
+        mtimeMs: 1_753_920_000_000,
+        documentId: documentIdA,
+      };
+      const failedState: SourceFileState = {
+        path: 'contracts/broken.pdf',
+        sha256: 'b'.repeat(64),
+        sizeBytes: 2048,
+        mtimeMs: 1_753_920_100_000,
+        documentId: documentIdB,
+        lastError: "Could not resolve a document type for 'contracts/broken.pdf'",
+      };
+      mockSourceModel.findOne.mockResolvedValueOnce(
+        buildMockSource({ fileStates: [okState, failedState] }),
+      );
+
+      const result = await service.getById(sourceId.toString(), actorId, 'tenant-a');
+
+      expect(result.fileStates).toEqual([
+        { path: okState.path, status: 'ok', lastError: undefined, mtimeMs: okState.mtimeMs },
+        {
+          path: failedState.path,
+          status: 'failed',
+          lastError: failedState.lastError,
+          mtimeMs: failedState.mtimeMs,
+        },
+      ]);
+    });
   });
 
   describe('setEnabled', () => {
     it('should throw SourceNotFoundException for a malformed id', async () => {
-      await expect(service.setEnabled('not-an-id', false, actorId)).rejects.toBeInstanceOf(
-        SourceNotFoundException,
-      );
+      await expect(
+        service.setEnabled('not-an-id', false, actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(SourceNotFoundException);
       expect(mockSourceModel.findOneAndUpdate).not.toHaveBeenCalled();
     });
 
@@ -386,28 +413,6 @@ describe('SourcesService', () => {
         tenantId: 'tenant-a',
       });
       expect(result).toEqual(runProjection);
-    });
-
-    it('should default the tenant to DEFAULT_TENANT_ID when omitted', async () => {
-      const source = buildMockSource();
-      mockSourceModel.findOne.mockResolvedValueOnce(source);
-      mockWorkflowEngine.start.mockResolvedValueOnce({ id: 'wf-sync-1', status: 'running' });
-      mockWorkflowRunsService.create.mockResolvedValueOnce({
-        id: 'run-1',
-        workflowId: 'wf-sync-1',
-        status: 'running',
-        createdAt: new Date('2026-07-01T00:00:00.000Z'),
-      });
-
-      await service.requestSync(sourceId.toString(), actorId);
-
-      expect(mockSourceModel.findOne).toHaveBeenCalledWith({
-        _id: sourceId.toString(),
-        tenantId: DEFAULT_TENANT_ID,
-      });
-      expect(mockWorkflowRunsService.create).toHaveBeenCalledWith(
-        expect.objectContaining({ tenantId: DEFAULT_TENANT_ID }),
-      );
     });
 
     it('should not start a second workflow and return the existing run when one is still running', async () => {
@@ -720,6 +725,7 @@ describe('SourcesService', () => {
         expect.objectContaining({ originalname: 'new.pdf' }),
         { title: 'new.pdf' },
         DEFAULT_TENANT_ID,
+        'unclassified',
       );
 
       const persistedFileStates = getFinalizeUpdate(1).$set.fileStates;
