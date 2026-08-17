@@ -1,6 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
+import { registerTestUser } from '../utils/register-test-user';
 
 interface MeResponseBody {
   id: string;
@@ -56,8 +57,22 @@ describe('Auth (e2e)', () => {
     expect(meResponse.status).toBe(200);
     expect(meBody.email).toBe(credentials.email);
     expect(meBody.id).toBe(registerBody.id);
-    expect(meBody.role).toBe('member');
+    // A sole registrant provisions and lands as the `admin` of a brand-new tenant.
+    expect(meBody.role).toBe('admin');
     expect(Object.keys(meBody).sort()).toEqual(['id', 'email', 'role', 'createdAt'].sort());
+  });
+
+  it('provisions a distinct tenant for each registration', async () => {
+    const first = await registerTestUser(app, {
+      email: 'auth-e2e-tenant-a@example.com',
+      password: 'correct-horse-battery-staple',
+    });
+    const second = await registerTestUser(app, {
+      email: 'auth-e2e-tenant-b@example.com',
+      password: 'correct-horse-battery-staple',
+    });
+
+    expect(first.tenantId).not.toBe(second.tenantId);
   });
 
   // Proves the global APP_GUARD JwtAuthGuard denies by default: only handlers explicitly
@@ -73,7 +88,7 @@ describe('Auth (e2e)', () => {
       email: 'auth-e2e-cookie@example.com',
       password: 'correct-horse-battery-staple',
     };
-    await request(getTestServer(app)).post('/api/v1/auth/register').send(cookieCredentials);
+    await registerTestUser(app, cookieCredentials);
 
     const loginResponse = await request(getTestServer(app))
       .post('/api/v1/auth/login')
@@ -103,15 +118,11 @@ describe('Auth (e2e)', () => {
       email: 'auth-e2e-logout@example.com',
       password: 'correct-horse-battery-staple',
     };
-    await request(getTestServer(app)).post('/api/v1/auth/register').send(logoutCredentials);
-    const loginResponse = await request(getTestServer(app))
-      .post('/api/v1/auth/login')
-      .send(logoutCredentials);
-    const loginBody = loginResponse.body as AuthTokenResponseBody;
+    const { token } = await registerTestUser(app, logoutCredentials);
 
     const logoutResponse = await request(getTestServer(app))
       .post('/api/v1/auth/logout')
-      .set('Authorization', `Bearer ${loginBody.accessToken}`);
+      .set('Authorization', `Bearer ${token}`);
     const setCookieHeader = logoutResponse.headers['set-cookie'] as unknown as string[];
     const clearedCookie = setCookieHeader.find((cookie) => cookie.startsWith('eo_session='));
 
@@ -133,17 +144,16 @@ describe('Auth (e2e)', () => {
     // workers; the added CPU load produced an observed `socket hang up` failure in 1 of 5 full
     // runs.
     beforeAll(async () => {
-      await request(getTestServer(app)).post('/api/v1/auth/register').send({ email, password });
+      const { token } = await registerTestUser(app, { email, password });
       const loginResponse = await request(getTestServer(app))
         .post('/api/v1/auth/login')
         .send({ email, password });
-      const loginBody = loginResponse.body as AuthTokenResponseBody;
       const setCookieHeader = loginResponse.headers['set-cookie'] as unknown as string[];
       const sessionCookie = setCookieHeader
         .find((cookie) => cookie.startsWith('eo_session='))
         ?.split(';')[0] as string;
 
-      logoutCredentials = { accessToken: loginBody.accessToken, sessionCookie };
+      logoutCredentials = { accessToken: token, sessionCookie };
     });
 
     it('rejects a cookie-authenticated mutating request carrying a hostile Origin', async () => {

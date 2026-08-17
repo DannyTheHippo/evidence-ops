@@ -2,8 +2,10 @@ import type { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import type { Model } from 'mongoose';
 import request from 'supertest';
+import { Types } from 'mongoose';
 import { Source, SourceDocument } from '../../src/database/schemas/evidence/source/source.schema';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
+import { registerTestUser } from '../utils/register-test-user';
 
 interface SourceBody {
   id: string;
@@ -17,6 +19,17 @@ interface SourceBody {
   lastSyncError?: string;
   fileCount: number;
   createdAt: string;
+}
+
+interface SourceFileStateBody {
+  path: string;
+  status: string;
+  lastError?: string;
+  mtimeMs: number;
+}
+
+interface SourceWithFileStatesBody extends SourceBody {
+  fileStates: SourceFileStateBody[];
 }
 
 interface WorkflowRunBody {
@@ -40,7 +53,14 @@ const SOURCE_KEYS = [
   'lastSyncError',
   'fileCount',
   'createdAt',
+  'fileStates',
 ].sort();
+
+/** A file state with `lastError` set — the only state in which `lastError` is observable on the
+ *  nested shape, for the same reason `FRESH_SOURCE_KEYS` exists for the source itself. */
+const FAILED_FILE_STATE_KEYS = ['path', 'status', 'lastError', 'mtimeMs'].sort();
+
+const OK_FILE_STATE_KEYS = ['path', 'status', 'mtimeMs'].sort();
 
 /**
  * What a source that has never synced actually serializes to. `intervalMs`, `lastSyncAt`,
@@ -63,15 +83,14 @@ const FRESH_SOURCE_KEYS = [
 describe('Sources (e2e)', () => {
   let app: INestApplication;
   let token: string;
+  let tenantId: string;
   let sourceModel: Model<SourceDocument>;
 
   beforeAll(async () => {
     app = await createTestApp();
 
     const credentials = { email: 'sources-e2e@example.com', password: 'correct-horse-battery' };
-    await request(getTestServer(app)).post('/api/v1/auth/register').send(credentials);
-    const login = await request(getTestServer(app)).post('/api/v1/auth/login').send(credentials);
-    token = (login.body as { accessToken: string }).accessToken;
+    ({ token, tenantId } = await registerTestUser(app, credentials));
 
     sourceModel = app.get<Model<SourceDocument>>(getModelToken(Source.name));
   });
@@ -153,6 +172,7 @@ describe('Sources (e2e)', () => {
         name: `Get Auth Source ${Date.now()}`,
         kind: 'local-folder',
         path: 'deal-room',
+        tenantId,
       });
 
       const response = await request(getTestServer(app)).get(
@@ -167,23 +187,42 @@ describe('Sources (e2e)', () => {
      * observable. Asserting it here is what actually gates `@Expose()` on the four sync fields — a
      * missing decorator on any of them is silently dropped from the payload with no error anywhere,
      * and a source that has never synced cannot detect it because those keys are legitimately
-     * absent.
+     * absent. The same reasoning applies to the nested `fileStates` entries: a file with no
+     * `lastError` is what proves the field is genuinely optional there too, and a file with
+     * `lastError` set is the only state in which that field is observable at all.
      */
     it('gets a fully-synced source and exposes the exact key set', async () => {
+      const okFileState = {
+        path: 'contracts/lease-agreement.pdf',
+        sha256: 'a'.repeat(64),
+        sizeBytes: 245_760,
+        mtimeMs: 1_753_920_000_000,
+        documentId: new Types.ObjectId(),
+      };
+      const failedFileState = {
+        path: 'contracts/broken-scan.pdf',
+        sha256: 'b'.repeat(64),
+        sizeBytes: 8192,
+        mtimeMs: 1_753_920_100_000,
+        documentId: new Types.ObjectId(),
+        lastError: "Could not resolve a document type for 'contracts/broken-scan.pdf'",
+      };
       const created = await sourceModel.create({
         name: `Getter Source ${Date.now()}`,
         kind: 'local-folder',
         path: 'deal-room',
+        tenantId,
         intervalMs: 300_000,
         lastSyncAt: new Date(),
         lastSyncStatus: 'failed',
         lastSyncError: 'connector refused an oversized file',
+        fileStates: [okFileState, failedFileState],
       });
 
       const response = await request(getTestServer(app))
         .get(`/api/v1/sources/${created._id.toString()}`)
         .set('Authorization', `Bearer ${token}`);
-      const body = response.body as SourceBody;
+      const body = response.body as SourceWithFileStatesBody;
 
       expect(response.status).toBe(200);
       expect(body.id).toBe(created._id.toString());
@@ -191,8 +230,23 @@ describe('Sources (e2e)', () => {
       expect(body.lastSyncStatus).toBe('failed');
       expect(body.lastSyncError).toBe('connector refused an oversized file');
       expect(Object.keys(body).sort()).toEqual(SOURCE_KEYS);
+
+      expect(body.fileStates).toHaveLength(2);
+      const [ok, failed] = body.fileStates;
+      expect(ok.path).toBe(okFileState.path);
+      expect(ok.status).toBe('ok');
+      expect(ok.mtimeMs).toBe(okFileState.mtimeMs);
+      expect(Object.keys(ok).sort()).toEqual(OK_FILE_STATE_KEYS);
+
+      expect(failed.path).toBe(failedFileState.path);
+      expect(failed.status).toBe('failed');
+      expect(failed.lastError).toBe(failedFileState.lastError);
+      expect(failed.mtimeMs).toBe(failedFileState.mtimeMs);
+      expect(Object.keys(failed).sort()).toEqual(FAILED_FILE_STATE_KEYS);
     });
 
+    // The caller's token carries a real, freshly provisioned tenant id, so this only proves
+    // isolation because that id genuinely differs from 'other-tenant'.
     it('returns 404 for a source belonging to a different tenant, not 403', async () => {
       const otherTenantSource = await sourceModel.create({
         name: `Other Tenant Source ${Date.now()}`,
@@ -215,6 +269,7 @@ describe('Sources (e2e)', () => {
         name: `Patch Auth Source ${Date.now()}`,
         kind: 'local-folder',
         path: 'deal-room',
+        tenantId,
       });
 
       const response = await request(getTestServer(app))
@@ -229,6 +284,7 @@ describe('Sources (e2e)', () => {
         name: `Patch Source ${Date.now()}`,
         kind: 'local-folder',
         path: 'deal-room',
+        tenantId,
         enabled: true,
       });
 
@@ -245,6 +301,8 @@ describe('Sources (e2e)', () => {
       expect(stored?.enabled).toBe(false);
     });
 
+    // The caller's token carries a real, freshly provisioned tenant id, so this only proves
+    // isolation because that id genuinely differs from 'other-tenant'.
     it('returns 404 for a source belonging to a different tenant, not 403', async () => {
       const otherTenantSource = await sourceModel.create({
         name: `Other Tenant Patch Source ${Date.now()}`,
@@ -268,6 +326,7 @@ describe('Sources (e2e)', () => {
         name: `Sync Auth Source ${Date.now()}`,
         kind: 'local-folder',
         path: 'deal-room',
+        tenantId,
       });
 
       const response = await request(getTestServer(app)).post(
@@ -282,6 +341,7 @@ describe('Sources (e2e)', () => {
         name: `Sync Source ${Date.now()}`,
         kind: 'local-folder',
         path: 'deal-room',
+        tenantId,
       });
 
       const response = await request(getTestServer(app))
@@ -298,6 +358,8 @@ describe('Sources (e2e)', () => {
       expect(Object.keys(body).sort()).toEqual(['id', 'workflowId', 'status', 'createdAt'].sort());
     });
 
+    // The caller's token carries a real, freshly provisioned tenant id, so this only proves
+    // isolation because that id genuinely differs from 'other-tenant'.
     it('returns 404 for a source belonging to a different tenant, not 403', async () => {
       const otherTenantSource = await sourceModel.create({
         name: `Other Tenant Sync Source ${Date.now()}`,

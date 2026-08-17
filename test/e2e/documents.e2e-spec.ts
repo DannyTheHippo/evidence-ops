@@ -6,7 +6,6 @@ import path from 'node:path';
 import type { Model } from 'mongoose';
 import { Types } from 'mongoose';
 import request from 'supertest';
-import { User, UserDocument } from '../../src/database/schemas/administration/user/user.schema';
 import {
   AuditEvent,
   AuditEventDocument,
@@ -33,9 +32,9 @@ import {
 } from '../../src/providers/storage/document-store.interface';
 import { FakeWorkflowEngine } from '../../src/providers/workflow-engine/fake-workflow.engine';
 import { WORKFLOW_ENGINE } from '../../src/providers/workflow-engine/workflow-engine.interface';
-import { UserRole } from '../../src/shared/enums/user-role.enum';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
 import { readSseEvent } from '../utils/read-sse-event';
+import { registerTestUser } from '../utils/register-test-user';
 import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts';
 
 const FIXTURES = path.join(__dirname, '../../fixtures/data-room');
@@ -63,6 +62,7 @@ describe('Documents (e2e)', () => {
   let app: INestApplication;
   let token: string;
   let adminToken: string;
+  let tenantId: string;
   let comps: Buffer;
   let memo: Buffer;
   let fakeWorkflowEngine: FakeWorkflowEngine;
@@ -77,26 +77,22 @@ describe('Documents (e2e)', () => {
     app = await createTestApp();
     fakeWorkflowEngine = app.get<FakeWorkflowEngine>(WORKFLOW_ENGINE);
 
-    const credentials = { email: 'documents-e2e@example.com', password: 'correct-horse-battery' };
-    await request(getTestServer(app)).post('/api/v1/auth/register').send(credentials);
-    const login = await request(getTestServer(app)).post('/api/v1/auth/login').send(credentials);
-    token = (login.body as { accessToken: string }).accessToken;
-
-    // DELETE /documents/:id is admin-gated; a freshly-registered user defaults to `member`. Flip
-    // the row directly, then re-login — the role travels in the JWT, so flipping the row without
-    // re-issuing the token would leave the existing `token` unchanged. Mirrors
-    // `approvals.e2e-spec.ts`'s identical admin-flip block for its own admin-gated route.
-    const userModel = app.get<Model<UserDocument>>(getModelToken(User.name));
-    const adminCredentials = {
+    // Registering provisions a brand-new tenant with the registrant as its admin. Co-tenanting the
+    // member into that same tenant lets both callers see the same seeded rows, so only the role
+    // (admin vs. member) is the variable under test.
+    const admin = await registerTestUser(app, {
       email: 'documents-admin-e2e@example.com',
       password: 'correct-horse-battery',
-    };
-    await request(getTestServer(app)).post('/api/v1/auth/register').send(adminCredentials);
-    await userModel.updateOne({ email: adminCredentials.email }, { role: UserRole.Admin });
-    const adminLogin = await request(getTestServer(app))
-      .post('/api/v1/auth/login')
-      .send(adminCredentials);
-    adminToken = (adminLogin.body as { accessToken: string }).accessToken;
+    });
+    adminToken = admin.token;
+    tenantId = admin.tenantId;
+
+    const member = await registerTestUser(
+      app,
+      { email: 'documents-e2e@example.com', password: 'correct-horse-battery' },
+      { role: 'member', tenantId },
+    );
+    token = member.token;
 
     documentVersionModel = app.get<Model<DocumentVersionDocument>>(
       getModelToken(DocumentVersion.name),
@@ -141,6 +137,7 @@ describe('Documents (e2e)', () => {
       _id: `chunk-${documentVersionId}-${page}-${new Types.ObjectId().toString()}`,
       documentId: new Types.ObjectId(),
       documentVersionId: new Types.ObjectId(documentVersionId),
+      tenantId,
       text: `chunk text for page ${page}`,
       tokenCount: 100 + page,
       embedding: [0.1, 0.2, 0.3],
@@ -434,9 +431,8 @@ describe('Documents (e2e)', () => {
       const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Content Tenant' });
       const versionId = (uploaded.body as DocumentBody).currentVersion.id;
 
-      // No route lets a self-registered e2e user land in a second tenant, so the cross-tenant
-      // row is produced the same way `approvals.e2e-spec.ts` does: flip the persisted row's
-      // tenantId directly, then request it with the original (default-tenant) token.
+      // The cross-tenant row is produced the same way `approvals.e2e-spec.ts` does: flip the
+      // persisted row's tenantId directly, then request it with the original token.
       await documentVersionModel.updateOne({ _id: versionId }, { tenantId: 'other-tenant' });
 
       const response = await request(getTestServer(app))
@@ -593,6 +589,7 @@ describe('Documents (e2e)', () => {
       const deletedFact = await extractedFactModel.create({
         factKey,
         groupKeyNormalized: groupKey(factKey),
+        tenantId,
         value: { amount: 5.25, unit: 'percent' },
         rawText: 'cap rate of 5.25%',
         confidence: 0.9,
@@ -604,6 +601,7 @@ describe('Documents (e2e)', () => {
       const survivingFact = await extractedFactModel.create({
         factKey,
         groupKeyNormalized: groupKey(factKey),
+        tenantId,
         value: { amount: 6.1, unit: 'percent' },
         rawText: 'cap rate of 6.10%',
         confidence: 0.9,
@@ -615,6 +613,7 @@ describe('Documents (e2e)', () => {
       const conflict = await conflictModel.create({
         factKey,
         groupKeyNormalized: groupKey(factKey),
+        tenantId,
         factIds: [deletedFact._id, survivingFact._id],
         magnitude: 0.0085,
         status: 'open',
@@ -699,6 +698,7 @@ describe('Documents (e2e)', () => {
       const deletedFact = await extractedFactModel.create({
         factKey,
         groupKeyNormalized: groupKey(factKey),
+        tenantId,
         value: { amount: 5.25, unit: 'percent' },
         rawText: 'cap rate of 5.25%',
         confidence: 0.9,
@@ -710,6 +710,7 @@ describe('Documents (e2e)', () => {
       const survivingFactA = await extractedFactModel.create({
         factKey,
         groupKeyNormalized: groupKey(factKey),
+        tenantId,
         value: { amount: 6.1, unit: 'percent' },
         rawText: 'cap rate of 6.10%',
         confidence: 0.9,
@@ -721,6 +722,7 @@ describe('Documents (e2e)', () => {
       const survivingFactB = await extractedFactModel.create({
         factKey,
         groupKeyNormalized: groupKey(factKey),
+        tenantId,
         value: { amount: 5.8, unit: 'percent' },
         rawText: 'cap rate of 5.80%',
         confidence: 0.9,
@@ -732,6 +734,7 @@ describe('Documents (e2e)', () => {
       const conflict = await conflictModel.create({
         factKey,
         groupKeyNormalized: groupKey(factKey),
+        tenantId,
         factIds: [deletedFact._id, survivingFactA._id, survivingFactB._id],
         magnitude: 0.011,
         status: 'open',

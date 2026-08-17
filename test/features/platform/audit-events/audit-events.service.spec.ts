@@ -2,7 +2,6 @@ import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { Types } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../../src/database/constants/tenant.constant';
 import { AuditEvent } from '../../../../src/database/schemas/audit/audit-event/audit-event.schema';
 import { AuditEventsService } from '../../../../src/features/platform/audit-events/audit-events.service';
 import { AuditService } from '../../../../src/shared/services/audit/audit.service';
@@ -46,28 +45,28 @@ describe('AuditEventsService', () => {
   });
 
   describe('list', () => {
-    it('should list events for the default tenant with no filters, and record its own listed event', async () => {
+    it('should list events for a tenant with no filters, and record its own listed event', async () => {
       const actorId = new Types.ObjectId().toString();
       const event = buildEvent();
       mockAuditEventModel.find.mockResolvedValueOnce([event]);
       mockAuditEventModel.countDocuments.mockResolvedValueOnce(1);
       mockAuditService.record.mockResolvedValueOnce(undefined);
 
-      const result = await service.list({ skip: 0, limit: 20 }, actorId);
+      const result = await service.list({ skip: 0, limit: 20 }, actorId, 'tenant-a');
 
-      expect(mockAuditEventModel.find).toHaveBeenCalledWith({ tenantId: DEFAULT_TENANT_ID }, null, {
+      expect(mockAuditEventModel.find).toHaveBeenCalledWith({ tenantId: 'tenant-a' }, null, {
         sort: { createdAt: -1 },
         skip: 0,
         limit: 20,
       });
       expect(mockAuditEventModel.countDocuments).toHaveBeenCalledWith({
-        tenantId: DEFAULT_TENANT_ID,
+        tenantId: 'tenant-a',
       });
       expect(mockAuditService.record).toHaveBeenCalledWith({
         action: 'audit-events.listed',
         actorId,
         subject: { entityType: 'User', entityId: actorId },
-        tenantId: DEFAULT_TENANT_ID,
+        tenantId: 'tenant-a',
       });
       expect(result).toEqual({
         docs: [
@@ -110,9 +109,9 @@ describe('AuditEventsService', () => {
       mockAuditEventModel.countDocuments.mockResolvedValueOnce(0);
       mockAuditService.record.mockResolvedValueOnce(undefined);
 
-      await service.list({ skip: 0, limit: 20, action: 'approvals.decided' }, actorId);
+      await service.list({ skip: 0, limit: 20, action: 'approvals.decided' }, actorId, 'tenant-a');
 
-      const expectedFilter = { tenantId: DEFAULT_TENANT_ID, action: 'approvals.decided' };
+      const expectedFilter = { tenantId: 'tenant-a', action: 'approvals.decided' };
       expect(mockAuditEventModel.find).toHaveBeenCalledWith(expectedFilter, null, {
         sort: { createdAt: -1 },
         skip: 0,
@@ -127,9 +126,9 @@ describe('AuditEventsService', () => {
       mockAuditEventModel.countDocuments.mockResolvedValueOnce(0);
       mockAuditService.record.mockResolvedValueOnce(undefined);
 
-      await service.list({ skip: 0, limit: 20, entityType: 'Approval' }, actorId);
+      await service.list({ skip: 0, limit: 20, entityType: 'Approval' }, actorId, 'tenant-a');
 
-      const expectedFilter = { tenantId: DEFAULT_TENANT_ID, 'subject.entityType': 'Approval' };
+      const expectedFilter = { tenantId: 'tenant-a', 'subject.entityType': 'Approval' };
       expect(mockAuditEventModel.find).toHaveBeenCalledWith(expectedFilter, null, {
         sort: { createdAt: -1 },
         skip: 0,
@@ -145,10 +144,10 @@ describe('AuditEventsService', () => {
       mockAuditEventModel.countDocuments.mockResolvedValueOnce(0);
       mockAuditService.record.mockResolvedValueOnce(undefined);
 
-      await service.list({ skip: 0, limit: 20, entityId }, actorId);
+      await service.list({ skip: 0, limit: 20, entityId }, actorId, 'tenant-a');
 
       const expectedFilter = {
-        tenantId: DEFAULT_TENANT_ID,
+        tenantId: 'tenant-a',
         'subject.entityId': new Types.ObjectId(entityId),
       };
       expect(mockAuditEventModel.find).toHaveBeenCalledWith(expectedFilter, null, {
@@ -169,10 +168,11 @@ describe('AuditEventsService', () => {
       await service.list(
         { skip: 0, limit: 20, action: 'approvals.decided', entityType: 'Approval', entityId },
         actorId,
+        'tenant-a',
       );
 
       const expectedFilter = {
-        tenantId: DEFAULT_TENANT_ID,
+        tenantId: 'tenant-a',
         action: 'approvals.decided',
         'subject.entityType': 'Approval',
         'subject.entityId': new Types.ObjectId(entityId),

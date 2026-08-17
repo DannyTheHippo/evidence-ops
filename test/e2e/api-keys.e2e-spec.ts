@@ -1,0 +1,407 @@
+import type { INestApplication } from '@nestjs/common';
+import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
+import { createHash } from 'node:crypto';
+import type { Connection, Model } from 'mongoose';
+import request from 'supertest';
+import { coTenantUser, type CoTenantUserResult } from '../../scripts/lib/co-tenant-user';
+import {
+  ApiKey,
+  ApiKeyDocument,
+} from '../../src/database/schemas/administration/api-key/api-key.schema';
+import { User, UserDocument } from '../../src/database/schemas/administration/user/user.schema';
+import { TOKEN_VERIFIER } from '../../src/features/platform/api-keys/token-verifier.interface';
+import type { TokenVerifier } from '../../src/features/platform/api-keys/token-verifier.interface';
+import { UserRole } from '../../src/shared/enums/user-role.enum';
+import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
+import { registerTestUser } from '../utils/register-test-user';
+
+interface MintedKeyBody {
+  id: string;
+  name: string;
+  token: string;
+  tokenPrefix: string;
+  expiresAt?: string;
+  createdAt: string;
+}
+
+interface ApiKeyBody {
+  id: string;
+  name: string;
+  tokenPrefix: string;
+  expiresAt?: string;
+  revokedAt?: string;
+  createdAt: string;
+}
+
+const MINTED_KEY_KEYS = ['id', 'name', 'token', 'tokenPrefix', 'createdAt'].sort();
+const MINTED_KEY_KEYS_WITH_EXPIRY = [
+  'id',
+  'name',
+  'token',
+  'tokenPrefix',
+  'expiresAt',
+  'createdAt',
+].sort();
+const LIST_KEY_KEYS_FRESH = ['id', 'name', 'tokenPrefix', 'createdAt'].sort();
+const LIST_KEY_KEYS_FULL = [
+  'id',
+  'name',
+  'tokenPrefix',
+  'expiresAt',
+  'revokedAt',
+  'createdAt',
+].sort();
+
+describe('ApiKeys (e2e)', () => {
+  let app: INestApplication;
+  let token: string;
+  let userId: string;
+  let tenantId: string;
+  let apiKeyModel: Model<ApiKeyDocument>;
+  let userModel: Model<UserDocument>;
+  let tokenVerifier: TokenVerifier;
+
+  beforeAll(async () => {
+    app = await createTestApp();
+
+    const credentials = { email: 'api-keys-e2e@example.com', password: 'correct-horse-battery' };
+    ({ token, userId, tenantId } = await registerTestUser(app, credentials));
+
+    apiKeyModel = app.get<Model<ApiKeyDocument>>(getModelToken(ApiKey.name));
+    userModel = app.get<Model<UserDocument>>(getModelToken(User.name));
+    tokenVerifier = app.get<TokenVerifier>(TOKEN_VERIFIER);
+  });
+
+  afterAll(async () => {
+    await closeTestApp(app);
+  });
+
+  describe('POST /api-keys', () => {
+    it('rejects an unauthenticated request', async () => {
+      const response = await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .send({ name: 'CI integration' });
+
+      expect(response.status).toBe(401);
+    });
+
+    it('mints a key, exposing the exact key set including the plaintext token exactly once', async () => {
+      const response = await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'CI integration' });
+      const body = response.body as MintedKeyBody;
+
+      expect(response.status).toBe(201);
+      expect(body.name).toBe('CI integration');
+      expect(body.token.startsWith('eo_pat_')).toBe(true);
+      expect(body.tokenPrefix.startsWith('eo_pat_')).toBe(true);
+      expect(Object.keys(body).sort()).toEqual(MINTED_KEY_KEYS);
+
+      const stored = await apiKeyModel.findById(body.id);
+      expect(stored?.tokenHash).not.toBe(body.token);
+      expect(stored?.tokenHash).toBe(createHash('sha256').update(body.token).digest('hex'));
+    });
+
+    it('mints a key with an expiry and exposes it in the exact key set', async () => {
+      const response = await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Expiring key', expiresAt: '2099-01-01T00:00:00.000Z' });
+      const body = response.body as MintedKeyBody;
+
+      expect(response.status).toBe(201);
+      expect(body.expiresAt).toBe('2099-01-01T00:00:00.000Z');
+      expect(Object.keys(body).sort()).toEqual(MINTED_KEY_KEYS_WITH_EXPIRY);
+    });
+  });
+
+  describe('GET /api-keys', () => {
+    it('rejects an unauthenticated request', async () => {
+      const response = await request(getTestServer(app)).get('/api/v1/api-keys');
+
+      expect(response.status).toBe(401);
+    });
+
+    it('lists only the caller’s own keys, metadata only, exact key set', async () => {
+      await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Listed key' });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/api-keys')
+        .set('Authorization', `Bearer ${token}`);
+      const body = response.body as { docs: ApiKeyBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(Object.keys(body).sort()).toEqual(['docs', 'count'].sort());
+      expect(body.count).toBeGreaterThan(0);
+      const listedKey = body.docs.find((doc) => doc.name === 'Listed key');
+      expect(listedKey).toBeDefined();
+      expect(listedKey).not.toHaveProperty('token');
+      expect(listedKey).not.toHaveProperty('tokenHash');
+      expect(Object.keys(listedKey as ApiKeyBody).sort()).toEqual(LIST_KEY_KEYS_FRESH);
+    });
+
+    it('does not list another user’s keys', async () => {
+      const other = await registerTestUser(app, {
+        email: 'api-keys-e2e-other@example.com',
+        password: 'correct-horse-battery',
+      });
+      await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Authorization', `Bearer ${other.token}`)
+        .send({ name: 'Other user key' });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/api-keys')
+        .set('Authorization', `Bearer ${token}`);
+      const body = response.body as { docs: ApiKeyBody[]; count: number };
+
+      expect(body.docs.find((doc) => doc.name === 'Other user key')).toBeUndefined();
+    });
+
+    it('exposes the exact key set for a revoked, expiring key (both optional fields present)', async () => {
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Full shape key', expiresAt: '2099-01-01T00:00:00.000Z' });
+      const mintedBody = minted.body as MintedKeyBody;
+
+      await request(getTestServer(app))
+        .delete(`/api/v1/api-keys/${mintedBody.id}`)
+        .set('Authorization', `Bearer ${token}`);
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/api-keys')
+        .set('Authorization', `Bearer ${token}`);
+      const body = response.body as { docs: ApiKeyBody[]; count: number };
+      const revokedKey = body.docs.find((doc) => doc.id === mintedBody.id);
+
+      expect(revokedKey).toBeDefined();
+      expect(revokedKey?.revokedAt).toBeDefined();
+      expect(Object.keys(revokedKey as ApiKeyBody).sort()).toEqual(LIST_KEY_KEYS_FULL);
+    });
+  });
+
+  describe('DELETE /api-keys/:id', () => {
+    it('rejects an unauthenticated request', async () => {
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Delete auth key' });
+      const mintedBody = minted.body as MintedKeyBody;
+
+      const response = await request(getTestServer(app)).delete(
+        `/api/v1/api-keys/${mintedBody.id}`,
+      );
+
+      expect(response.status).toBe(401);
+    });
+
+    it('returns 404 for a malformed id', async () => {
+      const response = await request(getTestServer(app))
+        .delete('/api/v1/api-keys/not-an-id')
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(response.status).toBe(404);
+    });
+
+    it('returns 404, not 403, for another user’s key', async () => {
+      const other = await registerTestUser(app, {
+        email: 'api-keys-e2e-cross-user@example.com',
+        password: 'correct-horse-battery',
+      });
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Authorization', `Bearer ${other.token}`)
+        .send({ name: 'Not yours' });
+      const mintedBody = minted.body as MintedKeyBody;
+
+      const response = await request(getTestServer(app))
+        .delete(`/api/v1/api-keys/${mintedBody.id}`)
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(response.status).toBe(404);
+    });
+
+    it('revokes a key', async () => {
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Revoke me' });
+      const mintedBody = minted.body as MintedKeyBody;
+
+      const response = await request(getTestServer(app))
+        .delete(`/api/v1/api-keys/${mintedBody.id}`)
+        .set('Authorization', `Bearer ${token}`);
+
+      expect(response.status).toBe(204);
+
+      const stored = await apiKeyModel.findById(mintedBody.id);
+      expect(stored?.revokedAt).toBeDefined();
+    });
+  });
+
+  /**
+   * There is no HTTP route that accepts a personal access token — the MCP consumer that presents
+   * one is a later step, and `JwtAuthGuard` stays untouched by this change. The `mint → use →
+   * revoke → refused` chain, live role resolution, and expiry are all exercised through
+   * `TOKEN_VERIFIER` directly, exactly as a future consumer would call it.
+   */
+  describe('TOKEN_VERIFIER', () => {
+    it('verifies a freshly minted token to the minting user’s identity', async () => {
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Verifier key' });
+      const mintedBody = minted.body as MintedKeyBody;
+
+      const identity = await tokenVerifier.verify(mintedBody.token);
+
+      // `email` rides along so an MCP-originated approval request can name a person in the
+      // reviewer's inbox rather than a bare account id.
+      expect(identity).toEqual({
+        userId,
+        tenantId,
+        role: UserRole.Admin,
+        email: 'api-keys-e2e@example.com',
+      });
+    });
+
+    it('refuses a revoked token', async () => {
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Revoked verifier key' });
+      const mintedBody = minted.body as MintedKeyBody;
+      await request(getTestServer(app))
+        .delete(`/api/v1/api-keys/${mintedBody.id}`)
+        .set('Authorization', `Bearer ${token}`);
+
+      const identity = await tokenVerifier.verify(mintedBody.token);
+
+      expect(identity).toBeNull();
+    });
+
+    it('refuses an expired token', async () => {
+      const rawToken = `eo_pat_expired-token-fixture-${Date.now()}`;
+      await apiKeyModel.create({
+        tenantId,
+        userId,
+        tokenHash: createHash('sha256').update(rawToken).digest('hex'),
+        tokenPrefix: rawToken.slice(0, 13),
+        name: 'Expired fixture',
+        expiresAt: new Date('2020-01-01T00:00:00.000Z'),
+      });
+
+      const identity = await tokenVerifier.verify(rawToken);
+
+      expect(identity).toBeNull();
+    });
+
+    it('refuses an unrecognized token', async () => {
+      const identity = await tokenVerifier.verify('eo_pat_never-minted-fixture');
+
+      expect(identity).toBeNull();
+    });
+
+    it('resolves role live from the User row rather than the token, reflecting a mid-lifetime demotion', async () => {
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Role-live key' });
+      const mintedBody = minted.body as MintedKeyBody;
+
+      const beforeIdentity = await tokenVerifier.verify(mintedBody.token);
+      expect(beforeIdentity?.role).toBe(UserRole.Admin);
+
+      await userModel.updateOne({ _id: userId }, { role: UserRole.Member });
+
+      const afterIdentity = await tokenVerifier.verify(mintedBody.token);
+      expect(afterIdentity?.role).toBe(UserRole.Member);
+
+      // Restore for any later test in this file that assumes the registered admin role.
+      await userModel.updateOne({ _id: userId }, { role: UserRole.Admin });
+    });
+  });
+
+  /**
+   * The operator co-tenanting path (`scripts/lib/co-tenant-user.ts`) is the only way a user changes
+   * tenant. A key row carries the tenant it was minted under and `list`/`revoke` match that against
+   * the caller's session tenant — reinforced by `tenantScopePlugin`, which intersects the session
+   * tenant into those queries regardless of what the service filter asks for — so the key rows have
+   * to move with their owner. A key left behind in the vacated tenant keeps authenticating while
+   * being invisible and unrevokable to the person who minted it.
+   */
+  describe('co-tenanting a key owner', () => {
+    const movedUser = {
+      email: 'api-keys-e2e-moved@example.com',
+      password: 'correct-horse-battery',
+    };
+    let moveResult: CoTenantUserResult;
+    let movedToken: string;
+    let targetTenantId: string;
+    let survivingKey: MintedKeyBody;
+    let verifiedKey: MintedKeyBody;
+
+    beforeAll(async () => {
+      const mover = await registerTestUser(app, movedUser);
+      // Registration is what creates the target tenant's `tenants` registry row — the move refuses
+      // a tenant id that is not registered.
+      const target = await registerTestUser(app, {
+        email: 'api-keys-e2e-move-target@example.com',
+        password: 'correct-horse-battery',
+      });
+      targetTenantId = target.tenantId;
+
+      const mint = async (name: string): Promise<MintedKeyBody> => {
+        const response = await request(getTestServer(app))
+          .post('/api/v1/api-keys')
+          .set('Authorization', `Bearer ${mover.token}`)
+          .send({ name });
+        return response.body as MintedKeyBody;
+      };
+      survivingKey = await mint('Survives a tenant move');
+      verifiedKey = await mint('Verifies after a tenant move');
+
+      const db = app.get<Connection>(getConnectionToken()).db;
+      if (!db) {
+        throw new Error('co-tenanting e2e: the Mongoose connection exposes no driver database');
+      }
+      moveResult = await coTenantUser(db, movedUser.email, targetTenantId);
+
+      // The pre-move token still carries the vacated tenant; the owner's next login is where the
+      // move takes effect for every session-scoped query.
+      const login = await request(getTestServer(app)).post('/api/v1/auth/login').send(movedUser);
+      movedToken = (login.body as { accessToken: string }).accessToken;
+    });
+
+    it('moves the owner’s keys alongside the owner', () => {
+      expect(moveResult).toEqual(expect.objectContaining({ outcome: 'moved', apiKeysMoved: 2 }));
+    });
+
+    it('keeps a key listable and revocable by its owner across a tenant move', async () => {
+      const listResponse = await request(getTestServer(app))
+        .get('/api/v1/api-keys')
+        .set('Authorization', `Bearer ${movedToken}`);
+      const body = listResponse.body as { docs: ApiKeyBody[]; count: number };
+
+      expect(listResponse.status).toBe(200);
+      expect(body.docs.find((doc) => doc.id === survivingKey.id)).toBeDefined();
+
+      const revokeResponse = await request(getTestServer(app))
+        .delete(`/api/v1/api-keys/${survivingKey.id}`)
+        .set('Authorization', `Bearer ${movedToken}`);
+
+      expect(revokeResponse.status).toBe(204);
+    });
+
+    it('verifies a moved owner’s key against the tenant they now belong to', async () => {
+      const identity = await tokenVerifier.verify(verifiedKey.token);
+
+      expect(identity?.tenantId).toBe(targetTenantId);
+    });
+  });
+});

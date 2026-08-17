@@ -3,7 +3,6 @@ import { getModelToken } from '@nestjs/mongoose';
 import type { Model } from 'mongoose';
 import { Types } from 'mongoose';
 import request from 'supertest';
-import { DEFAULT_TENANT_ID } from '../../src/database/constants/tenant.constant';
 import {
   AuditEvent,
   AuditEventDocument,
@@ -24,12 +23,11 @@ import {
   WorkflowRun,
   WorkflowRunDocument,
 } from '../../src/database/schemas/workflow/workflow-run/workflow-run.schema';
-import { User, UserDocument } from '../../src/database/schemas/administration/user/user.schema';
 import { FakeWorkflowEngine } from '../../src/providers/workflow-engine/fake-workflow.engine';
 import { WORKFLOW_ENGINE } from '../../src/providers/workflow-engine/workflow-engine.interface';
-import { UserRole } from '../../src/shared/enums/user-role.enum';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
 import { readSseEvent } from '../utils/read-sse-event';
+import { registerTestUser } from '../utils/register-test-user';
 import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts';
 
 interface ApprovalBody {
@@ -59,43 +57,40 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
   let app: INestApplication;
   let token: string;
   let adminToken: string;
+  let tenantId: string;
   let fakeWorkflowEngine: FakeWorkflowEngine;
   let approvalModel: Model<ApprovalDocument>;
   let workflowRunModel: Model<WorkflowRunDocument>;
   let conflictModel: Model<ConflictDocument>;
   let extractedFactModel: Model<ExtractedFactDocument>;
   let auditEventModel: Model<AuditEventDocument>;
-  let userModel: Model<UserDocument>;
 
   beforeAll(async () => {
     app = await createTestApp();
     fakeWorkflowEngine = app.get<FakeWorkflowEngine>(WORKFLOW_ENGINE);
-
-    const credentials = { email: 'approvals-e2e@example.com', password: 'correct-horse-battery' };
-    await request(getTestServer(app)).post('/api/v1/auth/register').send(credentials);
-    const login = await request(getTestServer(app)).post('/api/v1/auth/login').send(credentials);
-    token = (login.body as { accessToken: string }).accessToken;
 
     approvalModel = app.get<Model<ApprovalDocument>>(getModelToken(Approval.name));
     workflowRunModel = app.get<Model<WorkflowRunDocument>>(getModelToken(WorkflowRun.name));
     conflictModel = app.get<Model<ConflictDocument>>(getModelToken(Conflict.name));
     extractedFactModel = app.get<Model<ExtractedFactDocument>>(getModelToken(ExtractedFact.name));
     auditEventModel = app.get<Model<AuditEventDocument>>(getModelToken(AuditEvent.name));
-    userModel = app.get<Model<UserDocument>>(getModelToken(User.name));
 
-    // POST /approvals/:id/decision is admin-gated; a freshly-registered user defaults to
-    // `member`. Flip the row directly, then re-login — the role travels in the JWT, so flipping
-    // the row without re-issuing the token would leave the existing `token` unchanged.
-    const adminCredentials = {
+    // Registering provisions a brand-new tenant with the registrant as its admin. Co-tenanting the
+    // member into that same tenant lets both callers see the same seeded rows, so only the role
+    // (admin vs. member) is the variable under test.
+    const admin = await registerTestUser(app, {
       email: 'approvals-admin-e2e@example.com',
       password: 'correct-horse-battery',
-    };
-    await request(getTestServer(app)).post('/api/v1/auth/register').send(adminCredentials);
-    await userModel.updateOne({ email: adminCredentials.email }, { role: UserRole.Admin });
-    const adminLogin = await request(getTestServer(app))
-      .post('/api/v1/auth/login')
-      .send(adminCredentials);
-    adminToken = (adminLogin.body as { accessToken: string }).accessToken;
+    });
+    adminToken = admin.token;
+    tenantId = admin.tenantId;
+
+    const member = await registerTestUser(
+      app,
+      { email: 'approvals-e2e@example.com', password: 'correct-horse-battery' },
+      { role: 'member', tenantId },
+    );
+    token = member.token;
   });
 
   afterAll(async () => {
@@ -117,6 +112,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       chunkId: 'chunk-xlsx',
       documentVersionId: new Types.ObjectId(),
       locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
+      tenantId,
     });
     const factHigh = await extractedFactModel.create({
       factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
@@ -132,6 +128,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       chunkId: 'chunk-prose',
       documentVersionId: new Types.ObjectId(),
       locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+      tenantId,
     });
     const conflict = await conflictModel.create({
       factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
@@ -143,6 +140,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       factIds: [factLow._id, factHigh._id],
       magnitude: 0.0085,
       status: 'open',
+      tenantId,
     });
 
     return { conflict, factLow, factHigh };
@@ -195,11 +193,20 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       expect(fakeWorkflowEngine.started).toHaveLength(startedBefore + 1);
       const started = fakeWorkflowEngine.started[fakeWorkflowEngine.started.length - 1];
       expect(started.workflowType).toBe('resolveConflict');
+      // The survivorship proposal is captured here, at request time, and carried through the
+      // workflow — so the decision is later scored against what the reviewer was actually shown,
+      // not against a recomputation that a mid-wait reclassification could have changed.
+      // These fixtures carry no `sourceClass`, so the policy is silent and proposes nothing.
       expect(started.input).toEqual({
         conflictId: conflict._id.toString(),
         winningFactId: factLow._id.toString(),
         requestedBy: 'approvals-e2e@example.com',
-        tenantId: DEFAULT_TENANT_ID,
+        tenantId,
+        ruleFired: 'none',
+        proposedWinnerFactId: undefined,
+        // Carried so the approval summary can tell the reviewer whether a human or an AI client
+        // holding a long-lived token proposed this.
+        requestedByOrigin: 'api',
       });
 
       const stored = await workflowRunModel.findById(body.id);
@@ -228,6 +235,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
         requestedBy: 'analyst@example.com',
         workflowId: 'wf-list-1',
         state: 'pending',
+        tenantId,
       });
       await approvalModel.create({
         subject: { entityType: 'Conflict', entityId: new Types.ObjectId() },
@@ -236,6 +244,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
         state: 'approved',
         decidedBy: 'reviewer@example.com',
         decidedAt: new Date(),
+        tenantId,
       });
 
       const response = await request(getTestServer(app))
@@ -332,6 +341,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
         state: 'approved',
         decidedBy: 'reviewer@example.com',
         decidedAt: new Date(),
+        tenantId,
       });
 
       const response = await request(getTestServer(app))
@@ -349,6 +359,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
         summary: 'No workflow to wake.',
         requestedBy: 'analyst@example.com',
         state: 'pending',
+        tenantId,
       });
       const signalsBefore = fakeWorkflowEngine.signals.length;
 
@@ -388,6 +399,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
         requestedBy: 'analyst@example.com',
         state: 'pending',
         workflowId: handle.id,
+        tenantId,
       });
 
       const response = await request(getTestServer(app))
@@ -432,7 +444,11 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
     it('refreshes the status from the live engine and exposes the exact key set, recording an audit event', async () => {
       const handle = await fakeWorkflowEngine.start('resolveConflict', {});
       fakeWorkflowEngine.setStatus(handle.id, 'completed');
-      const run = await workflowRunModel.create({ workflowId: handle.id, status: 'running' });
+      const run = await workflowRunModel.create({
+        workflowId: handle.id,
+        status: 'running',
+        tenantId,
+      });
 
       const response = await request(getTestServer(app))
         .get(`/api/v1/workflow-runs/${run._id.toString()}`)
@@ -454,6 +470,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       const run = await workflowRunModel.create({
         workflowId: 'unregistered-workflow-id',
         status: 'running',
+        tenantId,
       });
 
       const response = await request(getTestServer(app))
@@ -478,6 +495,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       const run = await workflowRunModel.create({
         workflowId: 'unregistered-workflow-id',
         status: 'running',
+        tenantId,
       });
 
       const polled = await request(getTestServer(app))
@@ -516,7 +534,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
 
     it('lists runs by workflowId for this tenant, exposing the exact key set, and excludes a run belonging to a different tenant', async () => {
       const workflowId = `wf-list-${new Types.ObjectId().toString()}`;
-      const run = await workflowRunModel.create({ workflowId, status: 'running' });
+      const run = await workflowRunModel.create({ workflowId, status: 'running', tenantId });
       await workflowRunModel.create({ workflowId, status: 'running', tenantId: 'other-tenant' });
 
       const response = await request(getTestServer(app))

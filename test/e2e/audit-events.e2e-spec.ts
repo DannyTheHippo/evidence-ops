@@ -7,9 +7,8 @@ import {
   AuditEvent,
   AuditEventDocument,
 } from '../../src/database/schemas/audit/audit-event/audit-event.schema';
-import { User, UserDocument } from '../../src/database/schemas/administration/user/user.schema';
-import { UserRole } from '../../src/shared/enums/user-role.enum';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
+import { registerTestUser } from '../utils/register-test-user';
 
 interface AuditEventBody {
   id: string;
@@ -25,36 +24,30 @@ describe('AuditEvents (e2e)', () => {
   let app: INestApplication;
   let token: string;
   let adminToken: string;
+  let tenantId: string;
   let auditEventModel: Model<AuditEventDocument>;
-  let userModel: Model<UserDocument>;
 
   beforeAll(async () => {
     app = await createTestApp();
 
-    const credentials = {
-      email: 'audit-events-e2e@example.com',
-      password: 'correct-horse-battery',
-    };
-    await request(getTestServer(app)).post('/api/v1/auth/register').send(credentials);
-    const login = await request(getTestServer(app)).post('/api/v1/auth/login').send(credentials);
-    token = (login.body as { accessToken: string }).accessToken;
-
     auditEventModel = app.get<Model<AuditEventDocument>>(getModelToken(AuditEvent.name));
-    userModel = app.get<Model<UserDocument>>(getModelToken(User.name));
 
-    // GET /audit-events is admin-gated; a freshly-registered user defaults to `member`. Flip the
-    // row directly, then re-login — the role travels in the JWT, so flipping the row without
-    // re-issuing the token would leave the existing `token` unchanged (mirrors approvals.e2e-spec).
-    const adminCredentials = {
+    // Registering provisions a brand-new tenant with the registrant as its admin. Co-tenanting the
+    // member into that same tenant lets both callers see the same seeded rows, so only the role
+    // (admin vs. member) is the variable under test.
+    const admin = await registerTestUser(app, {
       email: 'audit-events-admin-e2e@example.com',
       password: 'correct-horse-battery',
-    };
-    await request(getTestServer(app)).post('/api/v1/auth/register').send(adminCredentials);
-    await userModel.updateOne({ email: adminCredentials.email }, { role: UserRole.Admin });
-    const adminLogin = await request(getTestServer(app))
-      .post('/api/v1/auth/login')
-      .send(adminCredentials);
-    adminToken = (adminLogin.body as { accessToken: string }).accessToken;
+    });
+    adminToken = admin.token;
+    tenantId = admin.tenantId;
+
+    const member = await registerTestUser(
+      app,
+      { email: 'audit-events-e2e@example.com', password: 'correct-horse-battery' },
+      { role: 'member', tenantId },
+    );
+    token = member.token;
   });
 
   afterAll(async () => {
@@ -95,6 +88,7 @@ describe('AuditEvents (e2e)', () => {
         subject: { entityType: 'EvidenceDocument', entityId },
         timestamp: new Date(),
         correlationId: 'corr-exact-key-set',
+        tenantId,
       });
 
       const response = await request(getTestServer(app))
@@ -136,6 +130,7 @@ describe('AuditEvents (e2e)', () => {
         subject: { entityType: 'Approval', entityId: new Types.ObjectId() },
         timestamp: new Date(),
         correlationId: 'corr-alpha',
+        tenantId,
       });
       await auditEventModel.create({
         actor: new Types.ObjectId(),
@@ -143,6 +138,7 @@ describe('AuditEvents (e2e)', () => {
         subject: { entityType: 'Approval', entityId: new Types.ObjectId() },
         timestamp: new Date(),
         correlationId: 'corr-beta',
+        tenantId,
       });
 
       const response = await request(getTestServer(app))
@@ -165,6 +161,7 @@ describe('AuditEvents (e2e)', () => {
         subject: { entityType: 'Approval', entityId: ownEntityId },
         timestamp: new Date(),
         correlationId: 'corr-own-tenant',
+        tenantId,
       });
       await auditEventModel.create({
         actor: new Types.ObjectId(),

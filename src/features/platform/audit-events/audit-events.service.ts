@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
 import {
   AuditEvent,
   type AuditEventDocument,
@@ -45,7 +44,7 @@ export class AuditEventsService {
   async list(
     dto: ListAuditEventsRequestDto,
     actorId: string,
-    tenantId: string = DEFAULT_TENANT_ID,
+    tenantId: string,
   ): Promise<DocumentResultWithCount<AuditEventResult>> {
     const filter = {
       tenantId,

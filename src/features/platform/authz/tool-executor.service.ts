@@ -7,7 +7,11 @@ import {
   type ToolAuthzHook,
 } from './authz-hook.interface';
 import { ToolAlreadyRegisteredException } from './exceptions/authz.exception';
-import type { ToolDefinition, ToolExecutionStep } from './types/tool-definition.type';
+import type {
+  ToolDefinition,
+  ToolExecutionContext,
+  ToolExecutionStep,
+} from './types/tool-definition.type';
 
 /**
  * `.strict()` sets `unknownKeys: 'strict'` only on the `ZodObject` it is called on — a nested
@@ -71,14 +75,18 @@ export interface ExecuteToolInput {
   /** Untrusted — whatever the model proposed as arguments, validated by check 4 below before it
    * ever reaches a handler. */
   readonly rawArgs: unknown;
+  /** Trusted counterpart to `rawArgs` — see `ToolExecutionContext`'s own doc comment. The
+   * chokepoint passes this straight through to the authz hook and the handler; it never reads
+   * `rawArgs` to build or adjust it. */
+  readonly context: ToolExecutionContext;
 }
 
 /**
- * The single chokepoint every tool call MUST route through once a caller exists — "the model
- * proposes, the application disposes" applied to tool use. Nothing calls this yet (see ADR-0005):
- * it exists so that when a caller is wired, refusal is the default it inherits rather than a
- * control it has to remember to add. Deliberately thin — a registry, a step allowlist, an authz
- * hook, and zod-strict argument validation; no tool ecosystem invented ahead of a real consumer.
+ * The single chokepoint every tool call MUST route through — "the model proposes, the application
+ * disposes" applied to tool use. Its callers are `AgenticRetrievalService` (the retrieval loop's
+ * `search_evidence`/`fetch_chunks`) and `McpServerService` (the external MCP surface); both
+ * delegate here rather than re-implementing validation or authorization. Deliberately thin — a
+ * registry, a step allowlist, an authz hook, and zod-strict argument validation.
  *
  * Fails CLOSED at every one of its four gates, evaluated in this order, deliberately before any
  * work is done on the untrusted argument payload:
@@ -129,7 +137,7 @@ export class ToolExecutorService {
   }
 
   async execute(input: ExecuteToolInput): Promise<ToolExecutionResult> {
-    const { step, toolName, rawArgs } = input;
+    const { step, toolName, rawArgs, context } = input;
 
     const tool = this.registry.get(toolName);
     if (!tool) {
@@ -145,7 +153,7 @@ export class ToolExecutorService {
 
     let decision: ToolAuthzDecision;
     try {
-      decision = this.authzHook.authorize({ step, toolName });
+      decision = this.authzHook.authorize({ step, toolName, context });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return this.refuse(
@@ -172,7 +180,7 @@ export class ToolExecutorService {
       );
     }
 
-    const result = await tool.handler(parsed.data);
+    const result = await tool.handler(parsed.data, context);
     return { kind: 'executed', result };
   }
 

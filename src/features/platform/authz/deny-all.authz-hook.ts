@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { ToolAuthzDecision, ToolAuthzHook } from './authz-hook.interface';
-import type { ToolExecutionStep } from './types/tool-definition.type';
+import type { ToolExecutionContext, ToolExecutionStep } from './types/tool-definition.type';
 
 /**
  * The module's default `TOOL_AUTHZ_HOOK` binding (`./authz.module.ts`). No caller is wired to
@@ -15,6 +15,7 @@ export class DenyAllAuthzHook implements ToolAuthzHook {
   authorize(params: {
     readonly step: ToolExecutionStep;
     readonly toolName: string;
+    readonly context: ToolExecutionContext;
   }): ToolAuthzDecision {
     return {
       allowed: false,

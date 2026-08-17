@@ -13,12 +13,21 @@ import {
   ConflictDocument,
 } from '../../src/database/schemas/evidence/conflict/conflict.schema';
 import {
+  DocumentVersion,
+  DocumentVersionDocument,
+} from '../../src/database/schemas/evidence/document-version/document-version.schema';
+import {
+  Document,
+  DocumentDocument,
+} from '../../src/database/schemas/evidence/document/document.schema';
+import {
   ExtractedFact,
   ExtractedFactDocument,
 } from '../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import type { Citation } from '../../src/features/evidence/qa/contracts/answer.contract';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
 import { readSseEvent } from '../utils/read-sse-event';
+import { registerTestUser } from '../utils/register-test-user';
 import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts';
 
 interface AnswerUsageBody {
@@ -56,33 +65,37 @@ interface ConflictBody {
   magnitude: number;
   status: string;
   createdAt: string;
+  proposedWinnerFactId?: string;
+  ruleFired: string;
+  explanation: string;
 }
 
 describe('QA and Conflicts (e2e)', () => {
   let app: INestApplication;
   let token: string;
   let userId: string;
+  let tenantId: string;
   let answerModel: Model<AnswerDocument>;
   let auditEventModel: Model<AuditEventDocument>;
   let conflictModel: Model<ConflictDocument>;
   let extractedFactModel: Model<ExtractedFactDocument>;
+  let documentModel: Model<DocumentDocument>;
+  let documentVersionModel: Model<DocumentVersionDocument>;
 
   beforeAll(async () => {
     app = await createTestApp();
 
     const credentials = { email: 'qa-e2e@example.com', password: 'correct-horse-battery' };
-    await request(getTestServer(app)).post('/api/v1/auth/register').send(credentials);
-    const login = await request(getTestServer(app)).post('/api/v1/auth/login').send(credentials);
-    token = (login.body as { accessToken: string }).accessToken;
-    const me = await request(getTestServer(app))
-      .get('/api/v1/auth/me')
-      .set('Authorization', `Bearer ${token}`);
-    userId = (me.body as { id: string }).id;
+    ({ token, userId, tenantId } = await registerTestUser(app, credentials));
 
     answerModel = app.get<Model<AnswerDocument>>(getModelToken(Answer.name));
     auditEventModel = app.get<Model<AuditEventDocument>>(getModelToken(AuditEvent.name));
     conflictModel = app.get<Model<ConflictDocument>>(getModelToken(Conflict.name));
     extractedFactModel = app.get<Model<ExtractedFactDocument>>(getModelToken(ExtractedFact.name));
+    documentModel = app.get<Model<DocumentDocument>>(getModelToken(Document.name));
+    documentVersionModel = app.get<Model<DocumentVersionDocument>>(
+      getModelToken(DocumentVersion.name),
+    );
   });
 
   afterAll(async () => {
@@ -195,6 +208,7 @@ describe('QA and Conflicts (e2e)', () => {
         quote: 'at a cap rate of approximately 6.10%',
       };
       const seeded = await answerModel.create({
+        tenantId,
         questionText: 'What is the cap rate?',
         runStatus: 'completed',
         outcome: {
@@ -247,6 +261,7 @@ describe('QA and Conflicts (e2e)', () => {
     // through as a whole object, not per-field, but the assertion still proves the wire shape).
     it('presents a model-authored reasonCode on an insufficient_evidence outcome once completed', async () => {
       const seeded = await answerModel.create({
+        tenantId,
         questionText: 'What is the cap rate?',
         runStatus: 'completed',
         outcome: {
@@ -313,6 +328,7 @@ describe('QA and Conflicts (e2e)', () => {
     it('lists conflicts with a count, exposing the exact conflict key set and value provenance, and records an audit event', async () => {
       const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
       const factLow = await extractedFactModel.create({
+        tenantId,
         factKey,
         groupKeyNormalized: groupKey(factKey),
         value: { amount: 5.25, unit: 'percent' },
@@ -324,6 +340,7 @@ describe('QA and Conflicts (e2e)', () => {
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
       });
       const factHigh = await extractedFactModel.create({
+        tenantId,
         factKey,
         groupKeyNormalized: groupKey(factKey),
         value: { amount: 6.1, unit: 'percent' },
@@ -335,6 +352,7 @@ describe('QA and Conflicts (e2e)', () => {
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
       });
       await conflictModel.create({
+        tenantId,
         factKey,
         groupKeyNormalized: groupKey(factKey),
         factIds: [factLow._id, factHigh._id],
@@ -351,9 +369,24 @@ describe('QA and Conflicts (e2e)', () => {
       expect(Object.keys(body).sort()).toEqual(['docs', 'count'].sort());
       expect(body.count).toBeGreaterThan(0);
       expect(body.docs.length).toBeGreaterThan(0);
+      // `cap_rate` has no configured `authorityOrder` (`metric-ontology.ts`), so the survivorship
+      // policy proposes no winner — `proposedWinnerFactId` is undefined, and class-transformer's
+      // JSON serialization drops an undefined `@Expose()`d field entirely, so it is absent from the
+      // key set here rather than merely `null`.
       expect(Object.keys(body.docs[0]).sort()).toEqual(
-        ['id', 'factKey', 'factIds', 'values', 'magnitude', 'status', 'createdAt'].sort(),
+        [
+          'id',
+          'factKey',
+          'factIds',
+          'values',
+          'magnitude',
+          'status',
+          'createdAt',
+          'ruleFired',
+          'explanation',
+        ].sort(),
       );
+      expect(body.docs[0].ruleFired).toBe('none');
       expect(body.docs[0].values.length).toBeGreaterThan(0);
       expect(Object.keys(body.docs[0].values[0]).sort()).toEqual(
         ['factId', 'value', 'unit', 'sourceChunkId', 'documentVersionId', 'locator'].sort(),
@@ -361,6 +394,101 @@ describe('QA and Conflicts (e2e)', () => {
 
       const events = await auditEventModel.find({ action: 'conflicts.listed' });
       expect(events.length).toBeGreaterThan(0);
+    });
+
+    it("lists a proposedWinnerFactId for a metric with an authorityOrder, keyed by each fact document's sourceClass", async () => {
+      const factKey = {
+        entity: 'Southgate Business Park',
+        metric: 'net_operating_income',
+        period: '2025-03',
+      };
+
+      const pmDocument = await documentModel.create({
+        tenantId,
+        title: 'Rent Roll.xlsx',
+        sourceKind: 'xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        sourceClass: 'pm-export',
+      });
+      const pmVersion = await documentVersionModel.create({
+        tenantId,
+        documentId: pmDocument._id,
+        versionNumber: 1,
+        sha256: 'a'.repeat(64),
+        sizeBytes: 100,
+        storageKey: 'pm-rent-roll-v1',
+      });
+      const spreadsheetDocument = await documentModel.create({
+        tenantId,
+        title: 'Comps.xlsx',
+        sourceKind: 'xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        sourceClass: 'spreadsheet',
+      });
+      const spreadsheetVersion = await documentVersionModel.create({
+        tenantId,
+        documentId: spreadsheetDocument._id,
+        versionNumber: 1,
+        sha256: 'b'.repeat(64),
+        sizeBytes: 100,
+        storageKey: 'comps-v1',
+      });
+      const factPm = await extractedFactModel.create({
+        tenantId,
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        value: { amount: 500000, unit: 'usd' },
+        rawText: 'NOI of $500,000',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-pm',
+        documentVersionId: pmVersion._id,
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Rent Roll', cell: 'B2' },
+      });
+      const factSpreadsheet = await extractedFactModel.create({
+        tenantId,
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        value: { amount: 550000, unit: 'usd' },
+        rawText: 'NOI of $550,000',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-comps',
+        documentVersionId: spreadsheetVersion._id,
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'C4' },
+      });
+      await conflictModel.create({
+        tenantId,
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        factIds: [factPm._id, factSpreadsheet._id],
+        magnitude: 50000,
+        status: 'open',
+      });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/conflicts')
+        .set('Authorization', `Bearer ${token}`);
+      const body = response.body as { docs: ConflictBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      // The most recently created conflict sorts first (`createdAt: -1`).
+      expect(Object.keys(body.docs[0]).sort()).toEqual(
+        [
+          'id',
+          'factKey',
+          'factIds',
+          'values',
+          'magnitude',
+          'status',
+          'createdAt',
+          'proposedWinnerFactId',
+          'ruleFired',
+          'explanation',
+        ].sort(),
+      );
+      expect(body.docs[0].ruleFired).toBe('authority');
+      expect(body.docs[0].proposedWinnerFactId).toBe(factPm._id.toString());
     });
   });
 });

@@ -7,11 +7,20 @@ import {
 } from '../../../../src/features/platform/authz/authz-hook.interface';
 import { ToolAlreadyRegisteredException } from '../../../../src/features/platform/authz/exceptions/authz.exception';
 import { ToolExecutorService } from '../../../../src/features/platform/authz/tool-executor.service';
-import type { ToolExecutionStep } from '../../../../src/features/platform/authz/types/tool-definition.type';
+import type {
+  ToolExecutionContext,
+  ToolExecutionStep,
+} from '../../../../src/features/platform/authz/types/tool-definition.type';
+import { UserRole } from '../../../../src/shared/enums/user-role.enum';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
 
 const STEP: ToolExecutionStep = { stepId: 'step-1', allowedTools: ['echo'] };
+const CONTEXT: ToolExecutionContext = {
+  tenantId: 'tenant-1',
+  actorId: 'actor-1',
+  role: UserRole.Member,
+};
 
 function buildEchoTool(handler = jest.fn().mockResolvedValue('ok')) {
   return {
@@ -45,7 +54,12 @@ describe('ToolExecutorService', () => {
   });
 
   it('should refuse a call to a tool that was never registered', async () => {
-    const result = await service.execute({ step: STEP, toolName: 'echo', rawArgs: {} });
+    const result = await service.execute({
+      step: STEP,
+      toolName: 'echo',
+      rawArgs: {},
+      context: CONTEXT,
+    });
 
     expect(result).toEqual({
       kind: 'refused',
@@ -67,7 +81,12 @@ describe('ToolExecutorService', () => {
     service.registerTool(buildEchoTool());
     const step: ToolExecutionStep = { stepId: 'step-2', allowedTools: ['some-other-tool'] };
 
-    const result = await service.execute({ step, toolName: 'echo', rawArgs: { message: 'hi' } });
+    const result = await service.execute({
+      step,
+      toolName: 'echo',
+      rawArgs: { message: 'hi' },
+      context: CONTEXT,
+    });
 
     expect(result).toEqual({
       kind: 'refused',
@@ -84,6 +103,7 @@ describe('ToolExecutorService', () => {
       step: STEP,
       toolName: 'echo',
       rawArgs: { message: 'hi' },
+      context: CONTEXT,
     });
 
     expect(result).toEqual({
@@ -101,6 +121,7 @@ describe('ToolExecutorService', () => {
       step: STEP,
       toolName: 'echo',
       rawArgs: { message: 'hi' },
+      context: CONTEXT,
     });
 
     expect(result).toEqual({
@@ -120,6 +141,7 @@ describe('ToolExecutorService', () => {
       step: STEP,
       toolName: 'echo',
       rawArgs: { message: 'hi' },
+      context: CONTEXT,
     });
 
     expect(result).toEqual({
@@ -140,6 +162,7 @@ describe('ToolExecutorService', () => {
       step: STEP,
       toolName: 'echo',
       rawArgs: { message: 'hi' },
+      context: CONTEXT,
     });
 
     expect(result).toEqual({
@@ -156,6 +179,7 @@ describe('ToolExecutorService', () => {
       step: STEP,
       toolName: 'echo',
       rawArgs: { message: 'hi', extra: 'should not be silently dropped' },
+      context: CONTEXT,
     });
 
     expect(result.kind).toBe('refused');
@@ -169,6 +193,7 @@ describe('ToolExecutorService', () => {
       step: STEP,
       toolName: 'echo',
       rawArgs: { message: 42 },
+      context: CONTEXT,
     });
 
     expect(result).toMatchObject({ kind: 'refused', reason: 'invalid-arguments' });
@@ -189,6 +214,7 @@ describe('ToolExecutorService', () => {
       step,
       toolName: 'locate',
       rawArgs: { target: { path: '/reports/q3', scope: 'all-tenants' } },
+      context: CONTEXT,
     });
 
     expect(result).toMatchObject({ kind: 'refused', reason: 'invalid-arguments' });
@@ -207,10 +233,11 @@ describe('ToolExecutorService', () => {
       step,
       toolName: 'locate',
       rawArgs: { target: { path: '/reports/q3' } },
+      context: CONTEXT,
     });
 
     expect(result).toEqual({ kind: 'executed', result: 'ok' });
-    expect(handler).toHaveBeenCalledWith({ target: { path: '/reports/q3' } });
+    expect(handler).toHaveBeenCalledWith({ target: { path: '/reports/q3' } }, CONTEXT);
   });
 
   it('should recursively strict nested objects reachable through arrays, optional, and nullable wrappers', async () => {
@@ -230,6 +257,7 @@ describe('ToolExecutorService', () => {
       step,
       toolName: 'bulk-locate',
       rawArgs: { targets: [{ path: '/a', scope: 'all-tenants' }], fallback: null },
+      context: CONTEXT,
     });
     expect(arrayLeak).toMatchObject({ kind: 'refused', reason: 'invalid-arguments' });
 
@@ -241,6 +269,7 @@ describe('ToolExecutorService', () => {
         filter: { owner: 'alice', scope: 'all-tenants' },
         fallback: null,
       },
+      context: CONTEXT,
     });
     expect(optionalLeak).toMatchObject({ kind: 'refused', reason: 'invalid-arguments' });
 
@@ -251,6 +280,7 @@ describe('ToolExecutorService', () => {
         targets: [{ path: '/a' }],
         fallback: { path: '/b', scope: 'all-tenants' },
       },
+      context: CONTEXT,
     });
     expect(nullableLeak).toMatchObject({ kind: 'refused', reason: 'invalid-arguments' });
 
@@ -258,13 +288,17 @@ describe('ToolExecutorService', () => {
       step,
       toolName: 'bulk-locate',
       rawArgs: { targets: [{ path: '/a' }], filter: { owner: 'alice' }, fallback: { path: '/b' } },
+      context: CONTEXT,
     });
     expect(result).toEqual({ kind: 'executed', result: 'ok' });
-    expect(handler).toHaveBeenCalledWith({
-      targets: [{ path: '/a' }],
-      filter: { owner: 'alice' },
-      fallback: { path: '/b' },
-    });
+    expect(handler).toHaveBeenCalledWith(
+      {
+        targets: [{ path: '/a' }],
+        filter: { owner: 'alice' },
+        fallback: { path: '/b' },
+      },
+      CONTEXT,
+    );
   });
 
   it('should execute the handler with the parsed arguments once every gate passes', async () => {
@@ -275,12 +309,15 @@ describe('ToolExecutorService', () => {
       step: STEP,
       toolName: 'echo',
       rawArgs: { message: 'hi' },
+      context: CONTEXT,
     });
 
     expect(result).toEqual({ kind: 'executed', result: { echoed: 'hi' } });
-    expect(handler).toHaveBeenCalledWith({ message: 'hi' });
+    expect(handler).toHaveBeenCalledWith({ message: 'hi' }, CONTEXT);
     // `.mock.calls` rather than `toHaveBeenCalledWith(mockAuthzHook.authorize, ...)` — passing the
     // interface-typed method itself to `expect()` trips `@typescript-eslint/unbound-method`.
-    expect(mockAuthzHook.authorize.mock.calls).toEqual([[{ step: STEP, toolName: 'echo' }]]);
+    expect(mockAuthzHook.authorize.mock.calls).toEqual([
+      [{ step: STEP, toolName: 'echo', context: CONTEXT }],
+    ]);
   });
 });
