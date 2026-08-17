@@ -46,6 +46,45 @@ const openConflict = {
   magnitude: 0.0085,
   status: 'open',
   createdAt: new Date().toISOString(),
+  proposedWinnerFactId: 'fact-1',
+  ruleFired: 'authority',
+  explanation: "Source 'chunk-a' outranks the other value's source under the authority policy.",
+};
+
+const recencyConflict = {
+  ...openConflict,
+  id: 'conflict-2',
+  proposedWinnerFactId: 'fact-3',
+  ruleFired: 'recency',
+  explanation: "Source 'chunk-c' was ingested more recently than the conflicting value's source.",
+  values: [
+    {
+      factId: 'fact-3',
+      value: 5.4,
+      unit: 'percent',
+      sourceChunkId: 'chunk-c',
+      documentVersionId: 'docver-1',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 4 },
+    },
+  ],
+};
+
+const undecidedConflict = {
+  ...openConflict,
+  id: 'conflict-3',
+  proposedWinnerFactId: undefined,
+  ruleFired: 'none',
+  explanation: 'No configured rule distinguishes between these sources.',
+  values: [
+    {
+      factId: 'fact-4',
+      value: 7.2,
+      unit: 'percent',
+      sourceChunkId: 'chunk-d',
+      documentVersionId: 'docver-1',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 6 },
+    },
+  ],
 };
 
 function renderPage() {
@@ -64,10 +103,10 @@ function renderPage() {
 
 // Interleaves the conflicts fetch, the document-index fetches, and (in some tests) the
 // resolution-request call — dispatch by URL rather than by call order.
-function fetchStub(resolution?: () => Response) {
+function fetchStub(resolution?: () => Response, conflicts: unknown[] = [openConflict]) {
   return vi.fn((url: string, _init?: RequestInit) => {
     if (url === '/api/v1/conflicts') {
-      return Promise.resolve(jsonResponse({ docs: [openConflict], count: 1 }));
+      return Promise.resolve(jsonResponse({ docs: conflicts, count: conflicts.length }));
     }
     if (url === '/api/v1/documents') {
       return Promise.resolve(jsonResponse({ docs: [documentFixture], count: 1 }));
@@ -103,6 +142,45 @@ describe('ConflictsPage', () => {
     expect(await screen.findByText('Rent Roll Q1 — p.2')).toBeInTheDocument();
   });
 
+  it('shows the recommended value with the rule that fired and why, next to that value', async () => {
+    vi.stubGlobal('fetch', fetchStub());
+
+    renderPage();
+
+    expect(await screen.findByText('Recommended · authority')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Source 'chunk-a' outranks the other value's source under the authority policy.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('shows a recency-based recommendation the same way', async () => {
+    vi.stubGlobal('fetch', fetchStub(undefined, [recencyConflict]));
+
+    renderPage();
+
+    expect(await screen.findByText('Recommended · recency')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Source 'chunk-c' was ingested more recently than the conflicting value's source.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('shows no recommendation when the policy declines to pick a winner', async () => {
+    vi.stubGlobal('fetch', fetchStub(undefined, [undecidedConflict]));
+
+    renderPage();
+
+    expect(
+      await screen.findByText(
+        'Policy has no recommendation for this conflict — No configured rule distinguishes between these sources.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^Recommended ·/)).not.toBeInTheDocument();
+  });
+
   it('requests a resolution for a value and navigates to the run timeline', async () => {
     const fetchMock = fetchStub(() =>
       jsonResponse({
@@ -116,7 +194,17 @@ describe('ConflictsPage', () => {
 
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Request resolution' }));
+    const resolveButton = await screen.findByRole('button', { name: 'Request resolution' });
+    // The recommendation is a suggestion, never a decision — the resolution-request call only
+    // happens once the human clicks, never as a side effect of the conflict (or its proposal)
+    // simply loading and rendering.
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => url === '/api/v1/conflicts/conflict-1/resolution-requests',
+      ),
+    ).toBe(false);
+
+    fireEvent.click(resolveButton);
 
     expect(await screen.findByText('run page probe')).toBeInTheDocument();
 

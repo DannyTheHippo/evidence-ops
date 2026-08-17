@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import App from './App';
+import App, { RequireAdmin } from './App';
 import * as auth from './lib/auth';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -108,5 +108,152 @@ describe('App / RequireAuth', () => {
 
     expect(await screen.findByRole('heading', { name: 'Evidence Ops' })).toBeInTheDocument();
     expect(clearSessionSpy).toHaveBeenCalled();
+  });
+});
+
+function renderAtHome() {
+  render(
+    <MemoryRouter initialEntries={['/']}>
+      <App />
+    </MemoryRouter>,
+  );
+}
+
+describe('App / admin-only nav link', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  // HomePage's getMe() fires as soon as RequireAuth resolves; an unstubbed fetch would hit the
+  // relative URL for real and land in HomePage's error branch.
+  function stubMeFetch(role: 'admin' | 'member') {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse({
+            id: 'user-1',
+            email: `${role}@example.com`,
+            role,
+            createdAt: new Date().toISOString(),
+          }),
+        ),
+      ),
+    );
+  }
+
+  it('shows the Audit Log link to an admin', async () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue({
+      id: 'user-1',
+      email: 'admin@example.com',
+      role: 'admin',
+      createdAt: new Date().toISOString(),
+    });
+    stubMeFetch('admin');
+
+    renderAtHome();
+
+    expect(await screen.findByRole('link', { name: 'Audit Log' })).toBeInTheDocument();
+  });
+
+  it('hides the Audit Log link from a member', async () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue({
+      id: 'user-2',
+      email: 'member@example.com',
+      role: 'member',
+      createdAt: new Date().toISOString(),
+    });
+    stubMeFetch('member');
+
+    renderAtHome();
+
+    // The protected page rendering is what proves the probe resolved, so the absence below is the
+    // role gate holding rather than the session still being in flight.
+    expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Audit Log' })).not.toBeInTheDocument();
+  });
+
+  it('renders no Audit Log link while the session probe is still pending', () => {
+    vi.spyOn(auth, 'ensureSession').mockReturnValue(new Promise(() => {}));
+
+    renderAtHome();
+
+    // The chrome is route-based, so the rest of the nav is already on screen — the link is absent
+    // because the role is unknown, not because the header has yet to render.
+    expect(screen.getByRole('link', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Audit Log' })).not.toBeInTheDocument();
+  });
+});
+
+function renderRequireAdmin() {
+  render(
+    <MemoryRouter initialEntries={['/admin-only']}>
+      <Routes>
+        <Route
+          path="/admin-only"
+          element={
+            <RequireAdmin>
+              <p>admin content</p>
+            </RequireAdmin>
+          }
+        />
+        <Route path="/" element={<p>home probe</p>} />
+        <Route path="/login" element={<p>login probe</p>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+describe('RequireAdmin', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('an admin sees the wrapped content', async () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue({
+      id: 'user-1',
+      email: 'admin@example.com',
+      role: 'admin',
+      createdAt: new Date().toISOString(),
+    });
+
+    renderRequireAdmin();
+
+    expect(await screen.findByText('admin content')).toBeInTheDocument();
+  });
+
+  it('a member is redirected to / rather than seeing the wrapped content', async () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue({
+      id: 'user-2',
+      email: 'member@example.com',
+      role: 'member',
+      createdAt: new Date().toISOString(),
+    });
+
+    renderRequireAdmin();
+
+    expect(await screen.findByText('home probe')).toBeInTheDocument();
+    expect(screen.queryByText('admin content')).not.toBeInTheDocument();
+  });
+
+  it('an anonymous visitor is redirected to /login', async () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue(null);
+
+    renderRequireAdmin();
+
+    expect(await screen.findByText('login probe')).toBeInTheDocument();
+    expect(screen.queryByText('admin content')).not.toBeInTheDocument();
+  });
+
+  it('renders nothing while the session probe is pending', () => {
+    vi.spyOn(auth, 'ensureSession').mockReturnValue(new Promise(() => {}));
+
+    renderRequireAdmin();
+
+    expect(screen.queryByText('admin content')).not.toBeInTheDocument();
+    expect(screen.queryByText('home probe')).not.toBeInTheDocument();
+    expect(screen.queryByText('login probe')).not.toBeInTheDocument();
   });
 });

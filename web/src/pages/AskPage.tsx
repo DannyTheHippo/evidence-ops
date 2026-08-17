@@ -76,19 +76,30 @@ export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: A
 
   // Polls while the run is in flight; stops the moment runStatus leaves queued/running, matching
   // the API's separate runStatus/outcome axes (outcome is only meaningful once completed).
+  // Depends on the status value, not the `answer` object, so one interval spans every tick that
+  // reports the same status and the poll cadence stays fixed rather than drifting by the response
+  // latency of each tick. `cancelled` drops a response that lands after this effect is torn down —
+  // after unmount, or after a newer tick moved the answer on — instead of overwriting fresher state.
   useEffect(() => {
     if (!answerId) return;
     if (answer?.runStatus === 'completed' || answer?.runStatus === 'failed') return;
+    let cancelled = false;
 
     const timer = setInterval(() => {
       getAnswerById(answerId)
-        .then(setAnswer)
+        .then((next) => {
+          if (!cancelled) setAnswer(next);
+        })
         .catch((err: unknown) => {
+          if (cancelled) return;
           setError(err instanceof Error ? err.message : 'Failed to poll answer');
         });
     }, pollIntervalMs);
 
-    return () => clearInterval(timer);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, [answerId, answer?.runStatus, pollIntervalMs]);
 
   // Resolves citation/conflict-value document titles once there is something to resolve — a

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { clearSession } from '../lib/auth';
 import ApprovalsPage from './ApprovalsPage';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -9,6 +10,20 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: { 'Content-Type': 'application/json' },
   });
 }
+
+const admin = {
+  id: 'user-1',
+  email: 'admin@example.com',
+  role: 'admin' as const,
+  createdAt: new Date().toISOString(),
+};
+
+const member = {
+  id: 'user-2',
+  email: 'member@example.com',
+  role: 'member' as const,
+  createdAt: new Date().toISOString(),
+};
 
 const pendingApproval = {
   id: 'approval-1',
@@ -20,6 +35,63 @@ const pendingApproval = {
   state: 'pending',
   createdAt: '2026-08-01T12:00:00.000Z',
 };
+
+const authorityConflict = {
+  id: 'conflict-1',
+  factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+  factIds: ['fact-1', 'fact-2'],
+  values: [
+    {
+      factId: 'fact-1',
+      value: 5.25,
+      unit: 'percent',
+      sourceChunkId: 'chunk-a',
+      documentVersionId: 'docver-1',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+    },
+    {
+      factId: 'fact-2',
+      value: 6.1,
+      unit: 'percent',
+      sourceChunkId: 'chunk-b',
+      documentVersionId: 'docver-1',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 5 },
+    },
+  ],
+  magnitude: 0.0085,
+  status: 'open',
+  createdAt: '2026-08-01T11:00:00.000Z',
+  proposedWinnerFactId: 'fact-1',
+  ruleFired: 'authority',
+  explanation: "Source 'chunk-a' outranks the other value's source under the authority policy.",
+};
+
+const recencyConflict = {
+  ...authorityConflict,
+  id: 'conflict-2',
+  proposedWinnerFactId: 'fact-2',
+  ruleFired: 'recency',
+  explanation: "Source 'chunk-b' was ingested more recently than the conflicting value's source.",
+};
+
+const undecidedConflict = {
+  ...authorityConflict,
+  id: 'conflict-3',
+  proposedWinnerFactId: undefined,
+  ruleFired: 'none',
+  explanation: 'No configured rule distinguishes between these sources.',
+};
+
+// Dispatches by URL so a test can mock only the endpoints it cares about, and layer the
+// /auth/me probe useSession() now makes on top of every other endpoint's stub.
+function stubFetch(routes: Record<string, () => Response>): void {
+  const fetchMock = vi.fn((url: string) => {
+    const handler = routes[url];
+    if (!handler) return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    return Promise.resolve(handler());
+  });
+  vi.stubGlobal('fetch', fetchMock);
+}
 
 function renderPage() {
   render(
@@ -39,13 +111,17 @@ describe('ApprovalsPage', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    // useSession() shares auth.ts's module-level session cache; without this, whichever role
+    // the first test in this file probes for would leak into every later test.
+    clearSession();
   });
 
   it('lists a pending approval showing the conflicting values, source, and request timestamp', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(jsonResponse({ docs: [pendingApproval], count: 1 }));
-    vi.stubGlobal('fetch', fetchMock);
+    stubFetch({
+      '/api/v1/auth/me': () => jsonResponse(admin),
+      '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 1 }),
+      '/api/v1/conflicts': () => jsonResponse({ docs: [authorityConflict], count: 1 }),
+    });
 
     renderPage();
 
@@ -63,17 +139,96 @@ describe('ApprovalsPage', () => {
     ).toBeInTheDocument();
   });
 
-  it('approves a pending approval and removes it from the inbox', async () => {
-    const fetchMock = vi.fn();
-    fetchMock.mockResolvedValueOnce(jsonResponse({ docs: [pendingApproval], count: 1 }));
-    fetchMock.mockResolvedValueOnce(
-      jsonResponse({ ...pendingApproval, state: 'approved', decidedBy: 'reviewer@example.com' }),
-    );
+  it("shows the conflict's authority-rule recommendation as a suggestion, not a decision", async () => {
+    stubFetch({
+      '/api/v1/auth/me': () => jsonResponse(admin),
+      '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 1 }),
+      '/api/v1/conflicts': () => jsonResponse({ docs: [authorityConflict], count: 1 }),
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('Recommended · authority')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "5.25 percent — Source 'chunk-a' outranks the other value's source under the authority policy.",
+      ),
+    ).toBeInTheDocument();
+    // The approve/reject controls stay separate, explicit actions — the recommendation never
+    // pre-fills a decision or triggers one on its own.
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeInTheDocument();
+  });
+
+  it('shows a recency-rule recommendation the same way', async () => {
+    stubFetch({
+      '/api/v1/auth/me': () => jsonResponse(admin),
+      '/api/v1/approvals': () =>
+        jsonResponse({
+          docs: [
+            { ...pendingApproval, subject: { entityType: 'Conflict', entityId: 'conflict-2' } },
+          ],
+          count: 1,
+        }),
+      '/api/v1/conflicts': () => jsonResponse({ docs: [recencyConflict], count: 1 }),
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('Recommended · recency')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "6.1 percent — Source 'chunk-b' was ingested more recently than the conflicting value's source.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('shows no recommendation when the policy declines to pick a winner, but still shows why', async () => {
+    stubFetch({
+      '/api/v1/auth/me': () => jsonResponse(admin),
+      '/api/v1/approvals': () =>
+        jsonResponse({
+          docs: [
+            { ...pendingApproval, subject: { entityType: 'Conflict', entityId: 'conflict-3' } },
+          ],
+          count: 1,
+        }),
+      '/api/v1/conflicts': () => jsonResponse({ docs: [undecidedConflict], count: 1 }),
+    });
+
+    renderPage();
+
+    expect(
+      await screen.findByText(
+        'Policy has no recommendation for this conflict — No configured rule distinguishes between these sources.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^Recommended ·/)).not.toBeInTheDocument();
+  });
+
+  it('an admin sees and can use the decide controls', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      const routes: Record<string, () => Response> = {
+        '/api/v1/auth/me': () => jsonResponse(admin),
+        '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 1 }),
+        '/api/v1/approvals/approval-1/decision': () =>
+          jsonResponse({ ...pendingApproval, state: 'approved', decidedBy: admin.email }),
+      };
+      const handler = routes[url];
+      if (!handler) return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      return Promise.resolve(handler());
+    });
     vi.stubGlobal('fetch', fetchMock);
 
     renderPage();
 
     await screen.findByRole('button', { name: 'Approve' });
+    expect(screen.queryByText('Deciding approvals requires an admin.')).not.toBeInTheDocument();
+    // The recommendation (when present) is only ever a suggestion — loading and rendering an
+    // approval, recommendation included, never itself calls the decision endpoint.
+    expect(
+      fetchMock.mock.calls.some(([url]) => url === '/api/v1/approvals/approval-1/decision'),
+    ).toBe(false);
     fireEvent.change(screen.getByLabelText('Reason (optional)'), {
       target: { value: 'Evidence checks out.' },
     });
@@ -83,19 +238,19 @@ describe('ApprovalsPage', () => {
       expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
     });
     expect(screen.getByText('No pending approvals.')).toBeInTheDocument();
-
-    const [, decideCall] = fetchMock.mock.calls;
-    expect(decideCall[0]).toBe('/api/v1/approvals/approval-1/decision');
-    expect(JSON.parse((decideCall[1] as RequestInit).body as string)).toEqual({
-      decision: 'approved',
-      reason: 'Evidence checks out.',
-    });
   });
 
   it('rejects a pending approval and removes it from the inbox', async () => {
-    const fetchMock = vi.fn();
-    fetchMock.mockResolvedValueOnce(jsonResponse({ docs: [pendingApproval], count: 1 }));
-    fetchMock.mockResolvedValueOnce(jsonResponse({ ...pendingApproval, state: 'rejected' }));
+    const fetchMock = vi.fn((url: string, _init?: RequestInit) => {
+      if (url === '/api/v1/auth/me') return Promise.resolve(jsonResponse(admin));
+      if (url === '/api/v1/approvals') {
+        return Promise.resolve(jsonResponse({ docs: [pendingApproval], count: 1 }));
+      }
+      if (url === '/api/v1/approvals/approval-1/decision') {
+        return Promise.resolve(jsonResponse({ ...pendingApproval, state: 'rejected' }));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
     vi.stubGlobal('fetch', fetchMock);
 
     renderPage();
@@ -108,36 +263,79 @@ describe('ApprovalsPage', () => {
     });
     expect(screen.getByText('No pending approvals.')).toBeInTheDocument();
 
-    const [, decideCall] = fetchMock.mock.calls;
-    expect(decideCall[0]).toBe('/api/v1/approvals/approval-1/decision');
-    expect(JSON.parse((decideCall[1] as RequestInit).body as string)).toEqual({
+    const decideCall = fetchMock.mock.calls.find(
+      ([url]) => url === '/api/v1/approvals/approval-1/decision',
+    );
+    expect(decideCall).toBeDefined();
+    expect(JSON.parse((decideCall?.[1] as RequestInit).body as string)).toEqual({
       decision: 'rejected',
     });
   });
 
-  it('navigates to the workflow run when "View run" finds one', async () => {
+  it('a member sees why deciding is unavailable, and cannot reach the decide controls', async () => {
+    stubFetch({
+      '/api/v1/auth/me': () => jsonResponse(member),
+      '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 1 }),
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('Deciding approvals requires an admin.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Reason (optional)')).not.toBeInTheDocument();
+  });
+
+  it('withholds the admin-only notice until the session probe resolves, then admits the admin', async () => {
+    let resolveMe: (res: Response) => void;
+    const pendingMe = new Promise<Response>((resolve) => {
+      resolveMe = resolve;
+    });
     const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/auth/me') return pendingMe;
       if (url === '/api/v1/approvals') {
         return Promise.resolve(jsonResponse({ docs: [pendingApproval], count: 1 }));
       }
-      if (url === '/api/v1/workflow-runs?workflowId=wf-1') {
-        return Promise.resolve(
-          jsonResponse({
-            docs: [
-              {
-                id: 'run-1',
-                workflowId: 'wf-1',
-                status: 'running',
-                createdAt: pendingApproval.createdAt,
-              },
-            ],
-            count: 1,
-          }),
-        );
+      if (url === '/api/v1/conflicts') {
+        return Promise.resolve(jsonResponse({ docs: [authorityConflict], count: 1 }));
       }
       return Promise.reject(new Error(`Unhandled fetch: ${url}`));
     });
     vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    // Anchored on the approval itself, so the absences below are about the unresolved session
+    // rather than a list that has not arrived yet.
+    expect(await screen.findByText(pendingApproval.summary)).toBeInTheDocument();
+    expect(screen.queryByText('Deciding approvals requires an admin.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Reason (optional)')).not.toBeInTheDocument();
+
+    resolveMe!(jsonResponse(admin));
+
+    expect(await screen.findByRole('button', { name: 'Approve' })).toBeInTheDocument();
+    expect(screen.queryByText('Deciding approvals requires an admin.')).not.toBeInTheDocument();
+  });
+
+  it('navigates to the workflow run when "View run" finds one', async () => {
+    stubFetch({
+      '/api/v1/auth/me': () => jsonResponse(admin),
+      '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 1 }),
+      '/api/v1/workflow-runs?workflowId=wf-1': () =>
+        jsonResponse({
+          docs: [
+            {
+              id: 'run-1',
+              workflowId: 'wf-1',
+              status: 'running',
+              createdAt: pendingApproval.createdAt,
+            },
+          ],
+          count: 1,
+        }),
+    });
 
     renderPage();
 
@@ -147,16 +345,11 @@ describe('ApprovalsPage', () => {
   });
 
   it('shows an error when "View run" finds no run for the workflow', async () => {
-    const fetchMock = vi.fn((url: string) => {
-      if (url === '/api/v1/approvals') {
-        return Promise.resolve(jsonResponse({ docs: [pendingApproval], count: 1 }));
-      }
-      if (url === '/api/v1/workflow-runs?workflowId=wf-1') {
-        return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
-      }
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    stubFetch({
+      '/api/v1/auth/me': () => jsonResponse(admin),
+      '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 1 }),
+      '/api/v1/workflow-runs?workflowId=wf-1': () => jsonResponse({ docs: [], count: 0 }),
     });
-    vi.stubGlobal('fetch', fetchMock);
 
     renderPage();
 

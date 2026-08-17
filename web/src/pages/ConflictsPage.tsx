@@ -111,18 +111,40 @@ export default function ConflictsPage() {
                   <span className={statusBadgeClass(conflict.status)}>{conflict.status}</span>
                 </td>
                 <td>
+                  {conflict.ruleFired === 'none' && (
+                    <p className="cell-sub">
+                      Policy has no recommendation for this conflict — {conflict.explanation}
+                    </p>
+                  )}
                   <ul className="value-compare">
                     {conflict.values.map((value) => {
                       const resolved = documentIndex.get(value.documentVersionId);
                       const title = resolved?.documentTitle ?? 'Unknown document';
+                      const isRecommended = value.factId === conflict.proposedWinnerFactId;
                       return (
-                        <li key={value.factId} className="value-compare-item">
+                        <li
+                          key={value.factId}
+                          className={
+                            isRecommended
+                              ? 'value-compare-item value-compare-item--recommended'
+                              : 'value-compare-item'
+                          }
+                        >
                           <span className="mono">
                             {value.value} {value.unit}
                           </span>
                           <span className="cell-sub">
                             {title} — {formatLocator(value.locator)}
                           </span>
+                          {isRecommended && (
+                            <>
+                              <span className="badge badge--info">
+                                <span className="badge-dot" />
+                                Recommended · {conflict.ruleFired}
+                              </span>
+                              <p className="cell-sub">{conflict.explanation}</p>
+                            </>
+                          )}
                           {conflict.status === 'open' && (
                             <button
                               type="button"

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import AskPage from './AskPage';
@@ -8,6 +8,16 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+// A fetch response the test releases by hand, so an in-flight poll can be made to land after a
+// later one — the ordering a wall-clock delay can only approximate.
+function deferredResponse(body: unknown): { response: Promise<Response>; release: () => void } {
+  let release!: () => void;
+  const response = new Promise<Response>((resolve) => {
+    release = () => resolve(jsonResponse(body));
+  });
+  return { response, release };
 }
 
 function ask(question: string) {
@@ -37,7 +47,9 @@ describe('AskPage', () => {
 
     const fetchMock = vi.fn();
     fetchMock.mockResolvedValueOnce(jsonResponse({ id: 'answer-1', runStatus: 'queued' }, 201));
-    fetchMock.mockResolvedValue(jsonResponse(completedAnswer));
+    // A Response body reads once. The catch-all builds a fresh one per call so a second poll
+    // deserialises the answer again instead of throwing on a consumed body.
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(completedAnswer)));
     vi.stubGlobal('fetch', fetchMock);
 
     render(
@@ -160,15 +172,17 @@ describe('AskPage', () => {
       runStatus: 'completed',
       outcome: { kind: 'insufficient_evidence', reason: 'Not enough evidence.' },
     };
-    // Never a legitimate response — if polling kept running after completion, this is what the
-    // next call would return, and the test below would see it flip the UI.
+    // Never a legitimate response — only a poll issued after the answer completed can reach it,
+    // so it stands in for the state a leaked interval would push into the page.
     const poisonedAnswer = { ...runningAnswer, runStatus: 'failed', outcome: undefined };
 
     const fetchMock = vi.fn();
     fetchMock.mockResolvedValueOnce(jsonResponse({ id: 'answer-3', runStatus: 'queued' }, 201));
     fetchMock.mockResolvedValueOnce(jsonResponse(runningAnswer));
     fetchMock.mockResolvedValueOnce(jsonResponse(completedAnswer));
-    fetchMock.mockResolvedValue(jsonResponse(poisonedAnswer));
+    // Fresh Response per call: a single shared one is readable only once, so repeated polls would
+    // fail on a consumed body instead of deserialising the fixture.
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(poisonedAnswer)));
     vi.stubGlobal('fetch', fetchMock);
 
     render(
@@ -181,11 +195,63 @@ describe('AskPage', () => {
 
     await screen.findByText('Not enough evidence.');
 
-    // Give the poisoned response several intervals worth of real time to land, if it were going to.
+    // Assert the poll count stops growing rather than that the poisoned response fails to render:
+    // with a short interval several polls are in flight before React re-renders, so a
+    // render-based assertion races the teardown and fails intermittently. Call count is the
+    // property actually under test — "the interval was cleared" — and it is deterministic.
+    const pollCalls = () =>
+      fetchMock.mock.calls.filter(([url]) => url === '/api/v1/answers/answer-3').length;
+    const callsAtCompletion = pollCalls();
     await new Promise((resolve) => setTimeout(resolve, 60));
 
+    expect(pollCalls()).toBe(callsAtCompletion);
+  });
+
+  it('drops a poll response that lands after a later one already completed the answer', async () => {
+    const completedAnswer = {
+      id: 'answer-4',
+      questionText: 'Q',
+      runStatus: 'completed',
+      outcome: { kind: 'insufficient_evidence', reason: 'Not enough evidence.' },
+      citations: [],
+      conflictIds: [],
+      createdAt: new Date().toISOString(),
+    };
+    // The first poll's own response, held back until after a later poll reported completion.
+    // Applying it would walk the page backwards from a settled answer to a failed run.
+    const stale = deferredResponse({ ...completedAnswer, runStatus: 'failed', outcome: undefined });
+
+    let pollCall = 0;
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/questions') {
+        return Promise.resolve(jsonResponse({ id: 'answer-4', runStatus: 'queued' }, 201));
+      }
+      if (url === '/api/v1/answers/answer-4') {
+        pollCall += 1;
+        return pollCall === 1 ? stale.response : Promise.resolve(jsonResponse(completedAnswer));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter>
+        <AskPage pollIntervalMs={5} />
+      </MemoryRouter>,
+    );
+
+    ask('Q');
+
+    await screen.findByText('Not enough evidence.');
+
+    // act's async exit crosses a macrotask boundary, which drains the released response's whole
+    // promise chain — no timer, so no wall-clock race.
+    await act(async () => {
+      stale.release();
+      await stale.response;
+    });
+
     expect(screen.getByText('Not enough evidence.')).toBeInTheDocument();
-    expect(screen.queryByText('failed')).not.toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

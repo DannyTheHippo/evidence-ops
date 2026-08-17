@@ -5,7 +5,7 @@ import { getWorkflowRunById, listApprovals, type Approval, type WorkflowRun } fr
 const DEFAULT_POLL_INTERVAL_MS = 1500;
 
 interface WorkflowRunPageProps {
-  // Overridable so tests can poll on a short interval instead of stubbing timers.
+  // Overridable so tests can drive the poll cadence.
   pollIntervalMs?: number;
 }
 
@@ -33,34 +33,53 @@ export default function WorkflowRunPage({
   const [everPaused, setEverPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(() => {
-    if (!id) return;
-    Promise.all([getWorkflowRunById(id), listApprovals()])
-      .then(([runResult, { docs }]) => {
-        setRun(runResult);
-        const matched = docs.find((approval) => approval.workflowId === runResult.workflowId);
-        setPendingApproval(matched ?? null);
-        if (matched) setEverPaused(true);
-        setError(null);
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : 'Failed to load workflow run');
-      });
-  }, [id]);
+  // `isCurrent` returns false once the caller's effect has been torn down, so a response that
+  // lands late — after unmount, or after a newer tick moved the run on — is dropped instead of
+  // overwriting fresher state.
+  const refresh = useCallback(
+    (isCurrent: () => boolean) => {
+      if (!id) return;
+      Promise.all([getWorkflowRunById(id), listApprovals()])
+        .then(([runResult, { docs }]) => {
+          if (!isCurrent()) return;
+          setRun(runResult);
+          const matched = docs.find((approval) => approval.workflowId === runResult.workflowId);
+          setPendingApproval(matched ?? null);
+          if (matched) setEverPaused(true);
+          setError(null);
+        })
+        .catch((err: unknown) => {
+          if (!isCurrent()) return;
+          setError(err instanceof Error ? err.message : 'Failed to load workflow run');
+        });
+    },
+    [id],
+  );
 
   useEffect(() => {
-    refresh();
+    let cancelled = false;
+    refresh(() => !cancelled);
+    return () => {
+      cancelled = true;
+    };
   }, [refresh]);
 
-  // Polls while the run is in flight, matching AskPage's approach: depend on the status value,
-  // not the whole `run` object, so the interval survives ticks that don't change status.
-  useEffect(() => {
-    if (!run || run.status === 'completed' || run.status === 'failed') return;
-    const timer = setInterval(refresh, pollIntervalMs);
-    return () => clearInterval(timer);
-  }, [run, refresh, pollIntervalMs]);
+  const runStatus = run?.status;
 
-  const isTerminal = run?.status === 'completed' || run?.status === 'failed';
+  // Polls while the run is in flight. Depends on the status value, not the `run` object, so one
+  // interval spans every tick that reports the same status and the poll cadence stays fixed
+  // rather than drifting by the response latency of each tick.
+  useEffect(() => {
+    if (!runStatus || runStatus === 'completed' || runStatus === 'failed') return;
+    let cancelled = false;
+    const timer = setInterval(() => refresh(() => !cancelled), pollIntervalMs);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [runStatus, refresh, pollIntervalMs]);
+
+  const isTerminal = runStatus === 'completed' || runStatus === 'failed';
   const isPaused = !!pendingApproval;
   const isResumed = everPaused && isTerminal;
 
@@ -120,7 +139,7 @@ export default function WorkflowRunPage({
 
             <li className={stepClassName(false, isResumed)}>
               <span className="timeline-step-label">
-                {isTerminal ? `Resumed — ${run.status}` : 'Resumed'}
+                {isTerminal ? `Resumed — ${run.status}` : 'Not yet resumed'}
               </span>
               {run.errorMessage && <p className="cell-sub">{run.errorMessage}</p>}
             </li>

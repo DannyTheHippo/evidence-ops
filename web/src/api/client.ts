@@ -292,6 +292,8 @@ export interface ConflictValue {
   locator: Locator;
 }
 
+export type ConflictRuleFired = 'authority' | 'recency' | 'none';
+
 export interface Conflict {
   id: string;
   factKey: ConflictingFactKey;
@@ -300,6 +302,9 @@ export interface Conflict {
   magnitude: number;
   status: ConflictStatus;
   createdAt: string;
+  proposedWinnerFactId?: string;
+  ruleFired: ConflictRuleFired;
+  explanation: string;
 }
 
 export function listConflicts(params?: { limit?: number }): Promise<WithCount<Conflict>> {
@@ -436,6 +441,19 @@ export interface Source {
   createdAt: string;
 }
 
+export type SourceFileStateStatus = 'ok' | 'failed';
+
+export interface SourceFileState {
+  path: string;
+  status: SourceFileStateStatus;
+  lastError?: string;
+  mtimeMs: number;
+}
+
+export interface SourceWithFileStates extends Source {
+  fileStates: SourceFileState[];
+}
+
 export function createSource(input: {
   name: string;
   kind: SourceKind;
@@ -457,8 +475,8 @@ export function listSources(pagination?: {
   return request<WithCount<Source>>(`/sources${qs ? `?${qs}` : ''}`);
 }
 
-export function getSourceById(id: string): Promise<Source> {
-  return request<Source>(`/sources/${id}`);
+export function getSourceById(id: string): Promise<SourceWithFileStates> {
+  return request<SourceWithFileStates>(`/sources/${id}`);
 }
 
 export function setSourceEnabled(id: string, enabled: boolean): Promise<Source> {
@@ -467,4 +485,36 @@ export function setSourceEnabled(id: string, enabled: boolean): Promise<Source> 
 
 export function requestSourceSync(id: string): Promise<WorkflowRun> {
   return request<WorkflowRun>(`/sources/${id}/sync`, { method: 'POST' });
+}
+
+// ── API keys ─────────────────────────────────────────────────────────────
+
+export interface ApiKey {
+  id: string;
+  name: string;
+  tokenPrefix: string;
+  expiresAt?: string;
+  revokedAt?: string;
+  createdAt: string;
+}
+
+// The plaintext `token` lives only here — mint is the sole response shape that carries it.
+// Nothing persists it beyond this call; a caller that loses this response has lost the token.
+export interface MintedApiKey extends ApiKey {
+  token: string;
+}
+
+export function mintApiKey(name: string, expiresAt?: string): Promise<MintedApiKey> {
+  return request<MintedApiKey>('/api-keys', {
+    method: 'POST',
+    ...jsonBody(expiresAt ? { name, expiresAt } : { name }),
+  });
+}
+
+export function listApiKeys(): Promise<WithCount<ApiKey>> {
+  return request<WithCount<ApiKey>>('/api-keys');
+}
+
+export async function revokeApiKey(id: string): Promise<void> {
+  await request<void>(`/api-keys/${id}`, { method: 'DELETE' });
 }
