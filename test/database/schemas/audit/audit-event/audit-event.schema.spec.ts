@@ -1,6 +1,5 @@
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import mongoose, { Connection, createConnection, Model } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../../../src/database/constants/tenant.constant';
 import {
   AuditEvent,
   AuditEventSchema,
@@ -9,6 +8,7 @@ import {
 jest.setTimeout(60000);
 
 const buildEventInput = () => ({
+  tenantId: 'tenant-a',
   actor: new mongoose.Types.ObjectId(),
   action: 'answer.completed',
   subject: { entityType: 'Answer', entityId: new mongoose.Types.ObjectId() },
@@ -23,7 +23,7 @@ describe('AuditEvent schema', () => {
       AuditEventSchema,
     );
 
-    it('requires actor, action, subject, timestamp, and correlationId', () => {
+    it('requires actor, action, subject, timestamp, correlationId, and tenantId', () => {
       const event = new AuditEventModel({});
 
       const error = event.validateSync();
@@ -33,6 +33,7 @@ describe('AuditEvent schema', () => {
       expect(error?.errors.subject).toBeDefined();
       expect(error?.errors.timestamp).toBeDefined();
       expect(error?.errors.correlationId).toBeDefined();
+      expect(error?.errors.tenantId).toBeDefined();
     });
 
     it('accepts entityType/entityId as the subject shape (not `type`/`id`)', () => {
@@ -40,12 +41,6 @@ describe('AuditEvent schema', () => {
 
       expect(event.validateSync()).toBeUndefined();
       expect(event.subject.entityType).toBe('Answer');
-    });
-
-    it('defaults tenantId to DEFAULT_TENANT_ID', () => {
-      const event = new AuditEventModel(buildEventInput());
-
-      expect(event.tenantId).toBe(DEFAULT_TENANT_ID);
     });
   });
 
@@ -75,7 +70,7 @@ describe('AuditEvent schema', () => {
       expect(found?.action).toBe('answer.completed');
       expect(found?.subject.entityType).toBe('Answer');
       expect(found?.subject.entityId.equals(input.subject.entityId)).toBe(true);
-      expect(found?.tenantId).toBe(DEFAULT_TENANT_ID);
+      expect(found?.tenantId).toBe('tenant-a');
     });
   });
 });

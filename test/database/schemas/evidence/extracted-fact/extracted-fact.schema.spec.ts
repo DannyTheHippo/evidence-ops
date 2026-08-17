@@ -1,6 +1,5 @@
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import mongoose, { Connection, createConnection, Model } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../../../src/database/constants/tenant.constant';
 import {
   ExtractedFact,
   ExtractedFactSchema,
@@ -9,6 +8,7 @@ import {
 jest.setTimeout(60000);
 
 const buildFactInput = () => ({
+  tenantId: 'tenant-a',
   factKey: { entity: 'Acme Corp', metric: 'revenue', period: 'Q3-2025' },
   // Required, not optional: the incremental conflict scan queries facts by
   // `{tenantId, groupKeyNormalized}`, so a fact persisted without it is invisible to every keyed
@@ -48,6 +48,7 @@ describe('ExtractedFact schema', () => {
       expect(error?.errors.extractionMethod).toBeDefined();
       expect(error?.errors.chunkId).toBeDefined();
       expect(error?.errors.locator).toBeDefined();
+      expect(error?.errors.tenantId).toBeDefined();
     });
 
     it('rejects an extractionMethod outside llm/regex/manual', () => {
@@ -69,10 +70,25 @@ describe('ExtractedFact schema', () => {
       expect(error?.errors.confidence).toBeDefined();
     });
 
-    it('defaults tenantId to DEFAULT_TENANT_ID', () => {
+    it('passes validation with an explicit tenantId', () => {
       const fact = new ExtractedFactModel(buildFactInput());
 
-      expect(fact.tenantId).toBe(DEFAULT_TENANT_ID);
+      expect(fact.tenantId).toBe('tenant-a');
+      expect(fact.validateSync()).toBeUndefined();
+    });
+
+    it('leaves observedAt undefined when not supplied', () => {
+      const fact = new ExtractedFactModel(buildFactInput());
+
+      expect(fact.observedAt).toBeUndefined();
+      expect(fact.validateSync()).toBeUndefined();
+    });
+
+    it('accepts an explicit observedAt', () => {
+      const observedAt = new Date('2026-06-15T00:00:00.000Z');
+      const fact = new ExtractedFactModel({ ...buildFactInput(), observedAt });
+
+      expect(fact.observedAt).toEqual(observedAt);
       expect(fact.validateSync()).toBeUndefined();
     });
   });
@@ -109,7 +125,19 @@ describe('ExtractedFact schema', () => {
         period: 'Q3-2025',
       });
       expect(plain?.value).toEqual({ amount: 12_000_000, unit: 'usd' });
-      expect(found?.tenantId).toBe(DEFAULT_TENANT_ID);
+      expect(found?.tenantId).toBe('tenant-a');
+      expect(found?.observedAt).toBeUndefined();
+    });
+
+    it('persists and rehydrates an explicit observedAt, distinct from factKey.period', async () => {
+      const observedAt = new Date('2026-06-15T00:00:00.000Z');
+
+      const created = await ExtractedFactModel.create({ ...buildFactInput(), observedAt });
+
+      const found = await ExtractedFactModel.findById(created._id);
+
+      expect(found?.observedAt).toEqual(observedAt);
+      expect(found?.factKey.period).toBe('Q3-2025');
     });
   });
 });

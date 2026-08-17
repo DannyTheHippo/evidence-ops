@@ -1,6 +1,5 @@
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import mongoose, { Connection, createConnection, Model } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../../../src/database/constants/tenant.constant';
 import {
   User,
   UserSchema,
@@ -18,19 +17,24 @@ describe('User schema', () => {
     // overloads do not structurally accept as a type argument.
     const UserModel = mongoose.model<User>('UserValidationOnly', UserSchema);
 
-    it('requires email and password', () => {
+    it('requires email, password, and tenantId', () => {
       const user = new UserModel({});
 
       const error = user.validateSync();
 
       expect(error?.errors.email).toBeDefined();
       expect(error?.errors.password).toBeDefined();
+      expect(error?.errors.tenantId).toBeDefined();
     });
 
-    it('defaults tenantId and role when neither is supplied', () => {
-      const user = new UserModel({ email: 'demo@example.com', password: 'hashed' });
+    it('defaults role when it is not supplied', () => {
+      const user = new UserModel({
+        email: 'demo@example.com',
+        password: 'hashed',
+        tenantId: 'tenant-a',
+      });
 
-      expect(user.tenantId).toBe(DEFAULT_TENANT_ID);
+      expect(user.tenantId).toBe('tenant-a');
       expect(user.role).toBe(UserRole.Member);
       expect(user.validateSync()).toBeUndefined();
     });
@@ -39,6 +43,7 @@ describe('User schema', () => {
       const user = new UserModel({
         email: 'admin@example.com',
         password: 'hashed',
+        tenantId: 'tenant-a',
         role: UserRole.Admin,
       });
 
@@ -50,6 +55,7 @@ describe('User schema', () => {
       const user = new UserModel({
         email: 'demo@example.com',
         password: 'hashed',
+        tenantId: 'tenant-a',
         role: 'owner',
       });
 
@@ -76,12 +82,16 @@ describe('User schema', () => {
     });
 
     it('persists and rehydrates a user with its tenant and role defaults', async () => {
-      const created = await UserModel.create({ email: 'demo@example.com', password: 'hashed' });
+      const created = await UserModel.create({
+        email: 'demo@example.com',
+        password: 'hashed',
+        tenantId: 'tenant-a',
+      });
 
       const found = await UserModel.findById(created._id);
 
       expect(found?.email).toBe('demo@example.com');
-      expect(found?.tenantId).toBe(DEFAULT_TENANT_ID);
+      expect(found?.tenantId).toBe('tenant-a');
       expect(found?.role).toBe(UserRole.Member);
     });
   });

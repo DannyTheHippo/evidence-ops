@@ -1,6 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types, WithTimestamps } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../constants/tenant.constant';
 import { AuditableDocument } from '../../../global/auditable-document/auditable-document.schema';
 import { EvidenceLocator } from './evidence-locator.type';
 
@@ -62,7 +61,7 @@ export class EvidenceChunk extends AuditableDocument<string> {
   @Prop({ type: MongooseSchema.Types.Mixed, required: true })
   locator: EvidenceLocator;
 
-  @Prop({ type: String, required: true, default: DEFAULT_TENANT_ID })
+  @Prop({ type: String, required: true })
   tenantId: string;
 
   // Tags which `IngestionService.ingestVersion` attempt wrote this row. Required because a

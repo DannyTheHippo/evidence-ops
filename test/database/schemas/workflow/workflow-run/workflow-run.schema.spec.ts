@@ -1,6 +1,5 @@
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import mongoose, { Connection, createConnection, Model } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../../../src/database/constants/tenant.constant';
 import {
   WorkflowRun,
   WorkflowRunSchema,
@@ -15,27 +14,32 @@ describe('WorkflowRun schema', () => {
       WorkflowRunSchema,
     );
 
-    it('requires workflowId and defaults status to queued', () => {
+    it('requires workflowId and tenantId, and defaults status to queued', () => {
       const run = new WorkflowRunModel({});
 
       const error = run.validateSync();
 
       expect(error?.errors.workflowId).toBeDefined();
+      expect(error?.errors.tenantId).toBeDefined();
       expect(run.status).toBe('queued');
     });
 
     it('rejects a status outside queued/running/completed/failed', () => {
-      const run = new WorkflowRunModel({ workflowId: 'wf-1', status: 'paused' });
+      const run = new WorkflowRunModel({
+        workflowId: 'wf-1',
+        tenantId: 'tenant-a',
+        status: 'paused',
+      });
 
       const error = run.validateSync();
 
       expect(error?.errors.status).toBeDefined();
     });
 
-    it('defaults tenantId to DEFAULT_TENANT_ID', () => {
-      const run = new WorkflowRunModel({ workflowId: 'wf-1' });
+    it('accepts an explicit tenantId', () => {
+      const run = new WorkflowRunModel({ workflowId: 'wf-1', tenantId: 'tenant-a' });
 
-      expect(run.tenantId).toBe(DEFAULT_TENANT_ID);
+      expect(run.tenantId).toBe('tenant-a');
     });
   });
 
@@ -60,6 +64,7 @@ describe('WorkflowRun schema', () => {
 
       const created = await WorkflowRunModel.create({
         workflowId: 'wf-1',
+        tenantId: 'tenant-a',
         runId: 'run-1',
         status: 'running',
         currentStep: 'retrieve',
@@ -70,7 +75,7 @@ describe('WorkflowRun schema', () => {
 
       expect(found?.status).toBe('running');
       expect(found?.answerId?.equals(answerId)).toBe(true);
-      expect(found?.tenantId).toBe(DEFAULT_TENANT_ID);
+      expect(found?.tenantId).toBe('tenant-a');
     });
   });
 });

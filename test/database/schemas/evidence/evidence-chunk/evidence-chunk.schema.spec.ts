@@ -1,6 +1,5 @@
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import mongoose, { Connection, createConnection, Model } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../../../src/database/constants/tenant.constant';
 import {
   EvidenceChunk,
   EvidenceChunkSchema,
@@ -44,6 +43,7 @@ const locatorFixtures: Record<EvidenceLocator['kind'], EvidenceLocator> = {
 
 const buildChunkInput = (locator: EvidenceLocator, id = `chunk-${locator.kind}`) => ({
   _id: id,
+  tenantId: 'tenant-a',
   documentId: new mongoose.Types.ObjectId(),
   documentVersionId: new mongoose.Types.ObjectId(),
   text: 'Revenue grew 12% year over year.',
@@ -70,7 +70,7 @@ describe('EvidenceChunk schema', () => {
       },
     );
 
-    it('requires _id, documentId, documentVersionId, text, tokenCount, embedding, locator, and ingestionAttemptToken', () => {
+    it('requires _id, documentId, documentVersionId, text, tokenCount, embedding, locator, ingestionAttemptToken, and tenantId', () => {
       const chunk = new EvidenceChunkModel({});
 
       const error = chunk.validateSync();
@@ -83,12 +83,13 @@ describe('EvidenceChunk schema', () => {
       expect(error?.errors.embedding).toBeDefined();
       expect(error?.errors.locator).toBeDefined();
       expect(error?.errors.ingestionAttemptToken).toBeDefined();
+      expect(error?.errors.tenantId).toBeDefined();
     });
 
-    it('defaults tenantId to DEFAULT_TENANT_ID', () => {
+    it('accepts an explicit tenantId', () => {
       const chunk = new EvidenceChunkModel(buildChunkInput(locatorFixtures['pdf-page']));
 
-      expect(chunk.tenantId).toBe(DEFAULT_TENANT_ID);
+      expect(chunk.tenantId).toBe('tenant-a');
     });
   });
 
@@ -116,7 +117,7 @@ describe('EvidenceChunk schema', () => {
         const found = await EvidenceChunkModel.findById(created._id).lean();
 
         expect(found?.locator).toMatchObject({ kind, extractorVersion: locator.extractorVersion });
-        expect(found?.tenantId).toBe(DEFAULT_TENANT_ID);
+        expect(found?.tenantId).toBe('tenant-a');
       },
     );
   });

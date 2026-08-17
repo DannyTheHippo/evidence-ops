@@ -1,6 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types, WithTimestamps } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../constants/tenant.constant';
 import { AuditableDocument } from '../../../global/auditable-document/auditable-document.schema';
 
 export type ApprovalState = 'pending' | 'approved' | 'rejected';
@@ -65,7 +64,7 @@ export class Approval extends AuditableDocument {
   @Prop({ type: String })
   decisionReason?: string;
 
-  @Prop({ type: String, required: true, default: DEFAULT_TENANT_ID })
+  @Prop({ type: String, required: true })
   tenantId: string;
 }
 

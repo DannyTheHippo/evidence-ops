@@ -1,7 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types, WithTimestamps } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../constants/tenant.constant';
 import { AuditableDocument } from '../../../global/auditable-document/auditable-document.schema';
+import { DOCUMENT_SOURCE_CLASSES, type DocumentSourceClass } from '../document/document.schema';
 
 export type SourceKind = 'local-folder';
 
@@ -104,8 +104,22 @@ export class Source extends AuditableDocument {
   @Prop({ type: [SourceFileStateSchema], default: [] })
   fileStates: SourceFileState[];
 
-  @Prop({ type: String, required: true, default: DEFAULT_TENANT_ID })
+  @Prop({ type: String, required: true })
   tenantId: string;
+
+  /**
+   * Default `Document.sourceClass` a document created from this source's sync pass inherits — see
+   * that field's own doc comment for what `'unclassified'` means. A per-file override at upload
+   * time is a later step; this is the source-level default every connector-ingested document
+   * starts from.
+   */
+  @Prop({
+    type: String,
+    required: true,
+    enum: DOCUMENT_SOURCE_CLASSES,
+    default: 'unclassified',
+  })
+  sourceClass: DocumentSourceClass;
 }
 
 export const SourceSchema = SchemaFactory.createForClass(Source);

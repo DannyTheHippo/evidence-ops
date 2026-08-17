@@ -1,6 +1,5 @@
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import mongoose, { Connection, createConnection, Model } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../../../src/database/constants/tenant.constant';
 import {
   DocumentVersion,
   DocumentVersionSchema,
@@ -17,7 +16,7 @@ describe('DocumentVersion schema', () => {
       DocumentVersionSchema,
     );
 
-    it('requires documentId, versionNumber, sha256, sizeBytes, and storageKey', () => {
+    it('requires documentId, versionNumber, sha256, sizeBytes, storageKey, and tenantId', () => {
       const version = new DocumentVersionModel({});
 
       const error = version.validateSync();
@@ -27,6 +26,7 @@ describe('DocumentVersion schema', () => {
       expect(error?.errors.sha256).toBeDefined();
       expect(error?.errors.sizeBytes).toBeDefined();
       expect(error?.errors.storageKey).toBeDefined();
+      expect(error?.errors.tenantId).toBeDefined();
     });
 
     it('rejects a sha256 shorter than 64 characters', () => {
@@ -43,16 +43,17 @@ describe('DocumentVersion schema', () => {
       expect(error?.errors.sha256).toBeDefined();
     });
 
-    it('defaults tenantId to DEFAULT_TENANT_ID', () => {
+    it('accepts an explicit tenantId', () => {
       const version = new DocumentVersionModel({
         documentId: new mongoose.Types.ObjectId(),
         versionNumber: 1,
         sha256: SHA256_FIXTURE,
         sizeBytes: 1024,
         storageKey: 's3://bucket/key',
+        tenantId: 'tenant-a',
       });
 
-      expect(version.tenantId).toBe(DEFAULT_TENANT_ID);
+      expect(version.tenantId).toBe('tenant-a');
       expect(version.validateSync()).toBeUndefined();
     });
 
@@ -63,6 +64,7 @@ describe('DocumentVersion schema', () => {
         sha256: SHA256_FIXTURE,
         sizeBytes: 1024,
         storageKey: 's3://bucket/key',
+        tenantId: 'tenant-a',
       });
 
       expect(version.ingestionStatus).toBe('pending');
@@ -113,13 +115,14 @@ describe('DocumentVersion schema', () => {
         sha256: SHA256_FIXTURE,
         sizeBytes: 2048,
         storageKey: 's3://bucket/q3-report-v1.pdf',
+        tenantId: 'tenant-a',
       });
 
       const found = await DocumentVersionModel.findById(created._id);
 
       expect(found?.documentId.equals(documentId)).toBe(true);
       expect(found?.sha256).toBe(SHA256_FIXTURE);
-      expect(found?.tenantId).toBe(DEFAULT_TENANT_ID);
+      expect(found?.tenantId).toBe('tenant-a');
     });
   });
 });

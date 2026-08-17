@@ -1,6 +1,5 @@
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import mongoose, { Connection, createConnection, Model } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../../../src/database/constants/tenant.constant';
 import {
   Source,
   SourceSchema,
@@ -22,7 +21,7 @@ describe('Source schema', () => {
   describe('validation (offline — no database connection)', () => {
     const SourceModel = mongoose.model<Source>('SourceValidationOnly', SourceSchema);
 
-    it('requires name, kind, and path', () => {
+    it('requires name, kind, path, and tenantId', () => {
       const source = new SourceModel({});
 
       const error = source.validateSync();
@@ -30,6 +29,7 @@ describe('Source schema', () => {
       expect(error?.errors.name).toBeDefined();
       expect(error?.errors.kind).toBeDefined();
       expect(error?.errors.path).toBeDefined();
+      expect(error?.errors.tenantId).toBeDefined();
     });
 
     it('rejects a kind outside the supported set', () => {
@@ -44,17 +44,46 @@ describe('Source schema', () => {
       expect(error?.errors.kind).toBeDefined();
     });
 
-    it('defaults enabled to true, fileStates to an empty array, and tenantId to DEFAULT_TENANT_ID', () => {
+    it('defaults enabled to true, fileStates to an empty array, and sourceClass to unclassified', () => {
       const source = new SourceModel({
         name: 'Local inbox',
         kind: 'local-folder',
         path: './inbox',
+        tenantId: 'tenant-a',
       });
 
       expect(source.validateSync()).toBeUndefined();
       expect(source.enabled).toBe(true);
       expect(source.fileStates).toEqual([]);
-      expect(source.tenantId).toBe(DEFAULT_TENANT_ID);
+      expect(source.tenantId).toBe('tenant-a');
+      expect(source.sourceClass).toBe('unclassified');
+    });
+
+    it('preserves an explicit sourceClass', () => {
+      const source = new SourceModel({
+        name: 'Local inbox',
+        kind: 'local-folder',
+        path: './inbox',
+        tenantId: 'tenant-a',
+        sourceClass: 'pm-export',
+      });
+
+      expect(source.validateSync()).toBeUndefined();
+      expect(source.sourceClass).toBe('pm-export');
+    });
+
+    it('rejects a sourceClass outside the six supported classes', () => {
+      const source = new SourceModel({
+        name: 'Local inbox',
+        kind: 'local-folder',
+        path: './inbox',
+        tenantId: 'tenant-a',
+        sourceClass: 'email',
+      });
+
+      const error = source.validateSync();
+
+      expect(error?.errors.sourceClass).toBeDefined();
     });
 
     it('requires path, sha256, sizeBytes, mtimeMs, and documentId on each fileStates entry', () => {
@@ -98,6 +127,7 @@ describe('Source schema', () => {
         name: 'Local inbox',
         kind: 'local-folder',
         path: './inbox',
+        tenantId: 'tenant-a',
         fileStates: [fileState],
       });
 
@@ -112,7 +142,22 @@ describe('Source schema', () => {
         mtimeMs: fileState.mtimeMs,
         documentId: fileState.documentId,
       });
-      expect(found?.tenantId).toBe(DEFAULT_TENANT_ID);
+      expect(found?.tenantId).toBe('tenant-a');
+      expect(found?.sourceClass).toBe('unclassified');
+    });
+
+    it('persists and rehydrates an explicit sourceClass', async () => {
+      const created = await SourceModel.create({
+        name: 'CRM sync',
+        kind: 'local-folder',
+        path: './crm-exports',
+        tenantId: 'tenant-a',
+        sourceClass: 'crm-export',
+      });
+
+      const found = await SourceModel.findById(created._id);
+
+      expect(found?.sourceClass).toBe('crm-export');
     });
   });
 });

@@ -15,7 +15,14 @@ import { AlsContext } from '../../shared/types/als-context.type';
  *   `this.setQuery({ $and: [this.getFilter(), { tenantId }] })` rather than
  *   `filter.tenantId = tenantId`. Assignment would silently replace a caller's own predicate
  *   (corrupting `$or`/`$in` filters) and would let a filter that names a foreign tenant "win".
- *   Intersection makes a contradicting explicit predicate yield the empty set instead.
+ *   Intersection makes a contradicting explicit predicate yield the empty set instead. One
+ *   exception: when the filter already carries a top-level, own, strict-equality `tenantId` that
+ *   matches the ALS tenant, the hook leaves the filter untouched instead of intersecting.
+ *   MongoDB cannot derive an insert document for an upsert whose filter matches `tenantId` twice
+ *   — even when both occurrences agree — so intersecting an already-agreeing filter would break
+ *   every scoped upsert. Any other shape (a different tenant, an operator such as `$in`,
+ *   `tenantId` nested inside `$or`/`$and`, or no `tenantId` in the filter at all) still
+ *   intersects exactly as before, so a filter naming a foreign tenant still yields nothing.
  *
  * Unlike `auditablePlugin`, where a missed ALS context costs a missing audit stamp, a missed
  * scope here costs a LEAK across tenants. That is why the explicit-tenant parameters threaded
@@ -42,19 +49,19 @@ import { AlsContext } from '../../shared/types/als-context.type';
  *   same laziness reason documented on `auditablePlugin`: the hook fires at `.exec()`/`await`,
  *   not at construction.
  *
- * `pre('save')` stamps `tenantId` only on a genuinely new, unset document
- * (`this.isNew && this.$isDefault('tenantId')`) — it never overrides a value the worker or eval
- * harness set deliberately. `$isDefault` reports "unset" only when the schema itself declares a
- * `default` for `tenantId` (every current tenant-scoped schema does, e.g.
- * `evidence-chunk.schema.ts`'s `default: DEFAULT_TENANT_ID`) — Mongoose applies that default at
- * construction and marks the path as still-default until something assigns over it. A tenant
- * schema added later without a `default` on `tenantId` would make this stamp a permanent no-op;
- * that is a schema-authoring contract this plugin depends on, not something it can enforce.
+ * `pre('validate')` stamps `tenantId` only on a genuinely new, unset document
+ * (`this.isNew && this.get('tenantId') == null`) — it never overrides a value the worker or eval
+ * harness set deliberately. The loose `== null` check catches both `null` and `undefined` so a
+ * caller that explicitly passes either still gets stamped. The hook runs on `validate` rather
+ * than `save` because Mongoose's `required` validator runs before any `pre('save')` hook fires:
+ * stamping on `save` would always be too late to satisfy `required: true` on `tenantId`.
  *
- * `findOneAndUpdate`/`updateOne`/etc. with `upsert: true` is not specially handled: an insert via
- * upsert gets whatever `tenantId` the intersected filter or the update document supplies, never
- * one supplied by this plugin. That is covered by the same primary-control argument as
- * everything else above — the explicit-tenant service parameters are what get this right.
+ * `findOneAndUpdate`/`updateOne`/etc. with `upsert: true` is not otherwise specially handled: an
+ * insert via upsert gets whatever `tenantId` the filter or the update document supplies, never
+ * one supplied by this plugin. The already-agreeing-filter exception above only stops the filter
+ * from acquiring a second, duplicate `tenantId` predicate — it never adds one that was not
+ * already there. That is covered by the same primary-control argument as everything else above —
+ * the explicit-tenant service parameters are what get this right.
  */
 export const tenantScopePlugin =
   (als: AsyncLocalStorage<AlsContext>) =>
@@ -80,15 +87,25 @@ export const tenantScopePlugin =
       ],
       function (this: Query<unknown, unknown>): void {
         const tenantId = als.getStore()?.tenant;
-        if (tenantId) {
-          this.setQuery({ $and: [this.getFilter(), { tenantId }] });
+        if (!tenantId) {
+          return;
         }
+
+        const filter = this.getFilter();
+        if (
+          Object.hasOwn(filter, 'tenantId') &&
+          (filter as { tenantId: unknown }).tenantId === tenantId
+        ) {
+          return;
+        }
+
+        this.setQuery({ $and: [filter, { tenantId }] });
       },
     );
 
-    schema.pre('save', function (this: Document): void {
+    schema.pre('validate', function (this: Document): void {
       const tenantId = als.getStore()?.tenant;
-      if (tenantId && this.isNew && this.$isDefault('tenantId')) {
+      if (tenantId && this.isNew && this.get('tenantId') == null) {
         this.set('tenantId', tenantId);
       }
     });

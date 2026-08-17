@@ -1,6 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types, WithTimestamps } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../constants/tenant.constant';
 import { AuditableDocument } from '../../../global/auditable-document/auditable-document.schema';
 
 export type WorkflowRunStatus = 'queued' | 'running' | 'completed' | 'failed';
@@ -37,7 +36,7 @@ export class WorkflowRun extends AuditableDocument {
   @Prop({ type: String })
   errorMessage?: string;
 
-  @Prop({ type: String, required: true, default: DEFAULT_TENANT_ID })
+  @Prop({ type: String, required: true })
   tenantId: string;
 }
 

@@ -36,14 +36,12 @@ describe('tenantScopePlugin', () => {
     connection = await createConnection(mongod.getUri()).asPromise();
     connection.plugin(tenantScopePlugin(als));
 
-    // `default` mirrors the real schemas (e.g. `evidence-chunk.schema.ts`), which all declare
-    // `default: DEFAULT_TENANT_ID` on `tenantId`. It matters here: without a schema default,
-    // Mongoose never marks an unset path as "default" state, so `$isDefault('tenantId')` in the
-    // plugin would stay false and the save-stamp hook would never fire — verified against
-    // `node_modules/mongoose/lib/document.js`.
+    // `required`, no `default` — mirrors the real schemas (e.g. `evidence-chunk.schema.ts`),
+    // where a document with no `tenantId` must fail Mongoose's `required` validator unless the
+    // plugin's `pre('validate')` hook stamps one in first.
     const tenantScopedSchema = new Schema<TenantScopedTestDocProps>({
       name: { type: String, required: true },
-      tenantId: { type: String, default: 'schema-default' },
+      tenantId: { type: String, required: true },
     });
     TestModel = connection.model<TenantScopedTestDocProps>(
       'TenantScopedTestDoc',
@@ -135,15 +133,48 @@ describe('tenantScopePlugin', () => {
     expect(stillThere?.name).toBe('b1');
   });
 
-  it('stamps the ALS tenant on save for a defaulted document, and never overrides an explicit tenantId', async () => {
+  // Regression test: before the skip condition, `$and: [{ tenantId: TENANT_A, name }, { tenantId:
+  // TENANT_A }]` matches `tenantId` twice — even though both occurrences agree — and MongoDB
+  // refuses to derive an insert document for the upsert, throwing code 54 ("cannot infer query
+  // fields to set, path 'tenantId' is matched twice"). A filter that already pins the ALS tenant
+  // as an own, top-level, strict-equality match must be left untouched so the upsert can proceed.
+  it('performs an upsert whose filter already pins the ALS tenant, succeeding rather than throwing "matched twice"', async () => {
+    const result = await runAsTenant(TENANT_A, () =>
+      TestModel.updateOne(
+        { tenantId: TENANT_A, name: 'upsert-key' },
+        { $setOnInsert: { name: 'upsert-key' } },
+        { upsert: true },
+      ).exec(),
+    );
+    expect(result.upsertedCount).toBe(1);
+
+    const created = await runAsTenant(TENANT_A, () =>
+      TestModel.findOne({ name: 'upsert-key' }).exec(),
+    );
+    expect(created?.tenantId).toBe(TENANT_A);
+  });
+
+  // Regression test for the dead-backstop trap: `tenantId` is `required` with no schema
+  // `default`, so this only passes if the stamp runs on `pre('validate')` — early enough to
+  // satisfy `required` before it runs. Stamping on `pre('save')` instead would leave `tenantId`
+  // unset when `required` is checked, and `.save()` would reject before the stamp ever fires.
+  it('stamps the ALS tenant on a new document with no explicit tenantId, and saves it successfully', async () => {
     const stamped = await runAsTenant(TENANT_A, () => new TestModel({ name: 'new' }).save());
     expect(stamped.tenantId).toBe(TENANT_A);
+  });
 
+  it('never overrides an explicit tenantId with the ALS tenant', async () => {
     // The worker and eval harness set `tenantId` explicitly and deliberately — the hook must
     // not override that value even when a (different) tenant happens to be in the ALS store.
     const explicit = new TestModel({ name: 'explicit', tenantId: TENANT_B });
     const saved = await runAsTenant(TENANT_A, () => explicit.save());
     expect(saved.tenantId).toBe(TENANT_B);
+  });
+
+  it('fails validation for a new document with no tenantId and no ALS tenant, rather than silently defaulting', async () => {
+    const doc = new TestModel({ name: 'unscoped' });
+
+    await expect(doc.save()).rejects.toThrow(/tenantId/);
   });
 
   it('leaves the query unscoped with no ALS store — documented contract, not a bug', async () => {

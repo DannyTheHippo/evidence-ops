@@ -1,6 +1,5 @@
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import mongoose, { Connection, createConnection, Model } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../../../src/database/constants/tenant.constant';
 import {
   Document,
   DocumentSchema,
@@ -17,7 +16,7 @@ describe('Document schema', () => {
     // overloads do not structurally accept as a type argument.
     const DocumentModel = mongoose.model<Document>('DocumentValidationOnly', DocumentSchema);
 
-    it('requires title, sourceKind, and mimeType', () => {
+    it('requires title, sourceKind, mimeType, and tenantId', () => {
       const doc = new DocumentModel({});
 
       const error = doc.validateSync();
@@ -25,6 +24,7 @@ describe('Document schema', () => {
       expect(error?.errors.title).toBeDefined();
       expect(error?.errors.sourceKind).toBeDefined();
       expect(error?.errors.mimeType).toBeDefined();
+      expect(error?.errors.tenantId).toBeDefined();
     });
 
     it('rejects a sourceKind outside the eight supported kinds', () => {
@@ -43,15 +43,55 @@ describe('Document schema', () => {
       expect(error?.errors.sourceKind).toBeDefined();
     });
 
-    it('defaults tenantId to DEFAULT_TENANT_ID', () => {
+    it('accepts an explicit tenantId', () => {
       const doc = new DocumentModel({
         title: 'Q3 Report',
         sourceKind: 'pdf',
         mimeType: 'application/pdf',
+        tenantId: 'tenant-a',
       });
 
-      expect(doc.tenantId).toBe(DEFAULT_TENANT_ID);
+      expect(doc.tenantId).toBe('tenant-a');
       expect(doc.validateSync()).toBeUndefined();
+    });
+
+    it('defaults sourceClass to unclassified when omitted', () => {
+      const doc = new DocumentModel({
+        title: 'Q3 Report',
+        sourceKind: 'pdf',
+        mimeType: 'application/pdf',
+        tenantId: 'tenant-a',
+      });
+
+      expect(doc.sourceClass).toBe('unclassified');
+      expect(doc.validateSync()).toBeUndefined();
+    });
+
+    it('preserves an explicit sourceClass', () => {
+      const doc = new DocumentModel({
+        title: 'Q3 Report',
+        sourceKind: 'pdf',
+        mimeType: 'application/pdf',
+        tenantId: 'tenant-a',
+        sourceClass: 'crm-export',
+      });
+
+      expect(doc.sourceClass).toBe('crm-export');
+      expect(doc.validateSync()).toBeUndefined();
+    });
+
+    it('rejects a sourceClass outside the six supported classes', () => {
+      const doc = new DocumentModel({
+        title: 'Q3 Report',
+        sourceKind: 'pdf',
+        mimeType: 'application/pdf',
+        tenantId: 'tenant-a',
+        sourceClass: 'email',
+      });
+
+      const error = doc.validateSync();
+
+      expect(error?.errors.sourceClass).toBeDefined();
     });
   });
 
@@ -78,6 +118,7 @@ describe('Document schema', () => {
         title: 'Q3 Report',
         sourceKind: 'pdf',
         mimeType: 'application/pdf',
+        tenantId: 'tenant-a',
         currentVersionId,
       });
 
@@ -86,7 +127,22 @@ describe('Document schema', () => {
       expect(found?.title).toBe('Q3 Report');
       expect(found?.sourceKind).toBe('pdf');
       expect(found?.currentVersionId?.equals(currentVersionId)).toBe(true);
-      expect(found?.tenantId).toBe(DEFAULT_TENANT_ID);
+      expect(found?.tenantId).toBe('tenant-a');
+      expect(found?.sourceClass).toBe('unclassified');
+    });
+
+    it('persists and rehydrates an explicit sourceClass', async () => {
+      const created = await DocumentModel.create({
+        title: 'CRM Export',
+        sourceKind: 'csv',
+        mimeType: 'text/csv',
+        tenantId: 'tenant-a',
+        sourceClass: 'crm-export',
+      });
+
+      const found = await DocumentModel.findById(created._id);
+
+      expect(found?.sourceClass).toBe('crm-export');
     });
   });
 });

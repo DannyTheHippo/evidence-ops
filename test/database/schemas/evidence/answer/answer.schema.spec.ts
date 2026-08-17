@@ -1,6 +1,5 @@
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import mongoose, { Connection, createConnection, Model } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../../../src/database/constants/tenant.constant';
 import {
   Answer,
   AnswerSchema,
@@ -30,12 +29,13 @@ describe('Answer schema', () => {
   describe('validation (offline — no database connection)', () => {
     const AnswerModel = mongoose.model<Answer>('AnswerValidationOnly', AnswerSchema);
 
-    it('requires questionText and defaults runStatus to queued', () => {
+    it('requires questionText and tenantId, and defaults runStatus to queued', () => {
       const answer = new AnswerModel({});
 
       const error = answer.validateSync();
 
       expect(error?.errors.questionText).toBeDefined();
+      expect(error?.errors.tenantId).toBeDefined();
       expect(answer.runStatus).toBe('queued');
     });
 
@@ -55,6 +55,7 @@ describe('Answer schema', () => {
     it('accepts an outcome once runStatus is completed', async () => {
       const answer = new AnswerModel({
         questionText: 'What was Q3 revenue?',
+        tenantId: 'tenant-a',
         runStatus: 'completed',
         outcome: answeredOutcome,
       });
@@ -62,10 +63,13 @@ describe('Answer schema', () => {
       await expect(answer.validate()).resolves.toBeUndefined();
     });
 
-    it('defaults tenantId to DEFAULT_TENANT_ID', () => {
-      const answer = new AnswerModel({ questionText: 'What was Q3 revenue?' });
+    it('accepts an explicit tenantId', () => {
+      const answer = new AnswerModel({
+        questionText: 'What was Q3 revenue?',
+        tenantId: 'tenant-a',
+      });
 
-      expect(answer.tenantId).toBe(DEFAULT_TENANT_ID);
+      expect(answer.tenantId).toBe('tenant-a');
     });
   });
 
@@ -88,6 +92,7 @@ describe('Answer schema', () => {
     it('persists and rehydrates a completed answer with its verification metadata', async () => {
       const created = await AnswerModel.create({
         questionText: 'What was Q3 revenue?',
+        tenantId: 'tenant-a',
         runStatus: 'completed',
         outcome: answeredOutcome,
         claims: answeredOutcome.claims,
@@ -99,7 +104,7 @@ describe('Answer schema', () => {
 
       expect(found?.runStatus).toBe('completed');
       expect(found?.claimCoverage).toBe(1);
-      expect(found?.tenantId).toBe(DEFAULT_TENANT_ID);
+      expect(found?.tenantId).toBe('tenant-a');
     });
   });
 });

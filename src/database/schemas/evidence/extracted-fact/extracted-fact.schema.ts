@@ -1,6 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types, WithTimestamps } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../constants/tenant.constant';
 import { AuditableDocument } from '../../../global/auditable-document/auditable-document.schema';
 import { EvidenceLocator } from '../evidence-chunk/evidence-locator.type';
 
@@ -85,8 +84,29 @@ export class ExtractedFact extends AuditableDocument {
   @Prop({ type: MongooseSchema.Types.Mixed, required: true })
   locator: EvidenceLocator;
 
-  @Prop({ type: String, required: true, default: DEFAULT_TENANT_ID })
+  @Prop({ type: String, required: true })
   tenantId: string;
+
+  /**
+   * When the value itself was observed/recorded, distinct from `factKey.period` — the period is
+   * what the value *describes* (e.g. "March"), `observedAt` is when someone recorded that value
+   * (e.g. a March figure entered in June is fresher, for staleness purposes, than one entered in
+   * April even though both describe the same period). Left absent, never defaulted to `createdAt`
+   * or the current time: a fabricated observation date would let a later recency rule fire on
+   * evidence that never actually carried one.
+   */
+  @Prop({ type: Date })
+  observedAt?: Date;
+
+  /**
+   * Whether `factKey.entity` matched an entry in the tenant's `CanonicalEntity` registry
+   * (`CanonicalEntityService.resolveMany`) at extraction time. `false` means `factKey.entity` is
+   * the raw name exactly as extracted, unresolved rather than dropped or guessed at, so a human
+   * can find the registry's gaps by querying for `entityMatched: false`. Optional, not backfilled,
+   * because a fact extracted before this field existed carries no opinion either way.
+   */
+  @Prop({ type: Boolean })
+  entityMatched?: boolean;
 }
 
 export const ExtractedFactSchema = SchemaFactory.createForClass(ExtractedFact);

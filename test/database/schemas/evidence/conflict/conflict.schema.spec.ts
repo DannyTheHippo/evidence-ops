@@ -1,6 +1,5 @@
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import mongoose, { Connection, createConnection, Model } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../../../src/database/constants/tenant.constant';
 import {
   Conflict,
   ConflictSchema,
@@ -19,7 +18,7 @@ describe('Conflict schema', () => {
   describe('validation (offline — no database connection)', () => {
     const ConflictModel = mongoose.model<Conflict>('ConflictValidationOnly', ConflictSchema);
 
-    it('requires factKey, factIds, magnitude, and groupKeyNormalized', () => {
+    it('requires factKey, factIds, magnitude, groupKeyNormalized, and tenantId', () => {
       const conflict = new ConflictModel({});
 
       const error = conflict.validateSync();
@@ -28,6 +27,7 @@ describe('Conflict schema', () => {
       expect(error?.errors.factIds).toBeDefined();
       expect(error?.errors.magnitude).toBeDefined();
       expect(error?.errors.groupKeyNormalized).toBeDefined();
+      expect(error?.errors.tenantId).toBeDefined();
     });
 
     it('rejects fewer than two conflicting factIds', () => {
@@ -49,11 +49,12 @@ describe('Conflict schema', () => {
         groupKeyNormalized,
         factIds: [new mongoose.Types.ObjectId(), new mongoose.Types.ObjectId()],
         magnitude: 0.04,
+        tenantId: 'tenant-a',
       });
 
       expect(conflict.validateSync()).toBeUndefined();
       expect(conflict.status).toBe('open');
-      expect(conflict.tenantId).toBe(DEFAULT_TENANT_ID);
+      expect(conflict.tenantId).toBe('tenant-a');
     });
   });
 
@@ -81,12 +82,13 @@ describe('Conflict schema', () => {
         groupKeyNormalized,
         factIds,
         magnitude: 0.04,
+        tenantId: 'tenant-a',
       });
 
       const found = await ConflictModel.findById(created._id);
 
       expect(found?.factIds.map(String)).toEqual(factIds.map(String));
-      expect(found?.tenantId).toBe(DEFAULT_TENANT_ID);
+      expect(found?.tenantId).toBe('tenant-a');
     });
   });
 });
