@@ -153,7 +153,7 @@ describe('MongoHybridRetrievalStore (integration)', () => {
     new MongoHybridRetrievalStore(
       connection,
       new FakeEmbeddingProvider(),
-      getMockTypedConfig({ retrieval: { fusion, limit: 12 } }),
+      getMockTypedConfig({ retrieval: { fusion, limit: 12, strategy: 'single-shot' } }),
     );
 
   // The query already carries `vector: seedEmbedding` (the exact vector the seeded chunk was

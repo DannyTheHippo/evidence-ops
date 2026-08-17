@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../database/constants/tenant.constant';
 import {
   Approval,
   type ApprovalDocument,
@@ -35,8 +34,8 @@ export class MongoApprovalChannel implements ApprovalChannel {
         entityId: new Types.ObjectId(request.subject.entityId),
       },
       requestedBy: request.requestedBy,
-      // Undefined here lets the schema's own `default: DEFAULT_TENANT_ID` apply, matching every
-      // other write path — never assume a tenant here (9f0c2f2 was exactly this failure mode).
+      // Always the caller's own tenant — `ApprovalRequest.tenantId` is required, so this write
+      // never falls through to the schema's default.
       tenantId: request.tenantId,
       state: 'pending',
       workflowId: request.workflowId,
@@ -56,21 +55,21 @@ export class MongoApprovalChannel implements ApprovalChannel {
    * Tenant-scoped: `ApprovalsService.decide` (the HTTP decision path) already scopes its own read
    * to `{ _id, tenantId }` — see that method's own doc comment for why D1 originally left this
    * query unscoped (its only caller held an id it had just minted) and why that trust doesn't
-   * extend to a cross-tenant id. `getDecision` now agrees with `decide` about the same collection:
-   * `tenantId` omitted defaults to `DEFAULT_TENANT_ID`, matching every other write path here. The
-   * fail-closed contract above still holds for the mismatch case — a `_id` that exists but under a
-   * different tenant simply doesn't match this filter, so `approval` comes back `null` and falls
-   * into the same "no approval record found" branch as a genuinely unknown id, collapsing to
-   * `rejected` rather than leaking another tenant's decision.
+   * extend to a cross-tenant id. `getDecision` requires `tenantId` explicitly — there is no
+   * default to fall back on — so no caller can read across tenants by omitting it. The fail-closed
+   * contract above still holds for the mismatch case — a `_id` that exists but under a different
+   * tenant simply doesn't match this filter, so `approval` comes back `null` and falls into the
+   * same "no approval record found" branch as a genuinely unknown id, collapsing to `rejected`
+   * rather than leaking another tenant's decision.
    */
-  async getDecision(approvalId: string, tenantId?: string): Promise<ApprovalResult> {
+  async getDecision(approvalId: string, tenantId: string): Promise<ApprovalResult> {
     if (!Types.ObjectId.isValid(approvalId)) {
       return { decision: 'rejected', reason: `unknown approval id '${approvalId}'` };
     }
 
     const approval = await this.approvalModel.findOne({
       _id: approvalId,
-      tenantId: tenantId ?? DEFAULT_TENANT_ID,
+      tenantId,
     });
     if (!approval) {
       return { decision: 'rejected', reason: `no approval record found for '${approvalId}'` };

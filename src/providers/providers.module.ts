@@ -1,6 +1,10 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { TypedConfigService } from '../config/environment/typed-config.service';
+import {
+  ModelSpendWindow,
+  ModelSpendWindowSchema,
+} from '../database/schemas/platform/model-spend-window/model-spend-window.schema';
 import { Approval, ApprovalSchema } from '../database/schemas/workflow/approval/approval.schema';
 import { APPROVAL_CHANNEL } from './approval-channel/approval-channel.interface';
 import { MongoApprovalChannel } from './approval-channel/mongo-approval.channel';
@@ -13,6 +17,9 @@ import {
   type CachingModelProviderOptions,
 } from './model/caching-model.provider';
 import { MODEL_PROVIDER, type ModelProvider } from './model/model-provider.interface';
+import { OpenAiModelProvider } from './model/openai-model.provider';
+import { SpendGuardModelProvider } from './model/spend-guard-model.provider';
+import { TenantSpendService } from './model/spend/tenant-spend.service';
 import { TracingModelProvider } from './model/tracing-model.provider';
 import { MongoHybridRetrievalStore } from './retrieval/mongo-hybrid.store';
 import { RETRIEVAL_STORE } from './retrieval/retrieval-store.interface';
@@ -36,32 +43,68 @@ const MODEL_CACHE_DEFAULT_OPTIONS: CachingModelProviderOptions = {
 };
 
 /**
- * `CachingModelProvider` and `TracingModelProvider` take a `ModelProvider`/`Telemetry`
- * interface positionally rather than an `@Inject()`-tagged constructor param, so Nest's
- * reflection-based `useClass` can't resolve them — they're assembled by hand in this factory
- * instead. `AnthropicModelProvider` has a concrete, decorated constructor, so it stays a normal
- * class provider and is only referenced here via its `inject` token.
+ * Selects the base `ModelProvider` by `config.model.provider` and wraps it in the standing
+ * `Tracing(Caching(SpendGuard(base)))` chain — SpendGuard sits inside Caching deliberately. A
+ * replay-cache hit costs no money, so it must not consume budget: if SpendGuard wrapped Caching,
+ * every cached replay would reserve and settle spend that was never actually spent, and the eval
+ * harness — which replays hundreds of cached calls — would exhaust a tenant's daily ceiling for
+ * free.
+ *
+ * `CachingModelProvider`, `SpendGuardModelProvider`, and `TracingModelProvider` take a
+ * `ModelProvider`/`Telemetry` interface positionally rather than an `@Inject()`-tagged
+ * constructor param, so Nest's reflection-based `useClass` can't resolve them — they're
+ * assembled by hand here instead. `AnthropicModelProvider` and `OpenAiModelProvider` both have
+ * concrete, decorated constructors, so they stay normal class providers and are only referenced
+ * here via their `inject` tokens.
+ *
+ * Extracted as a plain, exported function (rather than inlined into the `MODEL_PROVIDER`
+ * factory below) so the base selection and the chain order are unit-testable without booting
+ * this module's Mongoose-backed DI graph.
  */
+export function createModelProvider(
+  anthropic: ModelProvider,
+  openai: ModelProvider,
+  spendService: TenantSpendService,
+  cacheOptions: CachingModelProviderOptions,
+  telemetry: Telemetry,
+  config: TypedConfigService,
+): ModelProvider {
+  const base = config.model.provider === 'openai' ? openai : anthropic;
+
+  return new TracingModelProvider(
+    new CachingModelProvider(
+      new SpendGuardModelProvider(base, spendService, config.spend.dailyLimitUsd),
+      cacheOptions,
+    ),
+    telemetry,
+    config.telemetry.captureModelContent,
+  );
+}
+
 @Module({
-  imports: [MongooseModule.forFeature([{ name: Approval.name, schema: ApprovalSchema }])],
+  imports: [
+    MongooseModule.forFeature([
+      { name: Approval.name, schema: ApprovalSchema },
+      { name: ModelSpendWindow.name, schema: ModelSpendWindowSchema },
+    ]),
+  ],
   providers: [
     AnthropicModelProvider,
+    OpenAiModelProvider,
+    TenantSpendService,
     { provide: TELEMETRY, useClass: LoggerTelemetry },
     { provide: MODEL_CACHE_OPTIONS, useValue: MODEL_CACHE_DEFAULT_OPTIONS },
     {
       provide: MODEL_PROVIDER,
-      inject: [AnthropicModelProvider, MODEL_CACHE_OPTIONS, TELEMETRY, TypedConfigService],
-      useFactory: (
-        anthropic: AnthropicModelProvider,
-        cacheOptions: CachingModelProviderOptions,
-        telemetry: Telemetry,
-        config: TypedConfigService,
-      ): ModelProvider =>
-        new TracingModelProvider(
-          new CachingModelProvider(anthropic, cacheOptions),
-          telemetry,
-          config.telemetry.captureModelContent,
-        ),
+      inject: [
+        AnthropicModelProvider,
+        OpenAiModelProvider,
+        TenantSpendService,
+        MODEL_CACHE_OPTIONS,
+        TELEMETRY,
+        TypedConfigService,
+      ],
+      useFactory: createModelProvider,
     },
     { provide: EMBEDDING_PROVIDER, useClass: VoyageEmbeddingProvider },
     { provide: SOURCE_CONNECTOR, useClass: LocalFolderSourceConnector },

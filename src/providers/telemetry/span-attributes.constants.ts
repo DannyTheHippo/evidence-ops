@@ -30,4 +30,9 @@ export const EVIDENCE_ATTRIBUTES = {
   CITATIONS_VERIFIED: 'evidence.citations.verified',
   /** Joins `CorrelationMiddleware`'s id to the active span — see `AsyncLocalStorageMiddleware`. */
   CORRELATION_ID: 'evidence.correlation_id',
+  /** Count and names only — `ModelToolCall.input` is model-generated content and must never
+   * reach a span attribute, matching the prompt/completion disclosure control this file's own
+   * events already enforce. */
+  TOOL_CALL_COUNT: 'evidence.tool_call.count',
+  TOOL_CALL_NAMES: 'evidence.tool_call.names',
 } as const;

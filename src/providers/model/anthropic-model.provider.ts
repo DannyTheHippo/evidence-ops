@@ -5,10 +5,7 @@ import { TypedConfigService } from '../../config/environment/typed-config.servic
 import { ANTHROPIC_PRICING, computeAnthropicCostUsd } from './anthropic-pricing.table';
 import { UnknownModelPricingError } from './errors/unknown-model-pricing.error';
 import { ModelBudgetExceededError } from './errors/model-budget-exceeded.error';
-import {
-  ModelSchemaValidationError,
-  type ModelValidationIssue,
-} from './errors/model-schema-validation.error';
+import { ModelSchemaValidationError } from './errors/model-schema-validation.error';
 import type {
   ModelMessage,
   ModelOutput,
@@ -16,23 +13,116 @@ import type {
   ModelProviderInfo,
   ModelRequest,
   ModelResult,
+  ModelStopReason,
+  ModelToolCall,
+  ModelToolChoice,
+  ModelToolDefinition,
   ModelUsage,
 } from './model-provider.interface';
+import {
+  estimateTokenCount,
+  formatIssuesForRetry,
+  safeParseModelJson,
+} from './model-output-validation.util';
 import { toStructuredOutputFormat } from './structured-output-format.util';
 
-/**
- * Rough chars-per-token heuristic (~4 chars/token for English) used only to pre-flight the
- * budget check before a call is made. Never used for billing — actual cost always comes from
- * the vendor's real `usage` counters after the call.
- */
-const ESTIMATED_CHARS_PER_TOKEN = 4;
+/** A `'tool'`-role `ModelMessage` has no dedicated role on Anthropic's side — it becomes a `user`
+ * message whose content is a single `tool_result` block naming the `tool_use_id` it answers. */
+function toAnthropicToolResultMessage(message: ModelMessage): Anthropic.MessageParam {
+  if (!message.toolCallId) {
+    throw new Error(
+      "A 'tool'-role ModelMessage must carry toolCallId — it identifies which " +
+        'tool_use call this result answers',
+    );
+  }
+  return {
+    role: 'user',
+    content: [{ type: 'tool_result', tool_use_id: message.toolCallId, content: message.content }],
+  };
+}
 
-function estimateTokenCount(text: string): number {
-  return Math.ceil(text.length / ESTIMATED_CHARS_PER_TOKEN);
+/** An assistant message with `toolCalls` set becomes `tool_use` content blocks, preceded by a
+ * `text` block only when there is text alongside the calls. */
+function toAnthropicAssistantMessage(message: ModelMessage): Anthropic.MessageParam {
+  const toolUseBlocks: Anthropic.ToolUseBlockParam[] = (message.toolCalls ?? []).map((call) => ({
+    type: 'tool_use',
+    id: call.id,
+    name: call.name,
+    input: call.input,
+  }));
+  const content: Anthropic.ContentBlockParam[] = message.content
+    ? [{ type: 'text', text: message.content }, ...toolUseBlocks]
+    : toolUseBlocks;
+  return { role: 'assistant', content };
 }
 
 function toAnthropicMessages(messages: readonly ModelMessage[]): Anthropic.MessageParam[] {
-  return messages.map((message) => ({ role: message.role, content: message.content }));
+  return messages.map((message) => {
+    if (message.role === 'tool') {
+      return toAnthropicToolResultMessage(message);
+    }
+    if (message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0) {
+      return toAnthropicAssistantMessage(message);
+    }
+    return { role: message.role, content: message.content };
+  });
+}
+
+/** `Tool.InputSchema` requires an object-rooted JSON Schema — every tool this codebase defines
+ * has an object `inputSchema`, so the cast holds; reuses `toStructuredOutputFormat`'s conversion
+ * rather than a second `toJSONSchema` call. */
+function toAnthropicTools(
+  tools: readonly ModelToolDefinition[] | undefined,
+): Anthropic.Tool[] | undefined {
+  if (!tools || tools.length === 0) {
+    return undefined;
+  }
+  return tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    input_schema: toStructuredOutputFormat(tool.inputSchema).schema as Anthropic.Tool.InputSchema,
+  }));
+}
+
+function toAnthropicToolChoice(
+  toolChoice: ModelToolChoice | undefined,
+): Anthropic.ToolChoice | undefined {
+  if (!toolChoice) {
+    return undefined;
+  }
+  if (toolChoice === 'auto') {
+    return { type: 'auto' };
+  }
+  if (toolChoice === 'none') {
+    return { type: 'none' };
+  }
+  if (toolChoice === 'required') {
+    return { type: 'any' };
+  }
+  return { type: 'tool', name: toolChoice.tool };
+}
+
+/** Closed over the three reasons `ModelStopReason` documents — every other Anthropic
+ * `stop_reason` (`pause_turn`, `refusal`, `model_context_window_exceeded`, `null`) maps to
+ * `undefined` rather than a fabricated guess. */
+function toModelStopReason(stopReason: Anthropic.StopReason | null): ModelStopReason | undefined {
+  switch (stopReason) {
+    case 'end_turn':
+    case 'stop_sequence':
+      return 'end_turn';
+    case 'tool_use':
+      return 'tool_use';
+    case 'max_tokens':
+      return 'max_tokens';
+    default:
+      return undefined;
+  }
+}
+
+function extractToolCalls(message: Anthropic.Message): ModelToolCall[] {
+  return message.content
+    .filter((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use')
+    .map((block) => ({ id: block.id, name: block.name, input: block.input }));
 }
 
 function extractText(message: Anthropic.Message): string {
@@ -70,12 +160,6 @@ function costUsdForUsage(model: string, usage: Anthropic.Usage): number {
   });
 }
 
-function formatIssuesForRetry(issues: readonly ModelValidationIssue[]): string {
-  return issues
-    .map((issue) => `- ${issue.path.join('.') || '(root)'}: ${issue.message}`)
-    .join('\n');
-}
-
 @Injectable()
 export class AnthropicModelProvider implements ModelProvider {
   readonly info: ModelProviderInfo;
@@ -86,7 +170,10 @@ export class AnthropicModelProvider implements ModelProvider {
     // The SDK auto-retries transient failures (network errors, 5XX) twice by default with
     // backoff honouring `retry-after`; we do not stack a retry loop on top of it. The retry
     // implemented below is for schema-validation failure only, a different failure class.
-    this.client = new Anthropic({ apiKey: this.config.anthropic.apiKey });
+    this.client = new Anthropic({
+      apiKey: this.config.anthropic.apiKey,
+      timeout: this.config.anthropic.timeoutMs,
+    });
     this.info = { provider: 'anthropic', model: this.config.anthropic.model };
   }
 
@@ -109,6 +196,8 @@ export class AnthropicModelProvider implements ModelProvider {
       system: request.system,
       messages: toAnthropicMessages(request.messages),
       output_config: schema ? { format: toStructuredOutputFormat(schema) } : undefined,
+      tools: toAnthropicTools(request.tools),
+      tool_choice: toAnthropicToolChoice(request.toolChoice),
       // No `temperature` — this model tier rejects it outright (`400 invalid_request_error:
       // \`temperature\` is deprecated for this model`), so sampling cannot be pinned. See
       // ADR-0006 for what that means for run-to-run reproducibility.
@@ -117,15 +206,20 @@ export class AnthropicModelProvider implements ModelProvider {
     const first = await this.client.messages.create(baseParams);
 
     if (!schema) {
+      // `stopReason`/`toolCalls` only carry information once a caller offers `tools` — a
+      // tool-free request keeps returning exactly what it returned before this field existed.
+      const stopReason = request.tools ? toModelStopReason(first.stop_reason) : undefined;
       return {
         output: extractText(first) as ModelOutput<TSchema>,
         usage: toModelUsage(first.usage),
         costUsd: costUsdForUsage(this.info.model, first.usage),
+        ...(stopReason ? { stopReason } : {}),
+        ...(stopReason === 'tool_use' ? { toolCalls: extractToolCalls(first) } : {}),
       };
     }
 
     const firstText = extractText(first);
-    const firstParsed = this.safeParseJson(firstText, schema);
+    const firstParsed = safeParseModelJson(firstText, schema);
     if (firstParsed.success) {
       return {
         output: firstParsed.data as ModelOutput<TSchema>,
@@ -150,7 +244,7 @@ export class AnthropicModelProvider implements ModelProvider {
 
     const retry = await this.client.messages.create(retryParams);
     const retryText = extractText(retry);
-    const retryParsed = this.safeParseJson(retryText, schema);
+    const retryParsed = safeParseModelJson(retryText, schema);
     const usage = sumUsage(toModelUsage(first.usage), toModelUsage(retry.usage));
     const costUsd =
       costUsdForUsage(this.info.model, first.usage) + costUsdForUsage(this.info.model, retry.usage);
@@ -160,36 +254,6 @@ export class AnthropicModelProvider implements ModelProvider {
     }
 
     throw new ModelSchemaValidationError(retryParsed.issues, retryText);
-  }
-
-  private safeParseJson<TSchema extends z.ZodType>(
-    text: string,
-    schema: TSchema,
-  ):
-    { success: true; data: z.infer<TSchema> } | { success: false; issues: ModelValidationIssue[] } {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text) as unknown;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return {
-        success: false,
-        issues: [{ path: [], message: `Response is not valid JSON: ${message}` }],
-      };
-    }
-
-    const result = schema.safeParse(parsed);
-    if (result.success) {
-      return { success: true, data: result.data };
-    }
-
-    return {
-      success: false,
-      issues: result.error.issues.map((issue) => ({
-        path: issue.path.map(String),
-        message: issue.message,
-      })),
-    };
   }
 
   /**

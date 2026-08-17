@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { VoyageApiKeyMissingError } from '../../../src/providers/embedding/errors/voyage-api-key-missing.error';
+import { VoyageInvalidResponseError } from '../../../src/providers/embedding/errors/voyage-invalid-response.error';
 import { VoyageRateLimitExceededError } from '../../../src/providers/embedding/errors/voyage-rate-limit-exceeded.error';
 import { VoyageRequestFailedError } from '../../../src/providers/embedding/errors/voyage-request-failed.error';
 import { EMBEDDING_PROVIDER } from '../../../src/providers/embedding/embedding-provider.interface';
@@ -23,6 +24,7 @@ const DEFAULT_VOYAGE_CONFIG = {
   requestsPerMinute: 3,
   maxRetries: 5,
   maxRetryWaitMs: 300_000,
+  requestTimeoutMs: 30_000,
 };
 
 function buildResponse(inputs: readonly string[]): Response {
@@ -52,6 +54,22 @@ function buildFailedResponse(
     json: () => Promise.reject(new Error('not called')),
     text: () => Promise.resolve(body),
   } as unknown as Response;
+}
+
+/** A 2xx response whose body does not match `voyageEmbeddingsResponseSchema`. */
+function buildMalformedResponse(): Response {
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    json: () => Promise.resolve({ data: [{ embedding: 'not-an-array', index: 0 }] }),
+    text: () => Promise.resolve('malformed'),
+  } as unknown as Response;
+}
+
+/** What `AbortSignal.timeout(...)` rejects `fetch` with when the timeout fires first. */
+function buildTimeoutError(): DOMException {
+  return new DOMException('The operation was aborted due to timeout', 'TimeoutError');
 }
 
 /**
@@ -155,17 +173,17 @@ describe('VoyageEmbeddingProvider', () => {
     expect(result.embeddings).toHaveLength(1001);
   });
 
-  it('should surface a non-2xx, non-429 response as VoyageRequestFailedError without retrying', async () => {
+  it('should surface a non-retryable 4xx response as VoyageRequestFailedError without retrying', async () => {
     const provider = buildProvider();
-    fetchMock.mockResolvedValue(buildFailedResponse(500, 'internal error'));
+    fetchMock.mockResolvedValue(buildFailedResponse(422, 'unprocessable input'));
 
     const error = await provider
       .embed({ inputs: ['a'], inputType: 'document' })
       .catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(VoyageRequestFailedError);
-    expect((error as VoyageRequestFailedError).status).toBe(500);
-    expect((error as VoyageRequestFailedError).body).toBe('internal error');
+    expect((error as VoyageRequestFailedError).status).toBe(422);
+    expect((error as VoyageRequestFailedError).body).toBe('unprocessable input');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -183,6 +201,79 @@ describe('VoyageEmbeddingProvider', () => {
     expect(clock.sleepCalls).toHaveLength(0);
   });
 
+  it('should fail immediately on a 400 without retrying', async () => {
+    const provider = buildProvider();
+    fetchMock.mockResolvedValue(buildFailedResponse(400, 'bad request'));
+
+    const error = await provider
+      .embed({ inputs: ['a'], inputType: 'document' })
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(VoyageRequestFailedError);
+    expect((error as VoyageRequestFailedError).status).toBe(400);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(clock.sleepCalls).toHaveLength(0);
+  });
+
+  it('should pass a timeout signal built from the configured requestTimeoutMs', async () => {
+    const provider = buildProvider({ requestTimeoutMs: 5_000 });
+    fetchMock.mockResolvedValue(buildResponse(['a']));
+
+    await provider.embed({ inputs: ['a'], inputType: 'document' });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, { signal: AbortSignal }];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('should retry a request-timeout abort and return the eventual success', async () => {
+    const provider = buildProvider();
+    fetchMock
+      .mockRejectedValueOnce(buildTimeoutError())
+      .mockResolvedValueOnce(buildResponse(['a']));
+
+    const result = await provider.embed({ inputs: ['a'], inputType: 'document' });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.embeddings).toHaveLength(1);
+  });
+
+  it('should retry a network error (fetch rejecting with no response) and return the eventual success', async () => {
+    const provider = buildProvider();
+    fetchMock
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(buildResponse(['a']));
+
+    const result = await provider.embed({ inputs: ['a'], inputType: 'document' });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.embeddings).toHaveLength(1);
+  });
+
+  it('should throw VoyageRateLimitExceededError once a repeated timeout exhausts the retry-attempt cap', async () => {
+    const provider = buildProvider({ maxRetries: 1, requestsPerMinute: 1_000_000 });
+    fetchMock.mockRejectedValue(buildTimeoutError());
+
+    const error = await provider
+      .embed({ inputs: ['a'], inputType: 'document' })
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(VoyageRateLimitExceededError);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('should throw VoyageInvalidResponseError when a 2xx response does not match the expected shape', async () => {
+    const provider = buildProvider();
+    fetchMock.mockResolvedValue(buildMalformedResponse());
+
+    const error = await provider
+      .embed({ inputs: ['a'], inputType: 'document' })
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(VoyageInvalidResponseError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(clock.sleepCalls).toHaveLength(0);
+  });
+
   it('should retry a 429 and return the eventual success', async () => {
     const provider = buildProvider();
     fetchMock
@@ -195,6 +286,18 @@ describe('VoyageEmbeddingProvider', () => {
     expect(result.embeddings).toHaveLength(1);
     // One backoff sleep for the retry, on top of pacing sleeps — both come from the mocked clock.
     expect(clock.sleepCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('should retry a 5xx and return the eventual success', async () => {
+    const provider = buildProvider();
+    fetchMock
+      .mockResolvedValueOnce(buildFailedResponse(503, 'service unavailable'))
+      .mockResolvedValueOnce(buildResponse(['a']));
+
+    const result = await provider.embed({ inputs: ['a'], inputType: 'document' });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.embeddings).toHaveLength(1);
   });
 
   it('should honour a numeric Retry-After header instead of computed backoff', async () => {

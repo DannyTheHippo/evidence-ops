@@ -1,7 +1,8 @@
 /**
- * Provisional shape — no Mongo `$search`/`$vectorSearch`/`$rankFusion` implementation exists
- * yet (a later step owns that). Kept generic over the hit metadata so a concrete store can
- * layer its own document shape on top without changing this contract.
+ * `RETRIEVAL_STORE` binds to `MongoHybridRetrievalStore`, which runs `$search`/`$vectorSearch`/
+ * `$rankFusion` queries against Mongo; `FakeRetrievalStore` is the test double. Kept generic
+ * over the hit metadata so a concrete store can layer its own document shape on top without
+ * changing this contract.
  */
 export interface RetrievalQuery {
   readonly text: string;

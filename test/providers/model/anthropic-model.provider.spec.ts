@@ -3,7 +3,11 @@ import { computeAnthropicCostUsd } from '../../../src/providers/model/anthropic-
 import { ModelBudgetExceededError } from '../../../src/providers/model/errors/model-budget-exceeded.error';
 import { ModelSchemaValidationError } from '../../../src/providers/model/errors/model-schema-validation.error';
 import { UnknownModelPricingError } from '../../../src/providers/model/errors/unknown-model-pricing.error';
-import type { ModelRequest } from '../../../src/providers/model/model-provider.interface';
+import type {
+  ModelRequest,
+  ModelToolChoice,
+} from '../../../src/providers/model/model-provider.interface';
+import { getMockToolRequest } from '../../utils/get-mock-tool-request';
 import { getMockTypedConfig } from '../../utils/get-mock-typed-config';
 
 // The real SDK client is never constructed against the network — `messages.create` is the only
@@ -35,7 +39,11 @@ function buildUsage(overrides: Partial<Anthropic.Usage> = {}): Anthropic.Usage {
   };
 }
 
-function buildMessage(text: string, usage: Partial<Anthropic.Usage> = {}): Anthropic.Message {
+function buildMessage(
+  text: string,
+  usage: Partial<Anthropic.Usage> = {},
+  stopReason: Anthropic.StopReason = 'end_turn',
+): Anthropic.Message {
   return {
     id: 'msg_test',
     container: null,
@@ -43,7 +51,31 @@ function buildMessage(text: string, usage: Partial<Anthropic.Usage> = {}): Anthr
     model: 'claude-sonnet-5',
     role: 'assistant',
     stop_details: null,
-    stop_reason: 'end_turn',
+    stop_reason: stopReason,
+    stop_sequence: null,
+    type: 'message',
+    usage: buildUsage(usage),
+  };
+}
+
+function buildToolUseMessage(
+  toolCalls: readonly { id: string; name: string; input: unknown }[],
+  usage: Partial<Anthropic.Usage> = {},
+): Anthropic.Message {
+  return {
+    id: 'msg_test',
+    container: null,
+    content: toolCalls.map((call) => ({
+      type: 'tool_use',
+      id: call.id,
+      name: call.name,
+      input: call.input,
+      caller: { type: 'direct' },
+    })),
+    model: 'claude-sonnet-5',
+    role: 'assistant',
+    stop_details: null,
+    stop_reason: 'tool_use',
     stop_sequence: null,
     type: 'message',
     usage: buildUsage(usage),
@@ -69,6 +101,22 @@ describe('AnthropicModelProvider', () => {
     jest.resetAllMocks();
   });
 
+  it('should construct the SDK client with the configured request timeout', () => {
+    new AnthropicModelProvider(getMockTypedConfig());
+
+    expect(MockAnthropic).toHaveBeenCalledWith(expect.objectContaining({ timeout: 60000 }));
+  });
+
+  it('should read the SDK client timeout from config rather than a hardcoded constant', () => {
+    const config = getMockTypedConfig({
+      anthropic: { apiKey: undefined, model: 'claude-sonnet-5', timeoutMs: 15000 },
+    });
+
+    new AnthropicModelProvider(config);
+
+    expect(MockAnthropic).toHaveBeenCalledWith(expect.objectContaining({ timeout: 15000 }));
+  });
+
   it('should refuse the call before issuing any request when the worst-case estimate exceeds maxCostUsd', async () => {
     const provider = new AnthropicModelProvider(getMockTypedConfig());
 
@@ -80,7 +128,7 @@ describe('AnthropicModelProvider', () => {
 
   it('should refuse the call before issuing any request for a model with no pricing entry', async () => {
     const config = getMockTypedConfig({
-      anthropic: { apiKey: undefined, model: 'claude-unpriced' },
+      anthropic: { apiKey: undefined, model: 'claude-unpriced', timeoutMs: 60000 },
     });
     const provider = new AnthropicModelProvider(config);
 
@@ -230,6 +278,145 @@ describe('AnthropicModelProvider', () => {
       const serializedSchema = JSON.stringify(call.output_config.format.schema);
       expect(serializedSchema).not.toContain('$defs');
       expect(serializedSchema).not.toContain('$ref');
+    });
+  });
+
+  describe('tool calls', () => {
+    const toolRequest: ModelRequest<undefined> = {
+      ...baseRequest,
+      tools: [
+        {
+          name: 'lookup_price',
+          description: 'Looks up the current price for a stock ticker.',
+          inputSchema: z.object({ ticker: z.string() }),
+        },
+      ],
+      toolChoice: 'auto',
+    };
+
+    it('should send tools mapped to Anthropic tool entries with a converted JSON-Schema input_schema', async () => {
+      mockCreate.mockResolvedValueOnce(buildMessage('Paris'));
+      const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+      await provider.generate(toolRequest);
+
+      const call = mockCreate.mock.calls[0][0] as { tools: Anthropic.Tool[] };
+      expect(call.tools).toHaveLength(1);
+      expect(call.tools[0]).toMatchObject({
+        name: 'lookup_price',
+        description: 'Looks up the current price for a stock ticker.',
+      });
+      expect(call.tools[0].input_schema).toMatchObject({
+        type: 'object',
+        properties: { ticker: { type: 'string' } },
+      });
+    });
+
+    it.each<[ModelToolChoice, unknown]>([
+      ['auto', { type: 'auto' }],
+      ['none', { type: 'none' }],
+      ['required', { type: 'any' }],
+      [{ tool: 'lookup_price' }, { type: 'tool', name: 'lookup_price' }],
+    ])(
+      'should map ModelToolChoice %j to Anthropic tool_choice %j',
+      async (toolChoice, expected) => {
+        mockCreate.mockResolvedValueOnce(buildMessage('Paris'));
+        const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+        await provider.generate({ ...toolRequest, toolChoice });
+
+        const call = mockCreate.mock.calls[0][0] as { tool_choice: unknown };
+        expect(call.tool_choice).toEqual(expected);
+      },
+    );
+
+    it('should map a tool_use stop into ModelResult.toolCalls with input as a parsed object', async () => {
+      mockCreate.mockResolvedValueOnce(
+        buildToolUseMessage([{ id: 'call_1', name: 'lookup_price', input: { ticker: 'ACME' } }]),
+      );
+      const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+      const result = await provider.generate(toolRequest);
+
+      expect(result.stopReason).toBe('tool_use');
+      expect(result.toolCalls).toEqual([
+        { id: 'call_1', name: 'lookup_price', input: { ticker: 'ACME' } },
+      ]);
+    });
+
+    it('should map stop_reason to end_turn for a normal completion once tools are offered, with no toolCalls', async () => {
+      mockCreate.mockResolvedValueOnce(buildMessage('Paris'));
+      const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+      const result = await provider.generate(toolRequest);
+
+      expect(result.stopReason).toBe('end_turn');
+      expect(result.toolCalls).toBeUndefined();
+    });
+
+    it('should leave stopReason and toolCalls unset on a tool-free request — regression guard for existing callers', async () => {
+      mockCreate.mockResolvedValueOnce(buildMessage('Paris'));
+      const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+      const result = await provider.generate(baseRequest);
+
+      expect(result.stopReason).toBeUndefined();
+      expect(result.toolCalls).toBeUndefined();
+    });
+
+    it('should round-trip a tool-role ModelMessage into a user message carrying a tool_result block', async () => {
+      mockCreate.mockResolvedValueOnce(buildMessage('259.75 USD'));
+      const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+      await provider.generate({
+        ...toolRequest,
+        messages: [
+          ...toolRequest.messages,
+          {
+            role: 'assistant',
+            content: '',
+            toolCalls: [{ id: 'call_1', name: 'lookup_price', input: { ticker: 'ACME' } }],
+          },
+          { role: 'tool', content: '259.75 USD', toolCallId: 'call_1' },
+        ],
+      });
+
+      const call = mockCreate.mock.calls[0][0] as { messages: Anthropic.MessageParam[] };
+      expect(call.messages.at(-1)).toEqual({
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'call_1', content: '259.75 USD' }],
+      });
+      expect(call.messages.at(-2)).toEqual({
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'call_1', name: 'lookup_price', input: { ticker: 'ACME' } },
+        ],
+      });
+    });
+
+    it('should send the same neutral tool request in Anthropic tools/tool_choice/tool_use/tool_result shape', async () => {
+      mockCreate.mockResolvedValueOnce(buildMessage('259.75 USD'));
+      const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+      await provider.generate(getMockToolRequest());
+
+      const call = mockCreate.mock.calls[0][0] as {
+        tools: Anthropic.Tool[];
+        tool_choice: unknown;
+        messages: Anthropic.MessageParam[];
+      };
+      expect(call.tool_choice).toEqual({ type: 'auto' });
+      expect(call.tools[0].name).toBe('lookup_price');
+      expect(call.messages[1]).toEqual({
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'call_1', name: 'lookup_price', input: { ticker: 'ACME' } },
+        ],
+      });
+      expect(call.messages[2]).toEqual({
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'call_1', content: '259.75 USD' }],
+      });
     });
   });
 });

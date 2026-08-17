@@ -22,10 +22,9 @@ export interface ApprovalRequest {
   readonly summary: string;
   readonly subject: ApprovalSubject;
   readonly requestedBy?: string;
-  /** Omitted → the channel's own tenant default, matching every other write path in this repo
-   *  (`DEFAULT_TENANT_ID`). Explicit here rather than implicit: `9f0c2f2` was a tenant-isolation
-   *  break from exactly this kind of field being assumed rather than threaded through. */
-  readonly tenantId?: string;
+  /** Required: every `ApprovalChannel` write is scoped to this tenant. There is no default to
+   *  fall back on — a caller that cannot supply a tenant has no business persisting the row. */
+  readonly tenantId: string;
   readonly context?: Record<string, unknown>;
   /** The requesting workflow's own Temporal workflow id (D3 of the approvals milestone —
    *  `Approval.workflowId`'s doc comment names this exact use). Persisted so a later HTTP decision
@@ -47,12 +46,10 @@ export interface ApprovalResult {
 
 export interface ApprovalChannel {
   requestApproval(request: ApprovalRequest): Promise<ApprovalHandle>;
-  /** `tenantId` omitted → the channel's own tenant default (`DEFAULT_TENANT_ID`), matching
-   *  `ApprovalRequest.tenantId`'s own omitted-means-default convention. See
-   *  `MongoApprovalChannel.getDecision`'s doc comment for why this parameter exists: the caller
-   *  (workflow code, via `getApprovalDecision`) now scopes the read to its own tenant rather than
-   *  trusting a bare id across tenants. */
-  getDecision(approvalId: string, tenantId?: string): Promise<ApprovalResult>;
+  /** Required: the caller (workflow code, via `getApprovalDecision`) always scopes the read to
+   *  its own tenant, never a bare id trusted across tenants — see `MongoApprovalChannel
+   *  .getDecision`'s own doc comment for the fail-closed contract this produces on a mismatch. */
+  getDecision(approvalId: string, tenantId: string): Promise<ApprovalResult>;
 }
 
 export const APPROVAL_CHANNEL = Symbol('APPROVAL_CHANNEL');

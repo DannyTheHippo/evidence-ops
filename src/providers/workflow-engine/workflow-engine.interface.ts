@@ -1,6 +1,7 @@
 /**
- * Provisional shape — no Temporal implementation exists yet (`@temporalio/*` is scaffolded but
- * unwired repo-wide; see `.claude/CLAUDE.md`). A later step owns the concrete engine.
+ * `WORKFLOW_ENGINE` binds to `TemporalWorkflowEngine`, which drives durable execution through
+ * `@temporalio/*`. `FakeWorkflowEngine` is the test double — `test/utils/create-test-app.ts`
+ * overrides the token back to it so no unit/e2e spec reaches a live Temporal server.
  */
 export type WorkflowStatus = 'running' | 'completed' | 'failed';
 

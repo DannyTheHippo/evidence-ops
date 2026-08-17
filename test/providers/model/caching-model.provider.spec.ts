@@ -94,4 +94,19 @@ describe('CachingModelProvider', () => {
     expect(second.output).toBe('London');
     expect(inner.calls).toHaveLength(2);
   });
+
+  // `tenantId` is a policy field for spend attribution (`SpendGuardModelProvider`), not part of
+  // the request's identity — two tenants asking the identical prompt must still share one
+  // cache entry, or the replay cache would fragment by tenant for no content-addressed reason.
+  it('should reuse the cached fixture for identical requests differing only in tenantId', async () => {
+    const provider = new CachingModelProvider(inner, { mode: 'record', cacheDir });
+    inner.enqueueResult({ output: 'Paris' });
+
+    const first = await provider.generate({ ...request, tenantId: 'tenant-a' });
+    const second = await provider.generate({ ...request, tenantId: 'tenant-b' });
+
+    expect(first.output).toBe('Paris');
+    expect(second.output).toBe('Paris');
+    expect(inner.calls).toHaveLength(1);
+  });
 });

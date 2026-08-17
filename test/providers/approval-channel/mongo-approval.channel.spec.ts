@@ -52,20 +52,6 @@ describe('MongoApprovalChannel', () => {
       });
       expect(handle).toEqual({ id: approvalId.toString() });
     });
-
-    it('should pass tenantId through as undefined when the caller omits it, letting the schema default apply', async () => {
-      mockApprovalModel.create.mockResolvedValueOnce({ _id: new Types.ObjectId() });
-
-      await channel.requestApproval({
-        action: 'publish_report',
-        summary: 'Publish the Q1 evidence report',
-        subject: { entityType: 'Conflict', entityId: new Types.ObjectId().toString() },
-      });
-
-      expect(mockApprovalModel.create).toHaveBeenCalledWith(
-        expect.objectContaining({ tenantId: undefined }),
-      );
-    });
   });
 
   describe('getDecision', () => {
@@ -149,24 +135,12 @@ describe('MongoApprovalChannel', () => {
     });
 
     it('should return rejected without querying the model when the id is not a valid ObjectId', async () => {
-      const result = await channel.getDecision('not-an-object-id');
+      const result = await channel.getDecision('not-an-object-id', 'acme-corp');
 
       expect(mockApprovalModel.findOne).not.toHaveBeenCalled();
       expect(result).toEqual({
         decision: 'rejected',
         reason: "unknown approval id 'not-an-object-id'",
-      });
-    });
-
-    it('should default tenantId to DEFAULT_TENANT_ID when the caller omits it', async () => {
-      const approvalId = new Types.ObjectId();
-      mockApprovalModel.findOne.mockResolvedValueOnce({ state: 'approved' });
-
-      await channel.getDecision(approvalId.toString());
-
-      expect(mockApprovalModel.findOne).toHaveBeenCalledWith({
-        _id: approvalId.toString(),
-        tenantId: 'default',
       });
     });
 

@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 import { toJSONSchema, type z } from 'zod/v4';
-import type { ModelMessage } from './model-provider.interface';
+import type {
+  ModelMessage,
+  ModelToolChoice,
+  ModelToolDefinition,
+} from './model-provider.interface';
 
 export interface CacheKeyInput {
   readonly provider: string;
@@ -11,6 +15,10 @@ export interface CacheKeyInput {
   readonly outputSchema?: z.ZodType;
   /** Cache-partitioning field only — see `ModelRequest.passOrdinal`'s own doc comment. */
   readonly passOrdinal?: number;
+  /** See `ModelRequest.tools`'s own doc comment for the omit-when-absent contract. */
+  readonly tools?: readonly ModelToolDefinition[];
+  /** See `ModelRequest.toolChoice`'s own doc comment. */
+  readonly toolChoice?: ModelToolChoice;
 }
 
 /**
@@ -49,6 +57,19 @@ export function computeCacheKey(input: CacheKeyInput): string {
     // before this field existed — every committed fixture under `eval/cache/model/` depends on
     // that. Only a caller that opts in changes the canonical shape at all.
     ...(input.passOrdinal === undefined ? {} : { passOrdinal: input.passOrdinal }),
+    // Same omit-when-absent treatment: a request without tools (every non-agentic caller) must
+    // keep hashing identically to a request built before this field existed, so it is omitted
+    // rather than coalesced to `null`.
+    ...(input.tools === undefined
+      ? {}
+      : {
+          tools: input.tools.map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            inputSchema: toJSONSchema(tool.inputSchema),
+          })),
+        }),
+    ...(input.toolChoice === undefined ? {} : { toolChoice: input.toolChoice }),
   });
 
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');

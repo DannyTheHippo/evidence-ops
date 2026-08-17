@@ -7,6 +7,7 @@ describe('FakeApprovalChannel', () => {
     action: 'publish_report',
     summary: 'Publish the Q1 evidence report',
     subject: { entityType: 'WorkflowRun', entityId: 'run-1' },
+    tenantId: 'acme-corp',
   };
 
   beforeEach(() => {

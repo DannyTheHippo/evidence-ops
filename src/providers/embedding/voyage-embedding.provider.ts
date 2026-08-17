@@ -1,6 +1,8 @@
 import { Injectable, Optional } from '@nestjs/common';
+import { z } from 'zod/v4';
 import { TypedConfigService } from '../../config/environment/typed-config.service';
 import { VoyageApiKeyMissingError } from './errors/voyage-api-key-missing.error';
+import { VoyageInvalidResponseError } from './errors/voyage-invalid-response.error';
 import { VoyageRateLimitExceededError } from './errors/voyage-rate-limit-exceeded.error';
 import { VoyageRequestFailedError } from './errors/voyage-request-failed.error';
 import type {
@@ -18,10 +20,10 @@ const MAX_INPUTS_PER_REQUEST = 1000;
 const RETRY_BASE_DELAY_MS = 1_000;
 const RETRY_MAX_DELAY_MS = 30_000;
 
-interface VoyageEmbeddingsResponse {
-  readonly data: { readonly embedding: number[]; readonly index: number }[];
-  readonly usage: { readonly total_tokens: number };
-}
+const voyageEmbeddingsResponseSchema = z.object({
+  data: z.array(z.object({ embedding: z.array(z.number()), index: z.number() })),
+  usage: z.object({ total_tokens: z.number() }),
+});
 
 /**
  * Real time by default; tests inject a virtual clock so a 3-requests-per-minute pace (20s between
@@ -65,6 +67,29 @@ function parseRetryAfterMs(headerValue: string | null): number | undefined {
   }
   const seconds = Number(headerValue);
   return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : undefined;
+}
+
+/** 429 (rate limit) and 5xx (vendor's own fault) are transient; any other 4xx is a bad request that fails identically on retry. */
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+/**
+ * `fetch` throws rather than resolving when the request never reaches an HTTP response at all —
+ * a DNS/connection failure, or the request timeout below firing. `AbortSignal.timeout` aborts
+ * with a `TimeoutError` DOMException, distinct from the generic `AbortError` a manual
+ * `AbortController.abort()` would produce, so a caught `error.name === 'TimeoutError'` names the
+ * timeout case specifically in the message; both it and a raw network failure are retried alike
+ * below, since neither proves anything about the request itself being invalid.
+ */
+function describeFetchFailure(error: unknown): string {
+  if (error instanceof Error && error.name === 'TimeoutError') {
+    return `Voyage embeddings request timed out: ${error.message}`;
+  }
+  if (error instanceof Error) {
+    return `Voyage embeddings request failed before a response was received: ${error.message}`;
+  }
+  return 'Voyage embeddings request failed before a response was received';
 }
 
 /**
@@ -134,27 +159,48 @@ export class VoyageEmbeddingProvider implements EmbeddingProvider {
     for (let attempt = 0; ; attempt++) {
       await this.pace();
 
-      const response = await fetch(VOYAGE_ENDPOINT, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body,
-      });
+      let response: Response | undefined;
+      let failureMessage: string | undefined;
 
-      if (response.ok) {
-        const responseBody = (await response.json()) as VoyageEmbeddingsResponse;
-        const embeddings = [...responseBody.data]
+      try {
+        response = await fetch(VOYAGE_ENDPOINT, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body,
+          signal: AbortSignal.timeout(this.config.voyage.requestTimeoutMs),
+        });
+      } catch (error) {
+        // No response at all — a hung connection past the timeout, or a network failure. Both
+        // fall through to the retry path below exactly like a 5xx.
+        failureMessage = describeFetchFailure(error);
+      }
+
+      if (response?.ok) {
+        const parsed = voyageEmbeddingsResponseSchema.safeParse(await response.json());
+        if (!parsed.success) {
+          throw new VoyageInvalidResponseError(
+            parsed.error.issues.map((issue) => ({
+              path: issue.path.join('.'),
+              message: issue.message,
+            })),
+          );
+        }
+
+        const embeddings = [...parsed.data.data]
           .sort((a, b) => a.index - b.index)
           .map((entry) => entry.embedding);
 
-        return { embeddings, usage: { totalTokens: responseBody.usage.total_tokens } };
+        return { embeddings, usage: { totalTokens: parsed.data.usage.total_tokens } };
       }
 
-      const responseText = await response.text();
+      const responseText = response
+        ? await response.text()
+        : (failureMessage ?? 'Voyage embeddings request failed before a response was received');
 
-      // A bad key or a malformed request (401/400/...) will never succeed on retry — only a 429
-      // is transient. Retrying anything else just burns the attempt/wait budget on a permanent
-      // failure.
-      if (response.status !== 429) {
+      // A bad key or a malformed request (401/400/...) will never succeed on retry. 429 (rate
+      // limit), 5xx (vendor's own fault), and a failure before any response arrived (timeout or
+      // network error, `response` undefined here) are all transient and worth another attempt.
+      if (response && !isRetryableStatus(response.status)) {
         throw new VoyageRequestFailedError(response.status, responseText);
       }
 
@@ -164,8 +210,9 @@ export class VoyageEmbeddingProvider implements EmbeddingProvider {
         throw new VoyageRateLimitExceededError(attempt, waitedMs, responseText);
       }
 
-      const delayMs =
-        parseRetryAfterMs(response.headers.get('retry-after')) ?? computeBackoffMs(attempt);
+      const delayMs = response
+        ? (parseRetryAfterMs(response.headers.get('retry-after')) ?? computeBackoffMs(attempt))
+        : computeBackoffMs(attempt);
       if (waitedMs + delayMs > maxRetryWaitMs) {
         throw new VoyageRateLimitExceededError(attempt, waitedMs, responseText);
       }

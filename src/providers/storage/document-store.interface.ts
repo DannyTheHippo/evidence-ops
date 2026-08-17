@@ -1,7 +1,7 @@
 /**
- * Provisional shape — no GridFS implementation exists yet (a later step owns that). `content`
- * is a `Buffer` rather than a stream: callers of this interface are expected to work with
- * whole documents, not large-file streaming, until a concrete store proves otherwise.
+ * `DOCUMENT_STORE` binds to `GridFsDocumentStore`; `FakeDocumentStore` is the test double.
+ * `content` is a `Buffer` rather than a stream: callers of this interface work with whole
+ * documents, not large-file streaming.
  */
 export interface StoredDocument<TMetadata = Record<string, unknown>> {
   readonly id: string;

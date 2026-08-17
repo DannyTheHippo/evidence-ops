@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import type { z } from 'zod/v4';
+import { modelCostHistogram } from '../telemetry/domain-metrics';
 import {
   EVIDENCE_ATTRIBUTES,
   GEN_AI_ATTRIBUTES,
@@ -68,6 +69,18 @@ export class TracingModelProvider implements ModelProvider {
           [GEN_AI_ATTRIBUTES.USAGE_OUTPUT_TOKENS]: result.usage.outputTokens,
           [EVIDENCE_ATTRIBUTES.COST_USD]: result.costUsd,
         });
+        modelCostHistogram.record(result.costUsd, {
+          provider: this.info.provider,
+          taskClass: request.taskClass,
+        });
+        if (result.toolCalls && result.toolCalls.length > 0) {
+          // Count and names only, never `ModelToolCall.input` — see this constant's own doc
+          // comment in `span-attributes.constants.ts`.
+          span.setAttributes({
+            [EVIDENCE_ATTRIBUTES.TOOL_CALL_COUNT]: result.toolCalls.length,
+            [EVIDENCE_ATTRIBUTES.TOOL_CALL_NAMES]: result.toolCalls.map((call) => call.name),
+          });
+        }
         if (this.captureModelContent) {
           span.addEvent(GEN_AI_CONTENT_EVENTS.COMPLETION, {
             'gen_ai.completion': JSON.stringify(result.output),
