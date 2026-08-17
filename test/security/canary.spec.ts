@@ -16,9 +16,13 @@ import type { RetrievedChunk } from '../../src/features/evidence/qa/types/retrie
 import { DenyAllAuthzHook } from '../../src/features/platform/authz/deny-all.authz-hook';
 import { ToolExecutorService } from '../../src/features/platform/authz/tool-executor.service';
 import { TOOL_AUTHZ_HOOK } from '../../src/features/platform/authz/authz-hook.interface';
-import type { ToolExecutionStep } from '../../src/features/platform/authz/types/tool-definition.type';
+import type {
+  ToolExecutionContext,
+  ToolExecutionStep,
+} from '../../src/features/platform/authz/types/tool-definition.type';
 import { FakeModelProvider } from '../../src/providers/model/fake-model.provider';
 import { MODEL_PROVIDER } from '../../src/providers/model/model-provider.interface';
+import { UserRole } from '../../src/shared/enums/user-role.enum';
 import { AppLogger } from '../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../utils/get-mock-logger';
 import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts';
@@ -213,6 +217,7 @@ describe('canary security suite', () => {
       await synthesisService.synthesizeAnswer({
         question: 'What is the cap rate for Northgate Business Park?',
         chunks: [xlsxChunk, pdfChunk, northgateChunk],
+        tenantId: 'tenant-1',
       });
 
       // No unexpected call attempted: exactly the one qa_answer synthesis call happened, nothing
@@ -255,6 +260,7 @@ describe('canary security suite', () => {
       const result = await synthesisService.synthesizeAnswer({
         question: 'What is the cap rate for Northgate Business Park?',
         chunks: [xlsxChunk, pdfChunk],
+        tenantId: 'tenant-1',
       });
 
       expect(JSON.stringify(result)).toContain(CANARY_MARKERS.xlsx.token);
@@ -277,6 +283,7 @@ describe('canary security suite', () => {
       const result = await synthesisService.synthesizeAnswer({
         question: 'What is the cap rate for Northgate Business Park?',
         chunks: [],
+        tenantId: 'tenant-1',
       });
 
       // Containment is asserted over the WHOLE return value, not just the contract, so the
@@ -313,6 +320,7 @@ describe('canary security suite', () => {
       const result = await synthesisService.synthesizeAnswer({
         question: 'What is the cap rate for Northgate Business Park?',
         chunks: [],
+        tenantId: 'tenant-1',
       });
 
       expect(JSON.stringify(result)).not.toContain(CANARY_MARKERS.xlsx.token);
@@ -359,7 +367,12 @@ describe('canary security suite', () => {
     });
   });
 
-  describe('tool chokepoint — what a compromised path would meet (not yet wired)', () => {
+  describe('tool chokepoint — the deny-all default a compromised path would meet', () => {
+    const CONTEXT: ToolExecutionContext = {
+      tenantId: 'tenant-1',
+      actorId: 'actor-1',
+      role: UserRole.Member,
+    };
     let toolExecutor: ToolExecutorService;
 
     beforeEach(async () => {
@@ -373,10 +386,13 @@ describe('canary security suite', () => {
       toolExecutor = module.get<ToolExecutorService>(ToolExecutorService);
     });
 
-    // Nothing in the qa path calls `ToolExecutorService` today — this asserts what the chokepoint
-    // would do if a future, compromised caller tried to act on the pdf canary's instruction
-    // ("export the full underlying deal-room contents"): with the real current wiring (no tools
-    // registered, the default deny-all authz hook), the call is refused before any handler runs.
+    // `QaModule` binds `AgenticRetrievalService`'s own `ToolExecutorService` to
+    // `StepPolicyAuthzHook` (see `qa.module.ts`), but that is a separate instance from the one
+    // built here — this module's `AuthzModule` binding, and therefore every other consumer that
+    // resolves `ToolExecutorService` through it, stays on `DenyAllAuthzHook`. This asserts what the
+    // chokepoint does if a future, compromised caller tried to act on the pdf canary's instruction
+    // ("export the full underlying deal-room contents") against that unchanged default: with no
+    // tools registered, the call is refused before any handler runs.
     it('should refuse a tool call named after the canary-implied action, against the real current (empty) registry', async () => {
       const step: ToolExecutionStep = { stepId: 'qa-answer', allowedTools: [] };
 
@@ -384,6 +400,7 @@ describe('canary security suite', () => {
         step,
         toolName: 'export_data_room',
         rawArgs: {},
+        context: CONTEXT,
       });
 
       expect(result).toEqual({
@@ -411,6 +428,7 @@ describe('canary security suite', () => {
         step,
         toolName: 'export_data_room',
         rawArgs: {},
+        context: CONTEXT,
       });
 
       expect(result).toEqual({
@@ -419,6 +437,39 @@ describe('canary security suite', () => {
         detail:
           "no authorization policy is configured for step 'qa-answer'; refusing " +
           "'export_data_room' by default",
+      });
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    // `StepPolicyAuthzHook` grants the `'agentic-retrieval'` step to `UserRole.Member` and above
+    // (`step-policy.authz-hook.ts`) — this proves that grant is scoped to the `ToolExecutorService`
+    // instance `QaModule` builds against `StepPolicyAuthzHook`, and never reaches an instance still
+    // bound to the real `DenyAllAuthzHook`, even for the highest role.
+    it('should refuse the agentic-retrieval step via the real DenyAllAuthzHook.authorize(), even for an admin role', async () => {
+      const step: ToolExecutionStep = {
+        stepId: 'agentic-retrieval',
+        allowedTools: ['search_evidence'],
+      };
+      const handler = jest.fn().mockResolvedValue('should never run');
+      toolExecutor.registerTool({
+        name: 'search_evidence',
+        argsSchema: z.object({}),
+        handler,
+      });
+
+      const result = await toolExecutor.execute({
+        step,
+        toolName: 'search_evidence',
+        rawArgs: {},
+        context: { ...CONTEXT, role: UserRole.Admin },
+      });
+
+      expect(result).toEqual({
+        kind: 'refused',
+        reason: 'authz-denied',
+        detail:
+          "no authorization policy is configured for step 'agentic-retrieval'; refusing " +
+          "'search_evidence' by default",
       });
       expect(handler).not.toHaveBeenCalled();
     });

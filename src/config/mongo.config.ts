@@ -1,5 +1,5 @@
 import type { MongooseModuleAsyncOptions } from '@nestjs/mongoose';
-import { MongoMemoryReplSet } from 'mongodb-memory-server';
+import type { MongoMemoryReplSet } from 'mongodb-memory-server';
 import type { Connection, ConnectOptions } from 'mongoose';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { auditablePlugin } from '../database/plugins/auditable.plugin';
@@ -28,6 +28,10 @@ export const mongooseModuleOptions: MongooseModuleAsyncOptions = {
   useFactory: async (config: TypedConfigService, als: AsyncLocalStorage<AlsContext>) => {
     let uri: string = config.mongo.uri;
     if (config.mongo.memoryServer) {
+      // Imported here rather than at module scope: `mongodb-memory-server` is a devDependency, and
+      // the production image installs with `--omit=dev`. A top-level import makes this module
+      // unloadable there, taking the whole app down at boot even though nothing would have used it.
+      const { MongoMemoryReplSet } = await import('mongodb-memory-server');
       inMemoryMongo = await MongoMemoryReplSet.create();
       uri = inMemoryMongo.getUri();
     }

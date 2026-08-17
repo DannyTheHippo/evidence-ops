@@ -72,8 +72,23 @@ export const environmentSchema = z
     THROTTLE_TTL_MS: zNum(60000),
     THROTTLE_LIMIT: zNum(100),
 
+    // 'anthropic' | 'openai' selects which base ModelProvider providers.module.ts wires behind
+    // the standing Tracing(Caching(SpendGuard(base))) chain.
+    MODEL_PROVIDER: z.enum(['anthropic', 'openai']).default('anthropic'),
+
     ANTHROPIC_API_KEY: zOptionalString(),
     ANTHROPIC_MODEL: z.string().default('claude-sonnet-5'),
+    ANTHROPIC_TIMEOUT_MS: zNum(60_000),
+
+    // Deliberately optional, no default: self-hosted OpenAI-compatible endpoints (vLLM, Ollama)
+    // accept no auth, so a missing key must not throw at construction.
+    OPENAI_API_KEY: zOptionalString(),
+    // Must name a model priced in `openai-pricing.table.ts`; an unpriced default would throw
+    // `UnknownModelPricingError` on the first call, since cost is asserted before every request.
+    OPENAI_MODEL: z.string().default('gpt-5'),
+    // Overriding this is what makes Azure OpenAI, vLLM, or Ollama reachable.
+    OPENAI_BASE_URL: z.string().default('https://api.openai.com/v1'),
+    OPENAI_TIMEOUT_MS: zNum(60_000),
 
     VOYAGE_API_KEY: zOptionalString(),
     VOYAGE_MODEL: z.string().default('voyage-4'),
@@ -83,6 +98,7 @@ export const environmentSchema = z
     VOYAGE_REQUESTS_PER_MINUTE: zNum(3),
     VOYAGE_MAX_RETRIES: zNum(5),
     VOYAGE_MAX_RETRY_WAIT_MS: zNum(300_000),
+    VOYAGE_REQUEST_TIMEOUT_MS: zNum(30_000),
 
     TEMPORAL_ADDRESS: z.string().default('localhost:7233'),
     TEMPORAL_NAMESPACE: z.string().default('default'),
@@ -90,8 +106,20 @@ export const environmentSchema = z
 
     RETRIEVAL_FUSION: z.enum(['server', 'app']).default('server'),
     RETRIEVAL_LIMIT: zNum(12),
+    // 'single-shot' keeps today's one-query-one-answer path; 'agentic' lets the model iterate
+    // (search, inspect, search again) before synthesis runs. Defaults to the unchanged path so no
+    // deployment picks up the new loop without opting in.
+    RETRIEVAL_STRATEGY: z.enum(['single-shot', 'agentic']).default('single-shot'),
+
+    // Hard caps on the agentic retrieval loop — reached regardless of what the model would still
+    // like to search, so a stuck or adversarial loop cannot run indefinitely or unboundedly.
+    AGENTIC_MAX_ITERATIONS: zNum(8),
+    AGENTIC_MAX_COST_USD: zNum(1),
 
     EXTRACTION_CHUNK_CONCURRENCY: zNum(2),
+
+    /** Per-tenant aggregate daily ceiling on model spend, in USD. A value `<= 0` disables the ceiling entirely. */
+    MODEL_SPEND_DAILY_LIMIT_USD: zNum(50),
 
     OTEL_EXPORTER_OTLP_ENDPOINT: z.string().default('http://localhost:4318'),
     // Dev-only, OFF by default: attaches prompt/completion text as span *events* (never
@@ -99,9 +127,24 @@ export const environmentSchema = z
     // backend is document content leaving the trust boundary; only turn this on locally against
     // a trace backend you control.
     OTEL_CAPTURE_MODEL_CONTENT: zBool(false),
+    // Set per-process by each start script ('evidence-ops-api' / 'evidence-ops-worker' /
+    // 'evidence-ops-mcp'), never read directly from `process.env` outside this file — see
+    // `instrumentation.ts`'s use of `telemetry.serviceName` to pick a process's metrics port.
+    OTEL_SERVICE_NAME: zOptionalString(),
+    // Prometheus's own registered default (9464) — see
+    // https://github.com/prometheus/prometheus/wiki/Default-port-allocations. The worker process
+    // offsets this by one rather than needing an env var of its own to keep in sync.
+    METRICS_PORT: zNum(9464),
 
     SOURCES_INBOX_DIR: z.string().default('./inbox'),
     SOURCE_SYNC_INTERVAL_MS: zNum(300_000),
+
+    // 3002: distinct from the API's 3000 (host-mapped 3001, docker-compose.yml) and every other
+    // port already in use in this stack (mongo host-mapped 27018, jaeger/OTLP 4318, temporal UI
+    // 8233, web 8090, qdrant 6333) — the MCP process is a third HTTP-listening process alongside
+    // the API.
+    MCP_PORT: zNum(3002),
+    MCP_RATE_LIMIT_PER_MINUTE: zNum(60),
   })
   .superRefine((e, ctx) => {
     if (!isProdLike(e.NODE_ENV)) {
@@ -154,9 +197,19 @@ export const environmentSchema = z
         ttlMs: e.THROTTLE_TTL_MS,
         limit: e.THROTTLE_LIMIT,
       },
+      model: {
+        provider: e.MODEL_PROVIDER,
+      },
       anthropic: {
         apiKey: e.ANTHROPIC_API_KEY,
         model: e.ANTHROPIC_MODEL,
+        timeoutMs: e.ANTHROPIC_TIMEOUT_MS,
+      },
+      openai: {
+        apiKey: e.OPENAI_API_KEY,
+        model: e.OPENAI_MODEL,
+        baseUrl: e.OPENAI_BASE_URL,
+        timeoutMs: e.OPENAI_TIMEOUT_MS,
       },
       voyage: {
         apiKey: e.VOYAGE_API_KEY,
@@ -165,6 +218,7 @@ export const environmentSchema = z
         requestsPerMinute: e.VOYAGE_REQUESTS_PER_MINUTE,
         maxRetries: e.VOYAGE_MAX_RETRIES,
         maxRetryWaitMs: e.VOYAGE_MAX_RETRY_WAIT_MS,
+        requestTimeoutMs: e.VOYAGE_REQUEST_TIMEOUT_MS,
       },
       temporal: {
         address: e.TEMPORAL_ADDRESS,
@@ -174,10 +228,17 @@ export const environmentSchema = z
       retrieval: {
         fusion: e.RETRIEVAL_FUSION,
         limit: e.RETRIEVAL_LIMIT,
+        strategy: e.RETRIEVAL_STRATEGY,
+      },
+      agenticRetrieval: {
+        maxIterations: e.AGENTIC_MAX_ITERATIONS,
+        maxCostUsd: e.AGENTIC_MAX_COST_USD,
       },
       telemetry: {
         otlpEndpoint: e.OTEL_EXPORTER_OTLP_ENDPOINT,
         captureModelContent: e.OTEL_CAPTURE_MODEL_CONTENT,
+        serviceName: e.OTEL_SERVICE_NAME,
+        metricsPort: e.METRICS_PORT,
       },
       sources: {
         inboxDir: e.SOURCES_INBOX_DIR,
@@ -185,6 +246,13 @@ export const environmentSchema = z
       },
       extraction: {
         chunkConcurrency: e.EXTRACTION_CHUNK_CONCURRENCY,
+      },
+      spend: {
+        dailyLimitUsd: e.MODEL_SPEND_DAILY_LIMIT_USD,
+      },
+      mcp: {
+        port: e.MCP_PORT,
+        rateLimitPerMinute: e.MCP_RATE_LIMIT_PER_MINUTE,
       },
     };
   });
@@ -195,13 +263,18 @@ export type CorsConfig = EnvironmentConfig['cors'];
 export type MongoConfig = EnvironmentConfig['mongo'];
 export type AuthConfig = EnvironmentConfig['auth'];
 export type ThrottleConfig = EnvironmentConfig['throttle'];
+export type ModelConfig = EnvironmentConfig['model'];
 export type AnthropicConfig = EnvironmentConfig['anthropic'];
+export type OpenAiConfig = EnvironmentConfig['openai'];
 export type VoyageConfig = EnvironmentConfig['voyage'];
 export type TemporalConfig = EnvironmentConfig['temporal'];
 export type RetrievalConfig = EnvironmentConfig['retrieval'];
+export type AgenticRetrievalConfig = EnvironmentConfig['agenticRetrieval'];
 export type TelemetryConfig = EnvironmentConfig['telemetry'];
 export type SourcesConfig = EnvironmentConfig['sources'];
 export type ExtractionConfig = EnvironmentConfig['extraction'];
+export type SpendConfig = EnvironmentConfig['spend'];
+export type McpConfig = EnvironmentConfig['mcp'];
 
 /**
  * `validate` hook for `ConfigModule.forRoot`. Throws a flattened, readable error

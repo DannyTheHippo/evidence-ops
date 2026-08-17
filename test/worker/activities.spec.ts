@@ -1,8 +1,10 @@
 import type { INestApplicationContext } from '@nestjs/common';
-import { DEFAULT_TENANT_ID } from '../../src/database/constants/tenant.constant';
+import { ApplicationFailure } from '@temporalio/common';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { ConflictsService } from '../../src/features/evidence/conflicts/conflicts.service';
 import { FactsService } from '../../src/features/evidence/facts/facts.service';
 import { IngestionService } from '../../src/features/evidence/ingestion/ingestion.service';
+import { AgenticRetrievalService } from '../../src/features/evidence/qa/agentic-retrieval.service';
 import { AnswerPersistenceService } from '../../src/features/evidence/qa/answer-persistence.service';
 import type { Claim } from '../../src/features/evidence/qa/contracts/answer.contract';
 import { EvidenceRetrievalService } from '../../src/features/evidence/qa/evidence-retrieval.service';
@@ -10,6 +12,8 @@ import { GroundingGateService } from '../../src/features/evidence/qa/grounding-g
 import { SynthesisService } from '../../src/features/evidence/qa/synthesis.service';
 import type { RetrievedChunk } from '../../src/features/evidence/qa/types/retrieved-chunk.type';
 import { APPROVAL_CHANNEL } from '../../src/providers/approval-channel/approval-channel.interface';
+import { UserRole } from '../../src/shared/enums/user-role.enum';
+import type { AlsContext } from '../../src/shared/types/als-context.type';
 import { createActivities } from '../../src/worker/activities';
 
 /**
@@ -26,6 +30,7 @@ function buildApp(overrides: {
   scanForConflicts?: jest.Mock;
   findCellFacts?: jest.Mock;
   retrieve?: jest.Mock;
+  gatherEvidence?: jest.Mock;
   synthesizeAnswer?: jest.Mock;
   verify?: jest.Mock;
   findConflictedFactGroupsForChunks?: jest.Mock;
@@ -34,8 +39,10 @@ function buildApp(overrides: {
   recordResolution?: jest.Mock;
   requestApproval?: jest.Mock;
   getDecision?: jest.Mock;
+  als?: AsyncLocalStorage<AlsContext>;
 }): INestApplicationContext {
   const services = new Map<unknown, unknown>([
+    [AsyncLocalStorage, overrides.als ?? new AsyncLocalStorage<AlsContext>()],
     [IngestionService, { ingestVersion: overrides.ingestVersion ?? jest.fn() }],
     [
       FactsService,
@@ -55,6 +62,7 @@ function buildApp(overrides: {
       },
     ],
     [EvidenceRetrievalService, { retrieve: overrides.retrieve ?? jest.fn() }],
+    [AgenticRetrievalService, { gatherEvidence: overrides.gatherEvidence ?? jest.fn() }],
     [SynthesisService, { synthesizeAnswer: overrides.synthesizeAnswer ?? jest.fn() }],
     [GroundingGateService, { verify: overrides.verify ?? jest.fn() }],
     [AnswerPersistenceService, { persist: overrides.persist ?? jest.fn() }],
@@ -130,10 +138,77 @@ describe('createActivities', () => {
     const app = buildApp({ ingestVersion: mockIngestVersion });
 
     const activities = createActivities(app);
-    const result = await activities.ingestDocumentVersion('doc-1');
+    const result = await activities.ingestDocumentVersion('doc-1', 'acme-corp');
 
-    expect(mockIngestVersion).toHaveBeenCalledWith('doc-1');
+    expect(mockIngestVersion).toHaveBeenCalledWith('doc-1', 'acme-corp');
     expect(result).toEqual({ chunksCreated: 3, alreadyIngested: false });
+  });
+
+  /**
+   * `withTenantScope` (and the `requireTenantId` guard it composes) is a single helper shared by
+   * every tenant-carrying activity, so exercising it through `ingestDocumentVersion` (a positional
+   * `tenantId` argument) and `persistAnswer` (a `tenantId` field on an input object) covers both
+   * call shapes without repeating the same assertions across all twelve wrapped activities.
+   */
+  describe('tenant scoping (defence in depth)', () => {
+    it('should reject an empty tenantId and do no work', async () => {
+      const mockIngestVersion = jest.fn();
+      const app = buildApp({ ingestVersion: mockIngestVersion });
+      const activities = createActivities(app);
+
+      await expect(activities.ingestDocumentVersion('doc-1', '')).rejects.toThrow(/no tenantId/);
+      expect(mockIngestVersion).not.toHaveBeenCalled();
+    });
+
+    it('should reject a missing tenantId — the shape a workflow history recorded before the tenant requirement replays with — and do no work', async () => {
+      const mockPersist = jest.fn();
+      const app = buildApp({ persist: mockPersist });
+      const activities = createActivities(app);
+      const input = {
+        answerId: 'answer-1',
+        questionText: 'What is the cap rate?',
+        // Replay of a pre-tenancy history: the field types as `string`, but a stale history
+        // supplies no value at runtime regardless of what the type says.
+        tenantId: undefined as unknown as string,
+        retrievedChunkIds: [],
+        outcome: { kind: 'insufficient_evidence' as const, reason: 'none' },
+        claims: [],
+      };
+
+      await expect(activities.persistAnswer(input)).rejects.toThrow(/no tenantId/);
+      expect(mockPersist).not.toHaveBeenCalled();
+    });
+
+    it('should mark the missing-tenant rejection as a non-retryable ApplicationFailure with a stable type', async () => {
+      const app = buildApp({});
+      const activities = createActivities(app);
+
+      expect.assertions(3);
+      try {
+        await activities.ingestDocumentVersion('doc-1', '');
+      } catch (error) {
+        expect(error).toBeInstanceOf(ApplicationFailure);
+        expect((error as ApplicationFailure).nonRetryable).toBe(true);
+        expect((error as ApplicationFailure).type).toBe('MissingTenantId');
+      }
+    });
+
+    it('should run the activity inside an ALS scope reporting the given tenant, restoring tenantScopePlugin for worker-context queries', async () => {
+      const als = new AsyncLocalStorage<AlsContext>();
+      let observedTenant: string | undefined;
+      const mockIngestVersion = jest.fn(() => {
+        observedTenant = als.getStore()?.tenant;
+        return Promise.resolve({ chunksCreated: 3, alreadyIngested: false });
+      });
+      const app = buildApp({ ingestVersion: mockIngestVersion, als });
+      const activities = createActivities(app);
+
+      await activities.ingestDocumentVersion('doc-1', 'acme-corp');
+
+      expect(observedTenant).toBe('acme-corp');
+      // The scope is scoped to this call, not leaked into the ambient context afterward.
+      expect(als.getStore()).toBeUndefined();
+    });
   });
 
   it('should delegate extractFacts to FactsService.extractFacts', async () => {
@@ -143,9 +218,9 @@ describe('createActivities', () => {
     const app = buildApp({ extractFacts: mockExtractFacts });
 
     const activities = createActivities(app);
-    const result = await activities.extractFacts('version-1');
+    const result = await activities.extractFacts('version-1', 'acme-corp');
 
-    expect(mockExtractFacts).toHaveBeenCalledWith('version-1');
+    expect(mockExtractFacts).toHaveBeenCalledWith('version-1', 'acme-corp');
     expect(result).toEqual({ factsCreated: 2, alreadyExtracted: false });
   });
 
@@ -173,7 +248,36 @@ describe('createActivities', () => {
     expect(result).toEqual([{ chunkId: 'chunk-1' }]);
   });
 
-  it('should delegate synthesizeAnswer to SynthesisService.synthesizeAnswer, renaming questionText to question', async () => {
+  it('should delegate retrieveEvidenceAgentic to AgenticRetrievalService.gatherEvidence, building a ToolExecutionContext from the input and returning only the gathered chunks', async () => {
+    const chunks: RetrievedChunk[] = [buildRetrievedChunk()];
+    const mockGatherEvidence = jest.fn().mockResolvedValue({
+      chunks,
+      iterations: 3,
+      costUsd: 0.12,
+      terminationReason: 'no-tool-call',
+    });
+    const app = buildApp({ gatherEvidence: mockGatherEvidence });
+    const input = {
+      questionText: 'What is the cap rate?',
+      tenantId: 'acme',
+      actorId: 'user-1',
+      role: 'member' as const,
+    };
+
+    const activities = createActivities(app);
+    const result = await activities.retrieveEvidenceAgentic(input);
+
+    expect(mockGatherEvidence).toHaveBeenCalledWith({
+      questionText: 'What is the cap rate?',
+      context: { tenantId: 'acme', actorId: 'user-1', role: UserRole.Member },
+    });
+    // Only `chunks` reaches the caller — `iterations`/`costUsd`/`terminationReason` are discarded
+    // here, matching `retrieveEvidence`'s own `RetrievedChunk[]` return shape (see the `Activities`
+    // interface's own doc comment on `retrieveEvidenceAgentic`).
+    expect(result).toEqual(chunks);
+  });
+
+  it('should delegate synthesizeAnswer to SynthesisService.synthesizeAnswer, renaming questionText to question and threading tenantId through', async () => {
     const outcome = { kind: 'insufficient_evidence' as const, reason: 'none' };
     const mockSynthesizeAnswer = jest.fn().mockResolvedValue(outcome);
     const app = buildApp({ synthesizeAnswer: mockSynthesizeAnswer });
@@ -183,11 +287,13 @@ describe('createActivities', () => {
     const result = await activities.synthesizeAnswer({
       questionText: 'What is the cap rate?',
       chunks,
+      tenantId: 'acme-corp',
     });
 
     expect(mockSynthesizeAnswer).toHaveBeenCalledWith({
       question: 'What is the cap rate?',
       chunks,
+      tenantId: 'acme-corp',
     });
     expect(result).toBe(outcome);
   });
@@ -198,7 +304,11 @@ describe('createActivities', () => {
     const outcome = { kind: 'insufficient_evidence' as const, reason: 'none' };
 
     const activities = createActivities(app);
-    const result = await activities.groundingCheck({ outcome, retrievedChunks: [] });
+    const result = await activities.groundingCheck({
+      outcome,
+      retrievedChunks: [],
+      tenantId: 'default',
+    });
 
     expect(mockVerify).not.toHaveBeenCalled();
     expect(result).toEqual({ outcome, claims: [] });
@@ -269,12 +379,16 @@ describe('createActivities', () => {
     const retrievedChunks: RetrievedChunk[] = [buildRetrievedChunk()];
 
     const activities = createActivities(app);
-    const result = await activities.groundingCheck({ outcome, retrievedChunks });
+    const result = await activities.groundingCheck({
+      outcome,
+      retrievedChunks,
+      tenantId: 'acme-corp',
+    });
 
     // Proves the guard actually ran the lookup rather than trusting the model's hint outright.
     expect(mockFindConflictedFactGroupsForChunks).toHaveBeenCalledWith(
       [retrievedChunks[0].chunkId],
-      DEFAULT_TENANT_ID,
+      'acme-corp',
     );
     expect(result).toEqual({ outcome, claims: [] });
   });
@@ -299,6 +413,7 @@ describe('createActivities', () => {
     const result = await activities.groundingCheck({
       outcome,
       retrievedChunks: [buildRetrievedChunk()],
+      tenantId: 'default',
     });
 
     expect(mockFindConflictedFactGroupsForChunks).not.toHaveBeenCalled();
@@ -320,7 +435,11 @@ describe('createActivities', () => {
     const retrievedChunks: RetrievedChunk[] = [buildRetrievedChunk()];
 
     const activities = createActivities(app);
-    const result = await activities.groundingCheck({ outcome, retrievedChunks });
+    const result = await activities.groundingCheck({
+      outcome,
+      retrievedChunks,
+      tenantId: 'default',
+    });
 
     expect(mockVerify).toHaveBeenCalledWith({
       outcome,
@@ -392,35 +511,6 @@ describe('createActivities', () => {
     });
   });
 
-  it('should default tenantId to the shared tenant constant when none is provided', async () => {
-    const claim = buildClaim();
-    const mockFindCellFacts = jest.fn().mockResolvedValue([]);
-    const mockFindConflictedFactGroupsForChunks = jest.fn().mockResolvedValue([]);
-    const mockVerify = jest.fn().mockReturnValue({
-      outcomeKind: 'answered',
-      claims: [claim],
-      droppedClaims: [],
-      violations: [],
-      claimCoverage: 1,
-    });
-    const app = buildApp({
-      findCellFacts: mockFindCellFacts,
-      findConflictedFactGroupsForChunks: mockFindConflictedFactGroupsForChunks,
-      verify: mockVerify,
-    });
-    const outcome = { kind: 'answered' as const, claims: [claim] };
-    const retrievedChunks: RetrievedChunk[] = [buildRetrievedChunk()];
-
-    const activities = createActivities(app);
-    await activities.groundingCheck({ outcome, retrievedChunks });
-
-    expect(mockFindCellFacts).toHaveBeenCalledWith([retrievedChunks[0].chunkId], DEFAULT_TENANT_ID);
-    expect(mockFindConflictedFactGroupsForChunks).toHaveBeenCalledWith(
-      [retrievedChunks[0].chunkId],
-      DEFAULT_TENANT_ID,
-    );
-  });
-
   it('should degrade the persisted outcome to insufficient_evidence when the gate drops every claim', async () => {
     // Regression for FIX 1: the model claimed `answered`, but zero claims survived verification
     // — the gate's degraded `outcomeKind`, not the model's raw `answered`, must be what
@@ -439,7 +529,11 @@ describe('createActivities', () => {
     const retrievedChunks: RetrievedChunk[] = [buildRetrievedChunk()];
 
     const activities = createActivities(app);
-    const result = await activities.groundingCheck({ outcome, retrievedChunks });
+    const result = await activities.groundingCheck({
+      outcome,
+      retrievedChunks,
+      tenantId: 'default',
+    });
 
     expect(result.outcome.kind).toBe('insufficient_evidence');
     if (result.outcome.kind === 'insufficient_evidence') {
@@ -481,7 +575,11 @@ describe('createActivities', () => {
     const retrievedChunks: RetrievedChunk[] = [buildRetrievedChunk()];
 
     const activities = createActivities(app);
-    const result = await activities.groundingCheck({ outcome, retrievedChunks });
+    const result = await activities.groundingCheck({
+      outcome,
+      retrievedChunks,
+      tenantId: 'default',
+    });
 
     expect(result.outcome).toEqual({ kind: 'conflicting_evidence', factKey, values });
     // The survived claims themselves still come from the report, not emptied out just because the
@@ -519,7 +617,11 @@ describe('createActivities', () => {
     const retrievedChunks: RetrievedChunk[] = [buildRetrievedChunk()];
 
     const activities = createActivities(app);
-    const result = await activities.groundingCheck({ outcome, retrievedChunks });
+    const result = await activities.groundingCheck({
+      outcome,
+      retrievedChunks,
+      tenantId: 'default',
+    });
 
     expect(result.outcome).toEqual({ kind: 'conflicting_evidence', factKey, values });
     expect(result.claims).toEqual([claim]);
@@ -551,7 +653,11 @@ describe('createActivities', () => {
     const retrievedChunks: RetrievedChunk[] = [buildRetrievedChunk()];
 
     const activities = createActivities(app);
-    const result = await activities.groundingCheck({ outcome, retrievedChunks });
+    const result = await activities.groundingCheck({
+      outcome,
+      retrievedChunks,
+      tenantId: 'default',
+    });
 
     expect(result.outcome).toEqual(outcome);
   });
@@ -588,7 +694,11 @@ describe('createActivities', () => {
     const retrievedChunks: RetrievedChunk[] = [buildRetrievedChunk()];
 
     const activities = createActivities(app);
-    const result = await activities.groundingCheck({ outcome, retrievedChunks });
+    const result = await activities.groundingCheck({
+      outcome,
+      retrievedChunks,
+      tenantId: 'default',
+    });
 
     expect(result.outcome).toEqual(outcome);
   });
@@ -616,9 +726,9 @@ describe('createActivities', () => {
 
     const activities = createActivities(app);
 
-    await expect(activities.groundingCheck({ outcome, retrievedChunks })).rejects.toThrow(
-      /no matching entry in conflictGroups/,
-    );
+    await expect(
+      activities.groundingCheck({ outcome, retrievedChunks, tenantId: 'default' }),
+    ).rejects.toThrow(/no matching entry in conflictGroups/);
   });
 
   it('should throw when the gate reports conflicting_evidence with no conflictingFactKey set', async () => {
@@ -639,9 +749,9 @@ describe('createActivities', () => {
 
     const activities = createActivities(app);
 
-    await expect(activities.groundingCheck({ outcome, retrievedChunks })).rejects.toThrow(
-      /no conflictingFactKey set/,
-    );
+    await expect(
+      activities.groundingCheck({ outcome, retrievedChunks, tenantId: 'default' }),
+    ).rejects.toThrow(/no conflictingFactKey set/);
   });
 
   it('should delegate persistAnswer to AnswerPersistenceService.persist', async () => {
@@ -655,6 +765,7 @@ describe('createActivities', () => {
     const input = {
       answerId: 'answer-1',
       questionText: 'What is the cap rate?',
+      tenantId: 'default',
       retrievedChunkIds: [],
       outcome: { kind: 'insufficient_evidence' as const, reason: 'none' },
       claims: [],
@@ -721,6 +832,7 @@ describe('createActivities', () => {
       action: 'ingest_document_version',
       summary: "Approve ingesting 'Q3 Rent Roll' (version 'version-1')",
       subject: { entityType: 'DocumentVersion', entityId: 'version-1' },
+      tenantId: 'acme-corp',
       workflowId: 'wf-ingest-1',
     };
 

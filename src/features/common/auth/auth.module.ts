@@ -4,6 +4,10 @@ import { JwtModule } from '@nestjs/jwt';
 import { MongooseModule } from '@nestjs/mongoose';
 import type { StringValue } from 'ms';
 import { TypedConfigService } from '../../../config/environment/typed-config.service';
+import {
+  Tenant,
+  TenantSchema,
+} from '../../../database/schemas/administration/tenant/tenant.schema';
 import { User, UserSchema } from '../../../database/schemas/administration/user/user.schema';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
@@ -11,7 +15,10 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
 @Module({
   imports: [
-    MongooseModule.forFeature([{ name: User.name, schema: UserSchema }]),
+    MongooseModule.forFeature([
+      { name: User.name, schema: UserSchema },
+      { name: Tenant.name, schema: TenantSchema },
+    ]),
     JwtModule.registerAsync({
       global: true,
       inject: [TypedConfigService],

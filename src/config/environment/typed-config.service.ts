@@ -1,15 +1,20 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type {
+  AgenticRetrievalConfig,
   AnthropicConfig,
   AppConfig,
   AuthConfig,
   CorsConfig,
   EnvironmentConfig,
   ExtractionConfig,
+  McpConfig,
+  ModelConfig,
   MongoConfig,
+  OpenAiConfig,
   RetrievalConfig,
   SourcesConfig,
+  SpendConfig,
   TelemetryConfig,
   TemporalConfig,
   ThrottleConfig,
@@ -39,8 +44,14 @@ export class TypedConfigService {
   get throttle(): ThrottleConfig {
     return this.config.get('throttle', { infer: true });
   }
+  get model(): ModelConfig {
+    return this.config.get('model', { infer: true });
+  }
   get anthropic(): AnthropicConfig {
     return this.config.get('anthropic', { infer: true });
+  }
+  get openai(): OpenAiConfig {
+    return this.config.get('openai', { infer: true });
   }
   get voyage(): VoyageConfig {
     return this.config.get('voyage', { infer: true });
@@ -51,6 +62,9 @@ export class TypedConfigService {
   get retrieval(): RetrievalConfig {
     return this.config.get('retrieval', { infer: true });
   }
+  get agenticRetrieval(): AgenticRetrievalConfig {
+    return this.config.get('agenticRetrieval', { infer: true });
+  }
   get telemetry(): TelemetryConfig {
     return this.config.get('telemetry', { infer: true });
   }
@@ -59,5 +73,11 @@ export class TypedConfigService {
   }
   get extraction(): ExtractionConfig {
     return this.config.get('extraction', { infer: true });
+  }
+  get spend(): SpendConfig {
+    return this.config.get('spend', { infer: true });
+  }
+  get mcp(): McpConfig {
+    return this.config.get('mcp', { infer: true });
   }
 }

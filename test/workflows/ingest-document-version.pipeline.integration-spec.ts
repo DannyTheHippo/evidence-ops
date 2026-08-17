@@ -3,6 +3,11 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import mongoose, { type Connection, type Model } from 'mongoose';
 import {
+  CanonicalEntity,
+  CanonicalEntitySchema,
+  type CanonicalEntityDocument,
+} from '../../src/database/schemas/evidence/canonical-entity/canonical-entity.schema';
+import {
   Conflict,
   ConflictSchema,
   type ConflictDocument,
@@ -31,7 +36,9 @@ import {
   ExtractedFactSchema,
   type ExtractedFactDocument,
 } from '../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import type { ApprovalDocument } from '../../src/database/schemas/workflow/approval/approval.schema';
 import { ConflictsService } from '../../src/features/evidence/conflicts/conflicts.service';
+import { CanonicalEntityService } from '../../src/features/evidence/facts/canonical-entity.service';
 import { FactsService } from '../../src/features/evidence/facts/facts.service';
 import { PASS_COUNT } from '../../src/features/evidence/facts/prose-fact-extractor';
 import { IngestionService } from '../../src/features/evidence/ingestion/ingestion.service';
@@ -87,6 +94,7 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
   let evidenceChunkModel: Model<EvidenceChunkDocument>;
   let extractedFactModel: Model<ExtractedFactDocument>;
   let conflictModel: Model<ConflictDocument>;
+  let canonicalEntityModel: Model<CanonicalEntityDocument>;
 
   beforeAll(async () => {
     connection = await mongoose.createConnection(MONGO_DB_URI).asPromise();
@@ -115,6 +123,10 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
       Conflict.name,
       ConflictSchema,
     ) as unknown as Model<ConflictDocument>;
+    canonicalEntityModel = connection.model(
+      CanonicalEntity.name,
+      CanonicalEntitySchema,
+    ) as unknown as Model<CanonicalEntityDocument>;
   });
 
   afterAll(async () => {
@@ -125,6 +137,7 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
         evidenceChunkModel.deleteMany({ tenantId: TENANT_ID }),
         extractedFactModel.deleteMany({ tenantId: TENANT_ID }),
         conflictModel.deleteMany({ tenantId: TENANT_ID }),
+        canonicalEntityModel.deleteMany({ tenantId: TENANT_ID }),
       ]);
       await connection.close();
     }
@@ -147,6 +160,10 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
       connection,
       logger,
     );
+    // No canonical-entity rows are seeded for this tenant, so every candidate's entity resolves
+    // unmatched and passes through unchanged — the pipeline's real-fixture assertions below are
+    // about ingestion, extraction, and conflict detection, not entity canonicalization.
+    const canonicalEntityService = new CanonicalEntityService(canonicalEntityModel, logger);
     const factsService = new FactsService(
       documentVersionModel,
       evidenceChunkModel,
@@ -154,17 +171,24 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
       documentStore,
       modelProvider,
       parserRegistry,
+      canonicalEntityService,
       getMockTypedConfig(),
       logger,
     );
     // This pipeline never resolves a conflict — it only detects one — so a real
     // WorkflowEngine/WorkflowRunsService is unneeded; the fake and a minimal stub satisfy the
     // constructor without pulling Temporal or another Mongo model into this integration lane.
+    // `requestResolution`'s pending-approval guard is likewise never exercised, so `approvalModel`
+    // is the same kind of unused-but-required stub.
     const workflowEngine = new FakeWorkflowEngine();
     const workflowRunsService = { create: jest.fn() } as unknown as WorkflowRunsService;
+    const approvalModel = { exists: jest.fn() } as unknown as Model<ApprovalDocument>;
     const conflictsService = new ConflictsService(
       extractedFactModel,
       conflictModel,
+      documentVersionModel,
+      documentModel,
+      approvalModel,
       workflowEngine,
       workflowRunsService,
       auditService,
@@ -217,13 +241,16 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
 
     // Step 1 (chunk+embed): real parsers, real chunker, fake embeddings — mirrors what the
     // workflow's `ingestActivities.ingestDocumentVersion` activity does for each version.
-    const compsIngest = await ingestionService.ingestVersion(compsVersion._id.toString());
-    const memoIngest = await ingestionService.ingestVersion(memoVersion._id.toString());
+    const compsIngest = await ingestionService.ingestVersion(
+      compsVersion._id.toString(),
+      TENANT_ID,
+    );
+    const memoIngest = await ingestionService.ingestVersion(memoVersion._id.toString(), TENANT_ID);
     expect(compsIngest.chunksCreated).toBeGreaterThan(0);
     expect(memoIngest.chunksCreated).toBeGreaterThan(0);
 
     // Step 2a (extract facts, spreadsheet path): deterministic regex extraction, no model call.
-    const compsFacts = await factsService.extractFacts(compsVersion._id.toString());
+    const compsFacts = await factsService.extractFacts(compsVersion._id.toString(), TENANT_ID);
     expect(compsFacts.factsCreated).toBeGreaterThan(0);
 
     // Step 2b (extract facts, prose path): one FakeModelProvider result per persisted chunk,
@@ -263,6 +290,7 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
                 // xlsx extractor derives from comps.xlsx's Sale Date column for this same row, or
                 // the two facts never share a `FactKey` and no conflict groups them together.
                 periodText: 'March 2025',
+                observedAtText: '',
                 amount: 6.1,
                 unit: 'percent',
                 quote,
@@ -277,7 +305,7 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
     // otherwise pass vacuously (zero facts, zero conflicts) — fail loudly instead.
     expect(queuedCapRateFact).toBe(true);
 
-    const memoFacts = await factsService.extractFacts(memoVersion._id.toString());
+    const memoFacts = await factsService.extractFacts(memoVersion._id.toString(), TENANT_ID);
     expect(memoFacts.factsCreated).toBeGreaterThan(0);
 
     // Step 3 (scan for conflicts): pure Mongo read-then-insert across both versions' facts.

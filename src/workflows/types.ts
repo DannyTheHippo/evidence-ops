@@ -16,18 +16,16 @@
  * `summary` a human reviewer reads in the approval inbox (`ApprovalsService.listPending`). Absent
  * on a caller that doesn't have a title in hand; the workflow falls back to `documentVersionId`.
  *
- * `tenantId` is optional for the same reason `ResolveConflictWorkflowInput.tenantId` is below —
- * single-tenant until multi-tenancy ships (`DEFAULT_TENANT_ID`), defaulted activity-side rather
- * than imported here (that would pull `src/database/**` into `src/workflows/**`). Threaded to the
- * approval request and to `getApprovalDecision` so the gate's tenant scoping
- * (`MongoApprovalChannel.getDecision`) agrees with whichever tenant actually requested this
- * ingest, rather than always falling back to the default.
+ * `tenantId` is the uploader's tenant, carried as a plain string field rather than imported from
+ * `src/database/**` (that would cross the determinism fence). Threaded to the approval request and
+ * to `getApprovalDecision` so the gate's tenant scoping (`MongoApprovalChannel.getDecision`) agrees
+ * with whichever tenant actually requested this ingest.
  */
 export interface IngestDocumentVersionInput {
   readonly documentVersionId: string;
   readonly requireApproval?: boolean;
   readonly documentTitle?: string;
-  readonly tenantId?: string;
+  readonly tenantId: string;
 }
 
 export type IngestApprovalGateOutcome = 'approved' | 'rejected' | 'timed_out';
@@ -45,21 +43,41 @@ export interface IngestDocumentVersionResult {
 }
 
 /**
- * `tenantId` is optional here for the same reason `ConflictsService.scanForConflicts` defaults
- * it — single-tenant until multi-tenancy ships (`DEFAULT_TENANT_ID`). The workflow never imports
- * that constant (it would pull `src/database/**` into `src/workflows/**`); the default is applied
- * activity-side, in `EvidenceRetrievalService`/`AnswerPersistenceService`.
+ * `tenantId` is the requesting tenant, carried as a plain string field rather than imported from
+ * `src/database/**` (that would cross the determinism fence). `retrieveEvidence` and
+ * `persistAnswer` both scope their Mongo access to it directly, with no activity-side fallback.
  *
  * `answerId` names the `queued` `Answer` row `QaService.startQuestion` already created before
  * starting this workflow — a plain string field, not a `mongoose`/`src/providers/**` import, so it
  * doesn't cross the determinism fence. `persistAnswer` updates that row rather than creating a
  * second one; see `AnswerPersistenceService`'s doc comment for the fail-closed behavior when it's
  * missing.
+ *
+ * `retrievalStrategy` picks which retrieval activity the workflow calls — `'single-shot'` (or
+ * absent) takes the unchanged `retrieveEvidence` path; `'agentic'` takes `retrieveEvidenceAgentic`
+ * instead. Read once, by `QaService.startQuestion`, from `config.retrieval.strategy` before this
+ * workflow starts; the workflow itself never reads config (that would cross the determinism fence)
+ * and only ever branches on this field. Optional so a workflow already mid-flight when this field
+ * was added replays with it absent and takes the single-shot path, the same in-flight-history
+ * reasoning `ResolveConflictWorkflowInput.ruleFired` documents above.
+ *
+ * `actorId`/`role` are the caller's own identity, threaded from `QaController`/`QaService` the same
+ * fields-not-imports way `answerId` is: `retrieveEvidenceAgentic`'s tool calls need a server-derived
+ * `ToolExecutionContext` (`src/features/platform/authz/types/tool-definition.type.ts`), and that
+ * context is never fabricated activity-side. `role` is a plain string union, not the `UserRole`
+ * enum `src/shared/enums/**` declares, for the same determinism-fence reason `ruleFired` stays a
+ * plain union; the activity maps it back to `UserRole` explicitly. Both optional for the same
+ * mid-flight-replay reason `retrievalStrategy` is: the agentic branch below only runs when all
+ * three of `retrievalStrategy`, `actorId`, and `role` are present, so a stale history with none of
+ * them falls back to single-shot rather than erroring.
  */
 export interface AnswerQuestionInput {
   readonly answerId: string;
   readonly questionText: string;
-  readonly tenantId?: string;
+  readonly tenantId: string;
+  readonly retrievalStrategy?: 'single-shot' | 'agentic';
+  readonly actorId?: string;
+  readonly role?: 'admin' | 'member';
 }
 
 /**
@@ -80,12 +98,32 @@ export interface AnswerQuestionResult {
  * escape hatch `answerId` above uses: this workflow's only job is gating that proposal behind a
  * human, never inventing one. A plain string, not an ObjectId/mongoose import, for the same reason
  * `answerId` stays a plain string.
+ *
+ * `ruleFired`/`proposedWinnerFactId` are the survivorship policy's proposal, computed once by the
+ * caller (`ConflictsService.requestResolution`) before this workflow starts its 24-hour approval
+ * wait, and threaded straight through to every `recordConflictResolution` call — never recomputed
+ * inside the workflow or its activities. A plain string union, not the `ConflictRuleFired` type
+ * `src/database/schemas/**` declares, for the same determinism-fence reason `answerId` and
+ * `winningFactId` stay plain fields rather than imports. Both optional so a `resolveConflict`
+ * execution already mid-wait when this field was added still replays: it wakes with no value for
+ * either, and `recordResolution` records that as an honest absence, never a fabricated `'none'`.
+ * `proposedWinnerFactId` is present only when `ruleFired` is `'authority'`/`'recency'` — a `'none'`
+ * proposal named no winner to carry.
+ *
+ * `requestedByOrigin` names which surface called `ConflictsService.requestResolution` —
+ * `'api'` for the interactive REST path, `'mcp'` for `request_resolution`
+ * (`src/mcp/mcp-tools.ts`) — and travels straight into the approval summary this workflow builds,
+ * the same fields-not-imports reasoning `requestedBy` above uses. Absent renders as an unlabeled
+ * proposal rather than defaulting to either surface.
  */
 export interface ResolveConflictWorkflowInput {
   readonly conflictId: string;
   readonly winningFactId: string;
   readonly requestedBy?: string;
-  readonly tenantId?: string;
+  readonly requestedByOrigin?: 'api' | 'mcp';
+  readonly tenantId: string;
+  readonly ruleFired?: 'authority' | 'recency' | 'none';
+  readonly proposedWinnerFactId?: string;
 }
 
 export type ResolveConflictOutcome = 'resolved' | 'rejected' | 'timed_out';

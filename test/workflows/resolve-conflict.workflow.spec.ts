@@ -66,6 +66,8 @@ const input: ResolveConflictWorkflowInput = {
   winningFactId: 'fact-xlsx',
   requestedBy: 'reviewer@example.com',
   tenantId: 'acme-corp',
+  ruleFired: 'authority',
+  proposedWinnerFactId: 'fact-xlsx',
 };
 
 let capturedHandler: SignalHandler | undefined;
@@ -128,6 +130,8 @@ describe('resolveConflict', () => {
       decidedBy: 'reviewer@example.com',
       reason: undefined,
       tenantId: 'acme-corp',
+      ruleFired: 'authority',
+      proposedWinnerFactId: 'fact-xlsx',
     });
     expect(result).toEqual({
       conflictId: 'conflict-1',
@@ -136,6 +140,36 @@ describe('resolveConflict', () => {
       winningValue: 5.25,
       winningUnit: 'percent',
     });
+  });
+
+  it('should fold requestedByOrigin into the approval summary a reviewer reads, and omit the marker when absent', async () => {
+    condition.mockImplementation((predicate: () => boolean) => {
+      capturedHandler?.();
+      return predicate();
+    });
+    activityStubs.getApprovalDecision.mockResolvedValue({
+      decision: 'approved',
+      decidedBy: 'reviewer@example.com',
+    });
+    activityStubs.recordConflictResolution.mockResolvedValue({
+      conflictId: 'conflict-1',
+      outcome: 'resolved',
+    });
+    const baseSummary =
+      "Resolve Northgate Business Park cap_rate (2025-03) in favor of 5.25percent (source 'chunk-xlsx') over 6.1percent (source 'chunk-pdf')";
+
+    await resolveConflict({ ...input, requestedByOrigin: 'mcp' });
+
+    expect(activityStubs.requestConflictApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: `${baseSummary} [requested via mcp]` }),
+    );
+
+    activityStubs.requestConflictApproval.mockClear();
+    await resolveConflict(input);
+
+    expect(activityStubs.requestConflictApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: baseSummary }),
+    );
   });
 
   it('should record a rejected outcome and not resolve when the persisted decision is rejected', async () => {
@@ -161,6 +195,8 @@ describe('resolveConflict', () => {
       decidedBy: 'reviewer@example.com',
       reason: 'Not enough context to confirm.',
       tenantId: 'acme-corp',
+      ruleFired: 'authority',
+      proposedWinnerFactId: 'fact-xlsx',
     });
     expect(result).toEqual({ conflictId: 'conflict-1', outcome: 'rejected' });
   });
@@ -179,6 +215,8 @@ describe('resolveConflict', () => {
       conflictId: 'conflict-1',
       outcome: 'timed_out',
       tenantId: 'acme-corp',
+      ruleFired: 'authority',
+      proposedWinnerFactId: 'fact-xlsx',
     });
     expect(result).toEqual({ conflictId: 'conflict-1', outcome: 'timed_out' });
   });

@@ -6,6 +6,7 @@ import { Test } from '@nestjs/testing';
 import bcrypt from 'bcryptjs';
 import type { StringValue } from 'ms';
 import { DEFAULT_TENANT_ID } from '../../../../src/database/constants/tenant.constant';
+import { Tenant } from '../../../../src/database/schemas/administration/tenant/tenant.schema';
 import { User } from '../../../../src/database/schemas/administration/user/user.schema';
 import { AuthService } from '../../../../src/features/common/auth/auth.service';
 import {
@@ -25,6 +26,7 @@ describe('AuthService', () => {
 
   const mockUserId = '65f1c2e4a1b2c3d4e5f6a7b8';
   const mockUserModel = getMockModel();
+  const mockTenantModel = getMockModel();
   const mockConfig = getMockConfig();
   const mockAuditService = { record: jest.fn() };
 
@@ -35,6 +37,12 @@ describe('AuthService', () => {
     tenantId: DEFAULT_TENANT_ID,
     role: UserRole.Member,
     createdAt: new Date('2026-07-01T00:00:00.000Z'),
+    ...overrides,
+  });
+
+  const buildMockTenant = (overrides: Record<string, unknown> = {}) => ({
+    tenantId: 'generated-tenant-id',
+    name: 'user@example.com',
     ...overrides,
   });
 
@@ -51,6 +59,10 @@ describe('AuthService', () => {
         {
           provide: getModelToken(User.name),
           useValue: mockUserModel,
+        },
+        {
+          provide: getModelToken(Tenant.name),
+          useValue: mockTenantModel,
         },
         {
           provide: AppLogger,
@@ -74,6 +86,9 @@ describe('AuthService', () => {
   describe('register', () => {
     it('should hash the password before storing it', async () => {
       mockUserModel.findOne.mockResolvedValueOnce(null);
+      mockTenantModel.create.mockImplementationOnce((doc: { tenantId: string; name: string }) =>
+        Promise.resolve(buildMockTenant(doc)),
+      );
       mockUserModel.create.mockImplementationOnce((doc: { email: string; password: string }) =>
         Promise.resolve(buildMockUser(doc)),
       );
@@ -89,6 +104,9 @@ describe('AuthService', () => {
 
     it('should lowercase the email before lookup and storage', async () => {
       mockUserModel.findOne.mockResolvedValueOnce(null);
+      mockTenantModel.create.mockImplementationOnce((doc: { tenantId: string; name: string }) =>
+        Promise.resolve(buildMockTenant(doc)),
+      );
       mockUserModel.create.mockImplementationOnce((doc: { email: string; password: string }) =>
         Promise.resolve(buildMockUser(doc)),
       );
@@ -101,21 +119,67 @@ describe('AuthService', () => {
       expect(createdDoc.email).toBe('user@example.com');
     });
 
-    it('should default to member role and the default tenant, leaving both to the schema default', async () => {
+    it('should provision a brand-new tenant and make the registrant its admin', async () => {
       mockUserModel.findOne.mockResolvedValueOnce(null);
-      mockUserModel.create.mockImplementationOnce((doc: { email: string; password: string }) =>
+      mockTenantModel.create.mockImplementationOnce((doc: { tenantId: string; name: string }) =>
+        Promise.resolve(buildMockTenant(doc)),
+      );
+      mockUserModel.create.mockImplementationOnce((doc: Record<string, unknown>) =>
         Promise.resolve(buildMockUser(doc)),
       );
 
       const result = await service.register({ email: 'user@example.com', password: 'password123' });
 
-      // The service does not set tenantId/role itself — the User schema defaults them
-      // (DEFAULT_TENANT_ID / UserRole.Member). Asserting the create() call omits both fields
-      // proves the service relies on the schema default rather than hard-coding it here too.
-      const calls = mockUserModel.create.mock.calls as Array<[Record<string, unknown>]>;
-      expect(calls[0][0]).not.toHaveProperty('tenantId');
-      expect(calls[0][0]).not.toHaveProperty('role');
-      expect(result.role).toBe(UserRole.Member);
+      const tenantCalls = mockTenantModel.create.mock.calls as Array<
+        [{ tenantId: string; name: string }]
+      >;
+      const userCalls = mockUserModel.create.mock.calls as Array<[Record<string, unknown>]>;
+      const createdTenant = tenantCalls[0][0];
+      const createdUser = userCalls[0][0];
+
+      expect(createdTenant.name).toBe('user@example.com');
+      expect(createdUser.tenantId).toBe(createdTenant.tenantId);
+      expect(createdUser.role).toBe(UserRole.Admin);
+      expect(result.role).toBe(UserRole.Admin);
+    });
+
+    it('should generate a different tenantId for each registration', async () => {
+      mockUserModel.findOne.mockResolvedValue(null);
+      mockTenantModel.create.mockImplementation((doc: { tenantId: string; name: string }) =>
+        Promise.resolve(buildMockTenant(doc)),
+      );
+      mockUserModel.create.mockImplementation((doc: Record<string, unknown>) =>
+        Promise.resolve(buildMockUser(doc)),
+      );
+
+      await service.register({ email: 'first@example.com', password: 'password123' });
+      await service.register({ email: 'second@example.com', password: 'password123' });
+
+      const tenantCalls = mockTenantModel.create.mock.calls as Array<
+        [{ tenantId: string; name: string }]
+      >;
+      expect(tenantCalls[0][0].tenantId).not.toBe(tenantCalls[1][0].tenantId);
+    });
+
+    it('should delete the newly created tenant and rethrow when user creation fails', async () => {
+      mockUserModel.findOne.mockResolvedValueOnce(null);
+      mockTenantModel.create.mockImplementationOnce((doc: { tenantId: string; name: string }) =>
+        Promise.resolve(buildMockTenant(doc)),
+      );
+      const userCreationError = new Error('user creation failed');
+      mockUserModel.create.mockRejectedValueOnce(userCreationError);
+      mockTenantModel.deleteOne.mockResolvedValueOnce(undefined);
+
+      const error = await service
+        .register({ email: 'user@example.com', password: 'password123' })
+        .catch((e: unknown) => e);
+
+      expect(error).toBe(userCreationError);
+      const tenantCalls = mockTenantModel.create.mock.calls as Array<
+        [{ tenantId: string; name: string }]
+      >;
+      const createdTenantId = tenantCalls[0][0].tenantId;
+      expect(mockTenantModel.deleteOne).toHaveBeenCalledWith({ tenantId: createdTenantId });
     });
 
     it('should throw EmailAlreadyRegisteredException with 409 Conflict on a duplicate email', async () => {
@@ -128,6 +192,7 @@ describe('AuthService', () => {
       expect(error).toBeInstanceOf(EmailAlreadyRegisteredException);
       expect((error as EmailAlreadyRegisteredException).getStatus()).toBe(HttpStatus.CONFLICT);
       expect(mockUserModel.create).not.toHaveBeenCalled();
+      expect(mockTenantModel.create).not.toHaveBeenCalled();
     });
   });
 

@@ -28,9 +28,21 @@ export const getMockConfig = (): EnvironmentConfig => ({
     limit: 100,
   },
 
+  model: {
+    provider: 'anthropic',
+  },
+
   anthropic: {
     apiKey: undefined,
     model: 'claude-sonnet-5',
+    timeoutMs: 60000,
+  },
+
+  openai: {
+    apiKey: undefined,
+    model: 'gpt-5.1',
+    baseUrl: 'https://api.openai.com/v1',
+    timeoutMs: 60000,
   },
 
   voyage: {
@@ -40,6 +52,7 @@ export const getMockConfig = (): EnvironmentConfig => ({
     requestsPerMinute: 3,
     maxRetries: 5,
     maxRetryWaitMs: 300000,
+    requestTimeoutMs: 30000,
   },
 
   temporal: {
@@ -51,11 +64,19 @@ export const getMockConfig = (): EnvironmentConfig => ({
   retrieval: {
     fusion: 'server',
     limit: 12,
+    strategy: 'single-shot',
+  },
+
+  agenticRetrieval: {
+    maxIterations: 8,
+    maxCostUsd: 1,
   },
 
   telemetry: {
     otlpEndpoint: 'http://localhost:4318',
     captureModelContent: false,
+    serviceName: undefined,
+    metricsPort: 9464,
   },
 
   sources: {
@@ -65,5 +86,14 @@ export const getMockConfig = (): EnvironmentConfig => ({
 
   extraction: {
     chunkConcurrency: 2,
+  },
+
+  spend: {
+    dailyLimitUsd: 50,
+  },
+
+  mcp: {
+    port: 3002,
+    rateLimitPerMinute: 60,
   },
 });

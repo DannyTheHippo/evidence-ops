@@ -3,10 +3,10 @@ import { InjectModel } from '@nestjs/mongoose';
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Model, Types } from 'mongoose';
-import { DEFAULT_TENANT_ID } from '../../../database/constants/tenant.constant';
 import {
   AuditEvent,
   AuditEventDocument,
+  type AuditEventOrigin,
 } from '../../../database/schemas/audit/audit-event/audit-event.schema';
 import { AlsContext } from '../../types/als-context.type';
 import { AppLogger } from '../logger/logger.service';
@@ -15,7 +15,16 @@ export interface RecordAuditEventInput {
   readonly action: string;
   readonly actorId: string;
   readonly subject: { readonly entityType: string; readonly entityId: string };
-  readonly tenantId?: string;
+  readonly tenantId: string;
+  /** Which surface the action came through, when the caller knows it first-hand. Omitted by every
+   * caller that is not the surface itself: `record` then reads `AlsContext.origin`, so a shared
+   * service called from inside an MCP `tools/call` scope labels its row `'mcp'` without knowing
+   * anything about MCP, and falls back to `'api'` outside one. */
+  readonly origin?: AuditEventOrigin;
+  /** MCP `tools/call` rows only — see `AuditEvent.toolName`/`AuditEvent.refusalReason` for what
+   * each holds and what deliberately never reaches them. */
+  readonly toolName?: string;
+  readonly refusalReason?: string;
 }
 
 /**
@@ -40,7 +49,8 @@ export class AuditService {
   }
 
   async record(input: RecordAuditEventInput): Promise<void> {
-    const correlationId = this.als.getStore()?.['correlation-id'] ?? randomUUID();
+    const store = this.als.getStore();
+    const correlationId = store?.['correlation-id'] ?? randomUUID();
 
     const event = await this.auditEventModel.create({
       actor: new Types.ObjectId(input.actorId),
@@ -51,7 +61,10 @@ export class AuditService {
       },
       timestamp: new Date(),
       correlationId,
-      tenantId: input.tenantId ?? DEFAULT_TENANT_ID,
+      origin: input.origin ?? store?.origin ?? 'api',
+      toolName: input.toolName,
+      refusalReason: input.refusalReason,
+      tenantId: input.tenantId,
     });
 
     this.logger.debug(

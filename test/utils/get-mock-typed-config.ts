@@ -19,12 +19,17 @@ export const getMockTypedConfig = (
     mongo: config.mongo,
     auth: config.auth,
     throttle: config.throttle,
+    model: config.model,
     anthropic: config.anthropic,
+    openai: config.openai,
     voyage: config.voyage,
     temporal: config.temporal,
     retrieval: config.retrieval,
+    agenticRetrieval: config.agenticRetrieval,
     telemetry: config.telemetry,
     sources: config.sources,
     extraction: config.extraction,
+    spend: config.spend,
+    mcp: config.mcp,
   } as unknown as TypedConfigService;
 };

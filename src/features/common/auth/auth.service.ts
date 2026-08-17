@@ -3,7 +3,13 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
 import bcrypt from 'bcryptjs';
 import { Model } from 'mongoose';
+import { randomUUID } from 'node:crypto';
+import {
+  Tenant,
+  TenantDocument,
+} from '../../../database/schemas/administration/tenant/tenant.schema';
 import { User, UserDocument } from '../../../database/schemas/administration/user/user.schema';
+import { UserRole } from '../../../shared/enums/user-role.enum';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import { LoginRequestDto } from './dtos/request/login.request.dto';
@@ -27,6 +33,9 @@ export class AuthService {
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
 
+    @InjectModel(Tenant.name)
+    private readonly tenantModel: Model<TenantDocument>,
+
     private readonly jwtService: JwtService,
     private readonly auditService: AuditService,
     private readonly logger: AppLogger,
@@ -43,9 +52,25 @@ export class AuthService {
     }
 
     const password = await bcrypt.hash(dto.password, PASSWORD_HASH_COST);
-    const user = await this.userModel.create({ email, password });
 
-    this.logger.debug(`User registered with the _id '${user._id.toString()}'`);
+    // Registration provisions a brand-new tenant per registrant, never joins an existing one — the
+    // tenantId is opaque and generated here, not supplied by the caller.
+    const tenantId = randomUUID();
+    const tenant = await this.tenantModel.create({ tenantId, name: email });
+
+    let user: UserDocument;
+    try {
+      user = await this.userModel.create({ email, password, tenantId, role: UserRole.Admin });
+    } catch (error) {
+      // The registrant is the sole member of a tenant that failed to gain a user — remove the
+      // orphaned registry row rather than leave a tenant with nobody in it.
+      await this.tenantModel.deleteOne({ tenantId });
+      throw error;
+    }
+
+    this.logger.debug(
+      `User registered with the _id '${user._id.toString()}' as admin of tenant '${tenant.tenantId}'`,
+    );
 
     return this.toMeDto(user);
   }

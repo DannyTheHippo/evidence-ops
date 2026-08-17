@@ -5,7 +5,6 @@ import path from 'node:path';
 import type { Model } from 'mongoose';
 import { Types } from 'mongoose';
 import request from 'supertest';
-import { DEFAULT_TENANT_ID } from '../../src/database/constants/tenant.constant';
 import {
   Approval,
   ApprovalDocument,
@@ -22,9 +21,8 @@ import {
   WorkflowRun,
   WorkflowRunDocument,
 } from '../../src/database/schemas/workflow/workflow-run/workflow-run.schema';
-import { User, UserDocument } from '../../src/database/schemas/administration/user/user.schema';
-import { UserRole } from '../../src/shared/enums/user-role.enum';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
+import { registerTestUser } from '../utils/register-test-user';
 import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts';
 
 const FIXTURES = path.join(__dirname, '../../fixtures/data-room');
@@ -42,13 +40,27 @@ interface AnswerBody {
   runStatus: string;
 }
 
+interface WorkflowRunBody {
+  id: string;
+}
+
+interface ConflictBody {
+  id: string;
+}
+
+interface ApprovalBody {
+  id: string;
+}
+
 /**
  * Proves the multi-tenancy milestone's acceptance criterion: a second tenant's data is
- * unreachable BY QUERY, not merely unrendered. Every cross-tenant read below asserts 404, never
- * 403 — a cross-tenant id must be indistinguishable from a nonexistent one, or the endpoint
- * becomes an existence oracle (mirrors the reasoning already documented on
- * `approvals.e2e-spec.ts`'s "belongs to a different tenant" case, extended here across every
- * tenant-scoped resource in one pass).
+ * unreachable BY QUERY, not merely unrendered. For every tenant-scoped resource this file covers,
+ * a positive assertion (tenant A reads its own row) sits next to the negative one (tenant B is
+ * denied that same row) — a denial alone cannot distinguish "correctly isolated" from
+ * "unreachable by everyone". Every cross-tenant read asserts 404, never 403 — a cross-tenant id
+ * must be indistinguishable from a nonexistent one, or the endpoint becomes an existence oracle
+ * (mirrors the reasoning already documented on `approvals.e2e-spec.ts`'s "belongs to a different
+ * tenant" case, extended here across every tenant-scoped resource in one pass).
  */
 describe('Tenant isolation (e2e)', () => {
   let app: INestApplication;
@@ -57,12 +69,12 @@ describe('Tenant isolation (e2e)', () => {
   let comps: Buffer;
   let leaseSummary: Buffer;
 
-  let userModel: Model<UserDocument>;
   let conflictModel: Model<ConflictDocument>;
   let approvalModel: Model<ApprovalDocument>;
   let workflowRunModel: Model<WorkflowRunDocument>;
   let extractedFactModel: Model<ExtractedFactDocument>;
 
+  let tenantIdA: string;
   let documentIdA: string;
   let answerIdA: string;
   let conflictIdA: string;
@@ -76,7 +88,6 @@ describe('Tenant isolation (e2e)', () => {
     comps = await readFile(path.join(FIXTURES, 'comps.xlsx'));
     leaseSummary = await readFile(path.join(FIXTURES, 'lease-summary.docx'));
 
-    userModel = app.get<Model<UserDocument>>(getModelToken(User.name));
     conflictModel = app.get<Model<ConflictDocument>>(getModelToken(Conflict.name));
     approvalModel = app.get<Model<ApprovalDocument>>(getModelToken(Approval.name));
     workflowRunModel = app.get<Model<WorkflowRunDocument>>(getModelToken(WorkflowRun.name));
@@ -90,24 +101,18 @@ describe('Tenant isolation (e2e)', () => {
       email: 'tenant-isolation-b@example.com',
       password: 'correct-horse-battery',
     };
-    await request(getTestServer(app)).post('/api/v1/auth/register').send(credentialsA);
-    await request(getTestServer(app)).post('/api/v1/auth/register').send(credentialsB);
+    // `registerTestUser` provisions a brand-new tenant per registrant and makes the registrant
+    // that tenant's admin (both are needed here since POST /approvals/:id/decision is
+    // admin-gated). B's `tenantId` option re-points the persisted row at the same literal tenant
+    // id every other cross-tenant e2e in this repo uses, so B stays genuinely distinct from A's
+    // real, generated tenant without inventing a second convention for "the other tenant".
+    const userA = await registerTestUser(app, credentialsA);
+    const userB = await registerTestUser(app, credentialsB, { tenantId: OTHER_TENANT_ID });
+    tokenA = userA.token;
+    tokenB = userB.token;
+    tenantIdA = userA.tenantId;
 
-    // Flip B onto its own tenant and both users to admin (POST /approvals/:id/decision is
-    // admin-gated) directly on the row, then re-login both — tenant and role travel in the JWT,
-    // so mutating the row without re-issuing the token would leave the existing tokens unchanged.
-    await userModel.updateOne({ email: credentialsA.email }, { role: UserRole.Admin });
-    await userModel.updateOne(
-      { email: credentialsB.email },
-      { role: UserRole.Admin, tenantId: OTHER_TENANT_ID },
-    );
-
-    const loginA = await request(getTestServer(app)).post('/api/v1/auth/login').send(credentialsA);
-    tokenA = (loginA.body as { accessToken: string }).accessToken;
-    const loginB = await request(getTestServer(app)).post('/api/v1/auth/login').send(credentialsB);
-    tokenB = (loginB.body as { accessToken: string }).accessToken;
-
-    // Seed tenant-`default` data as user A.
+    // Seed user A's real tenant with data.
     const uploaded = await request(getTestServer(app))
       .post('/api/v1/documents')
       .set('Authorization', `Bearer ${tokenA}`)
@@ -135,7 +140,7 @@ describe('Tenant isolation (e2e)', () => {
       chunkId: 'chunk-xlsx',
       documentVersionId: new Types.ObjectId(),
       locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
-      tenantId: DEFAULT_TENANT_ID,
+      tenantId: tenantIdA,
     });
     const factHigh = await extractedFactModel.create({
       factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
@@ -151,7 +156,7 @@ describe('Tenant isolation (e2e)', () => {
       chunkId: 'chunk-prose',
       documentVersionId: new Types.ObjectId(),
       locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
-      tenantId: DEFAULT_TENANT_ID,
+      tenantId: tenantIdA,
     });
     const conflict = await conflictModel.create({
       factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
@@ -163,7 +168,7 @@ describe('Tenant isolation (e2e)', () => {
       factIds: [factLow._id, factHigh._id],
       magnitude: 0.0085,
       status: 'open',
-      tenantId: DEFAULT_TENANT_ID,
+      tenantId: tenantIdA,
     });
     conflictIdA = conflict._id.toString();
 
@@ -173,7 +178,7 @@ describe('Tenant isolation (e2e)', () => {
       summary: 'Resolve Northgate Business Park cap_rate (2025-03).',
       requestedBy: credentialsA.email,
       state: 'pending',
-      tenantId: DEFAULT_TENANT_ID,
+      tenantId: tenantIdA,
     });
     approvalIdA = approval._id.toString();
 
@@ -181,13 +186,94 @@ describe('Tenant isolation (e2e)', () => {
     const workflowRun = await workflowRunModel.create({
       workflowId: workflowIdA,
       status: 'running',
-      tenantId: DEFAULT_TENANT_ID,
+      tenantId: tenantIdA,
     });
     workflowRunIdA = workflowRun._id.toString();
   });
 
   afterAll(async () => {
     await closeTestApp(app);
+  });
+
+  it("provisions a newly registered user's own tenant, never DEFAULT_TENANT_ID", () => {
+    expect(tenantIdA).not.toBe('default');
+  });
+
+  // Headline claim of the tenancy change: public registration provisions a fresh, empty tenant
+  // rather than landing a stranger in the shared demo tenant. Registers a brand-new third user
+  // against a database that already holds tenant A's seeded data (documents, answers, conflicts,
+  // approvals, workflow runs) and asserts every evidence-bearing endpoint reports nothing for them.
+  describe('a freshly registered user with no data of their own', () => {
+    let tokenC: string;
+
+    beforeAll(async () => {
+      const userC = await registerTestUser(app, {
+        email: 'tenant-isolation-c@example.com',
+        password: 'correct-horse-battery',
+      });
+      tokenC = userC.token;
+    });
+
+    it('sees an empty list from GET /documents', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/documents')
+        .set('Authorization', `Bearer ${tokenC}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ docs: [], count: 0 });
+    });
+
+    it("gets 404 for tenant A's document id", async () => {
+      const response = await request(getTestServer(app))
+        .get(`/api/v1/documents/${documentIdA}`)
+        .set('Authorization', `Bearer ${tokenC}`);
+
+      expect(response.status).toBe(404);
+    });
+
+    it("gets 404 for tenant A's answer id", async () => {
+      const response = await request(getTestServer(app))
+        .get(`/api/v1/answers/${answerIdA}`)
+        .set('Authorization', `Bearer ${tokenC}`);
+
+      expect(response.status).toBe(404);
+    });
+
+    it('sees an empty list from GET /conflicts', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/conflicts')
+        .set('Authorization', `Bearer ${tokenC}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ docs: [], count: 0 });
+    });
+
+    it('sees an empty list from GET /approvals', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/approvals')
+        .set('Authorization', `Bearer ${tokenC}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ docs: [], count: 0 });
+    });
+
+    it("gets 404 for tenant A's workflow run id", async () => {
+      const response = await request(getTestServer(app))
+        .get(`/api/v1/workflow-runs/${workflowRunIdA}`)
+        .set('Authorization', `Bearer ${tokenC}`);
+
+      expect(response.status).toBe(404);
+    });
+
+    it("sees an empty list from GET /workflow-runs?workflowId=<A's workflowId>", async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/workflow-runs')
+        .query({ workflowId: workflowIdA })
+        .set('Authorization', `Bearer ${tokenC}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ docs: [], count: 0 });
+    });
   });
 
   it("returns an empty list for tenant B's GET /documents", async () => {
@@ -215,12 +301,32 @@ describe('Tenant isolation (e2e)', () => {
     expect(response.status).toBe(404);
   });
 
+  it("returns tenant A's own workflow run for tenant A's GET /workflow-runs/:idFromA", async () => {
+    const response = await request(getTestServer(app))
+      .get(`/api/v1/workflow-runs/${workflowRunIdA}`)
+      .set('Authorization', `Bearer ${tokenA}`);
+
+    expect(response.status).toBe(200);
+    expect((response.body as WorkflowRunBody).id).toBe(workflowRunIdA);
+  });
+
   it("returns 404, not 403, for tenant B's GET /workflow-runs/:idFromA", async () => {
     const response = await request(getTestServer(app))
       .get(`/api/v1/workflow-runs/${workflowRunIdA}`)
       .set('Authorization', `Bearer ${tokenB}`);
 
     expect(response.status).toBe(404);
+  });
+
+  it("returns tenant A's own run for tenant A's GET /workflow-runs?workflowId=<A's workflowId>", async () => {
+    const response = await request(getTestServer(app))
+      .get('/api/v1/workflow-runs')
+      .query({ workflowId: workflowIdA })
+      .set('Authorization', `Bearer ${tokenA}`);
+    const body = response.body as { docs: WorkflowRunBody[]; count: number };
+
+    expect(response.status).toBe(200);
+    expect(body.docs.some((doc) => doc.id === workflowRunIdA)).toBe(true);
   });
 
   it("returns an empty list for tenant B's GET /workflow-runs?workflowId=<A's workflowId>", async () => {
@@ -233,6 +339,16 @@ describe('Tenant isolation (e2e)', () => {
     expect(response.body).toEqual({ docs: [], count: 0 });
   });
 
+  it("returns tenant A's own conflict for tenant A's GET /conflicts", async () => {
+    const response = await request(getTestServer(app))
+      .get('/api/v1/conflicts')
+      .set('Authorization', `Bearer ${tokenA}`);
+    const body = response.body as { docs: ConflictBody[]; count: number };
+
+    expect(response.status).toBe(200);
+    expect(body.docs.some((doc) => doc.id === conflictIdA)).toBe(true);
+  });
+
   it("returns an empty list for tenant B's GET /conflicts", async () => {
     const response = await request(getTestServer(app))
       .get('/api/v1/conflicts')
@@ -240,6 +356,16 @@ describe('Tenant isolation (e2e)', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ docs: [], count: 0 });
+  });
+
+  it("returns tenant A's own approval for tenant A's GET /approvals", async () => {
+    const response = await request(getTestServer(app))
+      .get('/api/v1/approvals')
+      .set('Authorization', `Bearer ${tokenA}`);
+    const body = response.body as { docs: ApprovalBody[]; count: number };
+
+    expect(response.status).toBe(200);
+    expect(body.docs.some((doc) => doc.id === approvalIdA)).toBe(true);
   });
 
   it("returns an empty list for tenant B's GET /approvals", async () => {
@@ -293,7 +419,7 @@ describe('Tenant isolation (e2e)', () => {
       expect(body.docs.some((doc) => doc.id === documentIdB)).toBe(true);
     });
 
-    it('is invisible to tenant default (user A)', async () => {
+    it('is invisible to tenant A', async () => {
       const list = await request(getTestServer(app))
         .get('/api/v1/documents')
         .set('Authorization', `Bearer ${tokenA}`);

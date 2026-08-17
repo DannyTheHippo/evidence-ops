@@ -50,12 +50,60 @@ describe('AuditService', () => {
         action: 'qa.question.started',
         subject: { entityType: 'Answer', entityId: new Types.ObjectId(entityId) },
         correlationId: 'test-correlation-id',
+        // A caller that names no origin, in a scope that carries none, is the interactive path.
+        origin: 'api',
         tenantId: 'acme',
       }),
     );
   });
 
-  it('should default the correlation id and tenantId when the ALS store has neither', async () => {
+  // The MCP surface labels its rows by opening an ALS scope carrying `origin`, so a shared service
+  // called from inside a `tools/call` — this is `qa.answer.viewed`'s exact path — records the call
+  // as MCP-originated without taking an origin argument of its own.
+  it('should take the origin from the ALS store when the caller passes none', async () => {
+    const actorId = new Types.ObjectId().toString();
+    const entityId = new Types.ObjectId().toString();
+    mockAls.getStore.mockReturnValueOnce({ 'correlation-id': 'mcp-correlation-id', origin: 'mcp' });
+    mockAuditEventModel.create.mockResolvedValueOnce({ _id: new Types.ObjectId() });
+
+    await service.record({
+      action: 'qa.answer.viewed',
+      actorId,
+      subject: { entityType: 'Answer', entityId },
+      tenantId: 'acme',
+    });
+
+    expect(mockAuditEventModel.create).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'qa.answer.viewed', origin: 'mcp' }),
+    );
+  });
+
+  it('should prefer an explicit origin over the ALS store and carry the MCP tool-call fields', async () => {
+    const actorId = new Types.ObjectId().toString();
+    mockAls.getStore.mockReturnValueOnce({ 'correlation-id': 'mcp-correlation-id', origin: 'api' });
+    mockAuditEventModel.create.mockResolvedValueOnce({ _id: new Types.ObjectId() });
+
+    await service.record({
+      action: 'mcp.tool_call.refused',
+      actorId,
+      subject: { entityType: 'User', entityId: actorId },
+      tenantId: 'acme',
+      origin: 'mcp',
+      toolName: 'search_evidence',
+      refusalReason: 'authz-denied',
+    });
+
+    expect(mockAuditEventModel.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'mcp.tool_call.refused',
+        origin: 'mcp',
+        toolName: 'search_evidence',
+        refusalReason: 'authz-denied',
+      }),
+    );
+  });
+
+  it('should default the correlation id when the ALS store is empty', async () => {
     const actorId = new Types.ObjectId().toString();
     const entityId = new Types.ObjectId().toString();
     mockAls.getStore.mockReturnValueOnce(undefined);
@@ -65,15 +113,18 @@ describe('AuditService', () => {
       action: 'conflicts.listed',
       actorId,
       subject: { entityType: 'User', entityId },
+      tenantId: 'acme',
     });
 
     const createMock = mockAuditEventModel.create as jest.Mock<
       Promise<unknown>,
-      [{ correlationId: string; tenantId: string }]
+      [{ correlationId: string; tenantId: string; origin: string }]
     >;
     const call = createMock.mock.calls[0][0];
     expect(typeof call.correlationId).toBe('string');
     expect(call.correlationId).not.toHaveLength(0);
-    expect(call.tenantId).toBe('default');
+    expect(call.tenantId).toBe('acme');
+    // An absent store resolves the origin the same way a store with no origin does.
+    expect(call.origin).toBe('api');
   });
 });

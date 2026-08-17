@@ -25,7 +25,17 @@ import type {
 const ingestActivities = proxyActivities<Pick<Activities, 'ingestDocumentVersion'>>({
   startToCloseTimeout: '2 minutes',
   scheduleToCloseTimeout: '10 minutes',
-  retry: { maximumAttempts: 3 },
+  retry: {
+    maximumAttempts: 3,
+    // A missing tenantId never appears by retrying (`requireTenantId` in `activities.ts`), and
+    // Voyage's own errors here are deterministic for a given input: no configured API key and a
+    // malformed embeddings response shape both recur unchanged on the next attempt.
+    nonRetryableErrorTypes: [
+      'MissingTenantId',
+      'VoyageApiKeyMissingError',
+      'VoyageInvalidResponseError',
+    ],
+  },
 });
 
 // Fact extraction is paid and non-idempotent for its prose path: it calls a model once per
@@ -39,7 +49,22 @@ const ingestActivities = proxyActivities<Pick<Activities, 'ingestDocumentVersion
 const factsActivities = proxyActivities<Pick<Activities, 'extractFacts'>>({
   startToCloseTimeout: '5 minutes',
   scheduleToCloseTimeout: '10 minutes',
-  retry: { maximumAttempts: 2 },
+  retry: {
+    maximumAttempts: 2,
+    // A missing tenantId never appears by retrying (`requireTenantId` in `activities.ts`); the
+    // spend ceiling and the pricing table are facts a retry cannot change mid-workflow, and a
+    // schema-invalid model response recurs for the same prose chunk. A tenant's daily spend
+    // ceiling does not rise mid-workflow either, and a request with no tenant is refused
+    // identically on every retry, so both spend-guard failures join the same non-retryable set.
+    nonRetryableErrorTypes: [
+      'MissingTenantId',
+      'ModelBudgetExceededError',
+      'UnknownModelPricingError',
+      'ModelSchemaValidationError',
+      'TenantSpendLimitExceededError',
+      'ModelRequestMissingTenantError',
+    ],
+  },
 });
 
 // Pure Mongo read-then-insert, idempotent by open-conflict check (`ConflictsService
@@ -48,7 +73,11 @@ const factsActivities = proxyActivities<Pick<Activities, 'extractFacts'>>({
 const conflictsActivities = proxyActivities<Pick<Activities, 'scanForConflicts'>>({
   startToCloseTimeout: '10 seconds',
   scheduleToCloseTimeout: '1 minute',
-  retry: { maximumAttempts: 5 },
+  retry: {
+    maximumAttempts: 5,
+    // A missing tenantId never appears by retrying (`requireTenantId` in `activities.ts`).
+    nonRetryableErrorTypes: ['MissingTenantId'],
+  },
 });
 
 // `requestIngestApproval` is `approvalModel.create` under the hood
@@ -60,7 +89,11 @@ const conflictsActivities = proxyActivities<Pick<Activities, 'scanForConflicts'>
 const approvalRequestActivities = proxyActivities<Pick<Activities, 'requestIngestApproval'>>({
   startToCloseTimeout: '10 seconds',
   scheduleToCloseTimeout: '30 seconds',
-  retry: { maximumAttempts: 2 },
+  retry: {
+    maximumAttempts: 2,
+    // A missing tenantId never appears by retrying (`requireTenantId` in `activities.ts`).
+    nonRetryableErrorTypes: ['MissingTenantId'],
+  },
 });
 
 // Pure Mongo read (`MongoApprovalChannel.getDecision`), idempotent and side-effect-free, so this
@@ -68,7 +101,11 @@ const approvalRequestActivities = proxyActivities<Pick<Activities, 'requestInges
 const approvalDecisionActivities = proxyActivities<Pick<Activities, 'getApprovalDecision'>>({
   startToCloseTimeout: '10 seconds',
   scheduleToCloseTimeout: '1 minute',
-  retry: { maximumAttempts: 5 },
+  retry: {
+    maximumAttempts: 5,
+    // A missing tenantId never appears by retrying (`requireTenantId` in `activities.ts`).
+    nonRetryableErrorTypes: ['MissingTenantId'],
+  },
 });
 
 /**
@@ -102,10 +139,10 @@ const APPROVAL_TIMEOUT = '24 hours';
  *  `src/database/**`/`src/features/**`, so threading them stays inside the determinism fence. */
 async function runIngestPipeline(
   documentVersionId: string,
-  tenantId: string | undefined,
+  tenantId: string,
 ): Promise<IngestDocumentVersionResult> {
-  const result = await ingestActivities.ingestDocumentVersion(documentVersionId);
-  const factsResult = await factsActivities.extractFacts(documentVersionId);
+  const result = await ingestActivities.ingestDocumentVersion(documentVersionId, tenantId);
+  const factsResult = await factsActivities.extractFacts(documentVersionId, tenantId);
   await conflictsActivities.scanForConflicts(tenantId, factsResult.factKeys);
   return result;
 }

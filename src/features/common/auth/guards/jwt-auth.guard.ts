@@ -8,7 +8,9 @@ import {
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { isProdLike } from '../../../../config/environment/environment.config';
 import { TypedConfigService } from '../../../../config/environment/typed-config.service';
+import { DEFAULT_TENANT_ID } from '../../../../database/constants/tenant.constant';
 import { IS_PUBLIC_ROUTE } from '../../../../shared/decorators/public-route.decorator';
 import { AlsContext } from '../../../../shared/types/als-context.type';
 import { AuthenticatedRequest } from '../../../../shared/types/authenticated-request.type';
@@ -60,6 +62,18 @@ export class JwtAuthGuard implements CanActivate {
       // which is the correct cost versus carrying a dual-shape payload type forever or
       // defaulting a missing tenant — defaulting a security claim is how isolation bugs are born.
       if (!payload.tenantId || !payload.role) {
+        throw new UnauthorizedException('Invalid or expired token');
+      }
+
+      // Fail closed on the seeded demo tenant in a prod-like environment: `DEFAULT_TENANT_ID` is a
+      // guessable, shared id, and any token still carrying it — a stale JWT, a seeded dev account, a
+      // hand-crafted one — would read the demo tenant's evidence. JWT_EXPIRES_IN is 7 days with no
+      // refresh or revocation, so such a token stays structurally valid for up to a week after a
+      // deploy. The rejection reuses the same generic message as every other failure in this guard
+      // so a caller cannot distinguish "default tenant rejected" from "bad token" and use that as an
+      // oracle for which tenant id is the demo one. Below prod-like, `'default'` is the valid seeded
+      // dev tenant and must keep working.
+      if (isProdLike(this.config.app.env) && payload.tenantId === DEFAULT_TENANT_ID) {
         throw new UnauthorizedException('Invalid or expired token');
       }
 

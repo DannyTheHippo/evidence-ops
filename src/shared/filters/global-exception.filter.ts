@@ -7,6 +7,7 @@ import {
   Injectable,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import { isProdLike } from '../../config/environment/environment.config';
 import { TypedConfigService } from '../../config/environment/typed-config.service';
 
 @Catch()
@@ -24,8 +25,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const body: Record<string, unknown> =
       typeof message === 'string' ? { status, message } : { ...message };
 
-    const isProdLike = ['production', 'staging'].includes(appConfig.env);
-    if (!isProdLike && exception instanceof Error) {
+    if (!isProdLike(appConfig.env) && exception instanceof Error) {
       body.stack = exception.stack;
 
       if (exception.cause instanceof Error) {

@@ -157,10 +157,12 @@ describe('JwtAuthGuard', () => {
   // predicate the controller uses to set the cookie.
   describe('single-name resolution', () => {
     it('should reject the plain eo_session cookie and accept __Host-eo_session in a prod-like environment', async () => {
+      // Non-default tenant: production also rejects the default tenant (see "default tenant
+      // rejection" below), and this test is about cookie-name resolution, not that check.
       const payload: JwtPayload = {
         sub: 'user-id',
         email: 'user@example.com',
-        tenantId: 'default',
+        tenantId: 'tenant-b',
         role: UserRole.Admin,
       };
       const { guard: prodGuard } = await buildGuard(NodeEnv.PRODUCTION);
@@ -196,6 +198,65 @@ describe('JwtAuthGuard', () => {
       const { context: plainContext } = buildContext({ cookie: 'eo_session=cookie-token' });
       await expect(devGuard.canActivate(plainContext)).resolves.toBe(true);
       expect(mockJwtService.verifyAsync).toHaveBeenCalledWith('cookie-token');
+    });
+  });
+
+  // Fail-closed regression: `DEFAULT_TENANT_ID` is the seeded demo/dev tenant. A token still
+  // carrying it in a prod-like environment — stale JWT, seeded dev account, hand-crafted — must
+  // not authenticate, and the rejection must be indistinguishable from any other bad token.
+  describe('default tenant rejection', () => {
+    const defaultTenantPayload: JwtPayload = {
+      sub: 'user-id',
+      email: 'user@example.com',
+      tenantId: 'default',
+      role: UserRole.Admin,
+    };
+
+    it('should throw UnauthorizedException for the default tenant under production', async () => {
+      mockJwtService.verifyAsync.mockResolvedValueOnce(defaultTenantPayload);
+      const { guard: prodGuard } = await buildGuard(NodeEnv.PRODUCTION);
+      const { context } = buildContext({ authorization: 'Bearer default-tenant-token' });
+
+      await expect(prodGuard.canActivate(context)).rejects.toThrow(
+        new UnauthorizedException('Invalid or expired token'),
+      );
+    });
+
+    it('should throw UnauthorizedException for the default tenant under staging', async () => {
+      mockJwtService.verifyAsync.mockResolvedValueOnce(defaultTenantPayload);
+      const { guard: stagingGuard } = await buildGuard(NodeEnv.STAGING);
+      const { context } = buildContext({ authorization: 'Bearer default-tenant-token' });
+
+      await expect(stagingGuard.canActivate(context)).rejects.toThrow(
+        new UnauthorizedException('Invalid or expired token'),
+      );
+    });
+
+    it('should accept the default tenant under a non-prod-like environment', async () => {
+      mockJwtService.verifyAsync.mockResolvedValueOnce(defaultTenantPayload);
+      const { context } = buildContext({ authorization: 'Bearer default-tenant-token' });
+
+      await expect(guard.canActivate(context)).resolves.toBe(true);
+    });
+
+    it('should accept a non-default tenant under production and staging', async () => {
+      const nonDefaultPayload: JwtPayload = {
+        sub: 'user-id',
+        email: 'user@example.com',
+        tenantId: 'tenant-b',
+        role: UserRole.Admin,
+      };
+      const { guard: prodGuard } = await buildGuard(NodeEnv.PRODUCTION);
+      mockJwtService.verifyAsync.mockResolvedValueOnce(nonDefaultPayload);
+      const { context: prodContext } = buildContext({ authorization: 'Bearer non-default-token' });
+      await expect(prodGuard.canActivate(prodContext)).resolves.toBe(true);
+
+      const { guard: stagingGuard } = await buildGuard(NodeEnv.STAGING);
+      mockJwtService.verifyAsync.mockResolvedValueOnce(nonDefaultPayload);
+      const { context: stagingContext } = buildContext({
+        authorization: 'Bearer non-default-token',
+      });
+      await expect(stagingGuard.canActivate(stagingContext)).resolves.toBe(true);
     });
   });
 

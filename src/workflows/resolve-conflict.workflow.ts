@@ -80,7 +80,9 @@ const APPROVAL_TIMEOUT = '24 hours';
  *
  * `winningFactId` is not chosen here — see `ResolveConflictWorkflowInput`'s own doc comment
  * (`./types.ts`) for why it travels in on `input` instead. This function's only job is gating that
- * proposal behind a human, never inventing or second-guessing it.
+ * proposal behind a human, never inventing or second-guessing it. `input.ruleFired`/
+ * `input.proposedWinnerFactId` travel the same way, into every `recordConflictResolution` call
+ * below unchanged — this function never recomputes them either.
  */
 export async function resolveConflict(
   input: ResolveConflictWorkflowInput,
@@ -105,12 +107,18 @@ export async function resolveConflict(
   }
 
   const losingValues = candidate.values.filter((value) => value.factId !== candidate.winningFactId);
+  // Names which surface proposed this resolution — `'api'` (the interactive REST path) or `'mcp'`
+  // (`request_resolution`) — directly in the text a reviewer reads, so an approval requested by an
+  // AI client holding a PAT is never indistinguishable from one a colleague proposed by hand.
+  const originNote =
+    input.requestedByOrigin === undefined ? '' : ` [requested via ${input.requestedByOrigin}]`;
   const summary =
     `Resolve ${candidate.factKey.entity} ${candidate.factKey.metric} (${candidate.factKey.period}) ` +
     `in favor of ${winner.value}${winner.unit} (source '${winner.sourceChunkId}') over ` +
     losingValues
       .map((value) => `${value.value}${value.unit} (source '${value.sourceChunkId}')`)
-      .join(', ');
+      .join(', ') +
+    originNote;
 
   const approval = await approvalRequestActivities.requestConflictApproval({
     action: 'resolve_conflict',
@@ -140,6 +148,8 @@ export async function resolveConflict(
       conflictId: input.conflictId,
       outcome: 'timed_out',
       tenantId: input.tenantId,
+      ruleFired: input.ruleFired,
+      proposedWinnerFactId: input.proposedWinnerFactId,
     });
     return { conflictId: input.conflictId, outcome: 'timed_out' };
   }
@@ -161,6 +171,8 @@ export async function resolveConflict(
       decidedBy: decision.decidedBy,
       reason: decision.reason,
       tenantId: input.tenantId,
+      ruleFired: input.ruleFired,
+      proposedWinnerFactId: input.proposedWinnerFactId,
     });
     return { conflictId: input.conflictId, outcome: 'rejected' };
   }
@@ -172,6 +184,8 @@ export async function resolveConflict(
     decidedBy: decision.decidedBy,
     reason: decision.reason,
     tenantId: input.tenantId,
+    ruleFired: input.ruleFired,
+    proposedWinnerFactId: input.proposedWinnerFactId,
   });
 
   return {

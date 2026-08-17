@@ -28,6 +28,8 @@ describe('validateEnvironment', () => {
       expect(result.auth.jwtSecret).toBe('dev-only-insecure-jwt-secret');
       expect(result.throttle.ttlMs).toBe(60000);
       expect(result.throttle.limit).toBe(100);
+      expect(result.mcp.port).toBe(3002);
+      expect(result.mcp.rateLimitPerMinute).toBe(60);
     });
   });
 
@@ -148,13 +150,18 @@ describe('validateEnvironment', () => {
           'mongo',
           'auth',
           'throttle',
+          'model',
           'anthropic',
+          'openai',
           'voyage',
           'temporal',
           'retrieval',
+          'agenticRetrieval',
           'telemetry',
           'sources',
           'extraction',
+          'spend',
+          'mcp',
         ].sort(),
       );
     });
@@ -164,17 +171,43 @@ describe('validateEnvironment', () => {
     it('applies defaults when the vars are unset', () => {
       const result = validateEnvironment({});
 
+      expect(result.model.provider).toBe('anthropic');
       expect(result.anthropic.apiKey).toBeUndefined();
       expect(result.anthropic.model).toBe('claude-sonnet-5');
+      expect(result.anthropic.timeoutMs).toBe(60000);
+      expect(result.openai.apiKey).toBeUndefined();
+      expect(result.openai.model).toBe('gpt-5');
+      expect(result.openai.baseUrl).toBe('https://api.openai.com/v1');
+      expect(result.openai.timeoutMs).toBe(60000);
       expect(result.voyage.apiKey).toBeUndefined();
       expect(result.voyage.model).toBe('voyage-4');
       expect(result.voyage.dimensions).toBe(1024);
+      expect(result.voyage.requestTimeoutMs).toBe(30000);
       expect(result.temporal.address).toBe('localhost:7233');
       expect(result.temporal.namespace).toBe('default');
       expect(result.temporal.taskQueue).toBe('evidence-ops');
       expect(result.retrieval.fusion).toBe('server');
       expect(result.retrieval.limit).toBe(12);
+      expect(result.retrieval.strategy).toBe('single-shot');
+      expect(result.agenticRetrieval.maxIterations).toBe(8);
+      expect(result.agenticRetrieval.maxCostUsd).toBe(1);
       expect(result.extraction.chunkConcurrency).toBe(2);
+      expect(result.spend.dailyLimitUsd).toBe(50);
+    });
+
+    it('coerces ANTHROPIC_TIMEOUT_MS, OPENAI_TIMEOUT_MS, VOYAGE_REQUEST_TIMEOUT_MS, and MODEL_SPEND_DAILY_LIMIT_USD from string to number', () => {
+      const result = validateEnvironment({
+        ...validEnv,
+        ANTHROPIC_TIMEOUT_MS: '45000',
+        OPENAI_TIMEOUT_MS: '20000',
+        VOYAGE_REQUEST_TIMEOUT_MS: '15000',
+        MODEL_SPEND_DAILY_LIMIT_USD: '100',
+      });
+
+      expect(result.anthropic.timeoutMs).toBe(45000);
+      expect(result.openai.timeoutMs).toBe(20000);
+      expect(result.voyage.requestTimeoutMs).toBe(15000);
+      expect(result.spend.dailyLimitUsd).toBe(100);
     });
 
     it('coerces RETRIEVAL_LIMIT and EXTRACTION_CHUNK_CONCURRENCY from string to number', () => {
@@ -188,19 +221,48 @@ describe('validateEnvironment', () => {
       expect(result.extraction.chunkConcurrency).toBe(4);
     });
 
+    it('coerces AGENTIC_MAX_ITERATIONS and AGENTIC_MAX_COST_USD from string to number', () => {
+      const result = validateEnvironment({
+        ...validEnv,
+        AGENTIC_MAX_ITERATIONS: '5',
+        AGENTIC_MAX_COST_USD: '2.5',
+      });
+
+      expect(result.agenticRetrieval.maxIterations).toBe(5);
+      expect(result.agenticRetrieval.maxCostUsd).toBe(2.5);
+    });
+
+    it('rejects an unknown RETRIEVAL_STRATEGY value', () => {
+      const env: Record<string, unknown> = { ...validEnv, RETRIEVAL_STRATEGY: 'multi-shot' };
+
+      expect(() => validateEnvironment(env)).toThrow(/Invalid environment configuration/);
+      expect(() => validateEnvironment(env)).toThrow(/RETRIEVAL_STRATEGY/);
+    });
+
+    it('accepts the agentic retrieval strategy', () => {
+      const result = validateEnvironment({ ...validEnv, RETRIEVAL_STRATEGY: 'agentic' });
+
+      expect(result.retrieval.strategy).toBe('agentic');
+    });
+
     it.each([
       ['empty', ''],
       ['whitespace-only', '   '],
-    ])('normalises %s ANTHROPIC_API_KEY/VOYAGE_API_KEY to undefined', (_label, blank) => {
-      const result = validateEnvironment({
-        ...validEnv,
-        ANTHROPIC_API_KEY: blank,
-        VOYAGE_API_KEY: blank,
-      });
+    ])(
+      'normalises %s ANTHROPIC_API_KEY/OPENAI_API_KEY/VOYAGE_API_KEY to undefined',
+      (_label, blank) => {
+        const result = validateEnvironment({
+          ...validEnv,
+          ANTHROPIC_API_KEY: blank,
+          OPENAI_API_KEY: blank,
+          VOYAGE_API_KEY: blank,
+        });
 
-      expect(result.anthropic.apiKey).toBeUndefined();
-      expect(result.voyage.apiKey).toBeUndefined();
-    });
+        expect(result.anthropic.apiKey).toBeUndefined();
+        expect(result.openai.apiKey).toBeUndefined();
+        expect(result.voyage.apiKey).toBeUndefined();
+      },
+    );
 
     it('accepts each legal Matryoshka dimension', () => {
       for (const dimensions of [256, 512, 1024, 2048]) {
@@ -228,6 +290,24 @@ describe('validateEnvironment', () => {
       const result = validateEnvironment({ ...validEnv, RETRIEVAL_FUSION: 'app' });
 
       expect(result.retrieval.fusion).toBe('app');
+    });
+
+    it('rejects an unknown MODEL_PROVIDER value', () => {
+      const env: Record<string, unknown> = { ...validEnv, MODEL_PROVIDER: 'azure' };
+
+      expect(() => validateEnvironment(env)).toThrow(/Invalid environment configuration/);
+      expect(() => validateEnvironment(env)).toThrow(/MODEL_PROVIDER/);
+    });
+
+    it('accepts MODEL_PROVIDER=openai and applies the OPENAI_BASE_URL override', () => {
+      const result = validateEnvironment({
+        ...validEnv,
+        MODEL_PROVIDER: 'openai',
+        OPENAI_BASE_URL: 'https://openai.internal.example/v1',
+      });
+
+      expect(result.model.provider).toBe('openai');
+      expect(result.openai.baseUrl).toBe('https://openai.internal.example/v1');
     });
   });
 });
