@@ -9,6 +9,7 @@ import {
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
+import Pager from '../components/ui/Pager';
 import Select from '../components/ui/Select';
 import Skeleton from '../components/ui/Skeleton';
 import Table, { TableHeaderCell } from '../components/ui/Table';
@@ -68,8 +69,6 @@ export default function ConflictsPage() {
     setAppliedStatus(status);
   }
 
-  const hasPrev = skip > 0;
-  const hasNext = skip + PAGE_SIZE < count;
   const hasFilter = appliedStatus !== '';
 
   // Resolves value document titles once there is something to resolve. Failure here must not
@@ -241,29 +240,7 @@ export default function ConflictsPage() {
         </section>
       )}
 
-      {conflicts && (
-        <div className="pager">
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            disabled={!hasPrev}
-            onClick={() => setSkip((s) => Math.max(0, s - PAGE_SIZE))}
-          >
-            Previous
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            disabled={!hasNext}
-            onClick={() => setSkip((s) => s + PAGE_SIZE)}
-          >
-            Next
-          </Button>
-          <span className="cell-sub">{count} total</span>
-        </div>
-      )}
+      {conflicts && <Pager count={count} skip={skip} pageSize={PAGE_SIZE} onSkipChange={setSkip} />}
     </div>
   );
 }

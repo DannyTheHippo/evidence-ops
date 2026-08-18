@@ -13,6 +13,7 @@ import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import Field from '../components/ui/Field';
+import Pager from '../components/ui/Pager';
 import Skeleton from '../components/ui/Skeleton';
 import Table, { RowLink, TableHeaderCell, TableRow } from '../components/ui/Table';
 import { notify } from '../components/ui/toast';
@@ -227,9 +228,6 @@ export default function SourcesPage({
     setSources((current) => current?.map((s) => (s.id === updated.id ? updated : s)) ?? current);
   }
 
-  const hasPrev = skip > 0;
-  const hasNext = skip + PAGE_SIZE < count;
-
   return (
     <div className="view view--flow">
       <div className="page-head">
@@ -337,29 +335,7 @@ export default function SourcesPage({
         </section>
       )}
 
-      {sources && (
-        <div className="pager">
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            disabled={!hasPrev}
-            onClick={() => setSkip((s) => Math.max(0, s - PAGE_SIZE))}
-          >
-            Previous
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            disabled={!hasNext}
-            onClick={() => setSkip((s) => s + PAGE_SIZE)}
-          >
-            Next
-          </Button>
-          <span className="cell-sub">{count} total</span>
-        </div>
-      )}
+      {sources && <Pager count={count} skip={skip} pageSize={PAGE_SIZE} onSkipChange={setSkip} />}
     </div>
   );
 }
