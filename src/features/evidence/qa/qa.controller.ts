@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Param,
   Post,
+  Query,
   Sse,
   UnauthorizedException,
   Version,
@@ -16,8 +17,10 @@ import { SkipThrottle } from '@nestjs/throttler';
 import type { Observable } from 'rxjs';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
 import { AuthenticatedRequest } from '../../../shared/types/authenticated-request.type';
+import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { qaApiExamples } from './api-examples/qa.api-examples';
+import { ListAnswersRequestDto } from './dtos/request/list-answers.request.dto';
 import { StartQuestionRequestDto } from './dtos/request/start-question.request.dto';
 import { AnswerResponseDto } from './dtos/response/answer.response.dto';
 import { StartQuestionResponseDto } from './dtos/response/start-question.response.dto';
@@ -80,6 +83,26 @@ export class QaController {
     }
 
     return this.qaService.streamAnswer(id, user.userId, user.tenantId);
+  }
+
+  // MUST be declared above `@Get('answers/:id')` — a bare `answers` segment count differs from
+  // `answers/:id`, but keeping list-before-detail matches this controller's other ordering
+  // comments and avoids relying on segment-count disambiguation being obvious to a future reader.
+  @Get('answers')
+  @Version('1')
+  @HttpCode(HttpStatus.OK)
+  @ApiResponse(qaApiExamples.answersList)
+  async listAnswers(
+    @Query() query: ListAnswersRequestDto,
+    @CurrentUser() user: AuthenticatedRequest['user'],
+  ): Promise<WithCountResponseDto<AnswerResponseDto>> {
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    const { docs, count } = await this.qaService.listByTenant(query, user.userId, user.tenantId);
+
+    return { docs: docs.map((doc) => toResponseDto(AnswerResponseDto, doc)), count };
   }
 
   @Get('answers/:id')

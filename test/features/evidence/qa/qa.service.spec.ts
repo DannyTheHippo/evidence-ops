@@ -169,12 +169,18 @@ describe('QaService', () => {
         kind: 'answered' as const,
         claims: [{ statement: 's', citations: [citation] }],
       };
+      const verificationReport = {
+        verifiedClaimCount: 1,
+        totalClaimCount: 2,
+        droppedClaims: [{ statement: 'a dropped claim', reason: 'quote mismatch' }],
+      };
       mockAnswerModel.findOne.mockResolvedValueOnce({
         _id: answerId,
         questionText: 'What is the cap rate?',
         runStatus: 'completed',
         outcome,
         claimCoverage: 1,
+        verificationReport,
         claims: [{ statement: 's', citations: [citation] }],
         conflictIds: [conflictId],
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
@@ -195,13 +201,14 @@ describe('QaService', () => {
         runStatus: 'completed',
         outcome,
         claimCoverage: 1,
+        verificationReport,
         citations: [citation],
         conflictIds: [conflictId.toString()],
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
       });
     });
 
-    it('should omit outcome for a non-completed answer even when one is present on the document', async () => {
+    it('should omit outcome and verificationReport for a non-completed answer even when both are present on the document', async () => {
       const answerId = new Types.ObjectId();
       const citation = {
         docVersionId: 'v1',
@@ -220,6 +227,7 @@ describe('QaService', () => {
         runStatus: 'queued',
         outcome,
         claimCoverage: undefined,
+        verificationReport: { verifiedClaimCount: 1, totalClaimCount: 1, droppedClaims: [] },
         claims: [],
         conflictIds: [],
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
@@ -229,6 +237,7 @@ describe('QaService', () => {
       const result = await service.getAnswerById(answerId.toString(), 'actor', 'tenant-a');
 
       expect(result.outcome).toBeUndefined();
+      expect(result.verificationReport).toBeUndefined();
       expect(result.citations).toEqual([]);
       expect(result.conflictIds).toEqual([]);
     });
@@ -258,6 +267,97 @@ describe('QaService', () => {
       expect(result.id).toBe(answerId.toString());
       expect(result.runStatus).toBe('running');
       expect(mockAuditService.record).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('listByTenant', () => {
+    const buildAnswerDoc = (overrides: Record<string, unknown> = {}) => ({
+      _id: new Types.ObjectId(),
+      questionText: 'What is the cap rate?',
+      runStatus: 'completed',
+      outcome: { kind: 'answered' as const, claims: [] },
+      claimCoverage: 1,
+      verificationReport: { verifiedClaimCount: 0, totalClaimCount: 0, droppedClaims: [] },
+      claims: [],
+      conflictIds: [],
+      createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      ...overrides,
+    });
+
+    it('should list answers for a tenant with no filter, newest first, and record no audit event', async () => {
+      const answer = buildAnswerDoc();
+      mockAnswerModel.find.mockResolvedValueOnce([answer]);
+      mockAnswerModel.countDocuments.mockResolvedValueOnce(1);
+
+      const result = await service.listByTenant({ skip: 0, limit: 20 }, 'actor', 'tenant-a');
+
+      expect(mockAnswerModel.find).toHaveBeenCalledWith({ tenantId: 'tenant-a' }, null, {
+        sort: { createdAt: -1 },
+        skip: 0,
+        limit: 20,
+      });
+      expect(mockAnswerModel.countDocuments).toHaveBeenCalledWith({ tenantId: 'tenant-a' });
+      expect(mockAuditService.record).not.toHaveBeenCalled();
+      expect(result.count).toBe(1);
+      expect(result.docs).toEqual([
+        {
+          id: answer._id.toString(),
+          questionText: answer.questionText,
+          runStatus: 'completed',
+          outcome: answer.outcome,
+          claimCoverage: answer.claimCoverage,
+          verificationReport: answer.verificationReport,
+          citations: [],
+          conflictIds: [],
+          createdAt: answer.createdAt,
+          usage: undefined,
+        },
+      ]);
+    });
+
+    it('should scope the lookup to the given tenantId', async () => {
+      mockAnswerModel.find.mockResolvedValueOnce([]);
+      mockAnswerModel.countDocuments.mockResolvedValueOnce(0);
+
+      await service.listByTenant({ skip: 0, limit: 20 }, 'actor', 'tenant-b');
+
+      expect(mockAnswerModel.find).toHaveBeenCalledWith({ tenantId: 'tenant-b' }, null, {
+        sort: { createdAt: -1 },
+        skip: 0,
+        limit: 20,
+      });
+      expect(mockAnswerModel.countDocuments).toHaveBeenCalledWith({ tenantId: 'tenant-b' });
+    });
+
+    it('should add a runStatus predicate when the filter is provided', async () => {
+      mockAnswerModel.find.mockResolvedValueOnce([]);
+      mockAnswerModel.countDocuments.mockResolvedValueOnce(0);
+
+      await service.listByTenant({ skip: 0, limit: 20, runStatus: 'failed' }, 'actor', 'tenant-a');
+
+      const expectedFilter = { tenantId: 'tenant-a', runStatus: 'failed' };
+      expect(mockAnswerModel.find).toHaveBeenCalledWith(expectedFilter, null, {
+        sort: { createdAt: -1 },
+        skip: 0,
+        limit: 20,
+      });
+      expect(mockAnswerModel.countDocuments).toHaveBeenCalledWith(expectedFilter);
+    });
+
+    it('should present a queued row from the same list with outcome and verificationReport omitted', async () => {
+      const answer = buildAnswerDoc({
+        runStatus: 'queued',
+        outcome: undefined,
+        claimCoverage: undefined,
+        verificationReport: undefined,
+      });
+      mockAnswerModel.find.mockResolvedValueOnce([answer]);
+      mockAnswerModel.countDocuments.mockResolvedValueOnce(1);
+
+      const result = await service.listByTenant({ skip: 0, limit: 20 }, 'actor', 'tenant-a');
+
+      expect(result.docs[0].outcome).toBeUndefined();
+      expect(result.docs[0].verificationReport).toBeUndefined();
     });
   });
 

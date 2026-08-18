@@ -17,6 +17,7 @@ const exampleCompletedAnswer = {
     claims: [{ statement: 'The cap rate is approximately 6.10%.', citations: [] }],
   },
   claimCoverage: 1,
+  verificationReport: { verifiedClaimCount: 1, totalClaimCount: 1, droppedClaims: [] },
   citations: [],
   conflictIds: [],
   createdAt: '2026-07-01T00:00:00.000Z',
@@ -59,6 +60,18 @@ export const qaApiExamples: Record<string, ApiResponseOptions> = {
       example: {
         summary: 'Completed answer',
         value: exampleCompletedAnswer,
+      },
+    },
+  },
+  answersList: {
+    status: HttpStatus.OK,
+    description:
+      "Paginated answer history for the caller's tenant, most recent first, optionally filtered " +
+      'by runStatus.',
+    examples: {
+      example: {
+        summary: 'One completed answer',
+        value: { docs: [exampleCompletedAnswer], count: 1 },
       },
     },
   },

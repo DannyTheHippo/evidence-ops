@@ -32,7 +32,6 @@ import {
   WORKFLOW_ENGINE,
   type WorkflowEngine,
 } from '../../../providers/workflow-engine/workflow-engine.interface';
-import type { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
@@ -42,6 +41,7 @@ import {
   WorkflowRunsService,
   type WorkflowRunResult,
 } from '../workflow-runs/workflow-runs.service';
+import type { ListConflictsRequestDto } from './dtos/request/list-conflicts.request.dto';
 import type { ConflictValueShape } from './dtos/response/conflict.response.dto';
 import { ConflictResponseDto } from './dtos/response/conflict.response.dto';
 import { detectConflicts, groupKey, type FactForConflictScan } from './detect-conflicts';
@@ -194,17 +194,17 @@ export class ConflictsService {
    * dangle with no referent.
    */
   async list(
-    pagination: PaginationRequestDto,
+    dto: ListConflictsRequestDto,
     actorId: string,
     tenantId: string,
   ): Promise<DocumentResultWithCount<ConflictResponseDto>> {
-    const filter = { tenantId };
+    const filter = { tenantId, ...(dto.status ? { status: dto.status } : {}) };
 
     const [conflicts, count] = await Promise.all([
       this.conflictModel.find(filter, null, {
         sort: { createdAt: -1 },
-        skip: pagination.skip,
-        limit: pagination.limit,
+        skip: dto.skip,
+        limit: dto.limit,
       }),
       this.conflictModel.countDocuments(filter),
     ]);

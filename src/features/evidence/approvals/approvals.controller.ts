@@ -16,7 +16,6 @@ import { Throttle } from '@nestjs/throttler';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
 import { RolesGuard } from '../../common/auth/guards/roles.guard';
 import { RequireRole } from '../../../shared/decorators/require-role.decorator';
-import { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
 import { UserRole } from '../../../shared/enums/user-role.enum';
 import { AuthenticatedRequest } from '../../../shared/types/authenticated-request.type';
@@ -25,6 +24,7 @@ import { approvalsApiExamples } from './api-examples/approvals.api-examples';
 import { APPROVAL_DECISION_THROTTLE_LIMIT } from './approvals.constant';
 import { ApprovalsService } from './approvals.service';
 import { DecideApprovalRequestDto } from './dtos/request/decide-approval.request.dto';
+import { ListApprovalsRequestDto } from './dtos/request/list-approvals.request.dto';
 import { ApprovalResponseDto } from './dtos/response/approval.response.dto';
 
 @Controller('approvals')
@@ -38,7 +38,7 @@ export class ApprovalsController {
   @HttpCode(HttpStatus.OK)
   @ApiResponse(approvalsApiExamples.list)
   async list(
-    @Query() pagination: PaginationRequestDto,
+    @Query() query: ListApprovalsRequestDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
   ): Promise<WithCountResponseDto<ApprovalResponseDto>> {
     if (!user) {
@@ -46,7 +46,7 @@ export class ApprovalsController {
     }
 
     const { docs, count } = await this.approvalsService.listPending(
-      pagination,
+      query,
       user.userId,
       user.tenantId,
     );

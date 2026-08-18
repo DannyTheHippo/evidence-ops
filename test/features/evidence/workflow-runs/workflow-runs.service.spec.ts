@@ -226,6 +226,22 @@ describe('WorkflowRunsService', () => {
         tenantId: 'acme-corp',
       });
     });
+
+    it('should list every run for the tenant, unfiltered, when workflowId is omitted', async () => {
+      const actorId = new Types.ObjectId().toString();
+      mockWorkflowRunModel.find.mockResolvedValueOnce([]);
+      mockWorkflowRunModel.countDocuments.mockResolvedValueOnce(0);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      await service.listByWorkflowId({ skip: 0, limit: 20 }, actorId, 'acme-corp');
+
+      expect(mockWorkflowRunModel.find).toHaveBeenCalledWith({ tenantId: 'acme-corp' }, null, {
+        sort: { createdAt: -1 },
+        skip: 0,
+        limit: 20,
+      });
+      expect(mockWorkflowRunModel.countDocuments).toHaveBeenCalledWith({ tenantId: 'acme-corp' });
+    });
   });
 
   describe('findRunByWorkflowId', () => {

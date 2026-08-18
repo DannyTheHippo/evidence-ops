@@ -24,7 +24,10 @@ import {
   ExtractedFact,
   ExtractedFactDocument,
 } from '../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
-import type { Citation } from '../../src/features/evidence/qa/contracts/answer.contract';
+import type {
+  Citation,
+  VerificationReport,
+} from '../../src/features/evidence/qa/contracts/answer.contract';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
 import { readSseEvent } from '../utils/read-sse-event';
 import { registerTestUser } from '../utils/register-test-user';
@@ -42,6 +45,7 @@ interface AnswerBody {
   runStatus: string;
   outcome?: unknown;
   claimCoverage?: number;
+  verificationReport?: VerificationReport;
   citations?: unknown[];
   conflictIds?: string[];
   createdAt?: string;
@@ -207,6 +211,13 @@ describe('QA and Conflicts (e2e)', () => {
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 3 },
         quote: 'at a cap rate of approximately 6.10%',
       };
+      const verificationReport: VerificationReport = {
+        verifiedClaimCount: 1,
+        totalClaimCount: 2,
+        droppedClaims: [
+          { statement: 'The vacancy rate is 4%.', reason: 'quote did not match the source chunk' },
+        ],
+      };
       const seeded = await answerModel.create({
         tenantId,
         questionText: 'What is the cap rate?',
@@ -217,6 +228,7 @@ describe('QA and Conflicts (e2e)', () => {
         },
         claims: [{ statement: 'The cap rate is approximately 6.10%.', citations: [citation] }],
         claimCoverage: 0.8,
+        verificationReport,
         usage: { promptTokens: 1240, completionTokens: 180, costUsd: 0.0042 },
       });
 
@@ -240,6 +252,7 @@ describe('QA and Conflicts (e2e)', () => {
           'runStatus',
           'outcome',
           'claimCoverage',
+          'verificationReport',
           'citations',
           'conflictIds',
           'createdAt',
@@ -253,6 +266,15 @@ describe('QA and Conflicts (e2e)', () => {
         ['promptTokens', 'completionTokens', 'costUsd'].sort(),
       );
       expect(body.usage).toEqual({ promptTokens: 1240, completionTokens: 180, costUsd: 0.0042 });
+      // Same nested-key-set trap as `usage` above, one level deeper: `droppedClaims` needs its own
+      // @Type() on top of `verificationReport`'s, or it serializes as `[{}]` rather than dropping.
+      expect(Object.keys(body.verificationReport ?? {}).sort()).toEqual(
+        ['verifiedClaimCount', 'totalClaimCount', 'droppedClaims'].sort(),
+      );
+      expect(Object.keys(body.verificationReport?.droppedClaims[0] ?? {}).sort()).toEqual(
+        ['statement', 'reason'].sort(),
+      );
+      expect(body.verificationReport).toEqual(verificationReport);
     });
 
     // Regression for the "conflicting_evidence unreachable" gap (ADR-0004 bound 9): `reasonCode`
@@ -285,6 +307,91 @@ describe('QA and Conflicts (e2e)', () => {
           'The retrieved evidence reports conflicting values for the same fact, so no single answer can be given with confidence.',
         reasonCode: 'retrieved_evidence_contradicts_itself',
       });
+    });
+  });
+
+  describe('GET /answers', () => {
+    let listToken: string;
+    let listTenantId: string;
+
+    beforeAll(async () => {
+      const registered = await registerTestUser(app, {
+        email: 'qa-answers-list-e2e@example.com',
+        password: 'correct-horse-battery',
+      });
+      listToken = registered.token;
+      listTenantId = registered.tenantId;
+    });
+
+    it('rejects an unauthenticated request', async () => {
+      const response = await request(getTestServer(app)).get('/api/v1/answers');
+
+      expect(response.status).toBe(401);
+    });
+
+    it('lists only the caller tenant answers, newest first, with the exact docs/count key set', async () => {
+      const older = await answerModel.create({
+        tenantId: listTenantId,
+        questionText: 'Older question',
+        runStatus: 'completed',
+        outcome: {
+          kind: 'insufficient_evidence',
+          reason: 'no evidence',
+          reasonCode: 'no_relevant_evidence',
+        },
+        claims: [],
+      });
+      const newer = await answerModel.create({
+        tenantId: listTenantId,
+        questionText: 'Newer question',
+        runStatus: 'completed',
+        outcome: {
+          kind: 'insufficient_evidence',
+          reason: 'no evidence',
+          reasonCode: 'no_relevant_evidence',
+        },
+        claims: [],
+      });
+      // Under a different tenant entirely — must never appear in `listToken`'s results.
+      await answerModel.create({
+        tenantId: 'qa-answers-other-tenant',
+        questionText: 'Foreign tenant question',
+        runStatus: 'completed',
+        outcome: {
+          kind: 'insufficient_evidence',
+          reason: 'no evidence',
+          reasonCode: 'no_relevant_evidence',
+        },
+        claims: [],
+      });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/answers')
+        .set('Authorization', `Bearer ${listToken}`);
+      const body = response.body as { docs: AnswerBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(Object.keys(body).sort()).toEqual(['docs', 'count'].sort());
+      expect(body.count).toBe(2);
+      expect(body.docs.map((doc) => doc.id)).toEqual([newer._id.toString(), older._id.toString()]);
+    });
+
+    it('filters by runStatus', async () => {
+      await answerModel.create({
+        tenantId: listTenantId,
+        questionText: 'A still-queued question',
+        runStatus: 'queued',
+      });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/answers')
+        .query({ runStatus: 'queued' })
+        .set('Authorization', `Bearer ${listToken}`);
+      const body = response.body as { docs: AnswerBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.count).toBeGreaterThan(0);
+      expect(body.docs.every((doc) => doc.runStatus === 'queued')).toBe(true);
     });
   });
 
@@ -489,6 +596,104 @@ describe('QA and Conflicts (e2e)', () => {
       );
       expect(body.docs[0].ruleFired).toBe('authority');
       expect(body.docs[0].proposedWinnerFactId).toBe(factPm._id.toString());
+    });
+
+    it('filters by status, with count reflecting the filtered set rather than the collection total', async () => {
+      const openFactKey = {
+        entity: 'Eastgate Business Park',
+        metric: 'cap_rate',
+        period: '2025-04',
+      };
+      const openFactLow = await extractedFactModel.create({
+        tenantId,
+        factKey: openFactKey,
+        groupKeyNormalized: groupKey(openFactKey),
+        value: { amount: 5.1, unit: 'percent' },
+        rawText: 'cap rate of 5.10%',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-eastgate-low',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F3' },
+      });
+      const openFactHigh = await extractedFactModel.create({
+        tenantId,
+        factKey: openFactKey,
+        groupKeyNormalized: groupKey(openFactKey),
+        value: { amount: 6.2, unit: 'percent' },
+        rawText: 'cap rate of 6.20%',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-eastgate-high',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 3 },
+      });
+      await conflictModel.create({
+        tenantId,
+        factKey: openFactKey,
+        groupKeyNormalized: groupKey(openFactKey),
+        factIds: [openFactLow._id, openFactHigh._id],
+        magnitude: 0.011,
+        status: 'open',
+      });
+
+      const dismissedFactKey = {
+        entity: 'Westgate Business Park',
+        metric: 'cap_rate',
+        period: '2025-04',
+      };
+      const dismissedFactLow = await extractedFactModel.create({
+        tenantId,
+        factKey: dismissedFactKey,
+        groupKeyNormalized: groupKey(dismissedFactKey),
+        value: { amount: 5.0, unit: 'percent' },
+        rawText: 'cap rate of 5.00%',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-westgate-low',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F4' },
+      });
+      const dismissedFactHigh = await extractedFactModel.create({
+        tenantId,
+        factKey: dismissedFactKey,
+        groupKeyNormalized: groupKey(dismissedFactKey),
+        value: { amount: 6.3, unit: 'percent' },
+        rawText: 'cap rate of 6.30%',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-westgate-high',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 4 },
+      });
+      const dismissed = await conflictModel.create({
+        tenantId,
+        factKey: dismissedFactKey,
+        groupKeyNormalized: groupKey(dismissedFactKey),
+        factIds: [dismissedFactLow._id, dismissedFactHigh._id],
+        magnitude: 0.013,
+        status: 'dismissed',
+      });
+
+      const unfiltered = await request(getTestServer(app))
+        .get('/api/v1/conflicts')
+        .set('Authorization', `Bearer ${token}`);
+      const unfilteredBody = unfiltered.body as { docs: ConflictBody[]; count: number };
+      // The unfiltered collection already carries every status seeded across this describe block —
+      // proving the dismissed row is actually in the collection, not merely filtered out below.
+      expect(unfilteredBody.docs.some((doc) => doc.id === dismissed._id.toString())).toBe(true);
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/conflicts')
+        .query({ status: 'dismissed' })
+        .set('Authorization', `Bearer ${token}`);
+      const body = response.body as { docs: ConflictBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.docs.every((doc) => doc.status === 'dismissed')).toBe(true);
+      expect(body.docs.some((doc) => doc.id === dismissed._id.toString())).toBe(true);
+      expect(body.count).toBe(body.docs.length);
+      expect(body.count).toBeLessThan(unfilteredBody.count);
     });
   });
 });

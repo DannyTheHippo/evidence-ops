@@ -240,19 +240,21 @@ export class WorkflowRunsService {
   }
 
   /**
-   * Tenant-scoped lookup by Temporal `workflowId` — the SPA's only way to link an
-   * `ApprovalResponseDto` (which exposes `workflowId`, not the Mongo `_id`) to its run timeline.
-   * Deliberately does not refresh against the live engine the way `findById` does: a caller lands
-   * here to find the `_id` to link to, then immediately follows with `GET /workflow-runs/:id`,
-   * which already does the best-effort refresh — refreshing twice would be a redundant Temporal
-   * round-trip for a listing view.
+   * Tenant-scoped listing, optionally filtered by Temporal `workflowId` — the SPA's only way to
+   * link an `ApprovalResponseDto` (which exposes `workflowId`, not the Mongo `_id`) to its run
+   * timeline. Omitting `workflowId` lists every run for the tenant, most recent first, which is
+   * how a caller who navigated away from a run without keeping its id finds it again. Deliberately
+   * does not refresh against the live engine the way `findById` does: a caller lands here to find
+   * the `_id` to link to, then immediately follows with `GET /workflow-runs/:id`, which already
+   * does the best-effort refresh — refreshing twice would be a redundant Temporal round-trip for a
+   * listing view.
    */
   async listByWorkflowId(
     dto: ListWorkflowRunsRequestDto,
     actorId: string,
     tenantId: string,
   ): Promise<DocumentResultWithCount<WorkflowRunResult>> {
-    const filter = { workflowId: dto.workflowId, tenantId };
+    const filter = { tenantId, ...(dto.workflowId ? { workflowId: dto.workflowId } : {}) };
 
     const [runs, count] = await Promise.all([
       this.workflowRunModel.find(filter, null, {

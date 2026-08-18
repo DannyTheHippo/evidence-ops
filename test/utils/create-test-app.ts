@@ -6,6 +6,8 @@ import type request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { createApplicationConfig } from '../../src/config/app.config';
 import { stopInMemoryMongo } from '../../src/config/mongo.config';
+import { FakeRetrievalStore } from '../../src/providers/retrieval/fake-retrieval.store';
+import { RETRIEVAL_STORE } from '../../src/providers/retrieval/retrieval-store.interface';
 import { FakeWorkflowEngine } from '../../src/providers/workflow-engine/fake-workflow.engine';
 import { WORKFLOW_ENGINE } from '../../src/providers/workflow-engine/workflow-engine.interface';
 
@@ -22,11 +24,19 @@ type TestServer = Parameters<typeof request>[0];
  *
  * `WORKFLOW_ENGINE` is overridden back to `FakeWorkflowEngine`: `ProvidersModule` binds the real
  * `TemporalWorkflowEngine` there (ADR-0003), and e2e must not require a live Temporal server.
+ *
+ * `RETRIEVAL_STORE` is overridden back to `FakeRetrievalStore` for the same reason: `ProvidersModule`
+ * binds the real `MongoHybridRetrievalStore`, which runs `$search`/`$vectorSearch`/`$rankFusion`
+ * against Mongo — operators `mongodb-memory-server` does not support. `RetrievalController` is the
+ * first e2e-reachable, synchronous caller of that store, so without this override its request
+ * throws the moment `mongodb-memory-server` rejects the aggregation.
  */
 export const createTestApp = async (): Promise<INestApplication> => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(WORKFLOW_ENGINE)
     .useClass(FakeWorkflowEngine)
+    .overrideProvider(RETRIEVAL_STORE)
+    .useClass(FakeRetrievalStore)
     .compile();
 
   const app = moduleRef.createNestApplication();

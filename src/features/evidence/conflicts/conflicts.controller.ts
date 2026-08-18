@@ -12,13 +12,13 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
-import { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
 import { AuthenticatedRequest } from '../../../shared/types/authenticated-request.type';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { WorkflowRunResponseDto } from '../workflow-runs/dtos/response/workflow-run.response.dto';
 import { conflictsApiExamples } from './api-examples/conflicts.api-examples';
 import { ConflictsService } from './conflicts.service';
+import { ListConflictsRequestDto } from './dtos/request/list-conflicts.request.dto';
 import { RequestConflictResolutionRequestDto } from './dtos/request/request-conflict-resolution.request.dto';
 import { ConflictResponseDto } from './dtos/response/conflict.response.dto';
 
@@ -33,7 +33,7 @@ export class ConflictsController {
   @HttpCode(HttpStatus.OK)
   @ApiResponse(conflictsApiExamples.list)
   async list(
-    @Query() pagination: PaginationRequestDto,
+    @Query() query: ListConflictsRequestDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
   ): Promise<WithCountResponseDto<ConflictResponseDto>> {
     // JwtAuthGuard always sets request.user before a non-public handler runs; this guards
@@ -42,11 +42,7 @@ export class ConflictsController {
       throw new UnauthorizedException('No token provided');
     }
 
-    const { docs, count } = await this.conflictsService.list(
-      pagination,
-      user.userId,
-      user.tenantId,
-    );
+    const { docs, count } = await this.conflictsService.list(query, user.userId, user.tenantId);
 
     return { docs: docs.map((doc) => toResponseDto(ConflictResponseDto, doc)), count };
   }

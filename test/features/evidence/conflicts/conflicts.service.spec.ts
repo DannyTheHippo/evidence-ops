@@ -666,6 +666,25 @@ describe('ConflictsService', () => {
       expect(result).toEqual({ docs: [], count: 0 });
     });
 
+    it('should narrow both the find and countDocuments filter to the given status', async () => {
+      const actorId = new Types.ObjectId().toString();
+      mockConflictModel.find.mockResolvedValueOnce([]);
+      mockConflictModel.countDocuments.mockResolvedValueOnce(0);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      await service.list({ skip: 0, limit: 20, status: 'resolved' }, actorId, 'acme-corp');
+
+      expect(mockConflictModel.find).toHaveBeenCalledWith(
+        { tenantId: 'acme-corp', status: 'resolved' },
+        null,
+        { sort: { createdAt: -1 }, skip: 0, limit: 20 },
+      );
+      expect(mockConflictModel.countDocuments).toHaveBeenCalledWith({
+        tenantId: 'acme-corp',
+        status: 'resolved',
+      });
+    });
+
     it('should throw InternalServerErrorException when a listed conflict references a fact that no longer resolves', async () => {
       const actorId = new Types.ObjectId().toString();
       const factIdA = new Types.ObjectId();

@@ -31,9 +31,11 @@ import {
 import { UserRole } from '../../../shared/enums/user-role.enum';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
+import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import type { AnswerQuestionInput } from '../../../workflows/types';
-import type { AnswerContract, Citation } from './contracts/answer.contract';
+import type { AnswerContract, Citation, VerificationReport } from './contracts/answer.contract';
+import type { ListAnswersRequestDto } from './dtos/request/list-answers.request.dto';
 import { AnswerResponseDto } from './dtos/response/answer.response.dto';
 import { AnswerNotFoundException } from './exceptions/qa.exception';
 import { ANSWER_STREAM_INTERVAL_MS } from './qa.constant';
@@ -56,6 +58,7 @@ export interface AnswerEnvelope {
   readonly runStatus: AnswerRunStatus;
   readonly outcome?: AnswerContract;
   readonly claimCoverage?: number;
+  readonly verificationReport?: VerificationReport;
   readonly citations: Citation[];
   readonly conflictIds: string[];
   readonly createdAt: Date;
@@ -175,6 +178,35 @@ export class QaService {
   }
 
   /**
+   * Tenant-scoped read of the answer history, newest first. No audit call — browsing your own
+   * answer list is not an audited action (matching `DocumentsService.list`); `getAnswerById` and
+   * `peekAnswer` remain the audited reads of an individual answer. Every row is mapped through
+   * `toAnswerEnvelope`, so the completed-only gate on `outcome`/`claimCoverage`/`verificationReport`/
+   * `usage` applies per row for free rather than needing to be re-implemented here.
+   */
+  async listByTenant(
+    dto: ListAnswersRequestDto,
+    _actorId: string,
+    tenantId: string,
+  ): Promise<DocumentResultWithCount<AnswerEnvelope>> {
+    const filter = {
+      tenantId,
+      ...(dto.runStatus ? { runStatus: dto.runStatus } : {}),
+    };
+
+    const [answers, count] = await Promise.all([
+      this.answerModel.find(filter, null, {
+        sort: { createdAt: -1 },
+        skip: dto.skip,
+        limit: dto.limit,
+      }),
+      this.answerModel.countDocuments(filter),
+    ]);
+
+    return { docs: answers.map((answer) => this.toAnswerEnvelope(answer)), count };
+  }
+
+  /**
    * Polling-on-the-server, deliberately not a MongoDB change stream: change streams would need a
    * per-connection cursor and behave differently between Atlas-Local and mongodb-memory-server,
    * buying sub-second latency nobody needs over `ANSWER_STREAM_INTERVAL_MS`. Upgrade path if that
@@ -248,6 +280,9 @@ export class QaService {
       // all, not a stale or premature one.
       outcome: answer.runStatus === 'completed' ? answer.outcome : undefined,
       claimCoverage: answer.claimCoverage,
+      // Same withholding rule as `outcome` above — the verification report is computed alongside
+      // the outcome on completion (see `answer-persistence.service.ts`), so it follows the same gate.
+      verificationReport: answer.runStatus === 'completed' ? answer.verificationReport : undefined,
       // Flattened from `answer.claims` (the server-verified surviving claims), not
       // `answer.outcome.claims` (the model's raw, pre-verification output) — see `Answer.claims`'s
       // doc comment in `answer.schema.ts`.

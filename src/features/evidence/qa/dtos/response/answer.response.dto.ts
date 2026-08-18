@@ -4,6 +4,7 @@ import type { AnswerRunStatus } from '../../../../../database/schemas/evidence/a
 import { ANSWER_RUN_STATUSES } from '../../../../../database/schemas/evidence/answer/answer.schema';
 import type { AnswerContract, Citation } from '../../contracts/answer.contract';
 import { AnswerUsageResponseDto } from './answer-usage.response.dto';
+import { VerificationReportResponseDto } from './verification-report.response.dto';
 
 export class AnswerResponseDto {
   @Expose()
@@ -47,6 +48,19 @@ export class AnswerResponseDto {
     description: 'Fraction of the model-authored claims that survived server-side verification.',
   })
   claimCoverage?: number;
+
+  // Same conditional-presence rule as `outcome` above — the verification report is computed
+  // alongside the outcome on completion, so a queued, running, or failed answer must not expose a
+  // stale or absent value under this key.
+  @Expose()
+  @Type(() => VerificationReportResponseDto)
+  @ApiProperty({
+    required: false,
+    type: () => VerificationReportResponseDto,
+    description:
+      "Server-computed claim verification summary, present only once runStatus is 'completed'.",
+  })
+  verificationReport?: VerificationReportResponseDto;
 
   @Expose()
   @ApiProperty({

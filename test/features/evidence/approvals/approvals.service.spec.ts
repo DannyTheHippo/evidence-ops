@@ -134,6 +134,25 @@ describe('ApprovalsService', () => {
       );
       expect(result).toEqual({ docs: [], count: 0 });
     });
+
+    it('should narrow the filter to the given state instead of the pending default', async () => {
+      const actorId = new Types.ObjectId().toString();
+      mockApprovalModel.find.mockResolvedValueOnce([]);
+      mockApprovalModel.countDocuments.mockResolvedValueOnce(0);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      await service.listPending({ skip: 0, limit: 20, state: 'approved' }, actorId, 'acme-corp');
+
+      expect(mockApprovalModel.find).toHaveBeenCalledWith(
+        { tenantId: 'acme-corp', state: 'approved' },
+        null,
+        { sort: { createdAt: -1 }, skip: 0, limit: 20 },
+      );
+      expect(mockApprovalModel.countDocuments).toHaveBeenCalledWith({
+        tenantId: 'acme-corp',
+        state: 'approved',
+      });
+    });
   });
 
   describe('peekPending', () => {

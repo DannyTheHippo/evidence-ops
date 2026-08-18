@@ -275,6 +275,44 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       const events = await auditEventModel.find({ action: 'approvals.listed' });
       expect(events.length).toBeGreaterThan(0);
     });
+
+    it('filters by state, with count reflecting the filtered set rather than the pending default', async () => {
+      const rejected = await approvalModel.create({
+        subject: { entityType: 'Conflict', entityId: new Types.ObjectId() },
+        action: 'resolve_conflict',
+        summary: 'Rejected on review.',
+        state: 'rejected',
+        decidedBy: 'reviewer@example.com',
+        decidedAt: new Date(),
+        tenantId,
+      });
+      await approvalModel.create({
+        subject: { entityType: 'Conflict', entityId: new Types.ObjectId() },
+        action: 'resolve_conflict',
+        summary: 'Still pending, must not appear in the rejected-filtered response.',
+        state: 'pending',
+        tenantId,
+      });
+
+      const defaultResponse = await request(getTestServer(app))
+        .get('/api/v1/approvals')
+        .set('Authorization', `Bearer ${token}`);
+      const defaultBody = defaultResponse.body as { docs: ApprovalBody[]; count: number };
+      // The default (no `state` param) response stays the pending inbox — the rejected row seeded
+      // above must not appear in it.
+      expect(defaultBody.docs.some((doc) => doc.id === rejected._id.toString())).toBe(false);
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/approvals')
+        .query({ state: 'rejected' })
+        .set('Authorization', `Bearer ${token}`);
+      const body = response.body as { docs: ApprovalBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.docs.every((doc) => doc.state === 'rejected')).toBe(true);
+      expect(body.docs.some((doc) => doc.id === rejected._id.toString())).toBe(true);
+      expect(body.count).toBe(body.docs.length);
+    });
   });
 
   describe('POST /approvals/:id/decision', () => {
@@ -524,12 +562,23 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       expect(response.status).toBe(401);
     });
 
-    it('returns 400 when workflowId is missing', async () => {
+    it('lists every run for this tenant when workflowId is omitted, excluding a run belonging to a different tenant', async () => {
+      const workflowId = `wf-unfiltered-${new Types.ObjectId().toString()}`;
+      const run = await workflowRunModel.create({ workflowId, status: 'running', tenantId });
+      const otherTenantRun = await workflowRunModel.create({
+        workflowId,
+        status: 'running',
+        tenantId: 'other-tenant',
+      });
+
       const response = await request(getTestServer(app))
         .get('/api/v1/workflow-runs')
         .set('Authorization', `Bearer ${token}`);
+      const body = response.body as { docs: WorkflowRunBody[]; count: number };
 
-      expect(response.status).toBe(400);
+      expect(response.status).toBe(200);
+      expect(body.docs.some((doc) => doc.id === run._id.toString())).toBe(true);
+      expect(body.docs.some((doc) => doc.id === otherTenantRun._id.toString())).toBe(false);
     });
 
     it('lists runs by workflowId for this tenant, exposing the exact key set, and excludes a run belonging to a different tenant', async () => {

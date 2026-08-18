@@ -11,7 +11,9 @@ const exampleRunningRun = {
 export const workflowRunsApiExamples: Record<string, ApiResponseOptions> = {
   list: {
     status: HttpStatus.OK,
-    description: 'Runs matching the given workflowId, most recent first.',
+    description:
+      "Runs for the caller's tenant, most recent first. Filters to a single workflow when " +
+      'workflowId is given; omitting it lists every run.',
     examples: {
       example: {
         summary: 'One running run',

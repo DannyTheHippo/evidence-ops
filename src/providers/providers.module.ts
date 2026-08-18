@@ -111,13 +111,16 @@ export function createModelProvider(
 
     // RETRIEVAL_STORE, DOCUMENT_STORE, WORKFLOW_ENGINE, and now APPROVAL_CHANNEL bind their real
     // implementations here — their fakes stay in the tree because unit tests still bind them
-    // directly, not through this module. WORKFLOW_ENGINE is the one exception that needs an
-    // e2e-level override rather than just a unit-level one: TemporalWorkflowEngine only dials a
-    // server when start()/status() is actually called, and QaService.startQuestion does call
-    // start() on the real answer workflow — so `test/utils/create-test-app.ts` overrides the
-    // token back to FakeWorkflowEngine, so no e2e spec accidentally reaches a live Temporal
-    // server just by booting AppModule. MongoApprovalChannel dials nothing at construction or at
-    // module boot (same as RETRIEVAL_STORE/DOCUMENT_STORE) — no e2e override needed.
+    // directly, not through this module. WORKFLOW_ENGINE and RETRIEVAL_STORE are the two exceptions
+    // that need an e2e-level override rather than just a unit-level one: TemporalWorkflowEngine
+    // only dials a server when start()/status() is actually called, and QaService.startQuestion
+    // does call start() on the real answer workflow; MongoHybridRetrievalStore runs
+    // $search/$vectorSearch/$rankFusion, which mongodb-memory-server does not support, and
+    // RetrievalController is a synchronous, e2e-reachable caller of it. So
+    // `test/utils/create-test-app.ts` overrides both tokens back to their fakes, so no e2e spec
+    // accidentally reaches a live Temporal server or an unsupported aggregation operator just by
+    // booting AppModule. MongoApprovalChannel dials nothing at construction or at module boot (same
+    // as DOCUMENT_STORE) — no e2e override needed.
     { provide: RETRIEVAL_STORE, useClass: MongoHybridRetrievalStore },
     { provide: DOCUMENT_STORE, useClass: GridFsDocumentStore },
     { provide: WORKFLOW_ENGINE, useClass: TemporalWorkflowEngine },

@@ -9,11 +9,11 @@ import {
   WORKFLOW_ENGINE,
   type WorkflowEngine,
 } from '../../../providers/workflow-engine/workflow-engine.interface';
-import type { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
 import type { ApprovalDecisionSignal } from '../../../workflows/types';
+import type { ListApprovalsRequestDto } from './dtos/request/list-approvals.request.dto';
 import type { ApprovalResponseDto } from './dtos/response/approval.response.dto';
 import {
   ApprovalAlreadyDecidedException,
@@ -62,13 +62,14 @@ export class ApprovalsService {
     this.logger.init(ApprovalsService.name);
   }
 
-  /** The pending inbox: every `Approval` still awaiting a human decision, tenant-scoped. */
+  /** The pending inbox: every `Approval` still awaiting a human decision, tenant-scoped —
+   * `dto.state` narrows to a different state instead when given, but defaults to `pending`. */
   async listPending(
-    pagination: PaginationRequestDto,
+    dto: ListApprovalsRequestDto,
     actorId: string,
     tenantId: string,
   ): Promise<DocumentResultWithCount<ApprovalResponseDto>> {
-    const result = await this.peekPending(pagination, tenantId);
+    const result = await this.peekPending(dto, tenantId);
 
     await this.auditService.record({
       action: 'approvals.listed',
@@ -87,16 +88,16 @@ export class ApprovalsService {
    * write the `approvals.listed`/`workflow-runs.viewed` audit rows.
    */
   async peekPending(
-    pagination: PaginationRequestDto,
+    dto: ListApprovalsRequestDto,
     tenantId: string,
   ): Promise<DocumentResultWithCount<ApprovalResponseDto>> {
-    const filter = { tenantId, state: 'pending' as const };
+    const filter = { tenantId, state: dto.state ?? 'pending' };
 
     const [approvals, count] = await Promise.all([
       this.approvalModel.find(filter, null, {
         sort: { createdAt: -1 },
-        skip: pagination.skip,
-        limit: pagination.limit,
+        skip: dto.skip,
+        limit: dto.limit,
       }),
       this.approvalModel.countDocuments(filter),
     ]);
