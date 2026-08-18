@@ -7,11 +7,13 @@ import {
   HttpStatus,
   Param,
   Post,
+  Query,
   UnauthorizedException,
   Version,
 } from '@nestjs/common';
 import { ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
+import { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
 import { AuthenticatedRequest } from '../../../shared/types/authenticated-request.type';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
@@ -30,6 +32,7 @@ export class ApiKeysController {
   @Version('1')
   @HttpCode(HttpStatus.CREATED)
   @ApiResponse(apiKeysApiExamples.minted)
+  @ApiResponse(apiKeysApiExamples.limitExceeded)
   async mint(
     @Body() dto: CreateApiKeyRequestDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
@@ -42,7 +45,7 @@ export class ApiKeysController {
       MintedApiKeyResponseDto,
       await this.apiKeysService.mint({
         name: dto.name,
-        expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : undefined,
+        expiresAt: dto.expiresAt,
         actorId: user.userId,
         tenantId: user.tenantId,
       }),
@@ -54,13 +57,14 @@ export class ApiKeysController {
   @HttpCode(HttpStatus.OK)
   @ApiResponse(apiKeysApiExamples.list)
   async list(
+    @Query() pagination: PaginationRequestDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
   ): Promise<WithCountResponseDto<ApiKeyResponseDto>> {
     if (!user) {
       throw new UnauthorizedException('No token provided');
     }
 
-    const { docs, count } = await this.apiKeysService.list(user.userId, user.tenantId);
+    const { docs, count } = await this.apiKeysService.list(pagination, user.userId, user.tenantId);
 
     return { docs: docs.map((doc) => toResponseDto(ApiKeyResponseDto, doc)), count };
   }

@@ -53,6 +53,21 @@ export const workflowRunsApiExamples: Record<string, ApiResponseOptions> = {
       'final state before closing. `run` events carry the exact shape GET /workflow-runs/:id ' +
       "returns; `approvals` events carry the exact shape GET /approvals returns (the tenant's " +
       "whole pending inbox, not just this run's); a `heartbeat` event fires every 15s; a terminal " +
-      '`error` event means the client should fall back to polling both endpoints.',
+      '`error` event means the client should fall back to polling both endpoints. Re-checks the ' +
+      'connecting session every 30s and closes if it is gone or moved tenants.',
+  },
+  streamConnectionLimitExceeded: {
+    status: HttpStatus.TOO_MANY_REQUESTS,
+    description: "The caller's tenant or user is already at its open-SSE-stream cap.",
+    examples: {
+      example: {
+        summary: 'Open-stream cap reached',
+        value: {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          message: "User 'user-1' is at its open-stream limit (10)",
+          error: 'Too Many Requests',
+        },
+      },
+    },
   },
 };

@@ -31,7 +31,9 @@ export class MintedApiKeyResponseDto {
   @Expose()
   @ApiProperty({
     example: '2026-12-31T00:00:00.000Z',
-    description: 'When this key stops working. Absent means it never expires.',
+    description:
+      'When this key stops working. Set to the request value if given, otherwise the default ' +
+      'TTL (`apiKeys.defaultTtlDays` from config).',
     required: false,
   })
   expiresAt?: Date;

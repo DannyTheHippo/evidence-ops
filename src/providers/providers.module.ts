@@ -1,14 +1,20 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { TypedConfigService } from '../config/environment/typed-config.service';
 import {
   ModelSpendWindow,
   ModelSpendWindowSchema,
 } from '../database/schemas/platform/model-spend-window/model-spend-window.schema';
 import { Approval, ApprovalSchema } from '../database/schemas/workflow/approval/approval.schema';
+import { AlsContext } from '../shared/types/als-context.type';
 import { APPROVAL_CHANNEL } from './approval-channel/approval-channel.interface';
 import { MongoApprovalChannel } from './approval-channel/mongo-approval.channel';
-import { EMBEDDING_PROVIDER } from './embedding/embedding-provider.interface';
+import {
+  EMBEDDING_PROVIDER,
+  type EmbeddingProvider,
+} from './embedding/embedding-provider.interface';
+import { SpendGuardEmbeddingProvider } from './embedding/spend-guard-embedding.provider';
 import { VoyageEmbeddingProvider } from './embedding/voyage-embedding.provider';
 import { AnthropicModelProvider } from './model/anthropic-model.provider';
 import {
@@ -81,6 +87,29 @@ export function createModelProvider(
   );
 }
 
+/**
+ * Wraps the real `VoyageEmbeddingProvider` in `SpendGuardEmbeddingProvider` — production has no
+ * embedding cache to order the guard against (unlike the model chain's
+ * `Tracing(Caching(SpendGuard(base)))`); the only `CachingEmbeddingProvider` in the tree is
+ * `eval/providers/caching-embedding.provider.ts`, which replaces this token wholesale via
+ * `overrideProvider` rather than decorating it, so the eval's free-replay property already holds
+ * with no spend guard in that path at all.
+ *
+ * Reuses `config.spend.dailyLimitUsd` and `TenantSpendService` — one combined daily ceiling per
+ * tenant across model and embedding spend, not a second ledger.
+ *
+ * Extracted as a plain, exported function for the same unit-testability reason
+ * `createModelProvider` is.
+ */
+export function createEmbeddingProvider(
+  voyage: EmbeddingProvider,
+  spendService: TenantSpendService,
+  als: AsyncLocalStorage<AlsContext>,
+  config: TypedConfigService,
+): EmbeddingProvider {
+  return new SpendGuardEmbeddingProvider(voyage, spendService, config.spend.dailyLimitUsd, als);
+}
+
 @Module({
   imports: [
     MongooseModule.forFeature([
@@ -91,6 +120,7 @@ export function createModelProvider(
   providers: [
     AnthropicModelProvider,
     OpenAiModelProvider,
+    VoyageEmbeddingProvider,
     TenantSpendService,
     { provide: TELEMETRY, useClass: LoggerTelemetry },
     { provide: MODEL_CACHE_OPTIONS, useValue: MODEL_CACHE_DEFAULT_OPTIONS },
@@ -106,7 +136,11 @@ export function createModelProvider(
       ],
       useFactory: createModelProvider,
     },
-    { provide: EMBEDDING_PROVIDER, useClass: VoyageEmbeddingProvider },
+    {
+      provide: EMBEDDING_PROVIDER,
+      inject: [VoyageEmbeddingProvider, TenantSpendService, AsyncLocalStorage, TypedConfigService],
+      useFactory: createEmbeddingProvider,
+    },
     { provide: SOURCE_CONNECTOR, useClass: LocalFolderSourceConnector },
 
     // RETRIEVAL_STORE, DOCUMENT_STORE, WORKFLOW_ENGINE, and now APPROVAL_CHANNEL bind their real

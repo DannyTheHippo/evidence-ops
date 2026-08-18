@@ -2,15 +2,20 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Model, Types } from 'mongoose';
+import { TypedConfigService } from '../../../config/environment/typed-config.service';
 import {
   ApiKey,
   ApiKeyDocument,
 } from '../../../database/schemas/administration/api-key/api-key.schema';
 import { User, UserDocument } from '../../../database/schemas/administration/user/user.schema';
+import type { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
-import { ApiKeyNotFoundException } from './exceptions/api-keys.exception';
+import {
+  ApiKeyLimitExceededException,
+  ApiKeyNotFoundException,
+} from './exceptions/api-keys.exception';
 import type { TokenVerifier, VerifiedIdentity } from './token-verifier.interface';
 
 const TOKEN_PREFIX = 'eo_pat_';
@@ -21,6 +26,12 @@ const TOKEN_RANDOM_BYTES = 32;
 const TOKEN_RANDOM_LENGTH = Math.ceil((TOKEN_RANDOM_BYTES * 4) / 3);
 const TOKEN_LENGTH = TOKEN_PREFIX.length + TOKEN_RANDOM_LENGTH;
 const TOKEN_DISPLAY_PREFIX_LENGTH = TOKEN_PREFIX.length + 6;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** A key past this count of active (non-revoked, unexpired) keys refuses further minting for the
+ *  same user, bounding how many live credentials a single compromised account can accumulate. Not
+ *  config-driven — a per-user credential cap is a fixed platform decision, not a deployment knob. */
+export const MAX_ACTIVE_KEYS_PER_USER = 10;
 
 export interface MintApiKeyInput {
   readonly name: string;
@@ -44,6 +55,7 @@ export interface ApiKeyResult {
   readonly tokenPrefix: string;
   readonly expiresAt?: Date;
   readonly revokedAt?: Date;
+  readonly lastUsedAt?: Date;
   readonly createdAt: Date;
 }
 
@@ -56,6 +68,7 @@ export class ApiKeysService implements TokenVerifier {
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
 
+    private readonly config: TypedConfigService,
     private readonly auditService: AuditService,
     private readonly logger: AppLogger,
   ) {
@@ -63,9 +76,12 @@ export class ApiKeysService implements TokenVerifier {
   }
 
   async mint(input: MintApiKeyInput): Promise<MintedApiKeyResult> {
+    await this.assertUnderActiveKeyCap(input.actorId, input.tenantId);
+
     const token = `${TOKEN_PREFIX}${randomBytes(TOKEN_RANDOM_BYTES).toString('base64url')}`;
     const tokenHash = this.hash(token);
     const tokenPrefix = token.slice(0, TOKEN_DISPLAY_PREFIX_LENGTH);
+    const expiresAt = input.expiresAt ?? this.defaultExpiresAt();
 
     const apiKey = await this.apiKeyModel.create({
       tenantId: input.tenantId,
@@ -73,7 +89,7 @@ export class ApiKeysService implements TokenVerifier {
       tokenHash,
       tokenPrefix,
       name: input.name,
-      expiresAt: input.expiresAt,
+      expiresAt,
     });
 
     await this.auditService.record({
@@ -96,11 +112,19 @@ export class ApiKeysService implements TokenVerifier {
     };
   }
 
-  async list(actorId: string, tenantId: string): Promise<DocumentResultWithCount<ApiKeyResult>> {
+  async list(
+    pagination: PaginationRequestDto,
+    actorId: string,
+    tenantId: string,
+  ): Promise<DocumentResultWithCount<ApiKeyResult>> {
     const filter = { tenantId, userId: new Types.ObjectId(actorId) };
 
     const [keys, count] = await Promise.all([
-      this.apiKeyModel.find(filter, null, { sort: { createdAt: -1 } }),
+      this.apiKeyModel.find(filter, null, {
+        sort: { createdAt: -1 },
+        skip: pagination.skip,
+        limit: pagination.limit,
+      }),
       this.apiKeyModel.countDocuments(filter),
     ]);
 
@@ -170,6 +194,8 @@ export class ApiKeysService implements TokenVerifier {
       return null;
     }
 
+    await this.apiKeyModel.updateOne({ _id: apiKey._id }, { $set: { lastUsedAt: new Date() } });
+
     return {
       userId: user._id.toString(),
       tenantId: user.tenantId,
@@ -195,6 +221,27 @@ export class ApiKeysService implements TokenVerifier {
     return createHash('sha256').update(token).digest('hex');
   }
 
+  private defaultExpiresAt(): Date {
+    return new Date(Date.now() + this.config.apiKeys.defaultTtlDays * MS_PER_DAY);
+  }
+
+  /** Fails CLOSED: throws rather than minting once the user's active (non-revoked, unexpired) key
+   *  count reaches `MAX_ACTIVE_KEYS_PER_USER`. */
+  private async assertUnderActiveKeyCap(actorId: string, tenantId: string): Promise<void> {
+    const activeCount = await this.apiKeyModel.countDocuments({
+      tenantId,
+      userId: new Types.ObjectId(actorId),
+      revokedAt: { $exists: false },
+      $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $gt: new Date() } }],
+    });
+
+    if (activeCount >= MAX_ACTIVE_KEYS_PER_USER) {
+      throw new ApiKeyLimitExceededException(
+        `User '${actorId}' already has ${activeCount} active API keys, the maximum allowed`,
+      );
+    }
+  }
+
   private toResult(apiKey: ApiKeyDocument): ApiKeyResult {
     return {
       id: apiKey._id.toString(),
@@ -202,6 +249,7 @@ export class ApiKeysService implements TokenVerifier {
       tokenPrefix: apiKey.tokenPrefix,
       expiresAt: apiKey.expiresAt,
       revokedAt: apiKey.revokedAt,
+      lastUsedAt: apiKey.lastUsedAt,
       createdAt: apiKey.createdAt,
     };
   }

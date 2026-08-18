@@ -15,6 +15,7 @@ const exampleKey = {
   name: 'CI integration',
   tokenPrefix: 'eo_pat_9f8c12',
   expiresAt: '2026-12-31T00:00:00.000Z',
+  lastUsedAt: '2026-08-01T00:00:00.000Z',
   createdAt: '2026-07-01T00:00:00.000Z',
 };
 
@@ -36,6 +37,21 @@ export const apiKeysApiExamples: Record<string, ApiResponseOptions> = {
       example: {
         summary: 'One key',
         value: { docs: [exampleKey], count: 1 },
+      },
+    },
+  },
+  limitExceeded: {
+    status: HttpStatus.CONFLICT,
+    description: 'The caller already has the maximum number of active API keys.',
+    examples: {
+      example: {
+        summary: 'Active key cap reached',
+        value: {
+          statusCode: HttpStatus.CONFLICT,
+          message:
+            "User '65f1c2e4a1b2c3d4e5f6a7b8' already has 10 active API keys, the maximum allowed",
+          error: 'Conflict',
+        },
       },
     },
   },

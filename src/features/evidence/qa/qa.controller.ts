@@ -14,10 +14,13 @@ import {
 import type { MessageEvent } from '@nestjs/common';
 import { ApiResponse, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
+import { finalize } from 'rxjs';
 import type { Observable } from 'rxjs';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
+import { TypedConfigService } from '../../../config/environment/typed-config.service';
 import { AuthenticatedRequest } from '../../../shared/types/authenticated-request.type';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
+import { acquireStreamSlot } from '../../../shared/utils/stream-session.util';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { qaApiExamples } from './api-examples/qa.api-examples';
 import { ListAnswersRequestDto } from './dtos/request/list-answers.request.dto';
@@ -29,7 +32,10 @@ import { QaService } from './qa.service';
 @Controller()
 @ApiTags('qa')
 export class QaController {
-  constructor(private readonly qaService: QaService) {}
+  constructor(
+    private readonly qaService: QaService,
+    private readonly config: TypedConfigService,
+  ) {}
 
   @Post('questions')
   @Version('1')
@@ -66,13 +72,14 @@ export class QaController {
   // either — `@nestjs/core`'s `SseStream` already sends both, unconditionally, on every SSE
   // response (see `WorkflowRunsController.streamRun`'s identical note for the source location).
   // `@SkipThrottle()` exempts this route from the global throttler entirely — an unbounded,
-  // unthrottled, long-lived connection with an `ANSWER_STREAM_INTERVAL_MS` DB tick. Per-connection
-  // and per-tenant stream caps are deliberately not implemented yet; owned by the observability/ops
-  // phase, not this change.
+  // unthrottled, long-lived connection with an `ANSWER_STREAM_INTERVAL_MS` DB tick. Per-tenant and
+  // per-user open-connection caps are enforced below instead (`acquireStreamSlot`, config'd via
+  // `TypedConfigService.sse`), refusing with 429 rather than accepting past the process's budget.
   @Sse('answers/:id/events')
   @Version('1')
   @SkipThrottle()
   @ApiResponse(qaApiExamples.answerStream)
+  @ApiResponse(qaApiExamples.streamConnectionLimitExceeded)
   streamAnswer(
     @Param('id') id: string,
     @CurrentUser() user: AuthenticatedRequest['user'],
@@ -81,7 +88,9 @@ export class QaController {
       throw new UnauthorizedException('No token provided');
     }
 
-    return this.qaService.streamAnswer(id, user.userId, user.tenantId);
+    const release = acquireStreamSlot(user.tenantId, user.userId, this.config.sse);
+
+    return this.qaService.streamAnswer(id, user.userId, user.tenantId).pipe(finalize(release));
   }
 
   // MUST be declared above `@Get('answers/:id')` — a bare `answers` segment count differs from

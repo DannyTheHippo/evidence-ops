@@ -36,19 +36,29 @@ export class ApiKey extends AuditableDocument {
 
   @Prop({ type: Date })
   revokedAt?: Date;
+
+  /** Stamped by `ApiKeysService.verify` on every successful verification. Absent means the key
+   *  has never been used to authenticate a request. */
+  @Prop({ type: Date })
+  lastUsedAt?: Date;
 }
 
 export const ApiKeySchema = SchemaFactory.createForClass(ApiKey);
 
 /**
- * Declared here as well as in `migrations/0019-api-keys.ts`, with the same keys, options and
- * names — the migration builds them in a deployed database, this declaration is what
- * `Model.syncIndexes()` builds for a test lane that never runs migrations. The unique
- * `{ tokenHash: 1 }` index is `ApiKeysService.verify`'s lookup path; `{ tenantId, userId, createdAt }`
- * backs the "this user's keys, newest first" listing query.
+ * Declared here as well as in `migrations/0019-api-keys.ts` and `migrations/0021-api-key-expiry-and-usage.ts`,
+ * with the same keys, options and names — the migrations build them in a deployed database, this
+ * declaration is what `Model.syncIndexes()` builds for a test lane that never runs migrations. The
+ * unique `{ tokenHash: 1 }` index is `ApiKeysService.verify`'s lookup path; `{ tenantId, userId, createdAt }`
+ * backs the "this user's keys, newest first" listing query; `{ tenantId, userId, revokedAt }` backs
+ * the active-key count `ApiKeysService.mint` runs against the per-user cap on every mint.
  */
 ApiKeySchema.index({ tokenHash: 1 }, { unique: true, name: 'api_keys_tokenHash_unique' });
 ApiKeySchema.index(
   { tenantId: 1, userId: 1, createdAt: -1 },
   { name: 'api_keys_tenantId_userId_createdAt' },
+);
+ApiKeySchema.index(
+  { tenantId: 1, userId: 1, revokedAt: 1 },
+  { name: 'api_keys_tenantId_userId_revokedAt' },
 );

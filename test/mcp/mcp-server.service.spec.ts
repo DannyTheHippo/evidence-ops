@@ -19,6 +19,7 @@ import { TOOL_AUTHZ_HOOK } from '../../src/features/platform/authz/authz-hook.in
 import { StepPolicyAuthzHook } from '../../src/features/platform/authz/step-policy.authz-hook';
 import { ToolExecutorService } from '../../src/features/platform/authz/tool-executor.service';
 import type { ToolExecutionStep } from '../../src/features/platform/authz/types/tool-definition.type';
+import { AnswerNotFoundException } from '../../src/features/evidence/qa/exceptions/qa.exception';
 import { McpServerService } from '../../src/mcp/mcp-server.service';
 import {
   GET_ANSWER_TOOL_NAME,
@@ -29,6 +30,7 @@ import {
 import { PatTokenVerifier } from '../../src/mcp/pat-token.verifier';
 import {
   MCP_TOOL_CALL_EXECUTED_ACTION,
+  MCP_TOOL_CALL_FAILED_ACTION,
   MCP_TOOL_CALL_REFUSED_ACTION,
 } from '../../src/mcp/mcp.constant';
 import { UserRole } from '../../src/shared/enums/user-role.enum';
@@ -112,7 +114,11 @@ interface Harness {
   readonly als: AsyncLocalStorage<AlsContext>;
 }
 
-async function buildHarness(rateLimitPerMinute = 60): Promise<Harness> {
+async function buildHarness(
+  rateLimitPerMinute = 60,
+  preAuthIpRateLimitMaxRequests = 20,
+  preAuthIpRateLimitWindowMs = 60000,
+): Promise<Harness> {
   const tokenVerifier: jest.Mocked<TokenVerifier> = { verify: jest.fn() };
   const evidenceRetrievalService = { retrieve: jest.fn().mockResolvedValue([buildChunk()]) };
   const qaService = { getAnswerById: jest.fn().mockResolvedValue(buildAnswerEnvelope()) };
@@ -123,8 +129,8 @@ async function buildHarness(rateLimitPerMinute = 60): Promise<Harness> {
     mcp: {
       port: 3002,
       rateLimitPerMinute,
-      preAuthIpRateLimitWindowMs: 60000,
-      preAuthIpRateLimitMaxRequests: 20,
+      preAuthIpRateLimitWindowMs,
+      preAuthIpRateLimitMaxRequests,
     },
   });
 
@@ -547,6 +553,39 @@ describe('McpServerService', () => {
         client.callTool({ name: SEARCH_EVIDENCE_TOOL_NAME, arguments: { query: 'cap rate' } }),
       ).rejects.toThrow('audit write failed');
     });
+
+    // Regression for the id-enumeration gap: a fully authenticated, fully authorized `get_answer`
+    // for a non-existent id previously threw before the audit write ran at all, leaving no row —
+    // silent on every miss. The write now sits in a `finally` around the executor call, so a
+    // handler throw still leaves exactly one row, carrying a distinct action from both a success
+    // and a chokepoint refusal.
+    it('should leave an audit row with the failed action when the handler throws, never silently emitting no row', async () => {
+      const { service, auditService, qaService } = await buildHarness();
+      qaService.getAnswerById.mockRejectedValue(
+        new AnswerNotFoundException("Answer 'missing' not found"),
+      );
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      await expect(
+        client.callTool({ name: GET_ANSWER_TOOL_NAME, arguments: { answerId: 'missing' } }),
+      ).rejects.toThrow("Answer 'missing' not found");
+
+      expect(auditService.record.mock.calls).toEqual([
+        [
+          {
+            action: MCP_TOOL_CALL_FAILED_ACTION,
+            actorId: 'actor-a',
+            subject: { entityType: 'User', entityId: 'actor-a' },
+            tenantId: 'tenant-a',
+            origin: 'mcp',
+            toolName: GET_ANSWER_TOOL_NAME,
+            refusalReason: undefined,
+          },
+        ],
+      ]);
+      expect(MCP_TOOL_CALL_FAILED_ACTION).not.toBe(MCP_TOOL_CALL_EXECUTED_ACTION);
+      expect(MCP_TOOL_CALL_FAILED_ACTION).not.toBe(MCP_TOOL_CALL_REFUSED_ACTION);
+    });
   });
 
   describe('authenticate', () => {
@@ -643,6 +682,61 @@ describe('McpServerService', () => {
       expect(service.checkRateLimit('actor-a', 20)).toBe(false);
       // The refused batch consumed nothing — the remaining 10 units are still available.
       expect(service.checkRateLimit('actor-a', 10)).toBe(true);
+    });
+
+    // Bounds `rateLimitWindows`' growth to currently active actors — without this, a map entry
+    // survives forever once a caller's window has fully elapsed and is never checked again.
+    it('should evict an actor whose window has fully elapsed once any call runs, freeing the entry', async () => {
+      const { service } = await buildHarness(1);
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(0);
+
+      expect(service.checkRateLimit('actor-a')).toBe(true);
+
+      nowSpy.mockReturnValue(60_001);
+      // A different actor's call still sweeps `actor-a`'s expired window — eviction happens on
+      // every call, not only on the evicted key's own next lookup.
+      expect(service.checkRateLimit('actor-b')).toBe(true);
+      // `actor-a`'s budget of 1 is fresh again: the entry was evicted, not merely stale-but-present.
+      expect(service.checkRateLimit('actor-a')).toBe(true);
+    });
+  });
+
+  describe('checkPreAuthIpRateLimit', () => {
+    it('should allow requests up to the configured per-window cap, then refuse', async () => {
+      const { service } = await buildHarness(60, 2);
+
+      expect(service.checkPreAuthIpRateLimit('1.2.3.4')).toBe(true);
+      expect(service.checkPreAuthIpRateLimit('1.2.3.4')).toBe(true);
+      expect(service.checkPreAuthIpRateLimit('1.2.3.4')).toBe(false);
+    });
+
+    it('should reset the budget once the configured window elapses', async () => {
+      const { service } = await buildHarness(60, 1, 1000);
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(0);
+
+      expect(service.checkPreAuthIpRateLimit('1.2.3.4')).toBe(true);
+      expect(service.checkPreAuthIpRateLimit('1.2.3.4')).toBe(false);
+
+      nowSpy.mockReturnValue(1_001);
+      expect(service.checkPreAuthIpRateLimit('1.2.3.4')).toBe(true);
+    });
+
+    it('should track separate budgets per IP', async () => {
+      const { service } = await buildHarness(60, 1);
+
+      expect(service.checkPreAuthIpRateLimit('1.2.3.4')).toBe(true);
+      expect(service.checkPreAuthIpRateLimit('5.6.7.8')).toBe(true);
+    });
+
+    // The window this limiter uses is distinct from `checkRateLimit`'s actor-keyed one — a caller
+    // that has exhausted its post-auth budget must not be refused here, and vice versa, since the
+    // two police different populations (unverified IPs vs verified actors).
+    it('should apply a budget independent of the actor-keyed limiter', async () => {
+      const { service } = await buildHarness(1, 1);
+
+      expect(service.checkRateLimit('actor-a')).toBe(true);
+      expect(service.checkRateLimit('actor-a')).toBe(false);
+      expect(service.checkPreAuthIpRateLimit('1.2.3.4')).toBe(true);
     });
   });
 

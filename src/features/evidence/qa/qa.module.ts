@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { User, UserSchema } from '../../../database/schemas/administration/user/user.schema';
 import { Answer, AnswerSchema } from '../../../database/schemas/evidence/answer/answer.schema';
 import {
   DocumentVersion,
@@ -16,12 +17,15 @@ import { SynthesisService } from './synthesis.service';
 // `GroundingGateService` has no Mongoose/model dependency of its own (see its doc comment: it
 // verifies, never queries) and needs no `ProvidersModule` import. `SynthesisService` needs it for
 // `MODEL_PROVIDER`; `EvidenceRetrievalService` needs it for `RETRIEVAL_STORE`. `QaService` reuses
-// the same `Answer` model registration and `ProvidersModule` import for `WORKFLOW_ENGINE`.
+// the same `Answer` model registration and `ProvidersModule` import for `WORKFLOW_ENGINE`. `User`
+// is registered so `QaService.streamAnswer` can re-read the connecting user's tenant on each
+// `reauthTicks$` tick — see `ApiKeysModule`'s identical `User` registration for the same reason.
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: Answer.name, schema: AnswerSchema },
       { name: DocumentVersion.name, schema: DocumentVersionSchema },
+      { name: User.name, schema: UserSchema },
     ]),
     ProvidersModule,
   ],

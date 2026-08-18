@@ -144,5 +144,33 @@ describe('Retrieval (e2e)', () => {
 
       expect(lastStatus).toBe(429);
     });
+
+    // Regression for the defect `UserThrottlerGuard` closes: every request in this suite reaches
+    // the app through the same loopback connection, so keying the tracker by IP (the previous
+    // default) would put every caller in this bucket regardless of who they are — the exact
+    // "one user 429s the whole product" failure. Runs immediately after the test above, whose
+    // bucket for `cookie`'s user is already exhausted; a second, different authenticated user must
+    // still get through on their very first call.
+    it('does not share a throttle bucket between two different authenticated users', async () => {
+      fakeRetrievalStore.setHits([]);
+
+      const exhaustedUserResponse = await request(getTestServer(app))
+        .get('/api/v1/retrieval/search')
+        .set('Cookie', cookie)
+        .query({ query: 'throttle probe' });
+      expect(exhaustedUserResponse.status).toBe(429);
+
+      const { cookie: otherCookie } = await registerTestUser(app, {
+        email: 'retrieval-e2e-other-user@example.com',
+        password: 'correct-horse-battery',
+      });
+
+      const otherUserResponse = await request(getTestServer(app))
+        .get('/api/v1/retrieval/search')
+        .set('Cookie', otherCookie)
+        .query({ query: 'throttle probe' });
+
+      expect(otherUserResponse.status).toBe(200);
+    });
   });
 });

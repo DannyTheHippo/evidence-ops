@@ -26,11 +26,16 @@ export const MCP_RATE_LIMIT_WINDOW_MS = 60_000;
 export const MCP_JSON_BODY_LIMIT = '256kb';
 
 /**
- * The two audit actions every `tools/call` writes exactly one of, at the protocol boundary in
+ * The three audit actions every `tools/call` writes exactly one of, at the protocol boundary in
  * `McpServerService.buildServer`. The outcome lives in the action name, matching the closed
  * vocabulary the rest of the audit log uses (`approvals.decided`, `sources.sync_requested`); the
  * tool name and, for a refusal, the chokepoint's reason ride in `AuditEvent.toolName`/
  * `AuditEvent.refusalReason` so nothing model-controlled ever widens the action vocabulary itself.
+ * `MCP_TOOL_CALL_FAILED_ACTION` is distinct from both: a registered, authorized, well-formed call
+ * whose handler itself threw (a lookup miss, for one) is neither a policy refusal nor a success,
+ * and logging it as either would make a handler exception indistinguishable from a routine denial
+ * or a real result — the exact ambiguity that let id enumeration go unaudited.
  */
 export const MCP_TOOL_CALL_EXECUTED_ACTION = 'mcp.tool_call.executed';
 export const MCP_TOOL_CALL_REFUSED_ACTION = 'mcp.tool_call.refused';
+export const MCP_TOOL_CALL_FAILED_ACTION = 'mcp.tool_call.failed';

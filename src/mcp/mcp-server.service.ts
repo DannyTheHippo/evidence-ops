@@ -34,6 +34,7 @@ import {
   MCP_RATE_LIMIT_WINDOW_MS,
   MCP_SERVER_INFO,
   MCP_TOOL_CALL_EXECUTED_ACTION,
+  MCP_TOOL_CALL_FAILED_ACTION,
   MCP_TOOL_CALL_REFUSED_ACTION,
 } from './mcp.constant';
 import { PatTokenVerifier } from './pat-token.verifier';
@@ -102,8 +103,22 @@ export class McpServerService {
    *  cannot multiply their own budget, and one tenant's callers cannot starve each other. Held on
    *  the singleton service, not the per-request `Server`, since a `Server` this class returns
    *  lives only as long as one stateless HTTP request. In-memory and per-process: correct for a
-   *  single-replica surface with no shared counter store, not for horizontal scale-out. */
+   *  single-replica surface with no shared counter store, not for horizontal scale-out.
+   *  `applyFixedWindow` evicts a key's own expired window on the call that would otherwise reuse
+   *  it, so this stays bounded to currently active actors rather than growing for as long as the
+   *  process has been up. Distinct from `preAuthIpRateLimitWindows` below: this map only ever sees
+   *  a caller who already holds a live PAT. */
   private readonly rateLimitWindows = new Map<string, { windowStart: number; count: number }>();
+
+  /** Same fixed-window shape as `rateLimitWindows`, keyed by caller IP instead of `actorId` —
+   *  `checkPreAuthIpRateLimit` reads it, called from `src/mcp/main.ts` before `authenticate`, so an
+   *  unauthenticated flood is bounded before it ever reaches `PatTokenVerifier.verify` (a Mongo
+   *  lookup per call). The two limiters coexist deliberately: this one polices callers with no
+   *  verified identity yet, `rateLimitWindows` polices verified callers by budget. */
+  private readonly preAuthIpRateLimitWindows = new Map<
+    string,
+    { windowStart: number; count: number }
+  >();
 
   constructor(
     private readonly toolExecutor: ToolExecutorService,
@@ -146,13 +161,62 @@ export class McpServerService {
    * exceed the *remaining* budget is refused wholesale rather than partially admitted.
    */
   checkRateLimit(actorId: string, cost = 1): boolean {
-    const now = Date.now();
-    const existing = this.rateLimitWindows.get(actorId);
-    const limit = this.config.mcp.rateLimitPerMinute;
+    return this.applyFixedWindow(
+      this.rateLimitWindows,
+      actorId,
+      cost,
+      this.config.mcp.rateLimitPerMinute,
+      MCP_RATE_LIMIT_WINDOW_MS,
+    );
+  }
 
-    if (!existing || now - existing.windowStart >= MCP_RATE_LIMIT_WINDOW_MS) {
+  /**
+   * IP-keyed counterpart to `checkRateLimit`, gating `src/mcp/main.ts` *before* `authenticate` runs
+   * — the actor-keyed limiter above only ever sees a caller who already holds a live PAT, so
+   * without this an unauthenticated flood was never limited at all while each request still paid
+   * for a `PatTokenVerifier.verify` lookup. Budget is `config.mcp.preAuthIpRateLimitMaxRequests`
+   * per rolling `config.mcp.preAuthIpRateLimitWindowMs` window per IP; `cost` is always `1` since a
+   * caller with no verified identity yet cannot present a JSON-RPC batch this surface trusts to
+   * size a request. Fails CLOSED for the same reason `checkRateLimit` does.
+   */
+  checkPreAuthIpRateLimit(ip: string): boolean {
+    return this.applyFixedWindow(
+      this.preAuthIpRateLimitWindows,
+      ip,
+      1,
+      this.config.mcp.preAuthIpRateLimitMaxRequests,
+      this.config.mcp.preAuthIpRateLimitWindowMs,
+    );
+  }
+
+  /**
+   * Shared fixed-window admission check behind both limiters above. Evicts every window in `windows`
+   * that has already fully elapsed before looking `key` up, so a map keyed by a high-cardinality
+   * caller identity (an actor id, or an IP under a flood) stays bounded to currently active keys
+   * rather than accumulating one entry per caller the process has ever seen. A key with no
+   * surviving window is refused without being stored — a caller who is refused before ever
+   * succeeding once leaves no window behind to evict later.
+   */
+  private applyFixedWindow(
+    windows: Map<string, { windowStart: number; count: number }>,
+    key: string,
+    cost: number,
+    limit: number,
+    windowMs: number,
+  ): boolean {
+    const now = Date.now();
+    for (const [windowKey, window] of windows) {
+      if (now - window.windowStart >= windowMs) {
+        windows.delete(windowKey);
+      }
+    }
+
+    const existing = windows.get(key);
+    if (!existing) {
       const allowed = cost <= limit;
-      this.rateLimitWindows.set(actorId, { windowStart: now, count: allowed ? cost : 0 });
+      if (allowed) {
+        windows.set(key, { windowStart: now, count: cost });
+      }
       return allowed;
     }
 
@@ -178,12 +242,16 @@ export class McpServerService {
    * the services the tools delegate to: a read-only tool like `search_evidence` audits nothing on
    * its own (`EvidenceRetrievalService.retrieve` is shared with the worker's single-shot retrieval
    * activity, where a row per question is already recorded at `qa.question.started`), and a
-   * refusal never reaches a service at all. The
-   * row carries the tool name, the outcome, and — on a refusal — the chokepoint's reason, but
-   * never the arguments: those are model-controlled and can carry corpus text, so what is recorded
-   * answers "who called what, when", not "what did the payload say". The write fails CLOSED: it is
-   * awaited before the result goes back, so a failed audit write surfaces as a protocol error and
-   * no tool output is disclosed without a record of the call.
+   * refusal never reaches a service at all. The write happens in a `finally` around the executor
+   * call, not after it returns: a registered, authorized, well-formed call whose handler itself
+   * throws — a `get_answer` for an id that does not exist, for one — still leaves a row, carrying
+   * `MCP_TOOL_CALL_FAILED_ACTION` rather than either of the other two actions, so a thrown handler
+   * is never silently indistinguishable from a miss with no row at all. The row carries the tool
+   * name, the outcome, and — on a refusal — the chokepoint's reason, but never the arguments: those
+   * are model-controlled and can carry corpus text, so what is recorded answers "who called what,
+   * when", not "what did the payload say". The write fails CLOSED: it is awaited inside the
+   * `finally` before the result (or the original error) goes back, so a failed audit write
+   * surfaces as a protocol error and no tool output is disclosed without a record of the call.
    */
   buildServer(context: ToolExecutionContext): Server {
     const server = new Server(MCP_SERVER_INFO, { capabilities: { tools: {} } });
@@ -203,29 +271,36 @@ export class McpServerService {
           origin: 'mcp',
         },
         async () => {
-          const executed = await this.toolExecutor.execute({
-            step: stepForTool(name),
-            toolName: name,
-            rawArgs: toolArgs ?? {},
-            context,
-          });
-
-          await this.auditService.record({
-            action:
-              executed.kind === 'refused'
-                ? MCP_TOOL_CALL_REFUSED_ACTION
-                : MCP_TOOL_CALL_EXECUTED_ACTION,
-            actorId: context.actorId,
-            // No entity is common to all three tools, and `entityId` must be an ObjectId — the
-            // caller themselves is the subject, as in `AuditEventsService.list`'s own row.
-            subject: { entityType: 'User', entityId: context.actorId },
-            tenantId: context.tenantId,
-            origin: 'mcp',
-            toolName: name,
-            refusalReason: executed.kind === 'refused' ? executed.reason : undefined,
-          });
-
-          return executed;
+          // `executed` stays `undefined` only when `execute` throws before assigning it — that is
+          // the sole signal the `finally` block below needs to tell a handler throw apart from a
+          // refusal or a success, without a separate `catch` re-throwing to set a flag.
+          let executed: ToolExecutionResult | undefined;
+          try {
+            executed = await this.toolExecutor.execute({
+              step: stepForTool(name),
+              toolName: name,
+              rawArgs: toolArgs ?? {},
+              context,
+            });
+            return executed;
+          } finally {
+            await this.auditService.record({
+              action:
+                executed === undefined
+                  ? MCP_TOOL_CALL_FAILED_ACTION
+                  : executed.kind === 'refused'
+                    ? MCP_TOOL_CALL_REFUSED_ACTION
+                    : MCP_TOOL_CALL_EXECUTED_ACTION,
+              actorId: context.actorId,
+              // No entity is common to all three tools, and `entityId` must be an ObjectId — the
+              // caller themselves is the subject, as in `AuditEventsService.list`'s own row.
+              subject: { entityType: 'User', entityId: context.actorId },
+              tenantId: context.tenantId,
+              origin: 'mcp',
+              toolName: name,
+              refusalReason: executed?.kind === 'refused' ? executed.reason : undefined,
+            });
+          }
         },
       );
 

@@ -3,6 +3,7 @@ import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { Types } from 'mongoose';
+import { User } from '../../../../src/database/schemas/administration/user/user.schema';
 import { WorkflowRun } from '../../../../src/database/schemas/workflow/workflow-run/workflow-run.schema';
 import { ApprovalsService } from '../../../../src/features/evidence/approvals/approvals.service';
 import { WorkflowRunNotFoundException } from '../../../../src/features/evidence/workflow-runs/exceptions/workflow-runs.exception';
@@ -11,6 +12,7 @@ import { WorkflowRunsService } from '../../../../src/features/evidence/workflow-
 import { WORKFLOW_ENGINE } from '../../../../src/providers/workflow-engine/workflow-engine.interface';
 import {
   SSE_HEARTBEAT_INTERVAL_MS,
+  SSE_REAUTH_INTERVAL_MS,
   SSE_STREAM_ERROR_MESSAGE,
 } from '../../../../src/shared/constants/sse.constant';
 import { AuditService } from '../../../../src/shared/services/audit/audit.service';
@@ -22,6 +24,7 @@ describe('WorkflowRunsService', () => {
   let service: WorkflowRunsService;
 
   const mockWorkflowRunModel = getMockModel();
+  const mockUserModel = getMockModel();
   const mockWorkflowEngine = { start: jest.fn(), status: jest.fn(), signal: jest.fn() };
   const mockApprovalsService = { listPending: jest.fn(), peekPending: jest.fn() };
   const mockAuditService = { record: jest.fn() };
@@ -32,6 +35,7 @@ describe('WorkflowRunsService', () => {
       providers: [
         WorkflowRunsService,
         { provide: getModelToken(WorkflowRun.name), useValue: mockWorkflowRunModel },
+        { provide: getModelToken(User.name), useValue: mockUserModel },
         { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
         { provide: ApprovalsService, useValue: mockApprovalsService },
         { provide: AuditService, useValue: mockAuditService },
@@ -519,6 +523,71 @@ describe('WorkflowRunsService', () => {
       expect(mockLogger.error).toHaveBeenCalledWith(
         expect.stringContaining('a plain string rejection'),
       );
+    });
+
+    it('should complete the stream once a re-auth tick finds the connecting user gone, without a terminal error event', async () => {
+      const run = buildRun();
+      mockWorkflowRunModel.findOne.mockResolvedValue(run);
+      mockWorkflowEngine.status.mockRejectedValue(new Error('no live handle'));
+      mockApprovalsService.peekPending.mockResolvedValue(emptyApprovalsPage);
+      mockAuditService.record.mockResolvedValue(undefined);
+      mockUserModel.findById.mockResolvedValue(null);
+      const events: MessageEvent[] = [];
+      let completed = false;
+
+      service.streamRun(run._id.toString(), 'actor-1', 'tenant-a').subscribe({
+        next: (event) => events.push(event),
+        complete: () => {
+          completed = true;
+        },
+      });
+      await jest.advanceTimersByTimeAsync(0);
+      await jest.advanceTimersByTimeAsync(SSE_REAUTH_INTERVAL_MS);
+
+      expect(mockUserModel.findById).toHaveBeenCalledWith('actor-1');
+      expect(completed).toBe(true);
+      expect(events.some((event) => event.type === 'error')).toBe(false);
+    });
+
+    it('should complete the stream once a re-auth tick finds the connecting user moved to a different tenant', async () => {
+      const run = buildRun();
+      mockWorkflowRunModel.findOne.mockResolvedValue(run);
+      mockWorkflowEngine.status.mockRejectedValue(new Error('no live handle'));
+      mockApprovalsService.peekPending.mockResolvedValue(emptyApprovalsPage);
+      mockAuditService.record.mockResolvedValue(undefined);
+      mockUserModel.findById.mockResolvedValue({ tenantId: 'tenant-b' });
+      let completed = false;
+
+      service.streamRun(run._id.toString(), 'actor-1', 'tenant-a').subscribe({
+        complete: () => {
+          completed = true;
+        },
+      });
+      await jest.advanceTimersByTimeAsync(0);
+      await jest.advanceTimersByTimeAsync(SSE_REAUTH_INTERVAL_MS);
+
+      expect(completed).toBe(true);
+    });
+
+    it('should not complete the stream while re-auth ticks keep resolving the same tenant', async () => {
+      const run = buildRun();
+      mockWorkflowRunModel.findOne.mockResolvedValue(run);
+      mockWorkflowEngine.status.mockRejectedValue(new Error('no live handle'));
+      mockApprovalsService.peekPending.mockResolvedValue(emptyApprovalsPage);
+      mockAuditService.record.mockResolvedValue(undefined);
+      mockUserModel.findById.mockResolvedValue({ tenantId: 'tenant-a' });
+      let completed = false;
+
+      const subscription = service.streamRun(run._id.toString(), 'actor-1', 'tenant-a').subscribe({
+        complete: () => {
+          completed = true;
+        },
+      });
+      await jest.advanceTimersByTimeAsync(0);
+      await jest.advanceTimersByTimeAsync(SSE_REAUTH_INTERVAL_MS);
+
+      expect(completed).toBe(false);
+      subscription.unsubscribe();
     });
   });
 });

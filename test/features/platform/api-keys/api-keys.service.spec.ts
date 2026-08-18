@@ -3,15 +3,24 @@ import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { createHash, randomBytes } from 'node:crypto';
 import { Types } from 'mongoose';
+import { TypedConfigService } from '../../../../src/config/environment/typed-config.service';
 import { ApiKey } from '../../../../src/database/schemas/administration/api-key/api-key.schema';
 import { User } from '../../../../src/database/schemas/administration/user/user.schema';
-import { ApiKeysService } from '../../../../src/features/platform/api-keys/api-keys.service';
-import { ApiKeyNotFoundException } from '../../../../src/features/platform/api-keys/exceptions/api-keys.exception';
+import {
+  ApiKeysService,
+  MAX_ACTIVE_KEYS_PER_USER,
+} from '../../../../src/features/platform/api-keys/api-keys.service';
+import {
+  ApiKeyLimitExceededException,
+  ApiKeyNotFoundException,
+} from '../../../../src/features/platform/api-keys/exceptions/api-keys.exception';
+import { DEFAULT_PAGINATION_LIMIT } from '../../../../src/shared/constants/pagination-defaults.constant';
 import { UserRole } from '../../../../src/shared/enums/user-role.enum';
 import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
 import { getMockModel } from '../../../utils/get-mock-model';
+import { getMockTypedConfig } from '../../../utils/get-mock-typed-config';
 
 /** Builds a validly shaped presented token (`eo_pat_` + 43-char base64url) matching what
  *  `ApiKeysService.mint` generates, so the length/prefix precheck in `verify` passes and every
@@ -41,6 +50,7 @@ describe('ApiKeysService', () => {
     name: 'CI integration',
     expiresAt: undefined,
     revokedAt: undefined,
+    lastUsedAt: undefined,
     createdAt: new Date('2026-07-01T00:00:00.000Z'),
     ...overrides,
   });
@@ -59,6 +69,7 @@ describe('ApiKeysService', () => {
         ApiKeysService,
         { provide: getModelToken(ApiKey.name), useValue: mockApiKeyModel },
         { provide: getModelToken(User.name), useValue: mockUserModel },
+        { provide: TypedConfigService, useValue: getMockTypedConfig() },
         { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: mockLogger },
       ],
@@ -73,6 +84,7 @@ describe('ApiKeysService', () => {
 
   describe('mint', () => {
     it('should mint a key, persist only the hash, and return the plaintext token once', async () => {
+      mockApiKeyModel.countDocuments.mockResolvedValueOnce(0);
       mockApiKeyModel.create.mockResolvedValueOnce(buildMockApiKey());
 
       const result = await service.mint({
@@ -101,11 +113,47 @@ describe('ApiKeysService', () => {
 
     it('should pass an explicit expiresAt through to persistence', async () => {
       const expiresAt = new Date('2026-12-31T00:00:00.000Z');
+      mockApiKeyModel.countDocuments.mockResolvedValueOnce(0);
       mockApiKeyModel.create.mockResolvedValueOnce(buildMockApiKey({ expiresAt }));
 
       await service.mint({ name: 'CI integration', expiresAt, actorId, tenantId: 'tenant-a' });
 
       expect(mockApiKeyModel.create).toHaveBeenCalledWith(expect.objectContaining({ expiresAt }));
+    });
+
+    it('should default expiresAt from config when omitted', async () => {
+      mockApiKeyModel.countDocuments.mockResolvedValueOnce(0);
+      mockApiKeyModel.create.mockResolvedValueOnce(buildMockApiKey());
+
+      await service.mint({ name: 'CI integration', actorId, tenantId: 'tenant-a' });
+
+      const [createCall] = mockApiKeyModel.create.mock.calls[0] as [{ expiresAt: Date }];
+      const expectedMs = Date.now() + 90 * 24 * 60 * 60 * 1000;
+      expect(Math.abs(createCall.expiresAt.getTime() - expectedMs)).toBeLessThan(5000);
+    });
+
+    it('should refuse minting once the caller’s active key count reaches the cap', async () => {
+      mockApiKeyModel.countDocuments.mockResolvedValueOnce(MAX_ACTIVE_KEYS_PER_USER);
+
+      await expect(
+        service.mint({ name: 'One too many', actorId, tenantId: 'tenant-a' }),
+      ).rejects.toBeInstanceOf(ApiKeyLimitExceededException);
+      expect(mockApiKeyModel.create).not.toHaveBeenCalled();
+    });
+
+    it('should scope the active key count by tenant, user, and non-revoked, unexpired status', async () => {
+      mockApiKeyModel.countDocuments.mockResolvedValueOnce(0);
+      mockApiKeyModel.create.mockResolvedValueOnce(buildMockApiKey());
+
+      await service.mint({ name: 'CI integration', actorId, tenantId: 'tenant-a' });
+
+      expect(mockApiKeyModel.countDocuments).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: 'tenant-a',
+          userId,
+          revokedAt: { $exists: false },
+        }),
+      );
     });
   });
 
@@ -114,12 +162,20 @@ describe('ApiKeysService', () => {
       mockApiKeyModel.find.mockResolvedValueOnce([buildMockApiKey()]);
       mockApiKeyModel.countDocuments.mockResolvedValueOnce(1);
 
-      const result = await service.list(actorId, 'tenant-a');
+      const result = await service.list(
+        { skip: 0, limit: DEFAULT_PAGINATION_LIMIT },
+        actorId,
+        'tenant-a',
+      );
 
       expect(mockApiKeyModel.find).toHaveBeenCalledWith(
         { tenantId: 'tenant-a', userId },
         null,
-        expect.objectContaining({ sort: { createdAt: -1 } }),
+        expect.objectContaining({
+          sort: { createdAt: -1 },
+          skip: 0,
+          limit: DEFAULT_PAGINATION_LIMIT,
+        }),
       );
       expect(mockAuditService.record).toHaveBeenCalledWith({
         action: 'api-keys.listed',
@@ -130,6 +186,34 @@ describe('ApiKeysService', () => {
       expect(result.count).toBe(1);
       expect(result.docs).toHaveLength(1);
       expect(result.docs[0]).not.toHaveProperty('tokenHash');
+    });
+
+    it('should page results using the given skip and limit', async () => {
+      mockApiKeyModel.find.mockResolvedValueOnce([buildMockApiKey()]);
+      mockApiKeyModel.countDocuments.mockResolvedValueOnce(5);
+
+      const result = await service.list({ skip: 2, limit: 1 }, actorId, 'tenant-a');
+
+      expect(mockApiKeyModel.find).toHaveBeenCalledWith(
+        { tenantId: 'tenant-a', userId },
+        null,
+        expect.objectContaining({ skip: 2, limit: 1 }),
+      );
+      expect(result.count).toBe(5);
+    });
+
+    it('should expose lastUsedAt on a listed key', async () => {
+      const lastUsedAt = new Date('2026-08-01T00:00:00.000Z');
+      mockApiKeyModel.find.mockResolvedValueOnce([buildMockApiKey({ lastUsedAt })]);
+      mockApiKeyModel.countDocuments.mockResolvedValueOnce(1);
+
+      const result = await service.list(
+        { skip: 0, limit: DEFAULT_PAGINATION_LIMIT },
+        actorId,
+        'tenant-a',
+      );
+
+      expect(result.docs[0].lastUsedAt).toBe(lastUsedAt);
     });
   });
 

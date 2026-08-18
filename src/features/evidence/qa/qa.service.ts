@@ -13,9 +13,11 @@ import {
   map,
   merge,
   of,
+  takeUntil,
   takeWhile,
   timer,
 } from 'rxjs';
+import { User, UserDocument } from '../../../database/schemas/administration/user/user.schema';
 import { Answer, AnswerDocument } from '../../../database/schemas/evidence/answer/answer.schema';
 import type {
   AnswerRunStatus,
@@ -25,12 +27,14 @@ import type { WorkflowEngine } from '../../../providers/workflow-engine/workflow
 import { WORKFLOW_ENGINE } from '../../../providers/workflow-engine/workflow-engine.interface';
 import {
   SSE_HEARTBEAT_INTERVAL_MS,
+  SSE_REAUTH_INTERVAL_MS,
   SSE_STREAM_ERROR_MESSAGE,
 } from '../../../shared/constants/sse.constant';
 import { UserRole } from '../../../shared/enums/user-role.enum';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import { reauthTicks$ } from '../../../shared/utils/stream-session.util';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import type { AnswerQuestionInput } from '../../../workflows/types';
 import type { AnswerContract, Citation, VerificationReport } from './contracts/answer.contract';
@@ -90,6 +94,9 @@ export class QaService {
   constructor(
     @InjectModel(Answer.name)
     private readonly answerModel: Model<AnswerDocument>,
+
+    @InjectModel(User.name)
+    private readonly userModel: Model<UserDocument>,
 
     @Inject(WORKFLOW_ENGINE)
     private readonly workflowEngine: WorkflowEngine,
@@ -234,6 +241,21 @@ export class QaService {
     ).pipe(map((): AnswerStreamEvent => ({ type: 'heartbeat', data: {} })));
 
     return concat(opened$, merge(answer$, heartbeat$)).pipe(
+      // Re-checked on every `SSE_REAUTH_INTERVAL_MS` tick, independent of the answer/heartbeat
+      // cadence above — the initial `@CurrentUser()` check at subscribe time only proves the
+      // session was valid then, and this connection can otherwise outlive a logout or a tenant
+      // change for as long as the client keeps it open. See `reauthTicks$`'s own doc comment for
+      // why a `reload` failure also ends the stream rather than being swallowed.
+      takeUntil(
+        reauthTicks$(
+          { userId: actorId, tenantId },
+          (userId) =>
+            this.userModel
+              .findById(userId)
+              .then((user) => (user ? { tenantId: user.tenantId } : null)),
+          SSE_REAUTH_INTERVAL_MS,
+        ),
+      ),
       // Inclusive: the terminal answer event itself must reach the client before the stream ends —
       // an exclusive takeWhile would close the connection without ever sending the state the
       // caller most needs. Applied to the MERGED stream, not just `answer$`, so completing here

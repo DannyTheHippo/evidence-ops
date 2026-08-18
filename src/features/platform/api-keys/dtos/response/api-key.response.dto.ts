@@ -23,7 +23,9 @@ export class ApiKeyResponseDto {
   @Expose()
   @ApiProperty({
     example: '2026-12-31T00:00:00.000Z',
-    description: 'When this key stops working. Absent means it never expires.',
+    description:
+      'When this key stops working. Always set on a key minted after the default TTL shipped; ' +
+      'absent only on a key minted before then, which never expires.',
     required: false,
   })
   expiresAt?: Date;
@@ -35,6 +37,14 @@ export class ApiKeyResponseDto {
     required: false,
   })
   revokedAt?: Date;
+
+  @Expose()
+  @ApiProperty({
+    example: '2026-08-01T00:00:00.000Z',
+    description: 'When this key last authenticated a request. Absent means it has never been used.',
+    required: false,
+  })
+  lastUsedAt?: Date;
 
   @Expose()
   @ApiProperty({ example: '2026-07-01T00:00:00.000Z', description: 'Key creation timestamp.' })

@@ -86,10 +86,26 @@ export const documentsApiExamples: Record<string, ApiResponseOptions> = {
   stream: {
     status: HttpStatus.OK,
     description:
-      'text/event-stream. Polls every 3s for the life of the connection — no terminal state to ' +
-      'close on. `documents` events carry the exact shape GET /documents returns; a `heartbeat` ' +
-      'event fires every 15s; a terminal `error` event means the client should fall back to ' +
-      'polling GET /documents.',
+      'text/event-stream. Polls every 3s. `documents` events carry the exact shape GET /documents ' +
+      'returns; a `heartbeat` event fires every 15s; a terminal `error` event means the client ' +
+      'should fall back to polling GET /documents. Re-checks the connecting session every 30s and ' +
+      'closes if it is gone or moved tenants, and closes unconditionally once the connection has ' +
+      "been open for the configured max stream lifetime — this stream's own list has no terminal " +
+      'state of its own, unlike the answer/run streams.',
+  },
+  streamConnectionLimitExceeded: {
+    status: HttpStatus.TOO_MANY_REQUESTS,
+    description: "The caller's tenant or user is already at its open-SSE-stream cap.",
+    examples: {
+      example: {
+        summary: 'Open-stream cap reached',
+        value: {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          message: "User 'user-1' is at its open-stream limit (10)",
+          error: 'Too Many Requests',
+        },
+      },
+    },
   },
   versionContent: {
     status: HttpStatus.OK,

@@ -96,6 +96,21 @@ export const qaApiExamples: Record<string, ApiResponseOptions> = {
       'text/event-stream. Polls every 1.5s until runStatus reaches a terminal state, emitting the ' +
       'final state before closing. `answer` events carry the exact shape GET /answers/:id returns; ' +
       'a `heartbeat` event fires every 15s; a terminal `error` event means the client should fall ' +
-      'back to polling GET /answers/:id.',
+      'back to polling GET /answers/:id. Re-checks the connecting session every 30s and closes if ' +
+      'it is gone or moved tenants.',
+  },
+  streamConnectionLimitExceeded: {
+    status: HttpStatus.TOO_MANY_REQUESTS,
+    description: "The caller's tenant or user is already at its open-SSE-stream cap.",
+    examples: {
+      example: {
+        summary: 'Open-stream cap reached',
+        value: {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          message: "User 'user-1' is at its open-stream limit (10)",
+          error: 'Too Many Requests',
+        },
+      },
+    },
   },
 };

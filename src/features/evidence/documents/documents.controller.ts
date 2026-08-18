@@ -20,14 +20,17 @@ import type { MessageEvent } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBody, ApiConsumes, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
+import { finalize } from 'rxjs';
 import type { Observable } from 'rxjs';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
 import { RolesGuard } from '../../common/auth/guards/roles.guard';
+import { TypedConfigService } from '../../../config/environment/typed-config.service';
 import { RequireRole } from '../../../shared/decorators/require-role.decorator';
 import { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
 import { UserRole } from '../../../shared/enums/user-role.enum';
 import { AuthenticatedRequest } from '../../../shared/types/authenticated-request.type';
+import { acquireStreamSlot } from '../../../shared/utils/stream-session.util';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { documentsApiExamples } from './api-examples/documents.api-examples';
 import { MAX_FILE_SIZE_BYTES } from './documents.constant';
@@ -41,7 +44,10 @@ import type { UploadedFileLike } from './types/uploaded-file.type';
 @Controller('documents')
 @ApiTags('documents')
 export class DocumentsController {
-  constructor(private readonly documentsService: DocumentsService) {}
+  constructor(
+    private readonly documentsService: DocumentsService,
+    private readonly config: TypedConfigService,
+  ) {}
 
   // Content addressing: `documentId` in the body is how a caller says "this is a new version
   // of an existing document" rather than "this is a new document" — the task's endpoint list
@@ -110,19 +116,22 @@ export class DocumentsController {
   // Cache-Control/X-Accel-Buffering either — see `WorkflowRunsController.streamRun`'s identical
   // note: `@nestjs/core`'s `SseStream` already sends both, unconditionally, on every SSE response.
   // `@SkipThrottle()` exempts this route from the global throttler entirely — an unbounded,
-  // unthrottled, long-lived connection with a `DOCUMENTS_STREAM_INTERVAL_MS` DB tick. Per-connection
-  // and per-tenant stream caps are deliberately not implemented yet; owned by the observability/ops
-  // phase, not this change.
+  // unthrottled, long-lived connection with a `DOCUMENTS_STREAM_INTERVAL_MS` DB tick. Per-tenant
+  // and per-user open-connection caps are enforced below instead (`acquireStreamSlot`, config'd via
+  // `TypedConfigService.sse`), refusing with 429 rather than accepting past the process's budget.
   @Sse('events')
   @Version('1')
   @SkipThrottle()
   @ApiResponse(documentsApiExamples.stream)
+  @ApiResponse(documentsApiExamples.streamConnectionLimitExceeded)
   streamEvents(@CurrentUser() user: AuthenticatedRequest['user']): Observable<MessageEvent> {
     if (!user) {
       throw new UnauthorizedException('No token provided');
     }
 
-    return this.documentsService.streamList(user.tenantId);
+    const release = acquireStreamSlot(user.tenantId, user.userId, this.config.sse);
+
+    return this.documentsService.streamList(user.tenantId, user.userId).pipe(finalize(release));
   }
 
   @Get(':id')

@@ -12,10 +12,13 @@ import {
 import type { MessageEvent } from '@nestjs/common';
 import { ApiResponse, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
+import { finalize } from 'rxjs';
 import type { Observable } from 'rxjs';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
+import { TypedConfigService } from '../../../config/environment/typed-config.service';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
 import { AuthenticatedRequest } from '../../../shared/types/authenticated-request.type';
+import { acquireStreamSlot } from '../../../shared/utils/stream-session.util';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { workflowRunsApiExamples } from './api-examples/workflow-runs.api-examples';
 import { ListWorkflowRunsRequestDto } from './dtos/request/list-workflow-runs.request.dto';
@@ -25,7 +28,10 @@ import { WorkflowRunsService } from './workflow-runs.service';
 @Controller('workflow-runs')
 @ApiTags('workflow-runs')
 export class WorkflowRunsController {
-  constructor(private readonly workflowRunsService: WorkflowRunsService) {}
+  constructor(
+    private readonly workflowRunsService: WorkflowRunsService,
+    private readonly config: TypedConfigService,
+  ) {}
 
   @Get()
   @Version('1')
@@ -61,12 +67,14 @@ export class WorkflowRunsController {
   // Nest applies its own values after any caller-set ones.
   // `@SkipThrottle()` exempts this route from the global throttler entirely — an unbounded,
   // unthrottled, long-lived connection with a `WORKFLOW_RUN_STREAM_INTERVAL_MS` DB tick.
-  // Per-connection and per-tenant stream caps are deliberately not implemented yet; owned by the
-  // observability/ops phase, not this change.
+  // Per-tenant and per-user open-connection caps are enforced below instead (`acquireStreamSlot`,
+  // config'd via `TypedConfigService.sse`), refusing with 429 rather than accepting past the
+  // process's budget.
   @Sse(':id/events')
   @Version('1')
   @SkipThrottle()
   @ApiResponse(workflowRunsApiExamples.stream)
+  @ApiResponse(workflowRunsApiExamples.streamConnectionLimitExceeded)
   streamRun(
     @Param('id') id: string,
     @CurrentUser() user: AuthenticatedRequest['user'],
@@ -75,7 +83,11 @@ export class WorkflowRunsController {
       throw new UnauthorizedException('No token provided');
     }
 
-    return this.workflowRunsService.streamRun(id, user.userId, user.tenantId);
+    const release = acquireStreamSlot(user.tenantId, user.userId, this.config.sse);
+
+    return this.workflowRunsService
+      .streamRun(id, user.userId, user.tenantId)
+      .pipe(finalize(release));
   }
 
   @Get(':id')

@@ -11,3 +11,10 @@ export const SSE_HEARTBEAT_INTERVAL_MS = 15_000;
 // would otherwise reach the browser directly. Mirrors `GlobalExceptionFilter`'s own withheld-detail
 // text; the real error is still logged server-side by each stream's `catchError`.
 export const SSE_STREAM_ERROR_MESSAGE = 'Internal server error';
+
+// How often each of the three SSE streams (`QaService.streamAnswer`, `WorkflowRunsService.streamRun`,
+// `DocumentsService.streamList`) re-reads the connecting user via `reauthTicks$`
+// (`stream-session.util.ts`) and closes if the session is gone or moved tenants. This is the
+// window a revoked or cross-tenant session can keep an already-open stream alive — worth trading
+// against the extra Mongo lookup a tighter interval would add on every open connection.
+export const SSE_REAUTH_INTERVAL_MS = 30_000;

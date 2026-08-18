@@ -9,6 +9,7 @@ import {
   ApiKeyDocument,
 } from '../../src/database/schemas/administration/api-key/api-key.schema';
 import { User, UserDocument } from '../../src/database/schemas/administration/user/user.schema';
+import { MAX_ACTIVE_KEYS_PER_USER } from '../../src/features/platform/api-keys/api-keys.service';
 import { TOKEN_VERIFIER } from '../../src/features/platform/api-keys/token-verifier.interface';
 import type { TokenVerifier } from '../../src/features/platform/api-keys/token-verifier.interface';
 import { UserRole } from '../../src/shared/enums/user-role.enum';
@@ -30,25 +31,31 @@ interface ApiKeyBody {
   tokenPrefix: string;
   expiresAt?: string;
   revokedAt?: string;
+  lastUsedAt?: string;
   createdAt: string;
 }
 
-const MINTED_KEY_KEYS = ['id', 'name', 'token', 'tokenPrefix', 'createdAt'].sort();
-const MINTED_KEY_KEYS_WITH_EXPIRY = [
-  'id',
-  'name',
-  'token',
-  'tokenPrefix',
-  'expiresAt',
-  'createdAt',
-].sort();
-const LIST_KEY_KEYS_FRESH = ['id', 'name', 'tokenPrefix', 'createdAt'].sort();
+const DEFAULT_TTL_DAYS = 90;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// `expiresAt` defaults from config the moment `expiresAt` is omitted, so every mint response now
+// carries it — the "no expiry" shape from before the default TTL landed no longer occurs.
+const MINTED_KEY_KEYS = ['id', 'name', 'token', 'tokenPrefix', 'expiresAt', 'createdAt'].sort();
+const LIST_KEY_KEYS_FRESH = ['id', 'name', 'tokenPrefix', 'expiresAt', 'createdAt'].sort();
 const LIST_KEY_KEYS_FULL = [
   'id',
   'name',
   'tokenPrefix',
   'expiresAt',
   'revokedAt',
+  'createdAt',
+].sort();
+const LIST_KEY_KEYS_USED = [
+  'id',
+  'name',
+  'tokenPrefix',
+  'expiresAt',
+  'lastUsedAt',
   'createdAt',
 ].sort();
 
@@ -85,7 +92,7 @@ describe('ApiKeys (e2e)', () => {
       expect(response.status).toBe(401);
     });
 
-    it('mints a key, exposing the exact key set including the plaintext token exactly once', async () => {
+    it('mints a key, exposing the exact key set including the plaintext token exactly once, with expiresAt defaulted from config', async () => {
       const response = await request(getTestServer(app))
         .post('/api/v1/api-keys')
         .set('Cookie', cookie)
@@ -98,21 +105,56 @@ describe('ApiKeys (e2e)', () => {
       expect(body.tokenPrefix.startsWith('eo_pat_')).toBe(true);
       expect(Object.keys(body).sort()).toEqual(MINTED_KEY_KEYS);
 
+      const expiresAtMs = new Date(body.expiresAt as string).getTime();
+      const expectedMs = Date.now() + DEFAULT_TTL_DAYS * DAY_MS;
+      expect(Math.abs(expiresAtMs - expectedMs)).toBeLessThan(60_000);
+
       const stored = await apiKeyModel.findById(body.id);
       expect(stored?.tokenHash).not.toBe(body.token);
       expect(stored?.tokenHash).toBe(createHash('sha256').update(body.token).digest('hex'));
     });
 
-    it('mints a key with an expiry and exposes it in the exact key set', async () => {
+    it('mints a key with an explicit expiry inside the allowed window and exposes it exactly', async () => {
       const response = await request(getTestServer(app))
         .post('/api/v1/api-keys')
         .set('Cookie', cookie)
-        .send({ name: 'Expiring key', expiresAt: '2099-01-01T00:00:00.000Z' });
+        .send({ name: 'Expiring key', expiresAt: '2027-02-01T00:00:00.000Z' });
       const body = response.body as MintedKeyBody;
 
       expect(response.status).toBe(201);
-      expect(body.expiresAt).toBe('2099-01-01T00:00:00.000Z');
-      expect(Object.keys(body).sort()).toEqual(MINTED_KEY_KEYS_WITH_EXPIRY);
+      expect(body.expiresAt).toBe('2027-02-01T00:00:00.000Z');
+      expect(Object.keys(body).sort()).toEqual(MINTED_KEY_KEYS);
+    });
+
+    it('rejects an expiry beyond the one-year maximum window', async () => {
+      const response = await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Cookie', cookie)
+        .send({ name: 'Century key', expiresAt: '2099-01-01T00:00:00.000Z' });
+
+      expect(response.status).toBe(400);
+    });
+
+    it('refuses minting once the caller reaches the active key cap', async () => {
+      const capped = await registerTestUser(app, {
+        email: 'api-keys-e2e-capped@example.com',
+        password: 'correct-horse-battery',
+      });
+
+      for (let i = 0; i < MAX_ACTIVE_KEYS_PER_USER; i += 1) {
+        const response = await request(getTestServer(app))
+          .post('/api/v1/api-keys')
+          .set('Cookie', capped.cookie)
+          .send({ name: `Cap fixture ${i}` });
+        expect(response.status).toBe(201);
+      }
+
+      const response = await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Cookie', capped.cookie)
+        .send({ name: 'One too many' });
+
+      expect(response.status).toBe(409);
     });
   });
 
@@ -166,7 +208,7 @@ describe('ApiKeys (e2e)', () => {
       const minted = await request(getTestServer(app))
         .post('/api/v1/api-keys')
         .set('Cookie', cookie)
-        .send({ name: 'Full shape key', expiresAt: '2099-01-01T00:00:00.000Z' });
+        .send({ name: 'Full shape key', expiresAt: '2027-02-01T00:00:00.000Z' });
       const mintedBody = minted.body as MintedKeyBody;
 
       await request(getTestServer(app))
@@ -182,6 +224,58 @@ describe('ApiKeys (e2e)', () => {
       expect(revokedKey).toBeDefined();
       expect(revokedKey?.revokedAt).toBeDefined();
       expect(Object.keys(revokedKey as ApiKeyBody).sort()).toEqual(LIST_KEY_KEYS_FULL);
+    });
+
+    it('exposes lastUsedAt, exact key set, after a successful verify', async () => {
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Cookie', cookie)
+        .send({ name: 'Used key' });
+      const mintedBody = minted.body as MintedKeyBody;
+
+      await tokenVerifier.verify(mintedBody.token);
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/api-keys')
+        .set('Cookie', cookie);
+      const body = response.body as { docs: ApiKeyBody[]; count: number };
+      const usedKey = body.docs.find((doc) => doc.id === mintedBody.id);
+
+      expect(usedKey).toBeDefined();
+      expect(usedKey?.lastUsedAt).toBeDefined();
+      expect(Object.keys(usedKey as ApiKeyBody).sort()).toEqual(LIST_KEY_KEYS_USED);
+    });
+
+    it('paginates with skip and limit', async () => {
+      const paged = await registerTestUser(app, {
+        email: 'api-keys-e2e-paged@example.com',
+        password: 'correct-horse-battery',
+      });
+      for (let i = 0; i < 3; i += 1) {
+        await request(getTestServer(app))
+          .post('/api/v1/api-keys')
+          .set('Cookie', paged.cookie)
+          .send({ name: `Paged key ${i}` });
+      }
+
+      const firstPage = await request(getTestServer(app))
+        .get('/api/v1/api-keys?skip=0&limit=2')
+        .set('Cookie', paged.cookie);
+      const firstBody = firstPage.body as { docs: ApiKeyBody[]; count: number };
+
+      const secondPage = await request(getTestServer(app))
+        .get('/api/v1/api-keys?skip=2&limit=2')
+        .set('Cookie', paged.cookie);
+      const secondBody = secondPage.body as { docs: ApiKeyBody[]; count: number };
+
+      expect(firstBody.docs).toHaveLength(2);
+      expect(firstBody.count).toBe(3);
+      expect(secondBody.docs).toHaveLength(1);
+      expect(secondBody.count).toBe(3);
+
+      const firstIds = firstBody.docs.map((doc) => doc.id);
+      const secondIds = secondBody.docs.map((doc) => doc.id);
+      expect(firstIds).not.toEqual(expect.arrayContaining(secondIds));
     });
   });
 

@@ -3,6 +3,7 @@ import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { Types } from 'mongoose';
+import { User } from '../../../../src/database/schemas/administration/user/user.schema';
 import { Answer } from '../../../../src/database/schemas/evidence/answer/answer.schema';
 import { AnswerNotFoundException } from '../../../../src/features/evidence/qa/exceptions/qa.exception';
 import { ANSWER_STREAM_INTERVAL_MS } from '../../../../src/features/evidence/qa/qa.constant';
@@ -10,6 +11,7 @@ import { QaService } from '../../../../src/features/evidence/qa/qa.service';
 import { WORKFLOW_ENGINE } from '../../../../src/providers/workflow-engine/workflow-engine.interface';
 import {
   SSE_HEARTBEAT_INTERVAL_MS,
+  SSE_REAUTH_INTERVAL_MS,
   SSE_STREAM_ERROR_MESSAGE,
 } from '../../../../src/shared/constants/sse.constant';
 import { UserRole } from '../../../../src/shared/enums/user-role.enum';
@@ -21,6 +23,7 @@ import { getMockModel } from '../../../utils/get-mock-model';
 describe('QaService', () => {
   let service: QaService;
   const mockAnswerModel = getMockModel();
+  const mockUserModel = getMockModel();
   const mockWorkflowEngine = { start: jest.fn(), status: jest.fn() };
   const mockAuditService = { record: jest.fn() };
   const mockLogger = getMockLogger();
@@ -30,6 +33,7 @@ describe('QaService', () => {
       providers: [
         QaService,
         { provide: getModelToken(Answer.name), useValue: mockAnswerModel },
+        { provide: getModelToken(User.name), useValue: mockUserModel },
         { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
         { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: mockLogger },
@@ -466,6 +470,70 @@ describe('QaService', () => {
       expect(mockLogger.error).toHaveBeenCalledWith(
         expect.stringContaining('a plain string rejection'),
       );
+    });
+
+    it('should complete the stream once a re-auth tick finds the connecting user gone, without a terminal error event', async () => {
+      const answer = buildAnswerDoc();
+      mockAnswerModel.findOne.mockResolvedValue(answer);
+      mockAuditService.record.mockResolvedValue(undefined);
+      mockUserModel.findById.mockResolvedValue(null);
+      const events: MessageEvent[] = [];
+      let completed = false;
+
+      service.streamAnswer(answer._id.toString(), 'actor-1', 'tenant-a').subscribe({
+        next: (event) => events.push(event),
+        complete: () => {
+          completed = true;
+        },
+      });
+      await jest.advanceTimersByTimeAsync(0);
+      await jest.advanceTimersByTimeAsync(SSE_REAUTH_INTERVAL_MS);
+
+      expect(mockUserModel.findById).toHaveBeenCalledWith('actor-1');
+      expect(completed).toBe(true);
+      // The invalidated session ends the stream cleanly via `takeUntil` — no `catchError` fallback
+      // event is owed the way a Mongo failure would get one; the answer never reached a terminal
+      // runStatus of its own, so completion here is entirely `reauthTicks$`'s doing.
+      expect(events.some((event) => event.type === 'error')).toBe(false);
+    });
+
+    it('should complete the stream once a re-auth tick finds the connecting user moved to a different tenant', async () => {
+      const answer = buildAnswerDoc();
+      mockAnswerModel.findOne.mockResolvedValue(answer);
+      mockAuditService.record.mockResolvedValue(undefined);
+      mockUserModel.findById.mockResolvedValue({ tenantId: 'tenant-b' });
+      let completed = false;
+
+      service.streamAnswer(answer._id.toString(), 'actor-1', 'tenant-a').subscribe({
+        complete: () => {
+          completed = true;
+        },
+      });
+      await jest.advanceTimersByTimeAsync(0);
+      await jest.advanceTimersByTimeAsync(SSE_REAUTH_INTERVAL_MS);
+
+      expect(completed).toBe(true);
+    });
+
+    it('should not complete the stream while re-auth ticks keep resolving the same tenant', async () => {
+      const answer = buildAnswerDoc();
+      mockAnswerModel.findOne.mockResolvedValue(answer);
+      mockAuditService.record.mockResolvedValue(undefined);
+      mockUserModel.findById.mockResolvedValue({ tenantId: 'tenant-a' });
+      let completed = false;
+
+      const subscription = service
+        .streamAnswer(answer._id.toString(), 'actor-1', 'tenant-a')
+        .subscribe({
+          complete: () => {
+            completed = true;
+          },
+        });
+      await jest.advanceTimersByTimeAsync(0);
+      await jest.advanceTimersByTimeAsync(SSE_REAUTH_INTERVAL_MS);
+
+      expect(completed).toBe(false);
+      subscription.unsubscribe();
     });
   });
 });

@@ -13,9 +13,11 @@ import {
   map,
   merge,
   of,
+  takeUntil,
   takeWhile,
   timer,
 } from 'rxjs';
+import { User, UserDocument } from '../../../database/schemas/administration/user/user.schema';
 import {
   WorkflowRun,
   WorkflowRunDocument,
@@ -32,11 +34,13 @@ import {
 } from '../../../shared/constants/pagination-defaults.constant';
 import {
   SSE_HEARTBEAT_INTERVAL_MS,
+  SSE_REAUTH_INTERVAL_MS,
   SSE_STREAM_ERROR_MESSAGE,
 } from '../../../shared/constants/sse.constant';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import { reauthTicks$ } from '../../../shared/utils/stream-session.util';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { ApprovalsService } from '../approvals/approvals.service';
 import { ApprovalResponseDto } from '../approvals/dtos/response/approval.response.dto';
@@ -78,6 +82,9 @@ export class WorkflowRunsService {
   constructor(
     @InjectModel(WorkflowRun.name)
     private readonly workflowRunModel: Model<WorkflowRunDocument>,
+
+    @InjectModel(User.name)
+    private readonly userModel: Model<UserDocument>,
 
     @Inject(WORKFLOW_ENGINE)
     private readonly workflowEngine: WorkflowEngine,
@@ -222,6 +229,20 @@ export class WorkflowRunsService {
     ).pipe(map((): WorkflowRunStreamEvent => ({ type: 'heartbeat', data: {} })));
 
     return concat(opened$, merge(run$, approvals$, heartbeat$)).pipe(
+      // Re-checked on every `SSE_REAUTH_INTERVAL_MS` tick, independent of the run/approvals/
+      // heartbeat cadences above — see `QaService.streamAnswer`'s identical `takeUntil` for why
+      // the initial `@CurrentUser()` check at subscribe time is not enough on its own, and
+      // `reauthTicks$`'s own doc comment for why a `reload` failure also ends the stream.
+      takeUntil(
+        reauthTicks$(
+          { userId: actorId, tenantId },
+          (userId) =>
+            this.userModel
+              .findById(userId)
+              .then((user) => (user ? { tenantId: user.tenantId } : null)),
+          SSE_REAUTH_INTERVAL_MS,
+        ),
+      ),
       // Inclusive, and evaluated on the MERGED stream (not just `run$`) so completing here also
       // tears down the independent `approvals$` and heartbeat$ timers — see
       // `QaService.streamAnswer`'s identical reasoning for why a per-branch takeWhile would leave

@@ -9,7 +9,18 @@ import { InjectModel } from '@nestjs/mongoose';
 import { createHash } from 'node:crypto';
 import { Model, Types } from 'mongoose';
 import type { Observable } from 'rxjs';
-import { catchError, concatMap, distinctUntilChanged, map, merge, of, timer } from 'rxjs';
+import {
+  catchError,
+  concatMap,
+  distinctUntilChanged,
+  map,
+  merge,
+  of,
+  takeUntil,
+  timer,
+} from 'rxjs';
+import { TypedConfigService } from '../../../config/environment/typed-config.service';
+import { User, UserDocument } from '../../../database/schemas/administration/user/user.schema';
 import {
   Conflict,
   ConflictDocument,
@@ -50,11 +61,13 @@ import {
 } from '../../../shared/constants/pagination-defaults.constant';
 import {
   SSE_HEARTBEAT_INTERVAL_MS,
+  SSE_REAUTH_INTERVAL_MS,
   SSE_STREAM_ERROR_MESSAGE,
 } from '../../../shared/constants/sse.constant';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import { reauthTicks$ } from '../../../shared/utils/stream-session.util';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import type { IngestDocumentVersionInput } from '../../../workflows/types';
 import {
@@ -130,6 +143,9 @@ export class DocumentsService {
     @InjectModel(Conflict.name)
     private readonly conflictModel: Model<ConflictDocument>,
 
+    @InjectModel(User.name)
+    private readonly userModel: Model<UserDocument>,
+
     @Inject(DOCUMENT_STORE)
     private readonly documentStore: DocumentStore,
 
@@ -139,6 +155,8 @@ export class DocumentsService {
     private readonly auditService: AuditService,
 
     private readonly logger: AppLogger,
+
+    private readonly config: TypedConfigService,
   ) {
     this.logger.init(DocumentsService.name);
   }
@@ -266,11 +284,16 @@ export class DocumentsService {
    * is nothing this tick could over-record and nothing to gate an opening audit write on either —
    * this is the one stream of the three with no audit story at all.
    *
-   * No terminal `takeWhile` either: unlike the answer/run streams, a document list has no terminal
-   * state to close the connection on — it stays open until the client disconnects, which Nest's
-   * `SseStream` already tears down via its own socket-close handling.
+   * No terminal `takeWhile`: unlike the answer/run streams, a document list has no terminal state
+   * of its own to close the connection on. Two other ends instead: `reauthTicks$` closes it if the
+   * connecting session is gone or moved tenants (re-checked every `SSE_REAUTH_INTERVAL_MS`, same as
+   * the other two streams — see `QaService.streamAnswer`'s identical `takeUntil`), and a bare
+   * `timer(config.sse.maxStreamLifetimeMs)` bounds how long any single connection may stay open
+   * regardless — this is the one stream of the three with no other terminal condition at all, so
+   * without it a client that never disconnects holds the slot forever. Short of either, the
+   * connection still stays open until the client disconnects, same as before.
    */
-  streamList(tenantId: string): Observable<MessageEvent> {
+  streamList(tenantId: string, userId: string): Observable<MessageEvent> {
     const documents$: Observable<DocumentsStreamEvent> = timer(
       0,
       DOCUMENTS_STREAM_INTERVAL_MS,
@@ -294,6 +317,15 @@ export class DocumentsService {
     ).pipe(map((): DocumentsStreamEvent => ({ type: 'heartbeat', data: {} })));
 
     return merge(documents$, heartbeat$).pipe(
+      takeUntil(
+        reauthTicks$(
+          { userId, tenantId },
+          (id) =>
+            this.userModel.findById(id).then((user) => (user ? { tenantId: user.tenantId } : null)),
+          SSE_REAUTH_INTERVAL_MS,
+        ),
+      ),
+      takeUntil(timer(this.config.sse.maxStreamLifetimeMs)),
       map((event): MessageEvent => event),
       // FAIL OPEN TO POLLING — see `QaService.streamAnswer`'s identical reasoning: the SPA's
       // retained `listDocuments()` polling is the fallback. The event carries a fixed client-facing

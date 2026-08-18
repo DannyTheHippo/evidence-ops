@@ -5,6 +5,8 @@ import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { createHash } from 'node:crypto';
 import { Types } from 'mongoose';
+import { TypedConfigService } from '../../../../src/config/environment/typed-config.service';
+import { User } from '../../../../src/database/schemas/administration/user/user.schema';
 import {
   Conflict,
   MIN_CONFLICTING_FACTS,
@@ -33,12 +35,14 @@ import {
 } from '../../../../src/providers/workflow-engine/workflow-engine.interface';
 import {
   SSE_HEARTBEAT_INTERVAL_MS,
+  SSE_REAUTH_INTERVAL_MS,
   SSE_STREAM_ERROR_MESSAGE,
 } from '../../../../src/shared/constants/sse.constant';
 import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
 import { getMockModel } from '../../../utils/get-mock-model';
+import { getMockTypedConfig } from '../../../utils/get-mock-typed-config';
 
 describe('DocumentsService', () => {
   let service: DocumentsService;
@@ -48,6 +52,7 @@ describe('DocumentsService', () => {
   const mockEvidenceChunkModel = getMockModel();
   const mockExtractedFactModel = getMockModel();
   const mockConflictModel = getMockModel();
+  const mockUserModel = getMockModel();
   // `satisfies` rather than `: jest.Mocked<DocumentStore>`: the annotation types each property as
   // an interface *method*, so every `expect(mockDocumentStore.put)` reads as an unbound method
   // reference and trips `@typescript-eslint/unbound-method`. This keeps the constraint that the
@@ -109,10 +114,12 @@ describe('DocumentsService', () => {
         { provide: getModelToken(EvidenceChunk.name), useValue: mockEvidenceChunkModel },
         { provide: getModelToken(ExtractedFact.name), useValue: mockExtractedFactModel },
         { provide: getModelToken(Conflict.name), useValue: mockConflictModel },
+        { provide: getModelToken(User.name), useValue: mockUserModel },
         { provide: DOCUMENT_STORE, useValue: mockDocumentStore },
         { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
         { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: mockLogger },
+        { provide: TypedConfigService, useValue: getMockTypedConfig() },
       ],
     }).compile();
 
@@ -1004,7 +1011,9 @@ describe('DocumentsService', () => {
       primeOneDocumentTick();
       const events: MessageEvent[] = [];
 
-      const subscription = service.streamList('tenant-a').subscribe((event) => events.push(event));
+      const subscription = service
+        .streamList('tenant-a', 'actor-1')
+        .subscribe((event) => events.push(event));
       await jest.advanceTimersByTimeAsync(0);
 
       expect(events).toEqual([
@@ -1031,7 +1040,9 @@ describe('DocumentsService', () => {
       primeOneDocumentTick();
       const events: MessageEvent[] = [];
 
-      const subscription = service.streamList('tenant-a').subscribe((event) => events.push(event));
+      const subscription = service
+        .streamList('tenant-a', 'actor-1')
+        .subscribe((event) => events.push(event));
       await jest.advanceTimersByTimeAsync(0);
       const countAfterFirstTick = events.length;
 
@@ -1050,7 +1061,9 @@ describe('DocumentsService', () => {
       mockDocumentVersionModel.find.mockResolvedValue([buildMockVersion()]);
       const events: MessageEvent[] = [];
 
-      const subscription = service.streamList('tenant-a').subscribe((event) => events.push(event));
+      const subscription = service
+        .streamList('tenant-a', 'actor-1')
+        .subscribe((event) => events.push(event));
       await jest.advanceTimersByTimeAsync(0);
       await jest.advanceTimersByTimeAsync(SSE_HEARTBEAT_INTERVAL_MS);
 
@@ -1063,7 +1076,7 @@ describe('DocumentsService', () => {
       const events: MessageEvent[] = [];
       let completed = false;
 
-      service.streamList('tenant-a').subscribe({
+      service.streamList('tenant-a', 'actor-1').subscribe({
         next: (event) => events.push(event),
         complete: () => {
           completed = true;
@@ -1084,7 +1097,7 @@ describe('DocumentsService', () => {
       mockDocumentModel.find.mockRejectedValueOnce('a plain string rejection');
       const events: MessageEvent[] = [];
 
-      service.streamList('tenant-a').subscribe((event) => events.push(event));
+      service.streamList('tenant-a', 'actor-1').subscribe((event) => events.push(event));
       await jest.advanceTimersByTimeAsync(0);
 
       expect(events[0].type).toBe('error');
@@ -1092,6 +1105,86 @@ describe('DocumentsService', () => {
       expect(mockLogger.error).toHaveBeenCalledWith(
         expect.stringContaining('a plain string rejection'),
       );
+    });
+
+    it('should complete the stream once a re-auth tick finds the connecting user gone, without a terminal error event', async () => {
+      mockDocumentModel.find.mockResolvedValue([buildMockDocument()]);
+      mockDocumentModel.countDocuments.mockResolvedValue(1);
+      mockDocumentVersionModel.find.mockResolvedValue([buildMockVersion()]);
+      mockUserModel.findById.mockResolvedValue(null);
+      const events: MessageEvent[] = [];
+      let completed = false;
+
+      service.streamList('tenant-a', 'actor-1').subscribe({
+        next: (event) => events.push(event),
+        complete: () => {
+          completed = true;
+        },
+      });
+      await jest.advanceTimersByTimeAsync(0);
+      await jest.advanceTimersByTimeAsync(SSE_REAUTH_INTERVAL_MS);
+
+      expect(mockUserModel.findById).toHaveBeenCalledWith('actor-1');
+      expect(completed).toBe(true);
+      expect(events.some((event) => event.type === 'error')).toBe(false);
+    });
+
+    it('should complete the stream once a re-auth tick finds the connecting user moved to a different tenant', async () => {
+      mockDocumentModel.find.mockResolvedValue([buildMockDocument()]);
+      mockDocumentModel.countDocuments.mockResolvedValue(1);
+      mockDocumentVersionModel.find.mockResolvedValue([buildMockVersion()]);
+      mockUserModel.findById.mockResolvedValue({ tenantId: 'tenant-b' });
+      let completed = false;
+
+      service.streamList('tenant-a', 'actor-1').subscribe({
+        complete: () => {
+          completed = true;
+        },
+      });
+      await jest.advanceTimersByTimeAsync(0);
+      await jest.advanceTimersByTimeAsync(SSE_REAUTH_INTERVAL_MS);
+
+      expect(completed).toBe(true);
+    });
+
+    it('should not complete the stream while re-auth ticks keep resolving the same tenant', async () => {
+      mockDocumentModel.find.mockResolvedValue([buildMockDocument()]);
+      mockDocumentModel.countDocuments.mockResolvedValue(1);
+      mockDocumentVersionModel.find.mockResolvedValue([buildMockVersion()]);
+      mockUserModel.findById.mockResolvedValue({ tenantId: 'tenant-a' });
+      let completed = false;
+
+      const subscription = service.streamList('tenant-a', 'actor-1').subscribe({
+        complete: () => {
+          completed = true;
+        },
+      });
+      await jest.advanceTimersByTimeAsync(0);
+      await jest.advanceTimersByTimeAsync(SSE_REAUTH_INTERVAL_MS);
+
+      expect(completed).toBe(false);
+      subscription.unsubscribe();
+    });
+
+    it('should complete the stream once it has been open for the configured max lifetime, even with an unchanged reauth and list', async () => {
+      mockDocumentModel.find.mockResolvedValue([buildMockDocument()]);
+      mockDocumentModel.countDocuments.mockResolvedValue(1);
+      mockDocumentVersionModel.find.mockResolvedValue([buildMockVersion()]);
+      mockUserModel.findById.mockResolvedValue({ tenantId: 'tenant-a' });
+      let completed = false;
+
+      service.streamList('tenant-a', 'actor-1').subscribe({
+        complete: () => {
+          completed = true;
+        },
+      });
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(completed).toBe(false);
+
+      await jest.advanceTimersByTimeAsync(getMockTypedConfig().sse.maxStreamLifetimeMs);
+
+      expect(completed).toBe(true);
     });
   });
 });

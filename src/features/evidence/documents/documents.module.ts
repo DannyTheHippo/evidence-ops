@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { User, UserSchema } from '../../../database/schemas/administration/user/user.schema';
 import {
   Conflict,
   ConflictSchema,
@@ -27,7 +28,9 @@ import { DocumentsService } from './documents.service';
 // `ExtractedFact` and `Conflict` schemas are registered here, not pulled in through
 // `ConflictsModule`/`FactsModule`, for the same reason `EvidenceChunk` already is:
 // `DocumentsService.remove`'s cascade needs direct model access to delete/update rows
-// tenant-scoped and in a specific order, not another service's business logic.
+// tenant-scoped and in a specific order, not another service's business logic. `User` is
+// registered so `DocumentsService.streamList` can re-read the connecting user's tenant on each
+// `reauthTicks$` tick — see `ApiKeysModule`'s identical `User` registration for the same reason.
 @Module({
   imports: [
     MongooseModule.forFeature([
@@ -36,6 +39,7 @@ import { DocumentsService } from './documents.service';
       { name: EvidenceChunk.name, schema: EvidenceChunkSchema },
       { name: ExtractedFact.name, schema: ExtractedFactSchema },
       { name: Conflict.name, schema: ConflictSchema },
+      { name: User.name, schema: UserSchema },
     ]),
     ProvidersModule,
   ],
