@@ -331,6 +331,11 @@ services:
       # directly and bypasses npm, so without it here both processes report the same default
       # service name and a cross-process trace becomes unreadable.
       OTEL_SERVICE_NAME: evidence-ops-api
+      # Set only here, not on the shared `x-app-environment` anchor: `worker` never boots an HTTP
+      # server (`app.config.ts` never runs there) and `mcp` boots its own bare `express()` app with
+      # no `trust proxy` set at all, so neither reads this. `web` (nginx) is the one hop in front of
+      # this process now that its host-port publish above is loopback-only.
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
       # SSE streams are served only by this process. Caps bound how many concurrent streams one
       # tenant or user may hold open; the lifetime bounds how long any single stream may run
       # regardless of cap, forcing a periodic re-subscribe (and re-auth) rather than an indefinite
@@ -364,7 +369,15 @@ services:
       # 3000 here made `--profile full up` fail outright with "port is already allocated" against an
       # unrelated project's container. Container side stays 3000 so nothing inside the network,
       # including the healthcheck and nginx's `proxy_pass`, has to care.
-      - "${API_HOST_PORT:-3001}:3000"
+      #
+      # Bound to loopback: `web` (nginx) runs in this same `full` profile and already reaches this
+      # service in-network at `api:3000`, so the only reason to publish this port at all is direct
+      # host access for local debugging. A bare `${API_HOST_PORT}:3000` publish is reachable from
+      # any remote address, which bypasses nginx entirely — `TRUST_PROXY_HOPS` above assumes nginx
+      # is the only hop in front of this process, and a request that skips nginx can forge
+      # `X-Forwarded-For` to control `req.ip`. Loopback-only keeps that assumption true for every
+      # caller except one already on this host.
+      - "127.0.0.1:${API_HOST_PORT:-3001}:3000"
     networks:
       - evidence_ops_net
     healthcheck:

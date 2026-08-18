@@ -24,6 +24,7 @@ describe('validateEnvironment', () => {
       expect(result.app.port).toBe(3000);
       expect(result.app.logLevel).toBe('info');
       expect(result.app.url).toBe('http://localhost:3000');
+      expect(result.app.trustProxyHops).toBe(0);
       expect(result.mongo.uri).toBe('mongodb://localhost:27018/evidence-ops?directConnection=true');
       expect(result.auth.jwtSecret).toBe('dev-only-insecure-jwt-secret');
       expect(result.throttle.ttlMs).toBe(60000);
@@ -142,6 +143,15 @@ describe('validateEnvironment', () => {
       const env: Record<string, unknown> = { ...validEnv, PORT: 'not-a-number' };
 
       expect(() => validateEnvironment(env)).toThrow(/Invalid environment configuration/);
+    });
+
+    it('coerces TRUST_PROXY_HOPS from string to number', () => {
+      const env: Record<string, unknown> = { ...validEnv, TRUST_PROXY_HOPS: '1' };
+
+      const result = validateEnvironment(env);
+
+      expect(result.app.trustProxyHops).toBe(1);
+      expect(typeof result.app.trustProxyHops).toBe('number');
     });
   });
 

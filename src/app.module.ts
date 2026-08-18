@@ -23,6 +23,7 @@ import { ApiKeysModule } from './features/platform/api-keys/api-keys.module';
 import { AuditEventsModule } from './features/platform/audit-events/audit-events.module';
 import { AuthzModule } from './features/platform/authz/authz.module';
 import { GlobalExceptionFilter } from './shared/filters/global-exception.filter';
+import { PreAuthThrottlerGuard } from './shared/guards/pre-auth-throttler.guard';
 import { UserThrottlerGuard } from './shared/guards/user-throttler.guard';
 import { SelectInterceptor } from './shared/interceptors/select.interceptor';
 import { AsyncLocalStorageMiddleware } from './shared/middlewares/async-local-storage.middleware';
@@ -37,6 +38,11 @@ import { SharedModule } from './shared/shared.module';
  * only `JwtAuthGuard` (registered by `AuthModule`) sets, so the throttle guard has to be registered
  * from a module the scanner visits after `AuthModule` — hence this module instead of a direct entry
  * on `AppModule.providers`, imported below only once `AuthModule` already is.
+ *
+ * `PreAuthThrottlerGuard` (registered directly on `AppModule.providers` below) is the mirror image:
+ * it reads only `request.ip`, never `request.user`, so it has no reason to wait for `AuthModule` and
+ * every reason not to — placed here it would run after `JwtAuthGuard` too, and a request
+ * `JwtAuthGuard` rejects would never reach it, reopening the gap it exists to close.
  */
 @Module({
   providers: [{ provide: APP_GUARD, useClass: UserThrottlerGuard }],
@@ -47,6 +53,13 @@ class ThrottlingModule {}
   providers: [
     { provide: APP_FILTER, useClass: GlobalExceptionFilter },
     { provide: APP_INTERCEPTOR, useClass: SelectInterceptor },
+    // Runs before every other global guard, including `JwtAuthGuard` — see the doc comment above
+    // `ThrottlingModule` for why a direct `AppModule.providers` entry is what achieves that. Bounds
+    // every request by caller IP before authentication is attempted, so a credential-less burst
+    // against an authenticated route can no longer dodge all throttling by failing `JwtAuthGuard`'s
+    // 401 before `UserThrottlerGuard` (which only ever runs after, on requests already past auth)
+    // gets a turn.
+    { provide: APP_GUARD, useClass: PreAuthThrottlerGuard },
   ],
   imports: [
     AppConfigModule,
@@ -61,11 +74,12 @@ class ThrottlingModule {}
     SharedModule,
 
     AuthModule,
-    // Safety gate: fails CLOSED — a request over the configured limit is denied (429), never
-    // silently let through, even if the throttler storage lookup itself misbehaves. Keyed by
-    // authenticated user id rather than IP (`UserThrottlerGuard`), so requests from different users
-    // behind the same reverse proxy do not collapse into one shared bucket. Imported after
-    // `AuthModule` — see `ThrottlingModule`'s doc comment for why the position is load-bearing.
+    // Per-user safety gate, layered behind the perimeter `PreAuthThrottlerGuard` above: fails
+    // CLOSED — a request over the configured limit is denied (429), never silently let through,
+    // even if the throttler storage lookup itself misbehaves. Keyed by authenticated user id rather
+    // than IP (`UserThrottlerGuard`), so requests from different users behind the same reverse
+    // proxy do not collapse into one shared bucket. Imported after `AuthModule` — see
+    // `ThrottlingModule`'s doc comment for why the position is load-bearing.
     ThrottlingModule,
     HealthModule,
     InfoModule,

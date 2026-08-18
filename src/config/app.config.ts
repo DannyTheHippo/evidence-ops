@@ -19,14 +19,16 @@ export const createApplicationConfig = async (app: INestApplication): Promise<Ap
   // `INestApplication`, which has no `.set()` — the Express-specific `NestExpressApplication` is
   // what actually backs it at runtime (this app never swaps HTTP adapters), so the cast is sound.
   //
-  // The only reverse proxy between a browser and this process is the `web` nginx container
-  // (`web/nginx.conf`, `proxy_pass http://api:3000`) — one hop. With `trust proxy` set to that
-  // hop count, Express trusts the immediate socket peer (nginx) and reads `req.ip` off the
-  // right-most `X-Forwarded-For` entry, which is the one nginx itself appended via
-  // `$proxy_add_x_forwarded_for` — i.e. the real client address. This is what every user-keyed
-  // throttle bucket (`UserThrottlerGuard`) and login/registration's IP fallback rely on. Docker's
-  // host-port publish is a TCP-level mapping, not an HTTP proxy, so it adds no hop of its own.
-  (app as NestExpressApplication).set('trust proxy', 1);
+  // The hop count is config-driven (`TRUST_PROXY_HOPS`, `app.trustProxyHops`) rather than fixed,
+  // because this process is not always reachable through the same number of proxies: the `web`
+  // nginx container (`web/nginx.conf`, `proxy_pass http://api:3000`) is one hop, but the compose
+  // `api` service publishes its own port too, and a caller reaching that port arrives with no proxy
+  // in front of it at all. Defaulting to 0 means every `X-Forwarded-For` entry is ignored and
+  // `req.ip` is always the direct socket peer unless a deployment explicitly configures the exact
+  // number of proxies in front of it. This is what every user-keyed throttle bucket
+  // (`UserThrottlerGuard`) and login/registration's IP fallback rely on: trusting a hop that is not
+  // actually there lets a caller past the real edge spoof `req.ip` via `X-Forwarded-For`.
+  (app as NestExpressApplication).set('trust proxy', appConfig.trustProxyHops);
 
   // Swagger UI at /docs inlines scripts/styles; helmet's default CSP would block it,
   // so CSP stays off and the other secure-header defaults (HSTS, no-sniff, etc.) apply.

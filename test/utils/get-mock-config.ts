@@ -7,6 +7,7 @@ export const getMockConfig = (): EnvironmentConfig => ({
     port: 3000,
     logLevel: 'debug',
     url: 'http://localhost:3000',
+    trustProxyHops: 0,
   },
 
   cors: {

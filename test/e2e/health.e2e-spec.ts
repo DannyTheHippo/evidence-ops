@@ -56,4 +56,17 @@ describe('Health (e2e)', () => {
     expect(statuses[0]).toBe(200);
     expect(statuses).toContain(429);
   });
+
+  // Regression for `trust proxy` defaulting to 0 (`TRUST_PROXY_HOPS`, `app.config.ts`): with no
+  // proxy configured, `req.ip` is always the direct socket peer and every `X-Forwarded-For` entry
+  // is ignored. Must run immediately after the burst above, whose bucket for this loopback peer is
+  // already exhausted — a caller that could mint a fresh bucket by rotating `X-Forwarded-For` would
+  // get through here with 200; one that cannot stays blocked with 429.
+  it('does not mint a fresh throttle bucket from a spoofed X-Forwarded-For header', async () => {
+    const response = await request(getTestServer(app))
+      .get('/api/v1/health')
+      .set('X-Forwarded-For', `10.0.0.${Math.floor(Math.random() * 254) + 1}`);
+
+    expect(response.status).toBe(429);
+  });
 });

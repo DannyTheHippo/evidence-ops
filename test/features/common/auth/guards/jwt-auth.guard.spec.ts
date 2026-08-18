@@ -45,7 +45,7 @@ describe('JwtAuthGuard', () => {
     env: NodeEnv,
   ): Promise<{ guard: JwtAuthGuard; reflector: Reflector }> => {
     const config = getMockTypedConfig({
-      app: { env, port: 3000, logLevel: 'debug', url: 'http://localhost:3000' },
+      app: { env, port: 3000, logLevel: 'debug', url: 'http://localhost:3000', trustProxyHops: 0 },
     });
 
     const module: TestingModule = await Test.createTestingModule({

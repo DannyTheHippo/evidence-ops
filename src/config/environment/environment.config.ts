@@ -62,6 +62,13 @@ export const environmentSchema = z
     LOG_LEVEL: z.string().default('info'),
     URL: z.string().default('http://localhost:3000'),
     CORS_ORIGIN: z.string().default('http://localhost:5173'),
+    // Express `trust proxy` hop count. Zero by default: `req.ip` is always the direct socket peer
+    // and every `X-Forwarded-For` header is ignored, so a deployment that forgets to set this never
+    // silently inherits a reverse proxy it does not have. Set to the exact number of proxies in
+    // front of this process — a value too high lets a caller past the real edge spoof `req.ip` via
+    // `X-Forwarded-For`, which is what every IP-keyed throttle bucket and login/registration's IP
+    // fallback rely on.
+    TRUST_PROXY_HOPS: zNum(0),
 
     MONGO_DB_URI: zOptionalString(),
     MONGO_MEMORY_SERVER: zBool(false),
@@ -187,6 +194,7 @@ export const environmentSchema = z
         port: e.PORT,
         logLevel: e.LOG_LEVEL,
         url: e.URL,
+        trustProxyHops: e.TRUST_PROXY_HOPS,
       },
       cors: {
         origin: e.CORS_ORIGIN,

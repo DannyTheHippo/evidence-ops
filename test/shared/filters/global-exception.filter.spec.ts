@@ -32,7 +32,7 @@ describe('GlobalExceptionFilter', () => {
   // not just `env` — a partial override would drop the rest of the namespace.
   const buildFilter = async (env: NodeEnv): Promise<GlobalExceptionFilter> => {
     const config = getMockTypedConfig({
-      app: { env, port: 3000, logLevel: 'debug', url: 'http://localhost:3000' },
+      app: { env, port: 3000, logLevel: 'debug', url: 'http://localhost:3000', trustProxyHops: 0 },
     });
 
     const module: TestingModule = await Test.createTestingModule({

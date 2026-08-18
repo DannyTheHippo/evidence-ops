@@ -192,5 +192,27 @@ describe('Retrieval (e2e)', () => {
 
       expect(otherUserResponse.status).toBe(200);
     });
+
+    // Regression for the gap `PreAuthThrottlerGuard` closes: before it existed, `JwtAuthGuard`
+    // rejected a credential-less request with 401 before `UserThrottlerGuard` (which only ever runs
+    // after auth) got a turn, so a burst with no cookie at all never spent any throttle budget and
+    // never 429'd. Must run last — it drives this route's pre-auth IP bucket toward its own limit on
+    // top of whatever the tests above already spent.
+    it('throttles a burst of credential-less requests instead of returning 401 forever', async () => {
+      const throttleLimit = Number(process.env.THROTTLE_LIMIT);
+      const statuses: number[] = [];
+
+      for (let attempt = 0; attempt < throttleLimit + 5; attempt += 1) {
+        const response = await request(getTestServer(app))
+          .get('/api/v1/retrieval/search')
+          .query({ query: 'throttle probe' });
+        statuses.push(response.status);
+      }
+
+      // Both halves matter: an early request still 401s (the perimeter guard is not denying
+      // wholesale) and a later one 429s (it is actually bounding the credential-less burst).
+      expect(statuses).toContain(401);
+      expect(statuses).toContain(429);
+    });
   });
 });
