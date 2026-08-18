@@ -22,8 +22,8 @@ interface AuditEventBody {
 
 describe('AuditEvents (e2e)', () => {
   let app: INestApplication;
-  let token: string;
-  let adminToken: string;
+  let cookie: string;
+  let adminCookie: string;
   let tenantId: string;
   let auditEventModel: Model<AuditEventDocument>;
 
@@ -39,7 +39,7 @@ describe('AuditEvents (e2e)', () => {
       email: 'audit-events-admin-e2e@example.com',
       password: 'correct-horse-battery',
     });
-    adminToken = admin.token;
+    adminCookie = admin.cookie;
     tenantId = admin.tenantId;
 
     const member = await registerTestUser(
@@ -47,7 +47,7 @@ describe('AuditEvents (e2e)', () => {
       { email: 'audit-events-e2e@example.com', password: 'correct-horse-battery' },
       { role: 'member', tenantId },
     );
-    token = member.token;
+    cookie = member.cookie;
   });
 
   afterAll(async () => {
@@ -64,7 +64,7 @@ describe('AuditEvents (e2e)', () => {
     it('returns 403 when the caller is not an admin', async () => {
       const response = await request(getTestServer(app))
         .get('/api/v1/audit-events')
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
 
       expect(response.status).toBe(403);
       // objectContaining, not toEqual: GlobalExceptionFilter also attaches `stack` below
@@ -94,7 +94,7 @@ describe('AuditEvents (e2e)', () => {
       const response = await request(getTestServer(app))
         .get('/api/v1/audit-events')
         .query({ action })
-        .set('Authorization', `Bearer ${adminToken}`);
+        .set('Cookie', adminCookie);
       const body = response.body as { docs: AuditEventBody[]; count: number };
 
       expect(response.status).toBe(200);
@@ -144,7 +144,7 @@ describe('AuditEvents (e2e)', () => {
       const response = await request(getTestServer(app))
         .get('/api/v1/audit-events')
         .query({ action: actionA })
-        .set('Authorization', `Bearer ${adminToken}`);
+        .set('Cookie', adminCookie);
       const body = response.body as { docs: AuditEventBody[]; count: number };
 
       expect(response.status).toBe(200);
@@ -175,7 +175,7 @@ describe('AuditEvents (e2e)', () => {
       const response = await request(getTestServer(app))
         .get('/api/v1/audit-events')
         .query({ action })
-        .set('Authorization', `Bearer ${adminToken}`);
+        .set('Cookie', adminCookie);
       const body = response.body as { docs: AuditEventBody[]; count: number };
 
       expect(response.status).toBe(200);

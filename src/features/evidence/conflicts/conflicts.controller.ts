@@ -10,7 +10,7 @@ import {
   UnauthorizedException,
   Version,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
 import { AuthenticatedRequest } from '../../../shared/types/authenticated-request.type';
@@ -24,7 +24,6 @@ import { ConflictResponseDto } from './dtos/response/conflict.response.dto';
 
 @Controller('conflicts')
 @ApiTags('conflicts')
-@ApiBearerAuth()
 export class ConflictsController {
   constructor(private readonly conflictsService: ConflictsService) {}
 

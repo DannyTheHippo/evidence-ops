@@ -18,7 +18,7 @@ import {
 } from '@nestjs/common';
 import type { MessageEvent } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiBearerAuth, ApiBody, ApiConsumes, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBody, ApiConsumes, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Observable } from 'rxjs';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
@@ -40,7 +40,6 @@ import type { UploadedFileLike } from './types/uploaded-file.type';
 
 @Controller('documents')
 @ApiTags('documents')
-@ApiBearerAuth()
 export class DocumentsController {
   constructor(private readonly documentsService: DocumentsService) {}
 

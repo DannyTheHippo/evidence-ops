@@ -10,7 +10,7 @@ import {
   Version,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { ApiBearerAuth, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { CookieOptions, Response } from 'express';
 import { isProdLike } from '../../../config/environment/environment.config';
 import { TypedConfigService } from '../../../config/environment/typed-config.service';
@@ -34,7 +34,6 @@ import { JwtPayload } from './types/jwt-payload.type';
 
 @Controller('auth')
 @ApiTags('auth')
-@ApiBearerAuth()
 export class AuthController {
   constructor(
     private readonly authService: AuthService,

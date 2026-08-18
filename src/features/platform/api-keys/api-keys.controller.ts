@@ -10,7 +10,7 @@ import {
   UnauthorizedException,
   Version,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
 import { AuthenticatedRequest } from '../../../shared/types/authenticated-request.type';
@@ -23,7 +23,6 @@ import { MintedApiKeyResponseDto } from './dtos/response/minted-api-key.response
 
 @Controller('api-keys')
 @ApiTags('api-keys')
-@ApiBearerAuth()
 export class ApiKeysController {
   constructor(private readonly apiKeysService: ApiKeysService) {}
 

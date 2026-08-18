@@ -64,8 +64,8 @@ interface ApprovalBody {
  */
 describe('Tenant isolation (e2e)', () => {
   let app: INestApplication;
-  let tokenA: string;
-  let tokenB: string;
+  let cookieA: string;
+  let cookieB: string;
   let comps: Buffer;
   let leaseSummary: Buffer;
 
@@ -108,21 +108,21 @@ describe('Tenant isolation (e2e)', () => {
     // real, generated tenant without inventing a second convention for "the other tenant".
     const userA = await registerTestUser(app, credentialsA);
     const userB = await registerTestUser(app, credentialsB, { tenantId: OTHER_TENANT_ID });
-    tokenA = userA.token;
-    tokenB = userB.token;
+    cookieA = userA.cookie;
+    cookieB = userB.cookie;
     tenantIdA = userA.tenantId;
 
     // Seed user A's real tenant with data.
     const uploaded = await request(getTestServer(app))
       .post('/api/v1/documents')
-      .set('Authorization', `Bearer ${tokenA}`)
+      .set('Cookie', cookieA)
       .field('title', 'Comparables')
       .attach('file', comps, { filename: 'comps.xlsx', contentType: XLSX_MIME });
     documentIdA = (uploaded.body as DocumentBody).id;
 
     const started = await request(getTestServer(app))
       .post('/api/v1/questions')
-      .set('Authorization', `Bearer ${tokenA}`)
+      .set('Cookie', cookieA)
       .send({ questionText: 'What is the cap rate for Northgate Business Park?' });
     answerIdA = (started.body as AnswerBody).id;
 
@@ -204,20 +204,20 @@ describe('Tenant isolation (e2e)', () => {
   // against a database that already holds tenant A's seeded data (documents, answers, conflicts,
   // approvals, workflow runs) and asserts every evidence-bearing endpoint reports nothing for them.
   describe('a freshly registered user with no data of their own', () => {
-    let tokenC: string;
+    let cookieC: string;
 
     beforeAll(async () => {
       const userC = await registerTestUser(app, {
         email: 'tenant-isolation-c@example.com',
         password: 'correct-horse-battery',
       });
-      tokenC = userC.token;
+      cookieC = userC.cookie;
     });
 
     it('sees an empty list from GET /documents', async () => {
       const response = await request(getTestServer(app))
         .get('/api/v1/documents')
-        .set('Authorization', `Bearer ${tokenC}`);
+        .set('Cookie', cookieC);
 
       expect(response.status).toBe(200);
       expect(response.body).toEqual({ docs: [], count: 0 });
@@ -226,7 +226,7 @@ describe('Tenant isolation (e2e)', () => {
     it("gets 404 for tenant A's document id", async () => {
       const response = await request(getTestServer(app))
         .get(`/api/v1/documents/${documentIdA}`)
-        .set('Authorization', `Bearer ${tokenC}`);
+        .set('Cookie', cookieC);
 
       expect(response.status).toBe(404);
     });
@@ -234,7 +234,7 @@ describe('Tenant isolation (e2e)', () => {
     it("gets 404 for tenant A's answer id", async () => {
       const response = await request(getTestServer(app))
         .get(`/api/v1/answers/${answerIdA}`)
-        .set('Authorization', `Bearer ${tokenC}`);
+        .set('Cookie', cookieC);
 
       expect(response.status).toBe(404);
     });
@@ -242,7 +242,7 @@ describe('Tenant isolation (e2e)', () => {
     it('sees an empty list from GET /conflicts', async () => {
       const response = await request(getTestServer(app))
         .get('/api/v1/conflicts')
-        .set('Authorization', `Bearer ${tokenC}`);
+        .set('Cookie', cookieC);
 
       expect(response.status).toBe(200);
       expect(response.body).toEqual({ docs: [], count: 0 });
@@ -251,7 +251,7 @@ describe('Tenant isolation (e2e)', () => {
     it('sees an empty list from GET /approvals', async () => {
       const response = await request(getTestServer(app))
         .get('/api/v1/approvals')
-        .set('Authorization', `Bearer ${tokenC}`);
+        .set('Cookie', cookieC);
 
       expect(response.status).toBe(200);
       expect(response.body).toEqual({ docs: [], count: 0 });
@@ -260,7 +260,7 @@ describe('Tenant isolation (e2e)', () => {
     it("gets 404 for tenant A's workflow run id", async () => {
       const response = await request(getTestServer(app))
         .get(`/api/v1/workflow-runs/${workflowRunIdA}`)
-        .set('Authorization', `Bearer ${tokenC}`);
+        .set('Cookie', cookieC);
 
       expect(response.status).toBe(404);
     });
@@ -269,7 +269,7 @@ describe('Tenant isolation (e2e)', () => {
       const response = await request(getTestServer(app))
         .get('/api/v1/workflow-runs')
         .query({ workflowId: workflowIdA })
-        .set('Authorization', `Bearer ${tokenC}`);
+        .set('Cookie', cookieC);
 
       expect(response.status).toBe(200);
       expect(response.body).toEqual({ docs: [], count: 0 });
@@ -279,7 +279,7 @@ describe('Tenant isolation (e2e)', () => {
   it("returns an empty list for tenant B's GET /documents", async () => {
     const response = await request(getTestServer(app))
       .get('/api/v1/documents')
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Cookie', cookieB);
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ docs: [], count: 0 });
@@ -288,7 +288,7 @@ describe('Tenant isolation (e2e)', () => {
   it("returns 404, not 403, for tenant B's GET /documents/:idFromA", async () => {
     const response = await request(getTestServer(app))
       .get(`/api/v1/documents/${documentIdA}`)
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Cookie', cookieB);
 
     expect(response.status).toBe(404);
   });
@@ -296,7 +296,7 @@ describe('Tenant isolation (e2e)', () => {
   it("returns 404, not 403, for tenant B's GET /answers/:idFromA", async () => {
     const response = await request(getTestServer(app))
       .get(`/api/v1/answers/${answerIdA}`)
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Cookie', cookieB);
 
     expect(response.status).toBe(404);
   });
@@ -304,7 +304,7 @@ describe('Tenant isolation (e2e)', () => {
   it("returns tenant A's own workflow run for tenant A's GET /workflow-runs/:idFromA", async () => {
     const response = await request(getTestServer(app))
       .get(`/api/v1/workflow-runs/${workflowRunIdA}`)
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Cookie', cookieA);
 
     expect(response.status).toBe(200);
     expect((response.body as WorkflowRunBody).id).toBe(workflowRunIdA);
@@ -313,7 +313,7 @@ describe('Tenant isolation (e2e)', () => {
   it("returns 404, not 403, for tenant B's GET /workflow-runs/:idFromA", async () => {
     const response = await request(getTestServer(app))
       .get(`/api/v1/workflow-runs/${workflowRunIdA}`)
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Cookie', cookieB);
 
     expect(response.status).toBe(404);
   });
@@ -322,7 +322,7 @@ describe('Tenant isolation (e2e)', () => {
     const response = await request(getTestServer(app))
       .get('/api/v1/workflow-runs')
       .query({ workflowId: workflowIdA })
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Cookie', cookieA);
     const body = response.body as { docs: WorkflowRunBody[]; count: number };
 
     expect(response.status).toBe(200);
@@ -333,7 +333,7 @@ describe('Tenant isolation (e2e)', () => {
     const response = await request(getTestServer(app))
       .get('/api/v1/workflow-runs')
       .query({ workflowId: workflowIdA })
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Cookie', cookieB);
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ docs: [], count: 0 });
@@ -342,7 +342,7 @@ describe('Tenant isolation (e2e)', () => {
   it("returns tenant A's own conflict for tenant A's GET /conflicts", async () => {
     const response = await request(getTestServer(app))
       .get('/api/v1/conflicts')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Cookie', cookieA);
     const body = response.body as { docs: ConflictBody[]; count: number };
 
     expect(response.status).toBe(200);
@@ -352,7 +352,7 @@ describe('Tenant isolation (e2e)', () => {
   it("returns an empty list for tenant B's GET /conflicts", async () => {
     const response = await request(getTestServer(app))
       .get('/api/v1/conflicts')
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Cookie', cookieB);
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ docs: [], count: 0 });
@@ -361,7 +361,7 @@ describe('Tenant isolation (e2e)', () => {
   it("returns tenant A's own approval for tenant A's GET /approvals", async () => {
     const response = await request(getTestServer(app))
       .get('/api/v1/approvals')
-      .set('Authorization', `Bearer ${tokenA}`);
+      .set('Cookie', cookieA);
     const body = response.body as { docs: ApprovalBody[]; count: number };
 
     expect(response.status).toBe(200);
@@ -371,7 +371,7 @@ describe('Tenant isolation (e2e)', () => {
   it("returns an empty list for tenant B's GET /approvals", async () => {
     const response = await request(getTestServer(app))
       .get('/api/v1/approvals')
-      .set('Authorization', `Bearer ${tokenB}`);
+      .set('Cookie', cookieB);
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ docs: [], count: 0 });
@@ -380,7 +380,7 @@ describe('Tenant isolation (e2e)', () => {
   it("returns 404, not 403, for tenant B's POST /conflicts/:idFromA/resolution-requests", async () => {
     const response = await request(getTestServer(app))
       .post(`/api/v1/conflicts/${conflictIdA}/resolution-requests`)
-      .set('Authorization', `Bearer ${tokenB}`)
+      .set('Cookie', cookieB)
       .send({ winningFactId: new Types.ObjectId().toString() });
 
     expect(response.status).toBe(404);
@@ -389,7 +389,7 @@ describe('Tenant isolation (e2e)', () => {
   it("returns 404, not 403, for tenant B's POST /approvals/:idFromA/decision", async () => {
     const response = await request(getTestServer(app))
       .post(`/api/v1/approvals/${approvalIdA}/decision`)
-      .set('Authorization', `Bearer ${tokenB}`)
+      .set('Cookie', cookieB)
       .send({ decision: 'approved' });
 
     expect(response.status).toBe(404);
@@ -404,7 +404,7 @@ describe('Tenant isolation (e2e)', () => {
     beforeAll(async () => {
       const uploaded = await request(getTestServer(app))
         .post('/api/v1/documents')
-        .set('Authorization', `Bearer ${tokenB}`)
+        .set('Cookie', cookieB)
         .field('title', 'Lease Summary')
         .attach('file', leaseSummary, { filename: 'lease-summary.docx', contentType: DOCX_MIME });
       documentIdB = (uploaded.body as DocumentBody).id;
@@ -413,7 +413,7 @@ describe('Tenant isolation (e2e)', () => {
     it('is visible to tenant B', async () => {
       const response = await request(getTestServer(app))
         .get('/api/v1/documents')
-        .set('Authorization', `Bearer ${tokenB}`);
+        .set('Cookie', cookieB);
       const body = response.body as { docs: DocumentBody[]; count: number };
 
       expect(body.docs.some((doc) => doc.id === documentIdB)).toBe(true);
@@ -422,13 +422,13 @@ describe('Tenant isolation (e2e)', () => {
     it('is invisible to tenant A', async () => {
       const list = await request(getTestServer(app))
         .get('/api/v1/documents')
-        .set('Authorization', `Bearer ${tokenA}`);
+        .set('Cookie', cookieA);
       const listBody = list.body as { docs: DocumentBody[]; count: number };
       expect(listBody.docs.some((doc) => doc.id === documentIdB)).toBe(false);
 
       const detail = await request(getTestServer(app))
         .get(`/api/v1/documents/${documentIdB}`)
-        .set('Authorization', `Bearer ${tokenA}`);
+        .set('Cookie', cookieA);
       expect(detail.status).toBe(404);
     });
   });

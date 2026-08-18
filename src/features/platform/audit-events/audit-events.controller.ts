@@ -8,7 +8,7 @@ import {
   UseGuards,
   Version,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
 import { RolesGuard } from '../../common/auth/guards/roles.guard';
 import { RequireRole } from '../../../shared/decorators/require-role.decorator';
@@ -23,7 +23,6 @@ import { AuditEventResponseDto } from './dtos/response/audit-event.response.dto'
 
 @Controller('audit-events')
 @ApiTags('audit-events')
-@ApiBearerAuth()
 export class AuditEventsController {
   constructor(private readonly auditEventsService: AuditEventsService) {}
 

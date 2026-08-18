@@ -54,7 +54,7 @@ const LIST_KEY_KEYS_FULL = [
 
 describe('ApiKeys (e2e)', () => {
   let app: INestApplication;
-  let token: string;
+  let cookie: string;
   let userId: string;
   let tenantId: string;
   let apiKeyModel: Model<ApiKeyDocument>;
@@ -65,7 +65,7 @@ describe('ApiKeys (e2e)', () => {
     app = await createTestApp();
 
     const credentials = { email: 'api-keys-e2e@example.com', password: 'correct-horse-battery' };
-    ({ token, userId, tenantId } = await registerTestUser(app, credentials));
+    ({ cookie, userId, tenantId } = await registerTestUser(app, credentials));
 
     apiKeyModel = app.get<Model<ApiKeyDocument>>(getModelToken(ApiKey.name));
     userModel = app.get<Model<UserDocument>>(getModelToken(User.name));
@@ -88,7 +88,7 @@ describe('ApiKeys (e2e)', () => {
     it('mints a key, exposing the exact key set including the plaintext token exactly once', async () => {
       const response = await request(getTestServer(app))
         .post('/api/v1/api-keys')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ name: 'CI integration' });
       const body = response.body as MintedKeyBody;
 
@@ -106,7 +106,7 @@ describe('ApiKeys (e2e)', () => {
     it('mints a key with an expiry and exposes it in the exact key set', async () => {
       const response = await request(getTestServer(app))
         .post('/api/v1/api-keys')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ name: 'Expiring key', expiresAt: '2099-01-01T00:00:00.000Z' });
       const body = response.body as MintedKeyBody;
 
@@ -126,12 +126,12 @@ describe('ApiKeys (e2e)', () => {
     it('lists only the caller’s own keys, metadata only, exact key set', async () => {
       await request(getTestServer(app))
         .post('/api/v1/api-keys')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ name: 'Listed key' });
 
       const response = await request(getTestServer(app))
         .get('/api/v1/api-keys')
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const body = response.body as { docs: ApiKeyBody[]; count: number };
 
       expect(response.status).toBe(200);
@@ -151,12 +151,12 @@ describe('ApiKeys (e2e)', () => {
       });
       await request(getTestServer(app))
         .post('/api/v1/api-keys')
-        .set('Authorization', `Bearer ${other.token}`)
+        .set('Cookie', other.cookie)
         .send({ name: 'Other user key' });
 
       const response = await request(getTestServer(app))
         .get('/api/v1/api-keys')
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const body = response.body as { docs: ApiKeyBody[]; count: number };
 
       expect(body.docs.find((doc) => doc.name === 'Other user key')).toBeUndefined();
@@ -165,17 +165,17 @@ describe('ApiKeys (e2e)', () => {
     it('exposes the exact key set for a revoked, expiring key (both optional fields present)', async () => {
       const minted = await request(getTestServer(app))
         .post('/api/v1/api-keys')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ name: 'Full shape key', expiresAt: '2099-01-01T00:00:00.000Z' });
       const mintedBody = minted.body as MintedKeyBody;
 
       await request(getTestServer(app))
         .delete(`/api/v1/api-keys/${mintedBody.id}`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
 
       const response = await request(getTestServer(app))
         .get('/api/v1/api-keys')
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const body = response.body as { docs: ApiKeyBody[]; count: number };
       const revokedKey = body.docs.find((doc) => doc.id === mintedBody.id);
 
@@ -189,7 +189,7 @@ describe('ApiKeys (e2e)', () => {
     it('rejects an unauthenticated request', async () => {
       const minted = await request(getTestServer(app))
         .post('/api/v1/api-keys')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ name: 'Delete auth key' });
       const mintedBody = minted.body as MintedKeyBody;
 
@@ -203,7 +203,7 @@ describe('ApiKeys (e2e)', () => {
     it('returns 404 for a malformed id', async () => {
       const response = await request(getTestServer(app))
         .delete('/api/v1/api-keys/not-an-id')
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
 
       expect(response.status).toBe(404);
     });
@@ -215,13 +215,13 @@ describe('ApiKeys (e2e)', () => {
       });
       const minted = await request(getTestServer(app))
         .post('/api/v1/api-keys')
-        .set('Authorization', `Bearer ${other.token}`)
+        .set('Cookie', other.cookie)
         .send({ name: 'Not yours' });
       const mintedBody = minted.body as MintedKeyBody;
 
       const response = await request(getTestServer(app))
         .delete(`/api/v1/api-keys/${mintedBody.id}`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
 
       expect(response.status).toBe(404);
     });
@@ -229,13 +229,13 @@ describe('ApiKeys (e2e)', () => {
     it('revokes a key', async () => {
       const minted = await request(getTestServer(app))
         .post('/api/v1/api-keys')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ name: 'Revoke me' });
       const mintedBody = minted.body as MintedKeyBody;
 
       const response = await request(getTestServer(app))
         .delete(`/api/v1/api-keys/${mintedBody.id}`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
 
       expect(response.status).toBe(204);
 
@@ -254,7 +254,7 @@ describe('ApiKeys (e2e)', () => {
     it('verifies a freshly minted token to the minting user’s identity', async () => {
       const minted = await request(getTestServer(app))
         .post('/api/v1/api-keys')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ name: 'Verifier key' });
       const mintedBody = minted.body as MintedKeyBody;
 
@@ -273,12 +273,12 @@ describe('ApiKeys (e2e)', () => {
     it('refuses a revoked token', async () => {
       const minted = await request(getTestServer(app))
         .post('/api/v1/api-keys')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ name: 'Revoked verifier key' });
       const mintedBody = minted.body as MintedKeyBody;
       await request(getTestServer(app))
         .delete(`/api/v1/api-keys/${mintedBody.id}`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
 
       const identity = await tokenVerifier.verify(mintedBody.token);
 
@@ -310,7 +310,7 @@ describe('ApiKeys (e2e)', () => {
     it('resolves role live from the User row rather than the token, reflecting a mid-lifetime demotion', async () => {
       const minted = await request(getTestServer(app))
         .post('/api/v1/api-keys')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ name: 'Role-live key' });
       const mintedBody = minted.body as MintedKeyBody;
 
@@ -341,7 +341,7 @@ describe('ApiKeys (e2e)', () => {
       password: 'correct-horse-battery',
     };
     let moveResult: CoTenantUserResult;
-    let movedToken: string;
+    let movedCookie: string;
     let targetTenantId: string;
     let survivingKey: MintedKeyBody;
     let verifiedKey: MintedKeyBody;
@@ -359,7 +359,7 @@ describe('ApiKeys (e2e)', () => {
       const mint = async (name: string): Promise<MintedKeyBody> => {
         const response = await request(getTestServer(app))
           .post('/api/v1/api-keys')
-          .set('Authorization', `Bearer ${mover.token}`)
+          .set('Cookie', mover.cookie)
           .send({ name });
         return response.body as MintedKeyBody;
       };
@@ -372,10 +372,13 @@ describe('ApiKeys (e2e)', () => {
       }
       moveResult = await coTenantUser(db, movedUser.email, targetTenantId);
 
-      // The pre-move token still carries the vacated tenant; the owner's next login is where the
-      // move takes effect for every session-scoped query.
+      // The pre-move session cookie still carries the vacated tenant; the owner's next login is
+      // where the move takes effect for every session-scoped query.
       const login = await request(getTestServer(app)).post('/api/v1/auth/login').send(movedUser);
-      movedToken = (login.body as { accessToken: string }).accessToken;
+      const setCookieHeader = login.headers['set-cookie'] as unknown as string[];
+      movedCookie = setCookieHeader
+        .find((value) => value.startsWith('eo_session='))
+        ?.split(';')[0] as string;
     });
 
     it('moves the owner’s keys alongside the owner', () => {
@@ -385,7 +388,7 @@ describe('ApiKeys (e2e)', () => {
     it('keeps a key listable and revocable by its owner across a tenant move', async () => {
       const listResponse = await request(getTestServer(app))
         .get('/api/v1/api-keys')
-        .set('Authorization', `Bearer ${movedToken}`);
+        .set('Cookie', movedCookie);
       const body = listResponse.body as { docs: ApiKeyBody[]; count: number };
 
       expect(listResponse.status).toBe(200);
@@ -393,7 +396,7 @@ describe('ApiKeys (e2e)', () => {
 
       const revokeResponse = await request(getTestServer(app))
         .delete(`/api/v1/api-keys/${survivingKey.id}`)
-        .set('Authorization', `Bearer ${movedToken}`);
+        .set('Cookie', movedCookie);
 
       expect(revokeResponse.status).toBe(204);
     });

@@ -44,9 +44,8 @@ export const loginApiExamples: Record<string, ApiResponseOptions> = {
     type: AuthTokenResponseDto,
     examples: {
       example: {
-        summary: 'Access token issued',
+        summary: 'Authenticated, session cookie set',
         value: {
-          accessToken: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
           user: exampleUser,
         },
       },

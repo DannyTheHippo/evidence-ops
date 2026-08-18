@@ -60,8 +60,8 @@ interface DocumentBody {
 
 describe('Documents (e2e)', () => {
   let app: INestApplication;
-  let token: string;
-  let adminToken: string;
+  let cookie: string;
+  let adminCookie: string;
   let tenantId: string;
   let comps: Buffer;
   let memo: Buffer;
@@ -84,7 +84,7 @@ describe('Documents (e2e)', () => {
       email: 'documents-admin-e2e@example.com',
       password: 'correct-horse-battery',
     });
-    adminToken = admin.token;
+    adminCookie = admin.cookie;
     tenantId = admin.tenantId;
 
     const member = await registerTestUser(
@@ -92,7 +92,7 @@ describe('Documents (e2e)', () => {
       { email: 'documents-e2e@example.com', password: 'correct-horse-battery' },
       { role: 'member', tenantId },
     );
-    token = member.token;
+    cookie = member.cookie;
 
     documentVersionModel = app.get<Model<DocumentVersionDocument>>(
       getModelToken(DocumentVersion.name),
@@ -112,9 +112,7 @@ describe('Documents (e2e)', () => {
   });
 
   const upload = (body: Buffer, filename: string, mime: string, fields: Record<string, string>) => {
-    const req = request(getTestServer(app))
-      .post('/api/v1/documents')
-      .set('Authorization', `Bearer ${token}`);
+    const req = request(getTestServer(app)).post('/api/v1/documents').set('Cookie', cookie);
 
     for (const [key, value] of Object.entries(fields)) {
       void req.field(key, value);
@@ -233,7 +231,7 @@ describe('Documents (e2e)', () => {
 
     const detail = await request(getTestServer(app))
       .get(`/api/v1/documents/${documentId}`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Cookie', cookie);
     const version = (detail.body as DocumentBody).currentVersion;
 
     expect(version.ingestionStatus).toBe('failed');
@@ -275,7 +273,7 @@ describe('Documents (e2e)', () => {
 
     const detail = await request(getTestServer(app))
       .get(`/api/v1/documents/${documentId}`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Cookie', cookie);
 
     expect((detail.body as { versions: DocumentVersionBody[] }).versions).toHaveLength(1);
   });
@@ -292,7 +290,7 @@ describe('Documents (e2e)', () => {
 
     const detail = await request(getTestServer(app))
       .get(`/api/v1/documents/${documentId}`)
-      .set('Authorization', `Bearer ${token}`);
+      .set('Cookie', cookie);
     const versions = (detail.body as { versions: DocumentVersionBody[] }).versions;
 
     expect(versions).toHaveLength(2);
@@ -360,7 +358,7 @@ describe('Documents (e2e)', () => {
   it('lists uploaded documents with a count', async () => {
     const response = await request(getTestServer(app))
       .get('/api/v1/documents')
-      .set('Authorization', `Bearer ${token}`);
+      .set('Cookie', cookie);
     const body = response.body as { docs: DocumentBody[]; count: number };
 
     expect(response.status).toBe(200);
@@ -382,10 +380,10 @@ describe('Documents (e2e)', () => {
     it('streams the same list shape the polled GET returns, with SSE headers', async () => {
       const polled = await request(getTestServer(app))
         .get('/api/v1/documents')
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
 
       const frame = await readSseEvent(app, '/api/v1/documents/events', 'documents', {
-        Authorization: `Bearer ${token}`,
+        Cookie: cookie,
       });
 
       expect(frame.statusCode).toBe(200);
@@ -414,7 +412,7 @@ describe('Documents (e2e)', () => {
 
       const response = await request(getTestServer(app))
         .get(`/api/v1/documents/versions/${versionId}/content`)
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .responseType('blob');
 
       expect(response.status).toBe(200);
@@ -432,25 +430,25 @@ describe('Documents (e2e)', () => {
       const versionId = (uploaded.body as DocumentBody).currentVersion.id;
 
       // The cross-tenant row is produced the same way `approvals.e2e-spec.ts` does: flip the
-      // persisted row's tenantId directly, then request it with the original token.
+      // persisted row's tenantId directly, then request it with the original session cookie.
       await documentVersionModel.updateOne({ _id: versionId }, { tenantId: 'other-tenant' });
 
       const response = await request(getTestServer(app))
         .get(`/api/v1/documents/versions/${versionId}/content`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
 
       expect(response.status).toBe(404);
       // Fail-closed indistinguishability: a genuinely unknown id gets the identical shape.
       const unknown = await request(getTestServer(app))
         .get(`/api/v1/documents/versions/000000000000000000000000/content`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       expect(unknown.status).toBe(response.status);
     });
 
     it('returns 404 for a malformed versionId', async () => {
       const response = await request(getTestServer(app))
         .get('/api/v1/documents/versions/not-an-object-id/content')
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
 
       expect(response.status).toBe(404);
     });
@@ -478,7 +476,7 @@ describe('Documents (e2e)', () => {
     it('returns 404 for a malformed versionId', async () => {
       const response = await request(getTestServer(app))
         .get('/api/v1/documents/versions/not-an-object-id/chunks')
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
 
       expect(response.status).toBe(404);
     });
@@ -491,7 +489,7 @@ describe('Documents (e2e)', () => {
 
       const response = await request(getTestServer(app))
         .get(`/api/v1/documents/versions/${versionId}/chunks`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
 
       expect(response.status).toBe(404);
     });
@@ -514,7 +512,7 @@ describe('Documents (e2e)', () => {
 
       const response = await request(getTestServer(app))
         .get(`/api/v1/documents/versions/${versionId}/chunks`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const body = response.body as { docs: ChunkBody[]; count: number };
 
       expect(response.status).toBe(200);
@@ -548,7 +546,7 @@ describe('Documents (e2e)', () => {
 
       const response = await request(getTestServer(app))
         .delete(`/api/v1/documents/${documentId}`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
 
       expect(response.status).toBe(403);
       // objectContaining, not toEqual: GlobalExceptionFilter also attaches `stack` below
@@ -565,7 +563,7 @@ describe('Documents (e2e)', () => {
     it('returns 404 for an unknown document, even for an admin', async () => {
       const response = await request(getTestServer(app))
         .delete('/api/v1/documents/000000000000000000000000')
-        .set('Authorization', `Bearer ${adminToken}`);
+        .set('Cookie', adminCookie);
 
       expect(response.status).toBe(404);
     });
@@ -621,13 +619,13 @@ describe('Documents (e2e)', () => {
 
       const response = await request(getTestServer(app))
         .delete(`/api/v1/documents/${documentId}`)
-        .set('Authorization', `Bearer ${adminToken}`);
+        .set('Cookie', adminCookie);
 
       expect(response.status).toBe(204);
 
       const detail = await request(getTestServer(app))
         .get(`/api/v1/documents/${documentId}`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       expect(detail.status).toBe(404);
 
       const remainingVersions = await documentVersionModel.find({
@@ -670,7 +668,7 @@ describe('Documents (e2e)', () => {
       // `conflictModel.findById` never exercises that path; this call to the live endpoint does.
       const conflictsList = await request(getTestServer(app))
         .get('/api/v1/conflicts')
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       expect(conflictsList.status).toBe(200);
       const listedConflict = (
         conflictsList.body as { docs: Array<{ id: string; status: string; factIds: string[] }> }
@@ -742,7 +740,7 @@ describe('Documents (e2e)', () => {
 
       const response = await request(getTestServer(app))
         .delete(`/api/v1/documents/${documentId}`)
-        .set('Authorization', `Bearer ${adminToken}`);
+        .set('Cookie', adminCookie);
 
       expect(response.status).toBe(204);
 
@@ -758,7 +756,7 @@ describe('Documents (e2e)', () => {
       // filter — a still-open conflict with two facts must render, not 500.
       const conflictsList = await request(getTestServer(app))
         .get('/api/v1/conflicts')
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       expect(conflictsList.status).toBe(200);
       const listedConflict = (
         conflictsList.body as {

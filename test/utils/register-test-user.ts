@@ -17,7 +17,7 @@ export interface RegisterTestUserOptions {
 }
 
 export interface RegisterTestUserResult {
-  token: string;
+  cookie: string;
   userId: string;
   tenantId: string;
 }
@@ -26,20 +26,18 @@ interface RegisterResponseBody {
   id: string;
 }
 
-interface LoginResponseBody {
-  accessToken: string;
-}
-
 /**
  * Registers a user through `POST /api/v1/auth/register` — which provisions a brand-new tenant per
  * registrant with the registrant as that tenant's `admin` — then logs in through
- * `POST /api/v1/auth/login` and returns the resulting token alongside the user's real id and
- * tenant id.
+ * `POST /api/v1/auth/login` and returns the session cookie from that response alongside the
+ * user's real id and tenant id. Callers authenticate a subsequent request with
+ * `.set('Cookie', result.cookie)`; the session is cookie-only, so there is no bearer token to
+ * hand back.
  *
  * `options.role: 'member'` demotes the persisted row to `UserRole.Member` before login;
  * `options.tenantId` overwrites the persisted row's tenant, co-tenanting this user with whichever
  * fixtures already carry that id. Both mutations are applied before the single login call this
- * function makes, so the returned token's `role`/`tenantId` claims — signed at login — always
+ * function makes, so the returned cookie's `role`/`tenantId` claims — signed at login — always
  * match the row's final state.
  */
 export const registerTestUser = async (
@@ -73,7 +71,13 @@ export const registerTestUser = async (
   const loginResponse = await request(getTestServer(app))
     .post('/api/v1/auth/login')
     .send(credentials);
-  const { accessToken } = loginResponse.body as LoginResponseBody;
+  const setCookieHeader = loginResponse.headers['set-cookie'] as unknown as string[] | undefined;
+  if (!setCookieHeader?.length) {
+    throw new Error(
+      `registerTestUser: no session cookie in login response for '${credentials.email}'`,
+    );
+  }
+  const cookie = setCookieHeader[0].split(';')[0];
 
-  return { token: accessToken, userId, tenantId: persistedUser.tenantId };
+  return { cookie, userId, tenantId: persistedUser.tenantId };
 };

@@ -56,8 +56,8 @@ interface WorkflowRunBody {
 
 describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () => {
   let app: INestApplication;
-  let token: string;
-  let adminToken: string;
+  let cookie: string;
+  let adminCookie: string;
   let tenantId: string;
   let fakeWorkflowEngine: FakeWorkflowEngine;
   let approvalModel: Model<ApprovalDocument>;
@@ -83,7 +83,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       email: 'approvals-admin-e2e@example.com',
       password: 'correct-horse-battery',
     });
-    adminToken = admin.token;
+    adminCookie = admin.cookie;
     tenantId = admin.tenantId;
 
     const member = await registerTestUser(
@@ -91,7 +91,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       { email: 'approvals-e2e@example.com', password: 'correct-horse-battery' },
       { role: 'member', tenantId },
     );
-    token = member.token;
+    cookie = member.cookie;
   });
 
   afterAll(async () => {
@@ -159,7 +159,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
     it('returns 404 for an unknown conflict', async () => {
       const response = await request(getTestServer(app))
         .post(`/api/v1/conflicts/${new Types.ObjectId().toString()}/resolution-requests`)
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ winningFactId: new Types.ObjectId().toString() });
 
       expect(response.status).toBe(404);
@@ -170,7 +170,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
 
       const response = await request(getTestServer(app))
         .post(`/api/v1/conflicts/${conflict._id.toString()}/resolution-requests`)
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ winningFactId: new Types.ObjectId().toString() });
 
       expect(response.status).toBe(409);
@@ -182,7 +182,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
 
       const response = await request(getTestServer(app))
         .post(`/api/v1/conflicts/${conflict._id.toString()}/resolution-requests`)
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ winningFactId: factLow._id.toString() });
       const body = response.body as WorkflowRunBody;
 
@@ -254,7 +254,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
 
       const response = await request(getTestServer(app))
         .get('/api/v1/approvals')
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const body = response.body as { docs: ApprovalBody[]; count: number };
 
       expect(response.status).toBe(200);
@@ -301,7 +301,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
 
       const defaultResponse = await request(getTestServer(app))
         .get('/api/v1/approvals')
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const defaultBody = defaultResponse.body as { docs: ApprovalBody[]; count: number };
       // The default (no `state` param) response stays the pending inbox — the rejected row seeded
       // above must not appear in it.
@@ -310,7 +310,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       const response = await request(getTestServer(app))
         .get('/api/v1/approvals')
         .query({ state: 'rejected' })
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const body = response.body as { docs: ApprovalBody[]; count: number };
 
       expect(response.status).toBe(200);
@@ -332,7 +332,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
     it('returns 403 when the caller is not an admin', async () => {
       const response = await request(getTestServer(app))
         .post(`/api/v1/approvals/${new Types.ObjectId().toString()}/decision`)
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ decision: 'approved' });
 
       expect(response.status).toBe(403);
@@ -350,7 +350,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
     it('returns 404 for an unknown approval', async () => {
       const response = await request(getTestServer(app))
         .post(`/api/v1/approvals/${new Types.ObjectId().toString()}/decision`)
-        .set('Authorization', `Bearer ${adminToken}`)
+        .set('Cookie', adminCookie)
         .send({ decision: 'approved' });
 
       expect(response.status).toBe(404);
@@ -370,7 +370,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
 
       const response = await request(getTestServer(app))
         .post(`/api/v1/approvals/${otherTenantApproval._id.toString()}/decision`)
-        .set('Authorization', `Bearer ${adminToken}`)
+        .set('Cookie', adminCookie)
         .send({ decision: 'approved' });
 
       expect(response.status).toBe(404);
@@ -389,7 +389,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
 
       const response = await request(getTestServer(app))
         .post(`/api/v1/approvals/${decided._id.toString()}/decision`)
-        .set('Authorization', `Bearer ${adminToken}`)
+        .set('Cookie', adminCookie)
         .send({ decision: 'approved' });
 
       expect(response.status).toBe(409);
@@ -408,7 +408,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
 
       const response = await request(getTestServer(app))
         .post(`/api/v1/approvals/${pending._id.toString()}/decision`)
-        .set('Authorization', `Bearer ${adminToken}`)
+        .set('Cookie', adminCookie)
         .send({ decision: 'approved', reason: 'Evidence checks out.' });
       const body = response.body as ApprovalBody;
 
@@ -447,7 +447,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
 
       const response = await request(getTestServer(app))
         .post(`/api/v1/approvals/${pending._id.toString()}/decision`)
-        .set('Authorization', `Bearer ${adminToken}`)
+        .set('Cookie', adminCookie)
         .send({ decision: 'approved' });
       const body = response.body as ApprovalBody;
 
@@ -479,7 +479,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
     it('returns 404 for an unknown workflow run', async () => {
       const response = await request(getTestServer(app))
         .get(`/api/v1/workflow-runs/${new Types.ObjectId().toString()}`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
 
       expect(response.status).toBe(404);
     });
@@ -496,7 +496,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
 
       const response = await request(getTestServer(app))
         .get(`/api/v1/workflow-runs/${run._id.toString()}`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const body = response.body as WorkflowRunBody;
 
       expect(response.status).toBe(200);
@@ -522,7 +522,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
 
       const response = await request(getTestServer(app))
         .get(`/api/v1/workflow-runs/${run._id.toString()}`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const body = response.body as WorkflowRunBody;
 
       expect(response.status).toBe(200);
@@ -547,13 +547,13 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
 
       const polled = await request(getTestServer(app))
         .get(`/api/v1/workflow-runs/${run._id.toString()}`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
 
       const frame = await readSseEvent(
         app,
         `/api/v1/workflow-runs/${run._id.toString()}/events`,
         'run',
-        { Authorization: `Bearer ${token}` },
+        { Cookie: cookie },
       );
 
       expect(frame.statusCode).toBe(200);
@@ -582,7 +582,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
 
       const response = await request(getTestServer(app))
         .get('/api/v1/workflow-runs')
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const body = response.body as { docs: WorkflowRunBody[]; count: number };
 
       expect(response.status).toBe(200);
@@ -598,7 +598,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       const response = await request(getTestServer(app))
         .get('/api/v1/workflow-runs')
         .query({ workflowId })
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const body = response.body as { docs: WorkflowRunBody[]; count: number };
 
       expect(response.status).toBe(200);
@@ -628,7 +628,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       for (let attempt = 0; attempt < 11; attempt += 1) {
         const response = await request(getTestServer(app))
           .post(`/api/v1/approvals/${unknownId}/decision`)
-          .set('Authorization', `Bearer ${token}`)
+          .set('Cookie', cookie)
           .send({ decision: 'approved' });
         lastStatus = response.status;
       }

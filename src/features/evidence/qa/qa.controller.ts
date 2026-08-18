@@ -12,7 +12,7 @@ import {
   Version,
 } from '@nestjs/common';
 import type { MessageEvent } from '@nestjs/common';
-import { ApiBearerAuth, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiResponse, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Observable } from 'rxjs';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
@@ -28,7 +28,6 @@ import { QaService } from './qa.service';
 
 @Controller()
 @ApiTags('qa')
-@ApiBearerAuth()
 export class QaController {
   constructor(private readonly qaService: QaService) {}
 

@@ -3,6 +3,7 @@ import { Logger } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { writeFileSync } from 'fs';
 import packageJSON from '../../package.json';
+import { resolveSessionCookieName } from '../features/common/auth/auth.constant';
 import { TypedConfigService } from './environment/typed-config.service';
 
 export const createSwaggerConfig = (app: INestApplication, config: TypedConfigService) => {
@@ -14,7 +15,7 @@ export const createSwaggerConfig = (app: INestApplication, config: TypedConfigSe
       .setVersion(packageJSON.version)
       .setTitle('Evidence Ops API')
       .setDescription('Evidence Ops API specification')
-      .addBearerAuth()
+      .addCookieAuth(resolveSessionCookieName(appConfig.env))
       .build(),
   );
 

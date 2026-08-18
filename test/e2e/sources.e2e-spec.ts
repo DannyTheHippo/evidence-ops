@@ -83,7 +83,7 @@ const FRESH_SOURCE_KEYS = [
 
 describe('Sources (e2e)', () => {
   let app: INestApplication;
-  let token: string;
+  let cookie: string;
   let tenantId: string;
   let sourceModel: Model<SourceDocument>;
 
@@ -91,7 +91,7 @@ describe('Sources (e2e)', () => {
     app = await createTestApp();
 
     const credentials = { email: 'sources-e2e@example.com', password: 'correct-horse-battery' };
-    ({ token, tenantId } = await registerTestUser(app, credentials));
+    ({ cookie, tenantId } = await registerTestUser(app, credentials));
 
     sourceModel = app.get<Model<SourceDocument>>(getModelToken(Source.name));
   });
@@ -114,7 +114,7 @@ describe('Sources (e2e)', () => {
 
       const response = await request(getTestServer(app))
         .post('/api/v1/sources')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ name, kind: 'local-folder', path: 'deal-room' });
       const body = response.body as SourceBody;
 
@@ -130,12 +130,12 @@ describe('Sources (e2e)', () => {
       const name = `Duplicate Source ${Date.now()}`;
       await request(getTestServer(app))
         .post('/api/v1/sources')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ name, kind: 'local-folder', path: 'deal-room' });
 
       const response = await request(getTestServer(app))
         .post('/api/v1/sources')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ name, kind: 'local-folder', path: 'deal-room-2' });
 
       expect(response.status).toBe(409);
@@ -152,12 +152,12 @@ describe('Sources (e2e)', () => {
     it('lists sources as { docs, count }', async () => {
       await request(getTestServer(app))
         .post('/api/v1/sources')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ name: `Listed Source ${Date.now()}`, kind: 'local-folder', path: 'deal-room' });
 
       const response = await request(getTestServer(app))
         .get('/api/v1/sources')
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const body = response.body as { docs: SourceBody[]; count: number };
 
       expect(response.status).toBe(200);
@@ -222,7 +222,7 @@ describe('Sources (e2e)', () => {
 
       const response = await request(getTestServer(app))
         .get(`/api/v1/sources/${created._id.toString()}`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const body = response.body as SourceWithFileStatesBody;
 
       expect(response.status).toBe(200);
@@ -258,7 +258,7 @@ describe('Sources (e2e)', () => {
 
       const response = await request(getTestServer(app))
         .get(`/api/v1/sources/${otherTenantSource._id.toString()}`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
 
       expect(response.status).toBe(404);
     });
@@ -291,7 +291,7 @@ describe('Sources (e2e)', () => {
 
       const response = await request(getTestServer(app))
         .patch(`/api/v1/sources/${created._id.toString()}`)
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ enabled: false });
       const body = response.body as SourceBody;
 
@@ -314,7 +314,7 @@ describe('Sources (e2e)', () => {
 
       const response = await request(getTestServer(app))
         .patch(`/api/v1/sources/${otherTenantSource._id.toString()}`)
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ enabled: false });
 
       expect(response.status).toBe(404);
@@ -347,7 +347,7 @@ describe('Sources (e2e)', () => {
 
       const response = await request(getTestServer(app))
         .post(`/api/v1/sources/${created._id.toString()}/sync`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const body = response.body as WorkflowRunBody;
 
       expect(response.status).toBe(202);
@@ -375,7 +375,7 @@ describe('Sources (e2e)', () => {
 
       const response = await request(getTestServer(app))
         .post(`/api/v1/sources/${otherTenantSource._id.toString()}/sync`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
 
       expect(response.status).toBe(404);
     });

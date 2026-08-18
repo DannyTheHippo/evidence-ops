@@ -24,7 +24,7 @@ const RETRIEVED_CHUNK_KEYS = ['chunkId', 'docVersionId', 'sha256', 'text', 'loca
 
 describe('Retrieval (e2e)', () => {
   let app: INestApplication;
-  let token: string;
+  let cookie: string;
   let tenantId: string;
   let fakeRetrievalStore: FakeRetrievalStore;
   let documentVersionModel: Model<DocumentVersionDocument>;
@@ -33,7 +33,7 @@ describe('Retrieval (e2e)', () => {
     app = await createTestApp();
 
     const credentials = { email: 'retrieval-e2e@example.com', password: 'correct-horse-battery' };
-    ({ token, tenantId } = await registerTestUser(app, credentials));
+    ({ cookie, tenantId } = await registerTestUser(app, credentials));
 
     fakeRetrievalStore = app.get<FakeRetrievalStore>(RETRIEVAL_STORE);
     documentVersionModel = app.get<Model<DocumentVersionDocument>>(
@@ -57,7 +57,7 @@ describe('Retrieval (e2e)', () => {
     it('returns 400 for an empty query', async () => {
       const response = await request(getTestServer(app))
         .get('/api/v1/retrieval/search')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .query({ query: '' });
 
       expect(response.status).toBe(400);
@@ -66,7 +66,7 @@ describe('Retrieval (e2e)', () => {
     it('returns 400 for a query over 500 characters', async () => {
       const response = await request(getTestServer(app))
         .get('/api/v1/retrieval/search')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .query({ query: 'a'.repeat(501) });
 
       expect(response.status).toBe(400);
@@ -75,7 +75,7 @@ describe('Retrieval (e2e)', () => {
     it('returns 400 for an unknown field', async () => {
       const response = await request(getTestServer(app))
         .get('/api/v1/retrieval/search')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .query({ query: 'cap rate', unknownField: 'nope' });
 
       expect(response.status).toBe(400);
@@ -105,7 +105,7 @@ describe('Retrieval (e2e)', () => {
 
       const response = await request(getTestServer(app))
         .get('/api/v1/retrieval/search')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .query({ query: 'What is the cap rate?' });
       const body = response.body as { docs: RetrievedChunkBody[]; count: number };
 
@@ -137,7 +137,7 @@ describe('Retrieval (e2e)', () => {
       for (let attempt = 0; attempt < 11; attempt += 1) {
         const response = await request(getTestServer(app))
           .get('/api/v1/retrieval/search')
-          .set('Authorization', `Bearer ${token}`)
+          .set('Cookie', cookie)
           .query({ query: 'throttle probe' });
         lastStatus = response.status;
       }

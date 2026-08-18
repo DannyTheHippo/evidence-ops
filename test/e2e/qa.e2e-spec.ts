@@ -77,7 +77,7 @@ interface ConflictBody {
 
 describe('QA and Conflicts (e2e)', () => {
   let app: INestApplication;
-  let token: string;
+  let cookie: string;
   let userId: string;
   let tenantId: string;
   let answerModel: Model<AnswerDocument>;
@@ -91,7 +91,7 @@ describe('QA and Conflicts (e2e)', () => {
     app = await createTestApp();
 
     const credentials = { email: 'qa-e2e@example.com', password: 'correct-horse-battery' };
-    ({ token, userId, tenantId } = await registerTestUser(app, credentials));
+    ({ cookie, userId, tenantId } = await registerTestUser(app, credentials));
 
     answerModel = app.get<Model<AnswerDocument>>(getModelToken(Answer.name));
     auditEventModel = app.get<Model<AuditEventDocument>>(getModelToken(AuditEvent.name));
@@ -119,7 +119,7 @@ describe('QA and Conflicts (e2e)', () => {
     it('rejects a request with an unknown field', async () => {
       const response = await request(getTestServer(app))
         .post('/api/v1/questions')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ questionText: 'What is the cap rate?', notAField: 'x' });
 
       expect(response.status).toBe(400);
@@ -128,7 +128,7 @@ describe('QA and Conflicts (e2e)', () => {
     it('starts a queued answer, exposing only id and runStatus, and records an audit event', async () => {
       const response = await request(getTestServer(app))
         .post('/api/v1/questions')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ questionText: 'What is the cap rate for Northgate Business Park?' });
       const body = response.body as AnswerBody;
 
@@ -164,7 +164,7 @@ describe('QA and Conflicts (e2e)', () => {
     it('returns 404 for a syntactically invalid id rather than a 500', async () => {
       const response = await request(getTestServer(app))
         .get('/api/v1/answers/not-a-valid-object-id')
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
 
       expect(response.status).toBe(404);
     });
@@ -172,7 +172,7 @@ describe('QA and Conflicts (e2e)', () => {
     it('returns 404 for a well-formed id with no matching Answer', async () => {
       const response = await request(getTestServer(app))
         .get(`/api/v1/answers/${new Types.ObjectId().toString()}`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
 
       expect(response.status).toBe(404);
     });
@@ -180,13 +180,13 @@ describe('QA and Conflicts (e2e)', () => {
     it('presents a queued answer with no outcome/claimCoverage keys at all, and records an audit event', async () => {
       const started = await request(getTestServer(app))
         .post('/api/v1/questions')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ questionText: 'What is the vacancy rate?' });
       const answerId = (started.body as AnswerBody).id;
 
       const response = await request(getTestServer(app))
         .get(`/api/v1/answers/${answerId}`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const body = response.body as AnswerBody;
 
       expect(response.status).toBe(200);
@@ -236,7 +236,7 @@ describe('QA and Conflicts (e2e)', () => {
 
       const response = await request(getTestServer(app))
         .get(`/api/v1/answers/${seeded._id.toString()}`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const body = response.body as AnswerBody;
 
       expect(response.status).toBe(200);
@@ -301,7 +301,7 @@ describe('QA and Conflicts (e2e)', () => {
 
       const response = await request(getTestServer(app))
         .get(`/api/v1/answers/${seeded._id.toString()}`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const body = response.body as AnswerBody;
 
       expect(response.status).toBe(200);
@@ -315,7 +315,7 @@ describe('QA and Conflicts (e2e)', () => {
   });
 
   describe('GET /answers', () => {
-    let listToken: string;
+    let listCookie: string;
     let listTenantId: string;
 
     beforeAll(async () => {
@@ -323,7 +323,7 @@ describe('QA and Conflicts (e2e)', () => {
         email: 'qa-answers-list-e2e@example.com',
         password: 'correct-horse-battery',
       });
-      listToken = registered.token;
+      listCookie = registered.cookie;
       listTenantId = registered.tenantId;
     });
 
@@ -371,7 +371,7 @@ describe('QA and Conflicts (e2e)', () => {
 
       const response = await request(getTestServer(app))
         .get('/api/v1/answers')
-        .set('Authorization', `Bearer ${listToken}`);
+        .set('Cookie', listCookie);
       const body = response.body as { docs: AnswerBody[]; count: number };
 
       expect(response.status).toBe(200);
@@ -390,7 +390,7 @@ describe('QA and Conflicts (e2e)', () => {
       const response = await request(getTestServer(app))
         .get('/api/v1/answers')
         .query({ runStatus: 'queued' })
-        .set('Authorization', `Bearer ${listToken}`);
+        .set('Cookie', listCookie);
       const body = response.body as { docs: AnswerBody[]; count: number };
 
       expect(response.status).toBe(200);
@@ -409,16 +409,16 @@ describe('QA and Conflicts (e2e)', () => {
     it('streams the same shape the polled GET returns, with SSE headers, for a queued answer', async () => {
       const started = await request(getTestServer(app))
         .post('/api/v1/questions')
-        .set('Authorization', `Bearer ${token}`)
+        .set('Cookie', cookie)
         .send({ questionText: 'What is the cap rate?' });
       const answerId = (started.body as AnswerBody).id;
 
       const polled = await request(getTestServer(app))
         .get(`/api/v1/answers/${answerId}`)
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
 
       const frame = await readSseEvent(app, `/api/v1/answers/${answerId}/events`, 'answer', {
-        Authorization: `Bearer ${token}`,
+        Cookie: cookie,
       });
 
       expect(frame.statusCode).toBe(200);
@@ -473,7 +473,7 @@ describe('QA and Conflicts (e2e)', () => {
 
       const response = await request(getTestServer(app))
         .get('/api/v1/conflicts')
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const body = response.body as { docs: ConflictBody[]; count: number };
 
       expect(response.status).toBe(200);
@@ -579,7 +579,7 @@ describe('QA and Conflicts (e2e)', () => {
 
       const response = await request(getTestServer(app))
         .get('/api/v1/conflicts')
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const body = response.body as { docs: ConflictBody[]; count: number };
 
       expect(response.status).toBe(200);
@@ -681,7 +681,7 @@ describe('QA and Conflicts (e2e)', () => {
 
       const unfiltered = await request(getTestServer(app))
         .get('/api/v1/conflicts')
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const unfilteredBody = unfiltered.body as { docs: ConflictBody[]; count: number };
       // The unfiltered collection already carries every status seeded across this describe block —
       // proving the dismissed row is actually in the collection, not merely filtered out below.
@@ -690,7 +690,7 @@ describe('QA and Conflicts (e2e)', () => {
       const response = await request(getTestServer(app))
         .get('/api/v1/conflicts')
         .query({ status: 'dismissed' })
-        .set('Authorization', `Bearer ${token}`);
+        .set('Cookie', cookie);
       const body = response.body as { docs: ConflictBody[]; count: number };
 
       expect(response.status).toBe(200);

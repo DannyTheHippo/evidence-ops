@@ -80,7 +80,7 @@ describe('JwtAuthGuard', () => {
     expect(mockJwtService.verifyAsync).not.toHaveBeenCalled();
   });
 
-  it('should throw UnauthorizedException when neither an Authorization header nor a cookie is present', async () => {
+  it('should throw UnauthorizedException when no session cookie is present', async () => {
     const { context } = buildContext();
 
     await expect(guard.canActivate(context)).rejects.toThrow(UnauthorizedException);
@@ -88,7 +88,7 @@ describe('JwtAuthGuard', () => {
 
   it('should throw UnauthorizedException when the token fails verification', async () => {
     mockJwtService.verifyAsync.mockRejectedValueOnce(new Error('bad signature'));
-    const { context } = buildContext({ authorization: 'Bearer some-token' });
+    const { context } = buildContext({ cookie: 'eo_session=some-token' });
 
     await expect(guard.canActivate(context)).rejects.toThrow(UnauthorizedException);
   });
@@ -99,7 +99,7 @@ describe('JwtAuthGuard', () => {
   it('should throw UnauthorizedException when the payload is missing tenantId', async () => {
     const legacyPayload = { sub: 'user-id', email: 'user@example.com', role: UserRole.Member };
     mockJwtService.verifyAsync.mockResolvedValueOnce(legacyPayload);
-    const { context } = buildContext({ authorization: 'Bearer legacy-token' });
+    const { context } = buildContext({ cookie: 'eo_session=legacy-token' });
 
     await expect(guard.canActivate(context)).rejects.toThrow(UnauthorizedException);
   });
@@ -107,7 +107,7 @@ describe('JwtAuthGuard', () => {
   it('should throw UnauthorizedException when the payload is missing role', async () => {
     const legacyPayload = { sub: 'user-id', email: 'user@example.com', tenantId: 'default' };
     mockJwtService.verifyAsync.mockResolvedValueOnce(legacyPayload);
-    const { context } = buildContext({ authorization: 'Bearer legacy-token' });
+    const { context } = buildContext({ cookie: 'eo_session=legacy-token' });
 
     await expect(guard.canActivate(context)).rejects.toThrow(UnauthorizedException);
   });
@@ -120,7 +120,7 @@ describe('JwtAuthGuard', () => {
       role: UserRole.Admin,
     };
     mockJwtService.verifyAsync.mockResolvedValueOnce(payload);
-    const { context, request } = buildContext({ authorization: 'Bearer valid-token' });
+    const { context, request } = buildContext({ cookie: 'eo_session=valid-token' });
 
     await expect(guard.canActivate(context)).resolves.toBe(true);
 
@@ -134,7 +134,7 @@ describe('JwtAuthGuard', () => {
     expect(alsStore.tenant).toBe('default');
   });
 
-  it('should accept a token carried only by the eo_session cookie in a non-prod-like environment', async () => {
+  it('should accept a token carried by the eo_session cookie in a non-prod-like environment', async () => {
     const payload: JwtPayload = {
       sub: 'user-id',
       email: 'user@example.com',
@@ -215,7 +215,7 @@ describe('JwtAuthGuard', () => {
     it('should throw UnauthorizedException for the default tenant under production', async () => {
       mockJwtService.verifyAsync.mockResolvedValueOnce(defaultTenantPayload);
       const { guard: prodGuard } = await buildGuard(NodeEnv.PRODUCTION);
-      const { context } = buildContext({ authorization: 'Bearer default-tenant-token' });
+      const { context } = buildContext({ cookie: '__Host-eo_session=default-tenant-token' });
 
       await expect(prodGuard.canActivate(context)).rejects.toThrow(
         new UnauthorizedException('Invalid or expired token'),
@@ -225,7 +225,7 @@ describe('JwtAuthGuard', () => {
     it('should throw UnauthorizedException for the default tenant under staging', async () => {
       mockJwtService.verifyAsync.mockResolvedValueOnce(defaultTenantPayload);
       const { guard: stagingGuard } = await buildGuard(NodeEnv.STAGING);
-      const { context } = buildContext({ authorization: 'Bearer default-tenant-token' });
+      const { context } = buildContext({ cookie: '__Host-eo_session=default-tenant-token' });
 
       await expect(stagingGuard.canActivate(context)).rejects.toThrow(
         new UnauthorizedException('Invalid or expired token'),
@@ -234,7 +234,7 @@ describe('JwtAuthGuard', () => {
 
     it('should accept the default tenant under a non-prod-like environment', async () => {
       mockJwtService.verifyAsync.mockResolvedValueOnce(defaultTenantPayload);
-      const { context } = buildContext({ authorization: 'Bearer default-tenant-token' });
+      const { context } = buildContext({ cookie: 'eo_session=default-tenant-token' });
 
       await expect(guard.canActivate(context)).resolves.toBe(true);
     });
@@ -248,21 +248,25 @@ describe('JwtAuthGuard', () => {
       };
       const { guard: prodGuard } = await buildGuard(NodeEnv.PRODUCTION);
       mockJwtService.verifyAsync.mockResolvedValueOnce(nonDefaultPayload);
-      const { context: prodContext } = buildContext({ authorization: 'Bearer non-default-token' });
+      const { context: prodContext } = buildContext({
+        cookie: '__Host-eo_session=non-default-token',
+      });
       await expect(prodGuard.canActivate(prodContext)).resolves.toBe(true);
 
       const { guard: stagingGuard } = await buildGuard(NodeEnv.STAGING);
       mockJwtService.verifyAsync.mockResolvedValueOnce(nonDefaultPayload);
       const { context: stagingContext } = buildContext({
-        authorization: 'Bearer non-default-token',
+        cookie: '__Host-eo_session=non-default-token',
       });
       await expect(stagingGuard.canActivate(stagingContext)).resolves.toBe(true);
     });
   });
 
-  // Dual-accept precedence: a scripted client sending both should not be able to shadow the
-  // Bearer token with a stale or attacker-supplied cookie.
-  it('should prefer the Authorization header over the cookie when both are present', async () => {
+  // Regression: the guard used to read `Authorization` before the cookie, so a bearer token was a
+  // live credential path independent of the cookie. The cookie is now the only source it reads —
+  // this proves an Authorization header present alongside a valid cookie is ignored entirely, not
+  // merely deprioritized.
+  it('should ignore an Authorization header and authenticate from the cookie alone', async () => {
     const payload: JwtPayload = {
       sub: 'user-id',
       email: 'user@example.com',
@@ -276,6 +280,13 @@ describe('JwtAuthGuard', () => {
     });
 
     await expect(guard.canActivate(context)).resolves.toBe(true);
-    expect(mockJwtService.verifyAsync).toHaveBeenCalledWith('header-token');
+    expect(mockJwtService.verifyAsync).toHaveBeenCalledWith('cookie-token');
+  });
+
+  it('should throw UnauthorizedException when only an Authorization header is present, no cookie', async () => {
+    const { context } = buildContext({ authorization: 'Bearer header-token' });
+
+    await expect(guard.canActivate(context)).rejects.toThrow(UnauthorizedException);
+    expect(mockJwtService.verifyAsync).not.toHaveBeenCalled();
   });
 });

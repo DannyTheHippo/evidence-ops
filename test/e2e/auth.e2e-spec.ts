@@ -11,9 +11,20 @@ interface MeResponseBody {
 }
 
 interface AuthTokenResponseBody {
-  accessToken: string;
   user: MeResponseBody;
 }
+
+interface OpenApiDocument {
+  components?: { securitySchemes?: Record<string, unknown> };
+}
+
+const sessionCookieFromResponse = (setCookieHeader: string[] | undefined): string => {
+  const cookie = setCookieHeader?.find((value) => value.startsWith('eo_session='));
+  if (!cookie) {
+    throw new Error('sessionCookieFromResponse: no eo_session cookie in Set-Cookie header');
+  }
+  return cookie.split(';')[0];
+};
 
 describe('Auth (e2e)', () => {
   let app: INestApplication;
@@ -45,13 +56,17 @@ describe('Auth (e2e)', () => {
     const loginBody = loginResponse.body as AuthTokenResponseBody;
 
     expect(loginResponse.status).toBe(200);
-    expect(typeof loginBody.accessToken).toBe('string');
+    // Exact-key assertion: the only gate catching accessToken re-appearing in the response body.
+    expect(Object.keys(loginBody).sort()).toEqual(['user']);
     expect(loginBody.user.email).toBe(credentials.email);
     expect(Object.keys(loginBody.user).sort()).toEqual(['id', 'email', 'role', 'createdAt'].sort());
 
+    const sessionCookie = sessionCookieFromResponse(
+      loginResponse.headers['set-cookie'] as unknown as string[] | undefined,
+    );
     const meResponse = await request(getTestServer(app))
       .get('/api/v1/auth/me')
-      .set('Authorization', `Bearer ${loginBody.accessToken}`);
+      .set('Cookie', sessionCookie);
     const meBody = meResponse.body as MeResponseBody;
 
     expect(meResponse.status).toBe(200);
@@ -83,7 +98,24 @@ describe('Auth (e2e)', () => {
     expect(response.status).toBe(401);
   });
 
-  it('sets an HttpOnly, SameSite=Lax session cookie on login and accepts it in place of a Bearer header', async () => {
+  // The session cookie is the only credential path JwtAuthGuard accepts. A valid,
+  // correctly-signed JWT carried in Authorization instead of the cookie must still 401 — the
+  // regression this guards is the header being read as a live credential path again.
+  it('rejects a request carrying a valid Bearer token and no session cookie', async () => {
+    const { cookie } = await registerTestUser(app, {
+      email: 'auth-e2e-bearer-rejected@example.com',
+      password: 'correct-horse-battery-staple',
+    });
+    const token = cookie.slice(cookie.indexOf('=') + 1);
+
+    const response = await request(getTestServer(app))
+      .get('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(response.status).toBe(401);
+  });
+
+  it('sets an HttpOnly, SameSite=Lax session cookie on login and authenticates subsequent requests with it', async () => {
     const cookieCredentials = {
       email: 'auth-e2e-cookie@example.com',
       password: 'correct-horse-battery-staple',
@@ -110,31 +142,41 @@ describe('Auth (e2e)', () => {
     expect(meBody.email).toBe(cookieCredentials.email);
   });
 
-  // JWT is stateless: logout clears the browser's cookie but cannot revoke the token itself, so
-  // this only asserts the cookie is expired client-side, not that the prior Bearer token stopped
-  // working.
+  // The JWT itself is stateless and stays valid until `exp` — logout only clears the browser's
+  // cookie and records the client's intent, it revokes nothing server-side.
   it('clears the session cookie on logout', async () => {
     const logoutCredentials = {
       email: 'auth-e2e-logout@example.com',
       password: 'correct-horse-battery-staple',
     };
-    const { token } = await registerTestUser(app, logoutCredentials);
+    const { cookie } = await registerTestUser(app, logoutCredentials);
 
     const logoutResponse = await request(getTestServer(app))
       .post('/api/v1/auth/logout')
-      .set('Authorization', `Bearer ${token}`);
+      .set('Cookie', cookie);
     const setCookieHeader = logoutResponse.headers['set-cookie'] as unknown as string[];
-    const clearedCookie = setCookieHeader.find((cookie) => cookie.startsWith('eo_session='));
+    const clearedCookie = setCookieHeader.find((c) => c.startsWith('eo_session='));
 
     expect(logoutResponse.status).toBe(204);
     expect(clearedCookie).toBeDefined();
     expect(clearedCookie).toMatch(/Max-Age=0/);
   });
 
+  // Swagger previously advertised `addBearerAuth()`; a reader following that scheme would build a
+  // request the guard now rejects. `addCookieAuth` is the only scheme the document should carry.
+  it('does not advertise bearer auth in the OpenAPI document', async () => {
+    const response = await request(getTestServer(app)).get('/docs-json');
+    const body = response.body as OpenApiDocument;
+
+    expect(response.status).toBe(200);
+    expect(body.components?.securitySchemes).not.toHaveProperty('bearer');
+    expect(body.components?.securitySchemes).toHaveProperty('cookie');
+  });
+
   describe('CsrfOriginMiddleware', () => {
     const email = 'auth-e2e-csrf@example.com';
     const password = 'correct-horse-battery-staple';
-    let logoutCredentials: { accessToken: string; sessionCookie: string };
+    let sessionCookie: string;
 
     // Registered once and reused across every case below, including the login-route cases (which
     // call /auth/login again but never /auth/register): logout only records an audit entry
@@ -144,38 +186,16 @@ describe('Auth (e2e)', () => {
     // workers; the added CPU load produced an observed `socket hang up` failure in 1 of 5 full
     // runs.
     beforeAll(async () => {
-      const { token } = await registerTestUser(app, { email, password });
-      const loginResponse = await request(getTestServer(app))
-        .post('/api/v1/auth/login')
-        .send({ email, password });
-      const setCookieHeader = loginResponse.headers['set-cookie'] as unknown as string[];
-      const sessionCookie = setCookieHeader
-        .find((cookie) => cookie.startsWith('eo_session='))
-        ?.split(';')[0] as string;
-
-      logoutCredentials = { accessToken: token, sessionCookie };
+      const result = await registerTestUser(app, { email, password });
+      sessionCookie = result.cookie;
     });
 
+    // The rule is unconditional — see csrf-origin.middleware.ts — so it applies regardless of
+    // credential path; the session cookie is the only one that exists.
     it('rejects a cookie-authenticated mutating request carrying a hostile Origin', async () => {
       const response = await request(getTestServer(app))
         .post('/api/v1/auth/logout')
-        .set('Cookie', logoutCredentials.sessionCookie)
-        .set('Origin', 'https://hostile.example.com');
-
-      expect(response.status).toBe(403);
-    });
-
-    // Inverted from the original design, which exempted a Bearer-authenticated request from this
-    // check entirely on the theory that it carries no ambient cookie for a cross-site page to
-    // ride. That exemption was only ever reachable from a browser, where CORS already governs
-    // cross-origin responses — so it bought nothing and created a bypass class once the
-    // cookie/path scoping around it was found to be broken (see the trailing-slash and
-    // case-change cases below). The rule is now unconditional: any mutating request with a
-    // foreign Origin is refused, Bearer or not.
-    it('rejects a Bearer-authenticated mutating request carrying a hostile Origin', async () => {
-      const response = await request(getTestServer(app))
-        .post('/api/v1/auth/logout')
-        .set('Authorization', `Bearer ${logoutCredentials.accessToken}`)
+        .set('Cookie', sessionCookie)
         .set('Origin', 'https://hostile.example.com');
 
       expect(response.status).toBe(403);
@@ -186,7 +206,7 @@ describe('Auth (e2e)', () => {
     it('passes a cookie-authenticated mutating request that carries no Origin header', async () => {
       const response = await request(getTestServer(app))
         .post('/api/v1/auth/logout')
-        .set('Cookie', logoutCredentials.sessionCookie);
+        .set('Cookie', sessionCookie);
 
       expect(response.status).toBe(204);
     });

@@ -14,12 +14,12 @@ import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import { LoginRequestDto } from './dtos/request/login.request.dto';
 import { RegisterRequestDto } from './dtos/request/register.request.dto';
-import { AuthTokenResponseDto } from './dtos/response/auth-token.response.dto';
 import { MeResponseDto } from './dtos/response/me.response.dto';
 import {
   EmailAlreadyRegisteredException,
   InvalidCredentialsException,
 } from './exceptions/auth.exception';
+import { LoginResult } from './types/login-result.type';
 
 const PASSWORD_HASH_COST = 12;
 const INVALID_CREDENTIALS_MESSAGE = 'Invalid email or password';
@@ -75,7 +75,7 @@ export class AuthService {
     return this.toMeDto(user);
   }
 
-  async login(dto: LoginRequestDto): Promise<AuthTokenResponseDto> {
+  async login(dto: LoginRequestDto): Promise<LoginResult> {
     const email = dto.email.toLowerCase();
 
     const user = await this.userModel.findOne({ email });

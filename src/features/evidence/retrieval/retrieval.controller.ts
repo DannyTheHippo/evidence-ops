@@ -7,7 +7,7 @@ import {
   UnauthorizedException,
   Version,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
@@ -21,7 +21,6 @@ import { RetrievalService } from './retrieval.service';
 
 @Controller('retrieval')
 @ApiTags('retrieval')
-@ApiBearerAuth()
 export class RetrievalController {
   constructor(private readonly retrievalService: RetrievalService) {}
 

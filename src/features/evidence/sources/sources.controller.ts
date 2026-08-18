@@ -11,7 +11,7 @@ import {
   UnauthorizedException,
   Version,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
 import { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
@@ -27,7 +27,6 @@ import { SourcesService } from './sources.service';
 
 @Controller('sources')
 @ApiTags('sources')
-@ApiBearerAuth()
 export class SourcesController {
   constructor(private readonly sourcesService: SourcesService) {}
 

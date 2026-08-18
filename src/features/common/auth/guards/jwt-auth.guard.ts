@@ -43,11 +43,10 @@ export class JwtAuthGuard implements CanActivate {
     // Exactly one cookie name is valid per environment (`resolveSessionCookieName`, same
     // predicate the controller uses to set it) — accepting the other name too would let a cookie
     // planted under the dev-only plain name authenticate a request in a prod-like environment
-    // that never issues it.
+    // that never issues it. The session cookie is the only credential path this guard accepts —
+    // no Authorization header, so an XSS-stolen bearer token cannot authenticate anything.
     const cookies = parseCookieHeader(request.headers.cookie);
-    const token =
-      JwtAuthGuard.extractToken(request.headers.authorization) ??
-      cookies[resolveSessionCookieName(this.config.app.env)];
+    const token = cookies[resolveSessionCookieName(this.config.app.env)];
     if (!token) {
       throw new UnauthorizedException('No token provided');
     }
@@ -94,13 +93,5 @@ export class JwtAuthGuard implements CanActivate {
     } catch {
       throw new UnauthorizedException('Invalid or expired token');
     }
-  }
-
-  private static extractToken(header?: string): string | undefined {
-    if (!header?.startsWith('Bearer ')) {
-      return undefined;
-    }
-
-    return header.slice('Bearer '.length).trim() || undefined;
   }
 }
