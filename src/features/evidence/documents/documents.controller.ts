@@ -35,6 +35,7 @@ import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { documentsApiExamples } from './api-examples/documents.api-examples';
 import { MAX_FILE_SIZE_BYTES } from './documents.constant';
 import { DocumentsService } from './documents.service';
+import { ListDocumentsRequestDto } from './dtos/request/list-documents.request.dto';
 import { UploadDocumentRequestDto } from './dtos/request/upload-document.request.dto';
 import { DocumentResponseDto } from './dtos/response/document.response.dto';
 import { DocumentWithVersionsResponseDto } from './dtos/response/document-with-versions.response.dto';
@@ -95,14 +96,14 @@ export class DocumentsController {
   @HttpCode(HttpStatus.OK)
   @ApiResponse(documentsApiExamples.list)
   async list(
-    @Query() pagination: PaginationRequestDto,
+    @Query() query: ListDocumentsRequestDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
   ): Promise<WithCountResponseDto<DocumentResponseDto>> {
     if (!user) {
       throw new UnauthorizedException('No token provided');
     }
 
-    const { docs, count } = await this.documentsService.list(pagination, user.tenantId);
+    const { docs, count } = await this.documentsService.list(query, user.tenantId);
 
     return { docs: docs.map((doc) => toResponseDto(DocumentResponseDto, doc)), count };
   }

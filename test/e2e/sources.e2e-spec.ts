@@ -18,6 +18,11 @@ interface SourceBody {
   lastSyncStatus?: string;
   lastSyncError?: string;
   fileCount: number;
+  connectivity: string;
+  reachability: string;
+  owner?: string;
+  tracked: boolean;
+  sourceClass: string;
   createdAt: string;
 }
 
@@ -53,6 +58,11 @@ const SOURCE_KEYS = [
   'lastSyncStatus',
   'lastSyncError',
   'fileCount',
+  'connectivity',
+  'reachability',
+  'owner',
+  'tracked',
+  'sourceClass',
   'createdAt',
   'fileStates',
 ].sort();
@@ -69,7 +79,9 @@ const OK_FILE_STATE_KEYS = ['path', 'status', 'mtimeMs'].sort();
  * `JSON.stringify` drops an undefined value rather than emitting a null — so they are absent from
  * the payload, matching how `WorkflowRunResponseDto`'s optional fields behave in
  * `approvals.e2e-spec.ts`. Asserting this set exactly is what catches a field leaking in that the
- * DTO never declared.
+ * DTO never declared. `connectivity`/`reachability`/`tracked`/`sourceClass` are always present —
+ * every one has a schema default applied at creation — and `owner` is present here too because
+ * `CreateSourceRequestDto` requires it.
  */
 const FRESH_SOURCE_KEYS = [
   'id',
@@ -78,6 +90,11 @@ const FRESH_SOURCE_KEYS = [
   'path',
   'enabled',
   'fileCount',
+  'connectivity',
+  'reachability',
+  'owner',
+  'tracked',
+  'sourceClass',
   'createdAt',
 ].sort();
 
@@ -111,22 +128,24 @@ describe('Sources (e2e)', () => {
     await closeTestApp(app);
   });
 
+  const OWNER = 'Jane Doe, IT';
+
   describe('POST /sources', () => {
     it('rejects an unauthenticated request', async () => {
       const response = await request(getTestServer(app))
         .post('/api/v1/sources')
-        .send({ name: 'Deal Room Inbox', kind: 'local-folder', path: 'deal-room' });
+        .send({ name: 'Deal Room Inbox', kind: 'local-folder', path: 'deal-room', owner: OWNER });
 
       expect(response.status).toBe(401);
     });
 
-    it('creates a source and exposes the exact key set', async () => {
+    it('creates a source, defaults the inventory fields, and exposes the exact key set', async () => {
       const name = `Deal Room ${Date.now()}`;
 
       const response = await request(getTestServer(app))
         .post('/api/v1/sources')
         .set('Cookie', cookie)
-        .send({ name, kind: 'local-folder', path: 'deal-room' });
+        .send({ name, kind: 'local-folder', path: 'deal-room', owner: OWNER });
       const body = response.body as SourceBody;
 
       expect(response.status).toBe(201);
@@ -134,7 +153,46 @@ describe('Sources (e2e)', () => {
       expect(body.kind).toBe('local-folder');
       expect(body.enabled).toBe(true);
       expect(body.fileCount).toBe(0);
+      expect(body.connectivity).toBe('connector');
+      expect(body.reachability).toBe('live');
+      expect(body.owner).toBe(OWNER);
+      expect(body.tracked).toBe(true);
+      expect(body.sourceClass).toBe('unclassified');
       expect(Object.keys(body).sort()).toEqual(FRESH_SOURCE_KEYS);
+    });
+
+    it('creates an inventory-only source with explicit connectivity/reachability/sourceClass', async () => {
+      const name = `Inventory Only ${Date.now()}`;
+
+      const response = await request(getTestServer(app))
+        .post('/api/v1/sources')
+        .set('Cookie', cookie)
+        .send({
+          name,
+          kind: 'local-folder',
+          path: 'deal-room',
+          owner: OWNER,
+          connectivity: 'manual',
+          reachability: 'prohibited',
+          tracked: false,
+          sourceClass: 'pm-export',
+        });
+      const body = response.body as SourceBody;
+
+      expect(response.status).toBe(201);
+      expect(body.connectivity).toBe('manual');
+      expect(body.reachability).toBe('prohibited');
+      expect(body.tracked).toBe(false);
+      expect(body.sourceClass).toBe('pm-export');
+    });
+
+    it('returns 400 when owner is omitted', async () => {
+      const response = await request(getTestServer(app))
+        .post('/api/v1/sources')
+        .set('Cookie', cookie)
+        .send({ name: `No Owner ${Date.now()}`, kind: 'local-folder', path: 'deal-room' });
+
+      expect(response.status).toBe(400);
     });
 
     it('returns 409 for a duplicate name', async () => {
@@ -142,12 +200,12 @@ describe('Sources (e2e)', () => {
       await request(getTestServer(app))
         .post('/api/v1/sources')
         .set('Cookie', cookie)
-        .send({ name, kind: 'local-folder', path: 'deal-room' });
+        .send({ name, kind: 'local-folder', path: 'deal-room', owner: OWNER });
 
       const response = await request(getTestServer(app))
         .post('/api/v1/sources')
         .set('Cookie', cookie)
-        .send({ name, kind: 'local-folder', path: 'deal-room-2' });
+        .send({ name, kind: 'local-folder', path: 'deal-room-2', owner: OWNER });
 
       expect(response.status).toBe(409);
     });
@@ -158,7 +216,12 @@ describe('Sources (e2e)', () => {
       const response = await request(getTestServer(app))
         .post('/api/v1/sources')
         .set('Cookie', memberCookie)
-        .send({ name: `Member Source ${Date.now()}`, kind: 'local-folder', path: 'deal-room' });
+        .send({
+          name: `Member Source ${Date.now()}`,
+          kind: 'local-folder',
+          path: 'deal-room',
+          owner: OWNER,
+        });
 
       expect(response.status).toBe(403);
     });
@@ -175,7 +238,12 @@ describe('Sources (e2e)', () => {
       await request(getTestServer(app))
         .post('/api/v1/sources')
         .set('Cookie', cookie)
-        .send({ name: `Listed Source ${Date.now()}`, kind: 'local-folder', path: 'deal-room' });
+        .send({
+          name: `Listed Source ${Date.now()}`,
+          kind: 'local-folder',
+          path: 'deal-room',
+          owner: OWNER,
+        });
 
       const response = await request(getTestServer(app))
         .get('/api/v1/sources')
@@ -186,6 +254,50 @@ describe('Sources (e2e)', () => {
       expect(Object.keys(body).sort()).toEqual(['docs', 'count'].sort());
       expect(body.count).toBeGreaterThan(0);
       expect(body.docs.length).toBeGreaterThan(0);
+    });
+
+    it('filters to tracked: false sources, keeping them separate from the default list', async () => {
+      const untrackedName = `Untracked Filter Source ${Date.now()}`;
+      await sourceModel.create({
+        name: untrackedName,
+        kind: 'local-folder',
+        path: 'deal-room',
+        tenantId,
+        tracked: false,
+      });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/sources')
+        .query({ tracked: false })
+        .set('Cookie', cookie);
+      const body = response.body as { docs: SourceBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.docs.every((doc) => doc.tracked === false)).toBe(true);
+      expect(body.docs.some((doc) => doc.name === untrackedName)).toBe(true);
+    });
+
+    it('filters to lastSyncStatus: failed sources', async () => {
+      const failedName = `Failed Filter Source ${Date.now()}`;
+      await sourceModel.create({
+        name: failedName,
+        kind: 'local-folder',
+        path: 'deal-room',
+        tenantId,
+        lastSyncAt: new Date(),
+        lastSyncStatus: 'failed',
+        lastSyncError: 'connector refused an oversized file',
+      });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/sources')
+        .query({ lastSyncStatus: 'failed' })
+        .set('Cookie', cookie);
+      const body = response.body as { docs: SourceBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.docs.every((doc) => doc.lastSyncStatus === 'failed')).toBe(true);
+      expect(body.docs.some((doc) => doc.name === failedName)).toBe(true);
     });
   });
 
@@ -240,6 +352,7 @@ describe('Sources (e2e)', () => {
         lastSyncStatus: 'failed',
         lastSyncError: 'connector refused an oversized file',
         fileStates: [okFileState, failedFileState],
+        owner: OWNER,
       });
 
       const response = await request(getTestServer(app))
@@ -252,6 +365,11 @@ describe('Sources (e2e)', () => {
       expect(body.intervalMs).toBe(300_000);
       expect(body.lastSyncStatus).toBe('failed');
       expect(body.lastSyncError).toBe('connector refused an oversized file');
+      expect(body.owner).toBe(OWNER);
+      expect(body.connectivity).toBe('connector');
+      expect(body.reachability).toBe('live');
+      expect(body.tracked).toBe(true);
+      expect(body.sourceClass).toBe('unclassified');
       expect(Object.keys(body).sort()).toEqual(SOURCE_KEYS);
 
       expect(body.fileStates).toHaveLength(2);
@@ -322,6 +440,39 @@ describe('Sources (e2e)', () => {
 
       const stored = await sourceModel.findById(created._id);
       expect(stored?.enabled).toBe(false);
+    });
+
+    it('updates the inventory fields — connectivity, reachability, owner, tracked, sourceClass', async () => {
+      const created = await sourceModel.create({
+        name: `Patch Inventory Source ${Date.now()}`,
+        kind: 'local-folder',
+        path: 'deal-room',
+        tenantId,
+      });
+
+      const response = await request(getTestServer(app))
+        .patch(`/api/v1/sources/${created._id.toString()}`)
+        .set('Cookie', cookie)
+        .send({
+          connectivity: 'export-only',
+          reachability: 'possible',
+          owner: OWNER,
+          tracked: false,
+          sourceClass: 'crm-export',
+        });
+      const body = response.body as SourceBody;
+
+      expect(response.status).toBe(200);
+      expect(body.connectivity).toBe('export-only');
+      expect(body.reachability).toBe('possible');
+      expect(body.owner).toBe(OWNER);
+      expect(body.tracked).toBe(false);
+      expect(body.sourceClass).toBe('crm-export');
+      // `enabled` was not in the request body, so it must be untouched by the partial update.
+      expect(body.enabled).toBe(true);
+
+      const stored = await sourceModel.findById(created._id);
+      expect(stored?.tracked).toBe(false);
     });
 
     // The caller's token carries a real, freshly provisioned tenant id, so this only proves

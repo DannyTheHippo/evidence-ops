@@ -477,6 +477,45 @@ describe('DocumentsService', () => {
         InternalServerErrorException,
       );
     });
+
+    // `ingestionStatus` lives on `DocumentVersion`, not `Document` — this is the two-step filter's
+    // only path: resolve matching version ids first, then narrow the `documentModel` query to
+    // documents whose CURRENT version is one of them. The first `documentVersionModel.find` call
+    // (the pre-filter) and the second (the batch current-version resolve `toDocumentDto` needs) are
+    // deliberately asserted separately so a regression collapsing them back into one call is caught.
+    it('should resolve matching version ids first, then filter documents by currentVersionId', async () => {
+      const failedVersionId = new Types.ObjectId();
+      mockDocumentVersionModel.find
+        .mockResolvedValueOnce([{ _id: failedVersionId }])
+        .mockResolvedValueOnce([
+          buildMockVersion({ _id: failedVersionId, ingestionStatus: 'failed' }),
+        ]);
+      const mockDocument = buildMockDocument({ currentVersionId: failedVersionId });
+      mockDocumentModel.find.mockResolvedValueOnce([mockDocument]);
+      mockDocumentModel.countDocuments.mockResolvedValueOnce(1);
+
+      const result = await service.list(
+        { skip: 0, limit: 20, ingestionStatus: 'failed' },
+        'tenant-a',
+      );
+
+      expect(mockDocumentVersionModel.find).toHaveBeenNthCalledWith(
+        1,
+        { tenantId: 'tenant-a', ingestionStatus: 'failed' },
+        { _id: 1 },
+      );
+      expect(mockDocumentModel.find).toHaveBeenCalledWith(
+        { tenantId: 'tenant-a', currentVersionId: { $in: [failedVersionId] } },
+        null,
+        { sort: { createdAt: -1 }, skip: 0, limit: 20 },
+      );
+      expect(mockDocumentModel.countDocuments).toHaveBeenCalledWith({
+        tenantId: 'tenant-a',
+        currentVersionId: { $in: [failedVersionId] },
+      });
+      expect(result.count).toBe(1);
+      expect(result.docs[0].currentVersion.ingestionStatus).toBe('failed');
+    });
   });
 
   describe('getById', () => {

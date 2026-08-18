@@ -70,3 +70,15 @@ export class DocumentVersion extends AuditableDocument {
 }
 
 export const DocumentVersionSchema = SchemaFactory.createForClass(DocumentVersion);
+
+/**
+ * Declared here as well as in `migrations/0023-source-inventory-fields.ts`, with the same key
+ * pattern, options and name — MongoDB refuses a second index on a key pattern it already carries
+ * under a different name, and which side loses depends on boot order. Backs
+ * `DocumentsService.list`'s `ingestionStatus` filter: resolving "which versions have this status"
+ * for a tenant without a collection scan.
+ */
+DocumentVersionSchema.index(
+  { tenantId: 1, ingestionStatus: 1 },
+  { name: 'document_versions_tenantId_ingestionStatus' },
+);

@@ -8,8 +8,10 @@ import type { DocumentSourceClass } from '../../../database/schemas/evidence/doc
 import {
   Source,
   SourceDocument,
+  type SourceConnectivity,
   type SourceFileState,
   type SourceKind,
+  type SourceReachability,
 } from '../../../database/schemas/evidence/source/source.schema';
 import {
   SOURCE_CONNECTOR,
@@ -20,7 +22,6 @@ import {
   WORKFLOW_ENGINE,
   type WorkflowEngine,
 } from '../../../providers/workflow-engine/workflow-engine.interface';
-import type { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
@@ -31,6 +32,7 @@ import type { UploadedFileLike } from '../documents/types/uploaded-file.type';
 import type { WorkflowRunResult } from '../workflow-runs/workflow-runs.service';
 import { WorkflowRunsService } from '../workflow-runs/workflow-runs.service';
 import type { SourceFileStateStatus } from './dtos/response/source-file-state.response.dto';
+import type { ListSourcesRequestDto } from './dtos/request/list-sources.request.dto';
 import {
   SourceNameConflictException,
   SourceNotFoundException,
@@ -42,8 +44,24 @@ export interface CreateSourceInput {
   readonly path: string;
   readonly enabled?: boolean;
   readonly intervalMs?: number;
+  readonly connectivity?: SourceConnectivity;
+  readonly reachability?: SourceReachability;
+  readonly owner: string;
+  readonly tracked?: boolean;
+  readonly sourceClass?: DocumentSourceClass;
   readonly actorId: string;
   readonly tenantId: string;
+}
+
+/** `SourcesService.update`'s input — every field optional and independently applied; see that
+ *  method's own doc comment. */
+export interface UpdateSourceInput {
+  readonly enabled?: boolean;
+  readonly connectivity?: SourceConnectivity;
+  readonly reachability?: SourceReachability;
+  readonly owner?: string;
+  readonly tracked?: boolean;
+  readonly sourceClass?: DocumentSourceClass;
 }
 
 export interface SourceResult {
@@ -58,6 +76,11 @@ export interface SourceResult {
   readonly lastSyncStatus?: string;
   readonly lastSyncError?: string;
   readonly fileCount: number;
+  readonly connectivity: SourceConnectivity;
+  readonly reachability: SourceReachability;
+  readonly owner?: string;
+  readonly tracked: boolean;
+  readonly sourceClass: DocumentSourceClass;
   readonly createdAt: Date;
 }
 
@@ -123,6 +146,11 @@ export class SourcesService {
         path: input.path,
         enabled: input.enabled ?? true,
         intervalMs: input.intervalMs,
+        connectivity: input.connectivity ?? 'connector',
+        reachability: input.reachability ?? 'live',
+        owner: input.owner,
+        tracked: input.tracked ?? true,
+        sourceClass: input.sourceClass ?? 'unclassified',
         tenantId,
       });
     } catch (error) {
@@ -146,17 +174,21 @@ export class SourcesService {
   }
 
   async list(
-    pagination: PaginationRequestDto,
+    dto: ListSourcesRequestDto,
     actorId: string,
     tenantId: string,
   ): Promise<DocumentResultWithCount<SourceResult>> {
-    const filter = { tenantId };
+    const filter = {
+      tenantId,
+      ...(dto.lastSyncStatus !== undefined ? { lastSyncStatus: dto.lastSyncStatus } : {}),
+      ...(dto.tracked !== undefined ? { tracked: dto.tracked } : {}),
+    };
 
     const [sources, count] = await Promise.all([
       this.sourceModel.find(filter, null, {
         sort: { createdAt: -1 },
-        skip: pagination.skip,
-        limit: pagination.limit,
+        skip: dto.skip,
+        limit: dto.limit,
       }),
       this.sourceModel.countDocuments(filter),
     ]);
@@ -188,9 +220,14 @@ export class SourcesService {
     return this.toResultWithFileStates(source);
   }
 
-  async setEnabled(
+  /**
+   * Partial update — only fields present on `input` are touched, generalizing `setEnabled`'s old
+   * single-field `$set` to every field the inventory form can change. `name`/`kind`/`path` are not
+   * accepted here: repointing or renaming a source is a `create` decision, not an edit.
+   */
+  async update(
     id: string,
-    enabled: boolean,
+    input: UpdateSourceInput,
     actorId: string,
     tenantId: string,
   ): Promise<SourceResult> {
@@ -198,9 +235,17 @@ export class SourcesService {
       throw new SourceNotFoundException(`Source '${id}' not found`);
     }
 
+    const $set: Partial<Record<keyof UpdateSourceInput, unknown>> = {};
+    if (input.enabled !== undefined) $set.enabled = input.enabled;
+    if (input.connectivity !== undefined) $set.connectivity = input.connectivity;
+    if (input.reachability !== undefined) $set.reachability = input.reachability;
+    if (input.owner !== undefined) $set.owner = input.owner;
+    if (input.tracked !== undefined) $set.tracked = input.tracked;
+    if (input.sourceClass !== undefined) $set.sourceClass = input.sourceClass;
+
     const source = await this.sourceModel.findOneAndUpdate(
       { _id: id, tenantId },
-      { $set: { enabled } },
+      { $set },
       { new: true },
     );
     if (!source) {
@@ -208,7 +253,7 @@ export class SourcesService {
     }
 
     await this.auditService.record({
-      action: 'sources.enabled_updated',
+      action: 'sources.updated',
       actorId,
       subject: { entityType: 'Source', entityId: id },
       tenantId,
@@ -300,6 +345,13 @@ export class SourcesService {
 
     if (!source.enabled) {
       this.logger.debug(`Source '${sourceId}' disabled; sync loop exiting`);
+      return { disabled: true, intervalMs: null };
+    }
+
+    // Fails CLOSED: an inventory-only row is catalogued for the estate map, never handed to a
+    // connector — this recurring loop must never sync it, no matter how it was started.
+    if (!source.tracked) {
+      this.logger.debug(`Source '${sourceId}' not tracked; sync loop exiting`);
       return { disabled: true, intervalMs: null };
     }
 
@@ -532,6 +584,11 @@ export class SourcesService {
       lastSyncStatus: source.lastSyncStatus,
       lastSyncError: source.lastSyncError,
       fileCount: source.fileStates.length,
+      connectivity: source.connectivity,
+      reachability: source.reachability,
+      owner: source.owner,
+      tracked: source.tracked,
+      sourceClass: source.sourceClass,
       createdAt: source.createdAt,
     };
   }

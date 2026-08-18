@@ -21,6 +21,7 @@ import {
 import {
   DocumentVersion,
   DocumentVersionDocument,
+  type DocumentVersionIngestionStatus,
 } from '../../src/database/schemas/evidence/document-version/document-version.schema';
 import {
   EvidenceChunk,
@@ -153,7 +154,10 @@ describe('Documents (e2e)', () => {
   // Direct model writes for pagination fixtures, following the `seedChunk` pattern above — bulk
   // seeding through the multipart upload route would be needlessly slow for a test that only
   // needs many rows to exist, not real ingested content.
-  const seedDocumentWithVersion = async (title: string) => {
+  const seedDocumentWithVersion = async (
+    title: string,
+    overrides: { ingestionStatus?: DocumentVersionIngestionStatus } = {},
+  ) => {
     const document = await documentModel.create({
       title,
       sourceKind: 'txt',
@@ -167,6 +171,7 @@ describe('Documents (e2e)', () => {
       sizeBytes: 1,
       storageKey: `seed-${title}`,
       tenantId,
+      ...overrides,
     });
     document.currentVersionId = version._id;
     await document.save();
@@ -393,6 +398,60 @@ describe('Documents (e2e)', () => {
     expect(response.status).toBe(200);
     expect(body.count).toBeGreaterThan(0);
     expect(body.docs.length).toBeGreaterThan(0);
+  });
+
+  describe('GET /documents ingestionStatus filter', () => {
+    // The filter is a direct DB predicate on the CURRENT version's ingestionStatus, not a slice
+    // of a fixed-size "newest N" page — seeding well over 100 newer documents proves a failure
+    // does not fall out of view the way it does on Home's client-side newest-100 window.
+    it('returns a failed current version regardless of how many newer documents exist, and excludes one whose failed version was superseded', async () => {
+      const failedDoc = await seedDocumentWithVersion(
+        `Failed Fixture ${new Types.ObjectId().toString()}`,
+        { ingestionStatus: 'failed' },
+      );
+
+      const supersededDoc = await seedDocumentWithVersion(
+        `Superseded Fixture ${new Types.ObjectId().toString()}`,
+        { ingestionStatus: 'failed' },
+      );
+      const goodVersion = await documentVersionModel.create({
+        documentId: supersededDoc._id,
+        versionNumber: 2,
+        sha256: createHash('sha256').update('superseded-good-bytes').digest('hex'),
+        sizeBytes: 1,
+        storageKey: `seed-superseded-good-${supersededDoc._id.toString()}`,
+        tenantId,
+        ingestionStatus: 'completed',
+      });
+      supersededDoc.currentVersionId = goodVersion._id;
+      await supersededDoc.save();
+
+      for (let i = 0; i < 105; i += 1) {
+        await seedDocumentWithVersion(
+          `Filter Window Filler ${i}-${new Types.ObjectId().toString()}`,
+        );
+      }
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/documents')
+        .query({ ingestionStatus: 'failed' })
+        .set('Cookie', cookie);
+      const body = response.body as { docs: DocumentBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      const ids = body.docs.map((doc) => doc.id);
+      expect(ids).toContain(failedDoc._id.toString());
+      expect(ids).not.toContain(supersededDoc._id.toString());
+    });
+
+    it('returns 400 for an ingestionStatus outside the declared enum', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/documents')
+        .query({ ingestionStatus: 'bogus' })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
+    });
   });
 
   describe('GET /documents/events', () => {

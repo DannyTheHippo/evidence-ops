@@ -7,6 +7,33 @@ export type SourceKind = 'local-folder';
 
 export const SOURCE_KINDS: readonly SourceKind[] = ['local-folder'];
 
+/**
+ * How this source's bytes get into the corpus: `'connector'` syncs automatically through `kind`;
+ * `'export-only'` has no connector and relies on someone periodically handing over an export;
+ * `'manual'` is catalogued with no ingestion path at all yet. Independent of `tracked` below — a
+ * `'connector'` source can still be `tracked: false` if it is catalogued without being synced.
+ */
+export type SourceConnectivity = 'connector' | 'export-only' | 'manual';
+
+export const SOURCE_CONNECTIVITIES: readonly SourceConnectivity[] = [
+  'connector',
+  'export-only',
+  'manual',
+];
+
+/**
+ * Whether the estate's own access posture would let this system reach this source at all, distinct
+ * from `connectivity` (which only says how bytes would move if it were reachable). `'prohibited'`
+ * records standing client policy, not an incident.
+ */
+export type SourceReachability = 'live' | 'possible' | 'prohibited';
+
+export const SOURCE_REACHABILITIES: readonly SourceReachability[] = [
+  'live',
+  'possible',
+  'prohibited',
+];
+
 export type SourceDocument = HydratedDocument<WithTimestamps<Source>>;
 
 /**
@@ -106,6 +133,28 @@ export class Source extends AuditableDocument {
 
   @Prop({ type: String, required: true })
   tenantId: string;
+
+  @Prop({ type: String, required: true, enum: SOURCE_CONNECTIVITIES, default: 'connector' })
+  connectivity: SourceConnectivity;
+
+  @Prop({ type: String, required: true, enum: SOURCE_REACHABILITIES, default: 'live' })
+  reachability: SourceReachability;
+
+  /**
+   * The person or team accountable for this source, entered during the estate's inventory pass.
+   * Deliberately never defaulted or backfilled: its absence is the gap the inventory exists to
+   * surface, and inventing a value here would erase that signal.
+   */
+  @Prop({ type: String, trim: true })
+  owner?: string;
+
+  /**
+   * `false` marks an inventory-only row: catalogued for the estate map but never handed to the
+   * sync loop. `SourcesService.runSync` fails CLOSED on this — it exits the recurring loop before
+   * ever listing files for a source with `tracked: false`, no matter how the loop was started.
+   */
+  @Prop({ type: Boolean, required: true, default: true })
+  tracked: boolean;
 
   /**
    * Default `Document.sourceClass` a document created from this source's sync pass inherits — see

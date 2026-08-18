@@ -44,7 +44,7 @@ describe('Source schema', () => {
       expect(error?.errors.kind).toBeDefined();
     });
 
-    it('defaults enabled to true, fileStates to an empty array, and sourceClass to unclassified', () => {
+    it('defaults enabled, fileStates, sourceClass, connectivity, reachability, and tracked, and leaves owner unset', () => {
       const source = new SourceModel({
         name: 'Local inbox',
         kind: 'local-folder',
@@ -57,6 +57,57 @@ describe('Source schema', () => {
       expect(source.fileStates).toEqual([]);
       expect(source.tenantId).toBe('tenant-a');
       expect(source.sourceClass).toBe('unclassified');
+      expect(source.connectivity).toBe('connector');
+      expect(source.reachability).toBe('live');
+      expect(source.tracked).toBe(true);
+      expect(source.owner).toBeUndefined();
+    });
+
+    it('rejects a connectivity outside the supported set', () => {
+      const source = new SourceModel({
+        name: 'Local inbox',
+        kind: 'local-folder',
+        path: './inbox',
+        tenantId: 'tenant-a',
+        connectivity: 'sharepoint',
+      });
+
+      const error = source.validateSync();
+
+      expect(error?.errors.connectivity).toBeDefined();
+    });
+
+    it('rejects a reachability outside the supported set', () => {
+      const source = new SourceModel({
+        name: 'Local inbox',
+        kind: 'local-folder',
+        path: './inbox',
+        tenantId: 'tenant-a',
+        reachability: 'unknown',
+      });
+
+      const error = source.validateSync();
+
+      expect(error?.errors.reachability).toBeDefined();
+    });
+
+    it('preserves an explicit owner, connectivity, reachability, and tracked', () => {
+      const source = new SourceModel({
+        name: 'Local inbox',
+        kind: 'local-folder',
+        path: './inbox',
+        tenantId: 'tenant-a',
+        owner: 'Jane Doe, IT',
+        connectivity: 'export-only',
+        reachability: 'prohibited',
+        tracked: false,
+      });
+
+      expect(source.validateSync()).toBeUndefined();
+      expect(source.owner).toBe('Jane Doe, IT');
+      expect(source.connectivity).toBe('export-only');
+      expect(source.reachability).toBe('prohibited');
+      expect(source.tracked).toBe(false);
     });
 
     it('preserves an explicit sourceClass', () => {

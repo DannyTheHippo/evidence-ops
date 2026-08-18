@@ -1,8 +1,16 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose } from 'class-transformer';
 import {
+  DOCUMENT_SOURCE_CLASSES,
+  type DocumentSourceClass,
+} from '../../../../../database/schemas/evidence/document/document.schema';
+import {
+  SOURCE_CONNECTIVITIES,
   SOURCE_KINDS,
+  SOURCE_REACHABILITIES,
+  type SourceConnectivity,
   type SourceKind,
+  type SourceReachability,
 } from '../../../../../database/schemas/evidence/source/source.schema';
 
 export class SourceResponseDto {
@@ -73,6 +81,48 @@ export class SourceResponseDto {
   @Expose()
   @ApiProperty({ example: 42, description: 'Number of files this source has synced state for.' })
   fileCount: number;
+
+  @Expose()
+  @ApiProperty({
+    example: 'connector',
+    enum: SOURCE_CONNECTIVITIES,
+    description: "How this source's bytes get into the corpus.",
+  })
+  connectivity: SourceConnectivity;
+
+  @Expose()
+  @ApiProperty({
+    example: 'live',
+    enum: SOURCE_REACHABILITIES,
+    description:
+      "Whether the estate's own access posture lets this system reach this source at all.",
+  })
+  reachability: SourceReachability;
+
+  @Expose()
+  @ApiProperty({
+    example: 'Jane Doe, IT',
+    description: 'Person or team accountable for this source. Absent means nobody has said yet.',
+    required: false,
+  })
+  owner?: string;
+
+  @Expose()
+  @ApiProperty({
+    example: true,
+    description:
+      "Whether the sync loop may ever run for this source. 'false' marks an inventory-only row.",
+  })
+  tracked: boolean;
+
+  @Expose()
+  @ApiProperty({
+    example: 'unclassified',
+    enum: DOCUMENT_SOURCE_CLASSES,
+    description:
+      "Default document classification a document created from this source's sync pass inherits.",
+  })
+  sourceClass: DocumentSourceClass;
 
   @Expose()
   @ApiProperty({ example: '2026-07-01T00:00:00.000Z', description: 'Source creation timestamp.' })

@@ -16,7 +16,6 @@ import { ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
 import { RolesGuard } from '../../common/auth/guards/roles.guard';
 import { RequireRole } from '../../../shared/decorators/require-role.decorator';
-import { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
 import { UserRole } from '../../../shared/enums/user-role.enum';
 import { AuthenticatedRequest } from '../../../shared/types/authenticated-request.type';
@@ -24,7 +23,8 @@ import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { WorkflowRunResponseDto } from '../workflow-runs/dtos/response/workflow-run.response.dto';
 import { sourcesApiExamples } from './api-examples/sources.api-examples';
 import { CreateSourceRequestDto } from './dtos/request/create-source.request.dto';
-import { UpdateSourceEnabledRequestDto } from './dtos/request/update-source-enabled.request.dto';
+import { ListSourcesRequestDto } from './dtos/request/list-sources.request.dto';
+import { UpdateSourceRequestDto } from './dtos/request/update-source.request.dto';
 import { SourceResponseDto } from './dtos/response/source.response.dto';
 import { SourceWithFileStatesResponseDto } from './dtos/response/source-with-file-states.response.dto';
 import { SourcesService } from './sources.service';
@@ -61,6 +61,11 @@ export class SourcesController {
         path: dto.path,
         intervalMs: dto.intervalMs,
         enabled: dto.enabled,
+        connectivity: dto.connectivity,
+        reachability: dto.reachability,
+        owner: dto.owner,
+        tracked: dto.tracked,
+        sourceClass: dto.sourceClass,
         actorId: user.userId,
         tenantId: user.tenantId,
       }),
@@ -72,14 +77,14 @@ export class SourcesController {
   @HttpCode(HttpStatus.OK)
   @ApiResponse(sourcesApiExamples.list)
   async list(
-    @Query() pagination: PaginationRequestDto,
+    @Query() query: ListSourcesRequestDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
   ): Promise<WithCountResponseDto<SourceResponseDto>> {
     if (!user) {
       throw new UnauthorizedException('No token provided');
     }
 
-    const { docs, count } = await this.sourcesService.list(pagination, user.userId, user.tenantId);
+    const { docs, count } = await this.sourcesService.list(query, user.userId, user.tenantId);
 
     return { docs: docs.map((doc) => toResponseDto(SourceResponseDto, doc)), count };
   }
@@ -103,8 +108,8 @@ export class SourcesController {
     );
   }
 
-  // Admin-only, same reasoning as `create` above: disabling a source silently halts corpus
-  // freshness for the whole tenant, with no trace anywhere a Member would see it.
+  // Admin-only, same reasoning as `create` above: reconfiguring a source (including disabling it)
+  // silently changes corpus freshness for the whole tenant, with no trace anywhere a Member would see it.
   @Patch(':id')
   @Version('1')
   @HttpCode(HttpStatus.OK)
@@ -113,9 +118,9 @@ export class SourcesController {
   @ApiResponse(sourcesApiExamples.found)
   @ApiResponse(sourcesApiExamples.notFound)
   @ApiResponse(sourcesApiExamples.forbidden)
-  async setEnabled(
+  async update(
     @Param('id') id: string,
-    @Body() dto: UpdateSourceEnabledRequestDto,
+    @Body() dto: UpdateSourceRequestDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
   ): Promise<SourceResponseDto> {
     if (!user) {
@@ -124,11 +129,23 @@ export class SourcesController {
 
     return toResponseDto(
       SourceResponseDto,
-      await this.sourcesService.setEnabled(id, dto.enabled, user.userId, user.tenantId),
+      await this.sourcesService.update(
+        id,
+        {
+          enabled: dto.enabled,
+          connectivity: dto.connectivity,
+          reachability: dto.reachability,
+          owner: dto.owner,
+          tracked: dto.tracked,
+          sourceClass: dto.sourceClass,
+        },
+        user.userId,
+        user.tenantId,
+      ),
     );
   }
 
-  // Deliberately left open to any role: unlike `create`/`setEnabled`, this operates a source an
+  // Deliberately left open to any role: unlike `create`/`update`, this operates a source an
   // admin already configured and enabled rather than changing that configuration, and the workflow
   // run it starts is deduplicated against an already-running sync — no more consequential than a
   // Member asking a question, which is also ungated.

@@ -12,6 +12,11 @@ const exampleSource = {
   lastSyncAt: '2026-07-01T00:00:00.000Z',
   lastSyncStatus: 'ok',
   fileCount: 42,
+  connectivity: 'connector',
+  reachability: 'live',
+  owner: 'Jane Doe, IT',
+  tracked: true,
+  sourceClass: 'unclassified',
   createdAt: '2026-07-01T00:00:00.000Z',
 };
 

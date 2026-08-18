@@ -74,6 +74,7 @@ import {
   SOURCE_KIND_TO_MIME_TYPE,
 } from './documents.constant';
 import type { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
+import type { ListDocumentsRequestDto } from './dtos/request/list-documents.request.dto';
 import { UploadDocumentRequestDto } from './dtos/request/upload-document.request.dto';
 import { DocumentResponseDto } from './dtos/response/document.response.dto';
 import { DocumentVersionResponseDto } from './dtos/response/document-version.response.dto';
@@ -238,10 +239,29 @@ export class DocumentsService {
   }
 
   async list(
-    pagination: PaginationRequestDto,
+    pagination: ListDocumentsRequestDto,
     tenantId: string,
   ): Promise<DocumentResultWithCount<DocumentResponseDto>> {
-    const filter = { tenantId };
+    // `ingestionStatus` lives on `DocumentVersion`, not `Document` — a filter key on the
+    // `documentModel` query below cannot see it. Two-step: resolve which versions currently carry
+    // the requested status, then filter documents to those whose CURRENT version is one of them.
+    // A document whose failed version was superseded by a completed one is deliberately excluded —
+    // that is not a live failure, matching `HomePage.tsx`'s client-side filter. Never denormalize
+    // this onto `Document` (a second source of truth for a value the version already owns) and
+    // never reach for `$lookup` (replaces a tested `find` path with an aggregation for one filter).
+    let currentVersionFilter: { $in: Types.ObjectId[] } | undefined;
+    if (pagination.ingestionStatus) {
+      const matchingVersions = await this.documentVersionModel.find(
+        { tenantId, ingestionStatus: pagination.ingestionStatus },
+        { _id: 1 },
+      );
+      currentVersionFilter = { $in: matchingVersions.map((version) => version._id) };
+    }
+
+    const filter = {
+      tenantId,
+      ...(currentVersionFilter ? { currentVersionId: currentVersionFilter } : {}),
+    };
 
     const [documents, count] = await Promise.all([
       this.documentModel.find(filter, null, {

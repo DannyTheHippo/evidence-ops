@@ -81,6 +81,10 @@ describe('SourcesService', () => {
     lastSyncError: undefined,
     fileStates: [],
     tenantId: DEFAULT_TENANT_ID,
+    connectivity: 'connector',
+    reachability: 'live',
+    owner: undefined,
+    tracked: true,
     sourceClass: 'unclassified',
     createdAt: new Date('2026-07-01T00:00:00.000Z'),
     save: jest.fn().mockResolvedValue(undefined),
@@ -121,7 +125,7 @@ describe('SourcesService', () => {
   });
 
   describe('create', () => {
-    it('should create a source with the provided tenant and default enabled to true', async () => {
+    it('should create a source with the provided tenant, owner, and default the rest', async () => {
       const created = buildMockSource();
       mockSourceModel.create.mockResolvedValueOnce(created);
 
@@ -129,6 +133,7 @@ describe('SourcesService', () => {
         name: 'Deal Room Inbox',
         kind: 'local-folder',
         path: 'deal-room',
+        owner: 'Jane Doe, IT',
         actorId,
         tenantId: 'tenant-a',
       });
@@ -139,6 +144,11 @@ describe('SourcesService', () => {
         path: 'deal-room',
         enabled: true,
         intervalMs: undefined,
+        connectivity: 'connector',
+        reachability: 'live',
+        owner: 'Jane Doe, IT',
+        tracked: true,
+        sourceClass: 'unclassified',
         tenantId: 'tenant-a',
       });
       expect(mockAuditService.record).toHaveBeenCalledWith({
@@ -150,7 +160,7 @@ describe('SourcesService', () => {
       expect(result.id).toBe(sourceId.toString());
     });
 
-    it('should respect an explicit enabled/intervalMs override', async () => {
+    it('should respect an explicit enabled/intervalMs/connectivity/reachability/tracked/sourceClass override', async () => {
       mockSourceModel.create.mockResolvedValueOnce(buildMockSource());
 
       await service.create({
@@ -159,6 +169,11 @@ describe('SourcesService', () => {
         path: 'deal-room',
         enabled: false,
         intervalMs: 60000,
+        connectivity: 'export-only',
+        reachability: 'possible',
+        owner: 'Jane Doe, IT',
+        tracked: false,
+        sourceClass: 'crm-export',
         actorId,
         tenantId: 'tenant-b',
       });
@@ -167,6 +182,10 @@ describe('SourcesService', () => {
         expect.objectContaining({
           enabled: false,
           intervalMs: 60000,
+          connectivity: 'export-only',
+          reachability: 'possible',
+          tracked: false,
+          sourceClass: 'crm-export',
           tenantId: 'tenant-b',
         }),
       );
@@ -183,6 +202,7 @@ describe('SourcesService', () => {
           name: 'Deal Room Inbox',
           kind: 'local-folder',
           path: 'deal-room',
+          owner: 'Jane Doe, IT',
           actorId,
           tenantId: 'tenant-a',
         }),
@@ -198,6 +218,7 @@ describe('SourcesService', () => {
           name: 'Deal Room Inbox',
           kind: 'local-folder',
           path: 'deal-room',
+          owner: 'Jane Doe, IT',
           actorId,
           tenantId: 'tenant-a',
         }),
@@ -213,6 +234,7 @@ describe('SourcesService', () => {
           name: 'Deal Room Inbox',
           kind: 'local-folder',
           path: 'deal-room',
+          owner: 'Jane Doe, IT',
           actorId,
           tenantId: 'tenant-a',
         }),
@@ -227,6 +249,7 @@ describe('SourcesService', () => {
           name: 'Deal Room Inbox',
           kind: 'local-folder',
           path: 'deal-room',
+          owner: 'Jane Doe, IT',
           actorId,
           tenantId: 'tenant-a',
         }),
@@ -241,6 +264,7 @@ describe('SourcesService', () => {
           name: 'Deal Room Inbox',
           kind: 'local-folder',
           path: 'deal-room',
+          owner: 'Jane Doe, IT',
           actorId,
           tenantId: 'tenant-a',
         }),
@@ -268,6 +292,32 @@ describe('SourcesService', () => {
       });
       expect(result.count).toBe(1);
       expect(result.docs).toHaveLength(1);
+    });
+
+    it('should filter by lastSyncStatus when provided', async () => {
+      mockSourceModel.find.mockResolvedValueOnce([buildMockSource({ lastSyncStatus: 'failed' })]);
+      mockSourceModel.countDocuments.mockResolvedValueOnce(1);
+
+      await service.list({ skip: 0, limit: 20, lastSyncStatus: 'failed' }, actorId, 'tenant-a');
+
+      expect(mockSourceModel.find).toHaveBeenCalledWith(
+        { tenantId: 'tenant-a', lastSyncStatus: 'failed' },
+        null,
+        expect.objectContaining({ skip: 0, limit: 20 }),
+      );
+    });
+
+    it('should filter by tracked when provided, including an explicit false', async () => {
+      mockSourceModel.find.mockResolvedValueOnce([buildMockSource({ tracked: false })]);
+      mockSourceModel.countDocuments.mockResolvedValueOnce(1);
+
+      await service.list({ skip: 0, limit: 20, tracked: false }, actorId, 'tenant-a');
+
+      expect(mockSourceModel.find).toHaveBeenCalledWith(
+        { tenantId: 'tenant-a', tracked: false },
+        null,
+        expect.objectContaining({ skip: 0, limit: 20 }),
+      );
     });
   });
 
@@ -335,10 +385,10 @@ describe('SourcesService', () => {
     });
   });
 
-  describe('setEnabled', () => {
+  describe('update', () => {
     it('should throw SourceNotFoundException for a malformed id', async () => {
       await expect(
-        service.setEnabled('not-an-id', false, actorId, 'tenant-a'),
+        service.update('not-an-id', { enabled: false }, actorId, 'tenant-a'),
       ).rejects.toBeInstanceOf(SourceNotFoundException);
       expect(mockSourceModel.findOneAndUpdate).not.toHaveBeenCalled();
     });
@@ -347,14 +397,19 @@ describe('SourcesService', () => {
       mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(null);
 
       await expect(
-        service.setEnabled(sourceId.toString(), false, actorId, 'tenant-a'),
+        service.update(sourceId.toString(), { enabled: false }, actorId, 'tenant-a'),
       ).rejects.toBeInstanceOf(SourceNotFoundException);
     });
 
-    it('should flip enabled, return the updated source, and record an audit event', async () => {
+    it('should $set only the enabled field when it is the only one provided', async () => {
       mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(buildMockSource({ enabled: false }));
 
-      const result = await service.setEnabled(sourceId.toString(), false, actorId, 'tenant-a');
+      const result = await service.update(
+        sourceId.toString(),
+        { enabled: false },
+        actorId,
+        'tenant-a',
+      );
 
       expect(mockSourceModel.findOneAndUpdate).toHaveBeenCalledWith(
         { _id: sourceId.toString(), tenantId: 'tenant-a' },
@@ -362,12 +417,53 @@ describe('SourcesService', () => {
         { new: true },
       );
       expect(mockAuditService.record).toHaveBeenCalledWith({
-        action: 'sources.enabled_updated',
+        action: 'sources.updated',
         actorId,
         subject: { entityType: 'Source', entityId: sourceId.toString() },
         tenantId: 'tenant-a',
       });
       expect(result.enabled).toBe(false);
+    });
+
+    it('should $set every inventory field, including a falsy tracked, when all are provided', async () => {
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(
+        buildMockSource({
+          connectivity: 'export-only',
+          reachability: 'possible',
+          owner: 'Jane Doe, IT',
+          tracked: false,
+          sourceClass: 'crm-export',
+        }),
+      );
+
+      const result = await service.update(
+        sourceId.toString(),
+        {
+          connectivity: 'export-only',
+          reachability: 'possible',
+          owner: 'Jane Doe, IT',
+          tracked: false,
+          sourceClass: 'crm-export',
+        },
+        actorId,
+        'tenant-a',
+      );
+
+      expect(mockSourceModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: sourceId.toString(), tenantId: 'tenant-a' },
+        {
+          $set: {
+            connectivity: 'export-only',
+            reachability: 'possible',
+            owner: 'Jane Doe, IT',
+            tracked: false,
+            sourceClass: 'crm-export',
+          },
+        },
+        { new: true },
+      );
+      expect(result.connectivity).toBe('export-only');
+      expect(result.tracked).toBe(false);
     });
   });
 
@@ -502,6 +598,15 @@ describe('SourcesService', () => {
 
     it('should report disabled and exit without listing files when the source is disabled', async () => {
       mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(buildMockSource({ enabled: false }));
+
+      const result = await service.runSync(sourceId.toString(), leaseToken);
+
+      expect(result).toEqual({ disabled: true, intervalMs: null });
+      expect(mockSourceConnector.listFiles).not.toHaveBeenCalled();
+    });
+
+    it('should exit without listing files when the source is inventory-only (tracked: false)', async () => {
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(buildMockSource({ tracked: false }));
 
       const result = await service.runSync(sourceId.toString(), leaseToken);
 

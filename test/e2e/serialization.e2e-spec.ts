@@ -1,6 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
+import { registerTestUser } from '../utils/register-test-user';
 
 describe('Serialization (e2e)', () => {
   let app: INestApplication;
@@ -39,5 +40,37 @@ describe('Serialization (e2e)', () => {
     expect(response.status).toBe(200);
     expect(JSON.stringify(body)).not.toMatch(/password|hash/i);
     expect(Object.keys(body.user).sort()).toEqual(['id', 'email', 'role', 'createdAt'].sort());
+  });
+
+  // Regression for the inventory fields (D8): a response DTO field without @Expose() is dropped
+  // silently, with no error anywhere — this is the gate that catches it for the four new Source
+  // fields plus the previously write-only-by-accident sourceClass.
+  it('exposes every Source inventory field in the create response', async () => {
+    const { cookie } = await registerTestUser(app, {
+      email: 'serialization-sources-e2e@example.com',
+      password: 'correct-horse-battery',
+    });
+
+    const response = await request(getTestServer(app))
+      .post('/api/v1/sources')
+      .set('Cookie', cookie)
+      .send({
+        name: `Serialization Source ${Date.now()}`,
+        kind: 'local-folder',
+        path: 'deal-room',
+        owner: 'Jane Doe, IT',
+        connectivity: 'export-only',
+        reachability: 'possible',
+        tracked: false,
+        sourceClass: 'crm-export',
+      });
+    const body = response.body as Record<string, unknown>;
+
+    expect(response.status).toBe(201);
+    expect(body.connectivity).toBe('export-only');
+    expect(body.reachability).toBe('possible');
+    expect(body.owner).toBe('Jane Doe, IT');
+    expect(body.tracked).toBe(false);
+    expect(body.sourceClass).toBe('crm-export');
   });
 });
