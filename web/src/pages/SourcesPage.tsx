@@ -1,12 +1,13 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import {
   createSource,
   getWorkflowRunById,
   listSources,
   requestSourceSync,
-  setSourceEnabled,
+  updateSource,
   type Source,
+  type SourceReachability,
   type WorkflowRun,
 } from '../api/client';
 import Badge from '../components/ui/Badge';
@@ -14,14 +15,30 @@ import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import Field from '../components/ui/Field';
 import Pager from '../components/ui/Pager';
+import Select from '../components/ui/Select';
 import Skeleton from '../components/ui/Skeleton';
 import Table, { RowLink, TableHeaderCell, TableRow } from '../components/ui/Table';
 import { notify } from '../components/ui/toast';
 import { formatInterval } from '../lib/format-interval';
+import { useSession } from '../lib/use-session';
 import { isTerminalRun } from '../lib/workflow-runs';
 
 const DEFAULT_POLL_INTERVAL_MS = 1500;
 const PAGE_SIZE = 20;
+
+const TRACKED_OPTIONS = [
+  { value: 'true', label: 'Synced by a connector' },
+  { value: 'false', label: 'Catalogued only' },
+];
+
+// live -> verified, possible -> caution (the class is literally badge--possible), prohibited ->
+// neutral. Never `rejected` — that octagon is reserved for verification-grade failure, and
+// `prohibited` is standing policy an owner chose, not an incident.
+function reachTone(reachability: SourceReachability): 'verified' | 'caution' | 'neutral' {
+  if (reachability === 'live') return 'verified';
+  if (reachability === 'possible') return 'caution';
+  return 'neutral';
+}
 
 // An in-flight sync outranks everything else the row could report — it supersedes whatever status
 // the last completed sync left behind. Disabled is neutral regardless of a carried error, since the
@@ -42,10 +59,12 @@ function sourceStatusTone(
 function SourceRow({
   source,
   pollIntervalMs,
+  canManage,
   onToggled,
 }: {
   source: Source;
   pollIntervalMs: number;
+  canManage: boolean;
   onToggled: (updated: Source) => void;
 }) {
   const [toggling, setToggling] = useState(false);
@@ -58,7 +77,7 @@ function SourceRow({
     setToggling(true);
     setToggleError(null);
     try {
-      const updated = await setSourceEnabled(source.id, !source.enabled);
+      const updated = await updateSource(source.id, { enabled: !source.enabled });
       onToggled(updated);
     } catch (err: unknown) {
       setToggleError(err instanceof Error ? err.message : 'Failed to update source');
@@ -122,10 +141,16 @@ function SourceRow({
         <RowLink to={`/sources/${source.id}`}>{source.name}</RowLink>
       </td>
       <td className="cell-sub mono">{source.path}</td>
+      <td>{source.owner ?? <span className="cell-sub">Unassigned</span>}</td>
       <td className="cell-sub">{formatInterval(source.intervalMs)}</td>
       <td>
         <Badge tone={status.tone}>{status.label}</Badge>
       </td>
+      <td>
+        <Badge tone={reachTone(source.reachability)}>{source.reachability}</Badge>
+        <div className="cell-sub">{source.connectivity}</div>
+      </td>
+      <td>{source.sourceClass}</td>
       <td className="cell-sub">
         {source.lastSyncAt ? new Date(source.lastSyncAt).toLocaleString() : 'Never synced'}
         {source.lastSyncStatus && <div>{source.lastSyncStatus}</div>}
@@ -134,14 +159,16 @@ function SourceRow({
       <td className="num">{source.fileCount}</td>
       <td>
         <div className="form-actions">
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={toggling}
-            onClick={() => void handleToggle()}
-          >
-            {toggling ? 'Updating…' : source.enabled ? 'Disable' : 'Enable'}
-          </Button>
+          {canManage && (
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={toggling}
+              onClick={() => void handleToggle()}
+            >
+              {toggling ? 'Updating…' : source.enabled ? 'Disable' : 'Enable'}
+            </Button>
+          )}
           <Button variant="primary" size="sm" disabled={starting} onClick={() => void handleSync()}>
             {starting ? 'Starting…' : 'Sync now'}
           </Button>
@@ -167,6 +194,25 @@ function SourceRow({
   );
 }
 
+// Inventory-only rows carry no sync state at all — no interval, status, last-sync or file count —
+// so this stays a separate, narrower row rather than SourceRow with half its cells blank.
+function InventoryRow({ source }: { source: Source }) {
+  return (
+    <TableRow to={`/sources/${source.id}`}>
+      <td>
+        <RowLink to={`/sources/${source.id}`}>{source.name}</RowLink>
+      </td>
+      <td className="cell-sub mono">{source.path}</td>
+      <td>{source.owner ?? <span className="cell-sub">Unassigned</span>}</td>
+      <td>
+        <Badge tone={reachTone(source.reachability)}>{source.reachability}</Badge>
+        <div className="cell-sub">{source.connectivity}</div>
+      </td>
+      <td>{source.sourceClass}</td>
+    </TableRow>
+  );
+}
+
 interface SourcesPageProps {
   // Overridable so tests can poll on a short interval instead of stubbing timers.
   pollIntervalMs?: number;
@@ -175,27 +221,64 @@ interface SourcesPageProps {
 export default function SourcesPage({
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
 }: SourcesPageProps) {
-  const [sources, setSources] = useState<Source[] | null>(null);
-  const [count, setCount] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [skip, setSkip] = useState(0);
+  const session = useSession();
+  // Fails CLOSED on the still-loading probe too, matching DocumentDetail.tsx's canDelete — a
+  // member (or a session that hasn't resolved yet) never sees the create form or a toggle flash in
+  // before the check lands. The server's RolesGuard on POST/PATCH /sources is the actual boundary.
+  const canManage = session.status === 'authed' && session.me.role === 'admin';
+  // The notice states an absence of permission, so it waits for the probe to land — an admin is
+  // never told they are not one while the session resolves.
+  const sessionResolved = session.status !== 'loading';
+
+  const [trackedSources, setTrackedSources] = useState<Source[] | null>(null);
+  const [trackedCount, setTrackedCount] = useState(0);
+  const [trackedError, setTrackedError] = useState<string | null>(null);
+  const [trackedSkip, setTrackedSkip] = useState(0);
+
+  const [inventorySources, setInventorySources] = useState<Source[] | null>(null);
+  const [inventoryCount, setInventoryCount] = useState(0);
+  const [inventoryError, setInventoryError] = useState<string | null>(null);
+  const [inventorySkip, setInventorySkip] = useState(0);
+
   const [name, setName] = useState('');
   const [path, setPath] = useState('');
+  const [owner, setOwner] = useState('');
+  const [tracked, setTracked] = useState('true');
   const [intervalMs, setIntervalMs] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  useEffect(() => {
-    listSources({ skip, limit: PAGE_SIZE })
+  const loadTracked = useCallback(() => {
+    return listSources({ tracked: true, skip: trackedSkip, limit: PAGE_SIZE })
       .then(({ docs, count: total }) => {
-        setSources(docs);
-        setCount(total);
-        setError(null);
+        setTrackedSources(docs);
+        setTrackedCount(total);
+        setTrackedError(null);
       })
       .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : 'Failed to load sources');
+        setTrackedError(err instanceof Error ? err.message : 'Failed to load sources');
       });
-  }, [skip]);
+  }, [trackedSkip]);
+
+  useEffect(() => {
+    void loadTracked();
+  }, [loadTracked]);
+
+  const loadInventory = useCallback(() => {
+    return listSources({ tracked: false, skip: inventorySkip, limit: PAGE_SIZE })
+      .then(({ docs, count: total }) => {
+        setInventorySources(docs);
+        setInventoryCount(total);
+        setInventoryError(null);
+      })
+      .catch((err: unknown) => {
+        setInventoryError(err instanceof Error ? err.message : 'Failed to load inventory sources');
+      });
+  }, [inventorySkip]);
+
+  useEffect(() => {
+    void loadInventory();
+  }, [loadInventory]);
 
   async function handleCreate(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -206,16 +289,26 @@ export default function SourcesPage({
         name,
         kind: 'local-folder',
         path,
+        owner,
+        tracked: tracked === 'true',
         intervalMs: intervalMs.trim() ? Number(intervalMs) : undefined,
       });
-      // A create always lands on the first page — pushing it onto a later page's array would
-      // show it out of order with what a re-fetch of that page would return.
-      if (skip === 0) {
-        setSources((current) => [created, ...(current ?? [])].slice(0, PAGE_SIZE));
+      // A source created untracked belongs in the inventory list, not the synced one — reload
+      // whichever list the new row actually landed in from the server, rather than prepending it
+      // optimistically into the wrong one.
+      if (created.tracked) {
+        if (trackedSkip === 0) void loadTracked();
+        else setTrackedSkip(0);
+      } else if (inventorySkip === 0) {
+        void loadInventory();
+      } else {
+        setInventorySkip(0);
       }
-      setCount((current) => current + 1);
+      notify('success', `Added ${created.name}.`);
       setName('');
       setPath('');
+      setOwner('');
+      setTracked('true');
       setIntervalMs('');
     } catch (err: unknown) {
       setCreateError(err instanceof Error ? err.message : 'Failed to create source');
@@ -225,7 +318,9 @@ export default function SourcesPage({
   }
 
   function handleToggled(updated: Source) {
-    setSources((current) => current?.map((s) => (s.id === updated.id ? updated : s)) ?? current);
+    setTrackedSources(
+      (current) => current?.map((s) => (s.id === updated.id ? updated : s)) ?? current,
+    );
   }
 
   return (
@@ -242,49 +337,72 @@ export default function SourcesPage({
         <div className="card-head">
           <h2 className="card-title">Add a source</h2>
         </div>
-        <form onSubmit={(e) => void handleCreate(e)} className="form">
-          <Field label="Name">
-            {(inputProps) => (
-              <input
-                type="text"
-                required
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Deal Room Inbox"
-                {...inputProps}
-              />
-            )}
-          </Field>
-          <Field label="Folder path">
-            {(inputProps) => (
-              <input
-                type="text"
-                required
-                value={path}
-                onChange={(e) => setPath(e.target.value)}
-                placeholder="deal-room"
-                {...inputProps}
-              />
-            )}
-          </Field>
-          <Field label="Sync interval (ms, optional)">
-            {(inputProps) => (
-              <input
-                type="number"
-                min={1}
-                value={intervalMs}
-                onChange={(e) => setIntervalMs(e.target.value)}
-                placeholder="60000"
-                {...inputProps}
-              />
-            )}
-          </Field>
-          <div className="form-actions">
-            <Button type="submit" disabled={creating}>
-              {creating ? 'Adding…' : 'Add source'}
-            </Button>
-          </div>
-        </form>
+        {sessionResolved && !canManage && (
+          <p className="cell-sub">Adding and configuring sources requires an admin.</p>
+        )}
+        {canManage && (
+          <form onSubmit={(e) => void handleCreate(e)} className="form">
+            <Field label="Name">
+              {(inputProps) => (
+                <input
+                  type="text"
+                  required
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Deal Room Inbox"
+                  {...inputProps}
+                />
+              )}
+            </Field>
+            <Field label="Owner">
+              {(inputProps) => (
+                <input
+                  type="text"
+                  required
+                  value={owner}
+                  onChange={(e) => setOwner(e.target.value)}
+                  placeholder="Jane Doe, IT"
+                  {...inputProps}
+                />
+              )}
+            </Field>
+            <Field label="Folder path">
+              {(inputProps) => (
+                <input
+                  type="text"
+                  required
+                  value={path}
+                  onChange={(e) => setPath(e.target.value)}
+                  placeholder="deal-room"
+                  {...inputProps}
+                />
+              )}
+            </Field>
+            <Select
+              label="Tracked"
+              options={TRACKED_OPTIONS}
+              value={tracked}
+              onChange={setTracked}
+            />
+            <Field label="Sync interval (ms, optional)">
+              {(inputProps) => (
+                <input
+                  type="number"
+                  min={1}
+                  value={intervalMs}
+                  onChange={(e) => setIntervalMs(e.target.value)}
+                  placeholder="60000"
+                  {...inputProps}
+                />
+              )}
+            </Field>
+            <div className="form-actions">
+              <Button type="submit" disabled={creating}>
+                {creating ? 'Adding…' : 'Add source'}
+              </Button>
+            </div>
+          </form>
+        )}
         {createError && (
           <p className="error" role="alert">
             {createError}
@@ -292,41 +410,49 @@ export default function SourcesPage({
         )}
       </section>
 
-      {error && (
+      <div className="section-head">
+        <h2 className="card-title">Synced sources</h2>
+      </div>
+
+      {trackedError && (
         <p className="error error--page" role="alert">
-          {error}
+          {trackedError}
         </p>
       )}
 
-      {!sources && !error && <Skeleton label="Loading sources…" />}
+      {!trackedSources && !trackedError && <Skeleton label="Loading sources…" />}
 
-      {sources && sources.length === 0 && count === 0 && (
+      {trackedSources && trackedSources.length === 0 && trackedCount === 0 && (
         <EmptyState
           title="No sources yet — add one to start syncing documents."
           description="A source is a watched folder that keeps this data room current. Use the form above to add one."
         />
       )}
 
-      {sources && sources.length > 0 && (
+      {trackedSources && trackedSources.length > 0 && (
         <section className="panel">
           <Table caption="Sources syncing documents into this data room">
             <thead>
               <tr>
                 <TableHeaderCell>Name</TableHeaderCell>
                 <TableHeaderCell>Path</TableHeaderCell>
+                <TableHeaderCell>Owner</TableHeaderCell>
                 <TableHeaderCell>Interval</TableHeaderCell>
                 <TableHeaderCell>Status</TableHeaderCell>
+                <TableHeaderCell>Reach</TableHeaderCell>
+                <TableHeaderCell>Class</TableHeaderCell>
                 <TableHeaderCell>Last sync</TableHeaderCell>
                 <TableHeaderCell>Files</TableHeaderCell>
                 <TableHeaderCell>Actions</TableHeaderCell>
               </tr>
             </thead>
             <tbody>
-              {sources.map((source) => (
+              {trackedSources.map((source) => (
                 <SourceRow
                   key={source.id}
                   source={source}
                   pollIntervalMs={pollIntervalMs}
+                  canManage={canManage}
                   onToggled={handleToggled}
                 />
               ))}
@@ -335,7 +461,64 @@ export default function SourcesPage({
         </section>
       )}
 
-      {sources && <Pager count={count} skip={skip} pageSize={PAGE_SIZE} onSkipChange={setSkip} />}
+      {trackedSources && (
+        <Pager
+          count={trackedCount}
+          skip={trackedSkip}
+          pageSize={PAGE_SIZE}
+          onSkipChange={setTrackedSkip}
+        />
+      )}
+
+      <div className="section-head">
+        <h2 className="card-title">Inventory</h2>
+        <span className="card-meta card-meta--end">Catalogued, never synced.</span>
+      </div>
+
+      {inventoryError && (
+        <p className="error error--page" role="alert">
+          {inventoryError}
+        </p>
+      )}
+
+      {!inventorySources && !inventoryError && <Skeleton label="Loading inventory…" />}
+
+      {inventorySources && inventorySources.length === 0 && inventoryCount === 0 && (
+        <EmptyState
+          title="No inventory-only repositories yet."
+          description="A repository with no connector still belongs in the estate map — add one and leave it catalogued only."
+        />
+      )}
+
+      {inventorySources && inventorySources.length > 0 && (
+        <section className="panel">
+          <Table caption="Repositories catalogued for the estate but never synced">
+            <thead>
+              <tr>
+                <TableHeaderCell>Name</TableHeaderCell>
+                <TableHeaderCell>Path</TableHeaderCell>
+                <TableHeaderCell>Owner</TableHeaderCell>
+                <TableHeaderCell>Reach</TableHeaderCell>
+                <TableHeaderCell>Class</TableHeaderCell>
+              </tr>
+            </thead>
+            <tbody>
+              {inventorySources.map((source) => (
+                <InventoryRow key={source.id} source={source} />
+              ))}
+            </tbody>
+          </Table>
+        </section>
+      )}
+
+      {inventorySources && (
+        <Pager
+          count={inventoryCount}
+          skip={inventorySkip}
+          pageSize={PAGE_SIZE}
+          onSkipChange={setInventorySkip}
+        />
+      )}
     </div>
   );
 }

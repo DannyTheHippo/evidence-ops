@@ -163,10 +163,14 @@ export function uploadDocument(
 export function listDocuments(params?: {
   skip?: number;
   limit?: number;
+  // Filters to documents whose CURRENT version has this ingestionStatus — 'failed' is the
+  // corpus-health use case. An older failed version superseded by a completed one does not match.
+  ingestionStatus?: DocumentVersionIngestionStatus;
 }): Promise<WithCount<EvidenceDocument>> {
   const query = new URLSearchParams();
   if (params?.skip !== undefined) query.set('skip', String(params.skip));
   if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  if (params?.ingestionStatus !== undefined) query.set('ingestionStatus', params.ingestionStatus);
   const qs = query.toString();
   return request<WithCount<EvidenceDocument>>(`/documents${qs ? `?${qs}` : ''}`);
 }
@@ -543,6 +547,8 @@ export function listAuditEvents(params?: {
 // ── Sources ──────────────────────────────────────────────────────────────
 
 export type SourceKind = 'local-folder';
+export type SourceConnectivity = 'connector' | 'export-only' | 'manual';
+export type SourceReachability = 'live' | 'possible' | 'prohibited';
 
 export interface Source {
   id: string;
@@ -555,12 +561,17 @@ export interface Source {
   lastSyncStatus?: string;
   lastSyncError?: string;
   fileCount: number;
+  // How this source's bytes get into the corpus.
+  connectivity: SourceConnectivity;
+  // Whether the estate's own access posture lets this system reach this source at all.
+  reachability: SourceReachability;
+  // Person or team accountable for this source. Absent means nobody has said yet — never
+  // defaulted or backfilled, so the absence itself is the gap an inventory pass surfaces.
+  owner?: string;
+  // Whether the sync loop may ever run for this source. false marks an inventory-only row.
+  tracked: boolean;
+  sourceClass: DocumentSourceClass;
   createdAt: string;
-  // Optional here rather than mirroring the API's always-present field exactly: R4 owns adding
-  // this (and its siblings — owner, reachability, tracked) to every fixture across
-  // SourcesPage/HomePage's tests in one mechanical pass. This page only reads it for the class
-  // drift dialog's copy.
-  sourceClass?: DocumentSourceClass;
 }
 
 export type SourceFileStateStatus = 'ok' | 'failed';
@@ -580,8 +591,15 @@ export function createSource(input: {
   name: string;
   kind: SourceKind;
   path: string;
+  // Required — its absence is the gap an estate's inventory pass exists to surface, so it is
+  // never inferred or defaulted.
+  owner: string;
   intervalMs?: number;
   enabled?: boolean;
+  connectivity?: SourceConnectivity;
+  reachability?: SourceReachability;
+  tracked?: boolean;
+  sourceClass?: DocumentSourceClass;
 }): Promise<Source> {
   return request<Source>('/sources', { method: 'POST', ...jsonBody(input) });
 }
@@ -589,10 +607,20 @@ export function createSource(input: {
 export function listSources(pagination?: {
   skip?: number;
   limit?: number;
+  // Partitions synced ('tracked: true') from inventory-only ('tracked: false') sources into two
+  // separately-paged lists — cannot be done by filtering one fetched page client-side, since the
+  // pager's count would be the combined total.
+  tracked?: boolean;
+  // Exact lastSyncStatus to filter by — currently only 'failed' is meaningful.
+  lastSyncStatus?: string;
 }): Promise<WithCount<Source>> {
   const query = new URLSearchParams();
   if (pagination?.skip !== undefined) query.set('skip', String(pagination.skip));
   if (pagination?.limit !== undefined) query.set('limit', String(pagination.limit));
+  if (pagination?.tracked !== undefined) query.set('tracked', String(pagination.tracked));
+  if (pagination?.lastSyncStatus !== undefined) {
+    query.set('lastSyncStatus', pagination.lastSyncStatus);
+  }
   const qs = query.toString();
   return request<WithCount<Source>>(`/sources${qs ? `?${qs}` : ''}`);
 }
@@ -601,8 +629,19 @@ export function getSourceById(id: string): Promise<SourceWithFileStates> {
   return request<SourceWithFileStates>(`/sources/${id}`);
 }
 
-export function setSourceEnabled(id: string, enabled: boolean): Promise<Source> {
-  return request<Source>(`/sources/${id}`, { method: 'PATCH', ...jsonBody({ enabled }) });
+// Every field independently optional and settable — the caller sends only what changed.
+export function updateSource(
+  id: string,
+  input: {
+    enabled?: boolean;
+    connectivity?: SourceConnectivity;
+    reachability?: SourceReachability;
+    owner?: string;
+    tracked?: boolean;
+    sourceClass?: DocumentSourceClass;
+  },
+): Promise<Source> {
+  return request<Source>(`/sources/${id}`, { method: 'PATCH', ...jsonBody(input) });
 }
 
 export function requestSourceSync(id: string): Promise<WorkflowRun> {

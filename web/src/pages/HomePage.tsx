@@ -141,28 +141,25 @@ interface CorpusHealthItem {
 /** Failed ingestions and failed syncs as one queue, the same "specific item, not a count" shape as
  * the work queue above. An ingestion failure has no other alert anywhere in the app today — Data
  * Room shows `ingestionStatus` per row, but only to someone already browsing it — and
- * `lastSyncError` is otherwise visible only on the Sources pages. */
+ * `lastSyncError` is otherwise visible only on the Sources pages. Reads the server's own
+ * failed-only filters rather than scanning a fixed-size page client-side, so a failure older than
+ * any window is still visible here. */
 function CorpusHealthSection({
-  documents,
-  sources,
+  failedDocuments,
+  failedSources,
 }: {
-  documents: FetchState<EvidenceDocument>;
-  sources: FetchState<Source>;
+  failedDocuments: FetchState<EvidenceDocument>;
+  failedSources: FetchState<Source>;
 }) {
-  const failedDocs = (documents.docs ?? []).filter(
-    (doc) => doc.currentVersion.ingestionStatus === 'failed',
-  );
-  const failedSources = (sources.docs ?? []).filter((source) => source.lastSyncError);
-
   const items: CorpusHealthItem[] = [
-    ...failedDocs.map((doc) => ({
+    ...(failedDocuments.docs ?? []).map((doc) => ({
       key: `document-${doc.id}`,
       name: doc.title,
       to: `/documents/${doc.id}`,
       typeLabel: 'Ingestion failed',
       detail: doc.currentVersion.ingestionFailureReason ?? 'No reason recorded.',
     })),
-    ...failedSources.map((source) => ({
+    ...(failedSources.docs ?? []).map((source) => ({
       key: `source-${source.id}`,
       name: source.name,
       to: `/sources/${source.id}`,
@@ -171,24 +168,26 @@ function CorpusHealthSection({
     })),
   ];
 
-  const loading = !documents.docs && !sources.docs;
+  const loading = !failedDocuments.docs && !failedSources.docs;
 
   return (
     <section className="card">
       <div className="card-head">
         <h2 className="card-title">Corpus health</h2>
       </div>
-      {documents.error && (
+      {failedDocuments.error && (
         <p className="error" role="alert">
-          {documents.error}
+          {failedDocuments.error}
         </p>
       )}
-      {sources.error && (
+      {failedSources.error && (
         <p className="error" role="alert">
-          {sources.error}
+          {failedSources.error}
         </p>
       )}
-      {loading && !documents.error && !sources.error && <Skeleton label="Loading corpus health…" />}
+      {loading && !failedDocuments.error && !failedSources.error && (
+        <Skeleton label="Loading corpus health…" />
+      )}
       {!loading && items.length === 0 && <p className="cell-sub">No failed ingestions or syncs.</p>}
       {items.length > 0 && (
         <ul className="actionable-list">
@@ -299,6 +298,16 @@ export default function HomePage() {
     count: null,
     error: null,
   });
+  const [failedDocuments, setFailedDocuments] = useState<FetchState<EvidenceDocument>>({
+    docs: null,
+    count: null,
+    error: null,
+  });
+  const [failedSources, setFailedSources] = useState<FetchState<Source>>({
+    docs: null,
+    count: null,
+    error: null,
+  });
   const [answers, setAnswers] = useState<FetchState<Answer>>({
     docs: null,
     count: null,
@@ -331,9 +340,9 @@ export default function HomePage() {
       });
   }, []);
 
-  // Corpus health scans the newest 100 documents/sources for a failure — the server caps `limit`
-  // at 100, and there is no dedicated "failed only" filter, so a failure older than this window is
-  // invisible here even though it still exists on Data Room / Sources.
+  // Unfiltered — feeds only the first-run checklist and the empty-tenant check below, which need
+  // the tenant's actual corpus shape rather than its failures. Corpus health reads its own
+  // failed-only queries beneath, so this fetch's `count`/`docs` never doubles as a failure signal.
   useEffect(() => {
     listDocuments({ limit: 100 })
       .then(({ docs, count }) => setDocuments({ docs, count, error: null }))
@@ -351,6 +360,32 @@ export default function HomePage() {
       .then(({ docs, count }) => setSources({ docs, count, error: null }))
       .catch((err: unknown) => {
         setSources({
+          docs: null,
+          count: null,
+          error: err instanceof Error ? err.message : 'Failed to load sources',
+        });
+      });
+  }, []);
+
+  // Corpus health reads the server's own failed-only filters rather than scanning a fixed-size
+  // page client-side, so a failure older than any window is still visible here.
+  useEffect(() => {
+    listDocuments({ ingestionStatus: 'failed', limit: 100 })
+      .then(({ docs, count }) => setFailedDocuments({ docs, count, error: null }))
+      .catch((err: unknown) => {
+        setFailedDocuments({
+          docs: null,
+          count: null,
+          error: err instanceof Error ? err.message : 'Failed to load documents',
+        });
+      });
+  }, []);
+
+  useEffect(() => {
+    listSources({ lastSyncStatus: 'failed', limit: 100 })
+      .then(({ docs, count }) => setFailedSources({ docs, count, error: null }))
+      .catch((err: unknown) => {
+        setFailedSources({
           docs: null,
           count: null,
           error: err instanceof Error ? err.message : 'Failed to load sources',
@@ -422,7 +457,7 @@ export default function HomePage() {
       ) : (
         <>
           <WorkQueueSection approvals={approvals} conflicts={conflicts} />
-          <CorpusHealthSection documents={documents} sources={sources} />
+          <CorpusHealthSection failedDocuments={failedDocuments} failedSources={failedSources} />
           <RecentAnswersSection answers={answers} />
           {funnelLoaded && !funnelComplete && <FirstRunChecklist steps={steps} />}
         </>

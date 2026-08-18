@@ -1,10 +1,27 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { clearSession } from '../lib/auth';
 import type { Source, WorkflowRun } from '../api/client';
 import SourcesPage from './SourcesPage';
 
-const LIST_URL = '/api/v1/sources?skip=0&limit=20';
+const TRACKED_URL = '/api/v1/sources?skip=0&limit=20&tracked=true';
+const INVENTORY_URL = '/api/v1/sources?skip=0&limit=20&tracked=false';
+const ME_URL = '/api/v1/auth/me';
+
+const admin = {
+  id: 'user-1',
+  email: 'admin@example.com',
+  role: 'admin' as const,
+  createdAt: new Date().toISOString(),
+};
+
+const member = {
+  id: 'user-2',
+  email: 'member@example.com',
+  role: 'member' as const,
+  createdAt: new Date().toISOString(),
+};
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -15,10 +32,22 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 // Dispatches by URL and method, matching ApprovalsPage.test.tsx's stubFetch shape. Stubbing fetch
 // keeps client.ts in the path under test — URL construction, credentials, status handling and
-// error-message extraction all stay exercised.
-function stubFetch(routes: Record<string, (init?: RequestInit) => Response>) {
+// error-message extraction all stay exercised. Every route not given here 404s the empty pager
+// stub for the two list URLs, so a test only has to override what it cares about.
+type RouteHandler = (init?: RequestInit) => Response | Promise<Response>;
+
+function stubFetch(
+  routes: Record<string, RouteHandler> = {},
+  session: RouteHandler = () => jsonResponse(admin),
+) {
+  const defaults: Record<string, RouteHandler> = {
+    [ME_URL]: session,
+    [TRACKED_URL]: () => jsonResponse({ docs: [], count: 0 }),
+    [INVENTORY_URL]: () => jsonResponse({ docs: [], count: 0 }),
+    ...routes,
+  };
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-    const handler = routes[url];
+    const handler = defaults[url];
     if (!handler) return Promise.reject(new Error(`Unhandled fetch: ${url}`));
     return Promise.resolve(handler(init));
   });
@@ -54,6 +83,11 @@ function makeSource(overrides: Partial<Source> = {}): Source {
     path: 'deal-room',
     enabled: true,
     fileCount: 3,
+    connectivity: 'connector',
+    reachability: 'live',
+    owner: 'Jane Doe, IT',
+    tracked: true,
+    sourceClass: 'unclassified',
     createdAt: new Date().toISOString(),
     ...overrides,
   };
@@ -87,42 +121,47 @@ describe('SourcesPage', () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
+    // useSession() shares auth.ts's module-level session cache; without this, whichever role
+    // the first test in this file probes for would leak into every later test.
+    clearSession();
   });
 
-  it('shows a status region while the source list is loading', () => {
+  it('shows a status region for each list while both are loading', () => {
     stubFetch({
-      [LIST_URL]: () => jsonResponse({ docs: [], count: 0 }),
+      [TRACKED_URL]: () => new Promise<Response>(() => {}),
+      [INVENTORY_URL]: () => new Promise<Response>(() => {}),
     });
 
     renderPage();
 
-    expect(screen.getByRole('status')).toBeInTheDocument();
+    expect(screen.getByText('Loading sources…')).toBeInTheDocument();
+    expect(screen.getByText('Loading inventory…')).toBeInTheDocument();
   });
 
-  it('reads as "nothing here yet" on an empty source list', async () => {
-    stubFetch({
-      [LIST_URL]: () => jsonResponse({ docs: [], count: 0 }),
-    });
+  it('reads as "nothing here yet" on an empty source list, for both lists independently', async () => {
+    stubFetch();
 
     renderPage();
 
     expect(
       await screen.findByText('No sources yet — add one to start syncing documents.'),
     ).toBeInTheDocument();
+    expect(screen.getByText('No inventory-only repositories yet.')).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
-  it('shows an error when the source list fails to load', async () => {
+  it('shows an error when the synced list fails to load, without blocking the inventory list', async () => {
     stubFetch({
-      [LIST_URL]: () => jsonResponse({ message: 'Failed to load sources' }, 500),
+      [TRACKED_URL]: () => jsonResponse({ message: 'Failed to load sources' }, 500),
     });
 
     renderPage();
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load sources');
+    expect(await screen.findByText('No inventory-only repositories yet.')).toBeInTheDocument();
   });
 
-  it('lists a populated source with its status, interval, last sync, and file count', async () => {
+  it('lists a populated source with its status, interval, owner, reach, class, last sync, and file count', async () => {
     const source = makeSource({
       enabled: false,
       intervalMs: 300_000,
@@ -130,9 +169,13 @@ describe('SourcesPage', () => {
       lastSyncStatus: 'failed',
       lastSyncError: 'ENOENT: no such directory',
       fileCount: 7,
+      owner: 'Jane Doe, IT',
+      connectivity: 'export-only',
+      reachability: 'possible',
+      sourceClass: 'crm-export',
     });
     stubFetch({
-      [LIST_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
     });
 
     renderPage();
@@ -142,6 +185,7 @@ describe('SourcesPage', () => {
       screen.getByRole('table', { name: 'Sources syncing documents into this data room' }),
     ).toBeInTheDocument();
     expect(screen.getByText('deal-room')).toBeInTheDocument();
+    expect(screen.getByText('Jane Doe, IT')).toBeInTheDocument();
     expect(screen.getByText('Every 5 minutes')).toBeInTheDocument();
     expect(screen.getByText('disabled')).toBeInTheDocument();
     expect(
@@ -150,12 +194,47 @@ describe('SourcesPage', () => {
     expect(screen.getByText('failed')).toBeInTheDocument();
     expect(screen.getByText('ENOENT: no such directory')).toBeInTheDocument();
     expect(screen.getByText('7')).toBeInTheDocument();
+    expect(screen.getByText('possible')).toBeInTheDocument();
+    expect(screen.getByText('export-only')).toBeInTheDocument();
+    expect(screen.getByText('crm-export')).toBeInTheDocument();
   });
+
+  it('renders Unassigned as muted text, not a badge, when a source has no owner', async () => {
+    const source = makeSource({ owner: undefined });
+    stubFetch({
+      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+    });
+
+    renderPage();
+
+    const unassigned = await screen.findByText('Unassigned');
+    expect(unassigned.className).toContain('cell-sub');
+  });
+
+  it.each([
+    ['live', 'verified', 'badge--strong'],
+    ['possible', 'caution', 'badge--possible'],
+    ['prohibited', 'neutral', 'badge--neutral'],
+  ] as const)(
+    'maps reachability %s to the %s tone, never the rejected octagon',
+    async (reachability, _tone, badgeClass) => {
+      const source = makeSource({ reachability });
+      stubFetch({
+        [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+      });
+
+      renderPage();
+
+      const badge = await screen.findByText(reachability);
+      expect(badge.className).toContain(badgeClass);
+      expect(badge.className).not.toContain('badge--reject');
+    },
+  );
 
   it('shows a default-interval label for a source with no configured interval', async () => {
     const source = makeSource({ intervalMs: undefined });
     stubFetch({
-      [LIST_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
     });
 
     renderPage();
@@ -166,7 +245,7 @@ describe('SourcesPage', () => {
   it('flags an enabled source with a carried sync error as failed, not disabled', async () => {
     const source = makeSource({ enabled: true, lastSyncError: 'ENOENT: no such directory' });
     stubFetch({
-      [LIST_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
     });
 
     renderPage();
@@ -175,10 +254,10 @@ describe('SourcesPage', () => {
     expect(screen.queryByText('disabled')).not.toBeInTheDocument();
   });
 
-  it('links each source row to its detail page via a reachable row link', async () => {
+  it('links each synced source row to its detail page via a reachable row link', async () => {
     const source = makeSource();
     stubFetch({
-      [LIST_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
     });
 
     renderPage();
@@ -187,50 +266,116 @@ describe('SourcesPage', () => {
     expect(link).toHaveAttribute('href', '/sources/source-1');
   });
 
-  it('shows the total source count alongside Previous/Next, disabled at the ends', async () => {
+  it('shows the synced list total alongside Previous/Next, disabled at the ends', async () => {
     const first = makeSource({ id: 'source-1', name: 'Deal Room Inbox' });
     const second = makeSource({ id: 'source-2', name: 'Diligence Drive' });
-    const fetchMock = vi.fn((url: string) => {
-      if (url === LIST_URL) return Promise.resolve(jsonResponse({ docs: [first], count: 25 }));
-      if (url === '/api/v1/sources?skip=20&limit=20') {
-        return Promise.resolve(jsonResponse({ docs: [second], count: 25 }));
-      }
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    const fetchMock = stubFetch({
+      [TRACKED_URL]: () => jsonResponse({ docs: [first], count: 25 }),
+      '/api/v1/sources?skip=20&limit=20&tracked=true': () =>
+        jsonResponse({ docs: [second], count: 25 }),
     });
-    vi.stubGlobal('fetch', fetchMock);
 
     renderPage();
 
+    // Both lists render their own Pager, so both carry a "Previous"/"Next" pair — the tracked
+    // list's pager is the first of each in DOM order, since its section renders before Inventory.
     expect(await screen.findByText('25 total')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Next' })).not.toBeDisabled();
+    const [trackedPrev] = screen.getAllByRole('button', { name: 'Previous' });
+    const [trackedNext] = screen.getAllByRole('button', { name: 'Next' });
+    expect(trackedPrev).toBeDisabled();
+    expect(trackedNext).not.toBeDisabled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    fireEvent.click(trackedNext);
 
     expect(await screen.findByText('Diligence Drive')).toBeInTheDocument();
-    expect(fetchMock.mock.calls.some(([url]) => url === '/api/v1/sources?skip=20&limit=20')).toBe(
-      true,
-    );
-    expect(screen.getByRole('button', { name: 'Previous' })).not.toBeDisabled();
+    expect(
+      fetchMock.mock.calls.some(([url]) => url === '/api/v1/sources?skip=20&limit=20&tracked=true'),
+    ).toBe(true);
+    expect(screen.getAllByRole('button', { name: 'Previous' })[0]).not.toBeDisabled();
   });
 
-  it('creates a source and adds it to the list', async () => {
-    const created = makeSource({ id: 'source-2', name: 'New Source', path: 'new-folder' });
-    // The list GET and the create POST share a URL, so this one branches on method.
-    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-      if (url === '/api/v1/sources' && init?.method === 'POST') {
-        return Promise.resolve(jsonResponse(created, 201));
-      }
-      if (url === LIST_URL) return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+  it('shows inventory-only sources in their own table with Owner/Reach/Class columns only', async () => {
+    const inventorySource = makeSource({
+      id: 'source-3',
+      name: 'Export Drop',
+      tracked: false,
+      reachability: 'prohibited',
+      connectivity: 'manual',
+      sourceClass: 'memo',
+      owner: 'Ops Team',
     });
-    vi.stubGlobal('fetch', fetchMock);
+    stubFetch({
+      [INVENTORY_URL]: () => jsonResponse({ docs: [inventorySource], count: 1 }),
+    });
+
+    renderPage();
+
+    expect(
+      await screen.findByRole('table', {
+        name: 'Repositories catalogued for the estate but never synced',
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Export Drop')).toBeInTheDocument();
+    expect(screen.getByText('Ops Team')).toBeInTheDocument();
+    expect(screen.getByText('prohibited')).toBeInTheDocument();
+    expect(screen.getByText('manual')).toBeInTheDocument();
+    expect(screen.getByText('memo')).toBeInTheDocument();
+    // Inventory rows carry no sync-status, interval or file-count vocabulary.
+    expect(screen.queryByText('Interval')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sync now' })).not.toBeInTheDocument();
+  });
+
+  it('shows the inventory list total alongside its own Previous/Next, independent of the synced pager', async () => {
+    const first = makeSource({ id: 'source-3', name: 'Export Drop', tracked: false });
+    const second = makeSource({ id: 'source-4', name: 'Legacy Share', tracked: false });
+    stubFetch({
+      [INVENTORY_URL]: () => jsonResponse({ docs: [first], count: 25 }),
+      '/api/v1/sources?skip=20&limit=20&tracked=false': () =>
+        jsonResponse({ docs: [second], count: 25 }),
+    });
+
+    renderPage();
+
+    await screen.findByText('Export Drop');
+    const pagers = screen.getAllByText('25 total');
+    expect(pagers).toHaveLength(1);
+
+    // The inventory list's pager is the second "Next" in DOM order — the tracked (empty, default)
+    // list's pager is first and stays disabled throughout this test.
+    const nextButtons = screen.getAllByRole('button', { name: 'Next' });
+    fireEvent.click(nextButtons[1]);
+
+    expect(await screen.findByText('Legacy Share')).toBeInTheDocument();
+  });
+
+  it('an admin creates a synced source, which reloads and appears in the synced list', async () => {
+    const created = makeSource({
+      id: 'source-2',
+      name: 'New Source',
+      path: 'new-folder',
+      owner: 'Jane Doe, IT',
+      tracked: true,
+    });
+    let trackedCall = 0;
+    const fetchMock = stubFetch({
+      [TRACKED_URL]: () => {
+        trackedCall += 1;
+        return trackedCall === 1
+          ? jsonResponse({ docs: [], count: 0 })
+          : jsonResponse({ docs: [created], count: 1 });
+      },
+      '/api/v1/sources': (init) => {
+        if (init?.method === 'POST') return jsonResponse(created, 201);
+        return Promise.reject(new Error('unexpected'));
+      },
+    });
 
     renderPage();
 
     await screen.findByText('No sources yet — add one to start syncing documents.');
 
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New Source' } });
+    fireEvent.change(screen.getByLabelText('Owner'), { target: { value: 'Jane Doe, IT' } });
     fireEvent.change(screen.getByLabelText('Folder path'), { target: { value: 'new-folder' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
 
@@ -245,22 +390,58 @@ describe('SourcesPage', () => {
       name: 'New Source',
       kind: 'local-folder',
       path: 'new-folder',
+      owner: 'Jane Doe, IT',
+      tracked: true,
     });
     expect(screen.queryByLabelText('Name')).toHaveValue('');
+    expect(trackedCall).toBe(2);
+  });
+
+  it('an admin creates an inventory-only source, which reloads the inventory list, not the synced one', async () => {
+    const created = makeSource({
+      id: 'source-3',
+      name: 'Export Drop',
+      path: 'export-drop',
+      owner: 'Ops Team',
+      tracked: false,
+    });
+    let inventoryCall = 0;
+    stubFetch({
+      [INVENTORY_URL]: () => {
+        inventoryCall += 1;
+        return inventoryCall === 1
+          ? jsonResponse({ docs: [], count: 0 })
+          : jsonResponse({ docs: [created], count: 1 });
+      },
+      '/api/v1/sources': (init) => {
+        if (init?.method === 'POST') return jsonResponse(created, 201);
+        return Promise.reject(new Error('unexpected'));
+      },
+    });
+
+    renderPage();
+
+    await screen.findByText('No inventory-only repositories yet.');
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Export Drop' } });
+    fireEvent.change(screen.getByLabelText('Owner'), { target: { value: 'Ops Team' } });
+    fireEvent.change(screen.getByLabelText('Folder path'), { target: { value: 'export-drop' } });
+    fireEvent.change(screen.getByLabelText('Tracked'), { target: { value: 'false' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
+
+    expect(await screen.findByText('Export Drop')).toBeInTheDocument();
+    expect(inventoryCall).toBe(2);
   });
 
   it('toggles a source from enabled to disabled', async () => {
     const source = makeSource({ enabled: true });
-    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-      if (url === LIST_URL) {
-        return Promise.resolve(jsonResponse({ docs: [source], count: 1 }));
-      }
-      if (url === '/api/v1/sources/source-1' && init?.method === 'PATCH') {
-        return Promise.resolve(jsonResponse({ ...source, enabled: false }));
-      }
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    const fetchMock = stubFetch({
+      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+      '/api/v1/sources/source-1': (init) =>
+        init?.method === 'PATCH'
+          ? jsonResponse({ ...source, enabled: false })
+          : jsonResponse({ message: 'unexpected' }, 500),
     });
-    vi.stubGlobal('fetch', fetchMock);
 
     renderPage();
 
@@ -271,15 +452,34 @@ describe('SourcesPage', () => {
       ([url, init]) => url === '/api/v1/sources/source-1' && init?.method === 'PATCH',
     );
     expect(toggleCall).toBeDefined();
-    expect(JSON.parse((toggleCall?.[1] as RequestInit).body as string)).toEqual({ enabled: false });
+    expect(JSON.parse((toggleCall?.[1] as RequestInit).body as string)).toEqual({
+      enabled: false,
+    });
     expect(screen.getByText('disabled')).toBeInTheDocument();
+  });
+
+  it('shows an error when toggling a source fails', async () => {
+    const source = makeSource();
+    stubFetch({
+      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+      '/api/v1/sources/source-1': () => jsonResponse({ message: 'Failed to update source' }, 500),
+    });
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Failed to update source');
+    });
+    expect(screen.getByRole('button', { name: 'Disable' })).toBeInTheDocument();
   });
 
   it('starts a sync and links to the resulting workflow run', async () => {
     const source = makeSource();
     const run = makeRun({ status: 'completed' });
     stubFetch({
-      [LIST_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
       '/api/v1/sources/source-1/sync': () => jsonResponse(run, 201),
     });
 
@@ -299,17 +499,11 @@ describe('SourcesPage', () => {
     const runningRun = makeRun({ status: 'running' });
     const completedRun = makeRun({ status: 'completed' });
 
-    const fetchMock = vi.fn((url: string) => {
-      if (url === LIST_URL) {
-        return Promise.resolve(jsonResponse({ docs: [source], count: 1 }));
-      }
-      if (url === '/api/v1/sources/source-1/sync') {
-        return Promise.resolve(jsonResponse(runningRun, 201));
-      }
-      if (url === '/api/v1/workflow-runs/run-1') return Promise.resolve(jsonResponse(completedRun));
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    const fetchMock = stubFetch({
+      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+      '/api/v1/sources/source-1/sync': () => jsonResponse(runningRun, 201),
+      '/api/v1/workflow-runs/run-1': () => jsonResponse(completedRun),
     });
-    vi.stubGlobal('fetch', fetchMock);
 
     renderPage();
 
@@ -338,7 +532,7 @@ describe('SourcesPage', () => {
     // Each poll deserialises into a fresh object, so an effect keyed on the run object rather than
     // its id and status would tear the interval down and rebuild it on every tick.
     const fetchMock = stubFetch({
-      [LIST_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
       '/api/v1/sources/source-1/sync': () => jsonResponse(runningRun, 201),
       '/api/v1/workflow-runs/run-1': () => jsonResponse(runningRun),
     });
@@ -370,20 +564,14 @@ describe('SourcesPage', () => {
     const stale = deferredResponse(runningRun);
 
     let pollCall = 0;
-    const fetchMock = vi.fn((url: string) => {
-      if (url === LIST_URL) {
-        return Promise.resolve(jsonResponse({ docs: [source], count: 1 }));
-      }
-      if (url === '/api/v1/sources/source-1/sync') {
-        return Promise.resolve(jsonResponse(runningRun, 201));
-      }
-      if (url === '/api/v1/workflow-runs/run-1') {
+    stubFetch({
+      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+      '/api/v1/sources/source-1/sync': () => jsonResponse(runningRun, 201),
+      '/api/v1/workflow-runs/run-1': () => {
         pollCall += 1;
-        return pollCall === 1 ? stale.response : Promise.resolve(jsonResponse(completedRun));
-      }
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+        return pollCall === 1 ? stale.response : jsonResponse(completedRun);
+      },
     });
-    vi.stubGlobal('fetch', fetchMock);
 
     renderPage();
 
@@ -405,7 +593,7 @@ describe('SourcesPage', () => {
   it('shows an error when the sync request fails, without blocking further attempts', async () => {
     const source = makeSource();
     stubFetch({
-      [LIST_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
       '/api/v1/sources/source-1/sync': () =>
         jsonResponse({ message: 'Sync already in progress' }, 409),
     });
@@ -418,20 +606,55 @@ describe('SourcesPage', () => {
     expect(screen.getByRole('button', { name: 'Sync now' })).not.toBeDisabled();
   });
 
-  it('shows an error when toggling a source fails', async () => {
-    const source = makeSource();
-    stubFetch({
-      [LIST_URL]: () => jsonResponse({ docs: [source], count: 1 }),
-      '/api/v1/sources/source-1': () => jsonResponse({ message: 'Failed to update source' }, 500),
-    });
+  it('a member sees why they cannot add or manage sources, and cannot reach the create form', async () => {
+    stubFetch({}, () => jsonResponse(member));
 
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Disable' }));
+    expect(
+      await screen.findByText('Adding and configuring sources requires an admin.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
+  });
 
-    await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent('Failed to update source');
+  it('a member does not see the enable/disable toggle, but still sees Sync now', async () => {
+    const source = makeSource();
+    stubFetch(
+      {
+        [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+      },
+      () => jsonResponse(member),
+    );
+
+    renderPage();
+
+    await screen.findByText('Deal Room Inbox');
+    expect(screen.queryByRole('button', { name: 'Disable' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sync now' })).toBeInTheDocument();
+  });
+
+  it('withholds the admin-only notice until the session probe resolves, then admits the admin', async () => {
+    let resolveMe: (res: Response) => void;
+    const pendingMe = new Promise<Response>((resolve) => {
+      resolveMe = resolve;
     });
-    expect(screen.getByRole('button', { name: 'Disable' })).toBeInTheDocument();
+    stubFetch({}, () => pendingMe);
+
+    renderPage();
+
+    await screen.findByText('No sources yet — add one to start syncing documents.');
+    expect(
+      screen.queryByText('Adding and configuring sources requires an admin.'),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
+
+    act(() => {
+      resolveMe!(jsonResponse(admin));
+    });
+
+    expect(await screen.findByLabelText('Name')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Adding and configuring sources requires an admin.'),
+    ).not.toBeInTheDocument();
   });
 });

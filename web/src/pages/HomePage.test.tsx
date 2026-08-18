@@ -45,6 +45,11 @@ const sourceOk = {
   path: 'deal-room',
   enabled: true,
   fileCount: 3,
+  connectivity: 'connector',
+  reachability: 'live',
+  owner: 'Jane Doe, IT',
+  tracked: true,
+  sourceClass: 'unclassified',
   createdAt: new Date().toISOString(),
 };
 
@@ -52,6 +57,7 @@ const failingSource = {
   ...sourceOk,
   id: 'source-2',
   name: 'Second Source',
+  lastSyncStatus: 'failed',
   lastSyncError: 'Permission denied listing /deal-room',
 };
 
@@ -118,11 +124,16 @@ interface RouteOverrides {
   conflicts?: () => Response;
   documents?: () => Response;
   sources?: () => Response;
+  failedDocuments?: () => Response;
+  failedSources?: () => Response;
   answers?: () => Response;
 }
 
 // Every list route is keyed by its exact URL, query string included — a stub that only
-// matched by path would silently accept a response from the wrong call.
+// matched by path would silently accept a response from the wrong call. `documents`/`sources`
+// feed only the first-run checklist and empty-tenant check; `failedDocuments`/`failedSources`
+// feed corpus health, through the server's own failed-only filters rather than a client-side
+// scan of the unfiltered page.
 function stubFetch(overrides: RouteOverrides = {}): ReturnType<typeof vi.fn> {
   const routes: Record<string, () => Response> = {
     '/api/v1/approvals?limit=5&state=pending':
@@ -133,6 +144,10 @@ function stubFetch(overrides: RouteOverrides = {}): ReturnType<typeof vi.fn> {
       overrides.documents ?? (() => jsonResponse({ docs: [documentOk], count: 1 })),
     '/api/v1/sources?limit=100':
       overrides.sources ?? (() => jsonResponse({ docs: [sourceOk], count: 1 })),
+    '/api/v1/documents?limit=100&ingestionStatus=failed':
+      overrides.failedDocuments ?? (() => jsonResponse({ docs: [], count: 0 })),
+    '/api/v1/sources?limit=100&lastSyncStatus=failed':
+      overrides.failedSources ?? (() => jsonResponse({ docs: [], count: 0 })),
     '/api/v1/answers?limit=5':
       overrides.answers ?? (() => jsonResponse({ docs: [answered], count: 1 })),
   };
@@ -186,8 +201,8 @@ describe('HomePage', () => {
 
   it('surfaces a failed ingestion and a failed sync in corpus health, naming the item and its reason', async () => {
     stubFetch({
-      documents: () => jsonResponse({ docs: [documentOk, documentFailed], count: 2 }),
-      sources: () => jsonResponse({ docs: [sourceOk, failingSource], count: 2 }),
+      failedDocuments: () => jsonResponse({ docs: [documentFailed], count: 1 }),
+      failedSources: () => jsonResponse({ docs: [failingSource], count: 1 }),
     });
 
     renderPage();
@@ -210,6 +225,29 @@ describe('HomePage', () => {
     // documentOk and sourceOk both ingested/synced cleanly and must not appear as failures.
     expect(screen.queryByText('Lease Agreement.pdf')).not.toBeInTheDocument();
     expect(screen.queryByText('Deal Room Inbox')).not.toBeInTheDocument();
+  });
+
+  it('surfaces a failure older than the newest-100 window, invisible to the unfiltered fetch that only feeds the checklist', async () => {
+    const oldFailedDocument = {
+      ...documentFailed,
+      id: 'doc-old',
+      title: 'Archived Rent Roll 2019.xlsx',
+    };
+    stubFetch({
+      // The unfiltered document fetch (which only ever drives the first-run checklist) reports a
+      // corpus with no failure in view — simulating one older than the newest-100 window — while
+      // the failed-only filter still finds it.
+      documents: () => jsonResponse({ docs: [documentOk], count: 500 }),
+      failedDocuments: () => jsonResponse({ docs: [oldFailedDocument], count: 1 }),
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('Archived Rent Roll 2019.xlsx')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Archived Rent Roll 2019.xlsx' })).toHaveAttribute(
+      'href',
+      '/documents/doc-old',
+    );
   });
 
   it('shows all three answer outcomes as distinct badges, and a run status for one still in flight', async () => {
