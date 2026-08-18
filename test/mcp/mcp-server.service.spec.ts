@@ -119,7 +119,14 @@ async function buildHarness(rateLimitPerMinute = 60): Promise<Harness> {
   const conflictsService = { requestResolution: jest.fn().mockResolvedValue(buildRunResult()) };
   const auditService = { record: jest.fn().mockResolvedValue(undefined) };
   const als = new AsyncLocalStorage<AlsContext>();
-  const config = getMockTypedConfig({ mcp: { port: 3002, rateLimitPerMinute } });
+  const config = getMockTypedConfig({
+    mcp: {
+      port: 3002,
+      rateLimitPerMinute,
+      preAuthIpRateLimitWindowMs: 60000,
+      preAuthIpRateLimitMaxRequests: 20,
+    },
+  });
 
   const module: TestingModule = await Test.createTestingModule({
     providers: [

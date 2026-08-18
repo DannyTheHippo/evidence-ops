@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type {
   AnthropicConfig,
+  ApiKeysConfig,
   AppConfig,
   AuthConfig,
   CorsConfig,
@@ -14,6 +15,7 @@ import type {
   RetrievalConfig,
   SourcesConfig,
   SpendConfig,
+  SseConfig,
   TelemetryConfig,
   TemporalConfig,
   ThrottleConfig,
@@ -75,5 +77,11 @@ export class TypedConfigService {
   }
   get mcp(): McpConfig {
     return this.config.get('mcp', { infer: true });
+  }
+  get sse(): SseConfig {
+    return this.config.get('sse', { infer: true });
+  }
+  get apiKeys(): ApiKeysConfig {
+    return this.config.get('apiKeys', { infer: true });
   }
 }

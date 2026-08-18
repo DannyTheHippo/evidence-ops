@@ -89,5 +89,17 @@ export const getMockConfig = (): EnvironmentConfig => ({
   mcp: {
     port: 3002,
     rateLimitPerMinute: 60,
+    preAuthIpRateLimitWindowMs: 60000,
+    preAuthIpRateLimitMaxRequests: 20,
+  },
+
+  sse: {
+    maxConnectionsPerTenant: 100,
+    maxConnectionsPerUser: 10,
+    maxStreamLifetimeMs: 1_800_000,
+  },
+
+  apiKeys: {
+    defaultTtlDays: 90,
   },
 });

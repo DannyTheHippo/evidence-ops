@@ -331,6 +331,16 @@ services:
       # directly and bypasses npm, so without it here both processes report the same default
       # service name and a cross-process trace becomes unreadable.
       OTEL_SERVICE_NAME: evidence-ops-api
+      # SSE streams are served only by this process. Caps bound how many concurrent streams one
+      # tenant or user may hold open; the lifetime bounds how long any single stream may run
+      # regardless of cap, forcing a periodic re-subscribe (and re-auth) rather than an indefinite
+      # connection.
+      SSE_MAX_CONNECTIONS_PER_TENANT: ${SSE_MAX_CONNECTIONS_PER_TENANT:-100}
+      SSE_MAX_CONNECTIONS_PER_USER: ${SSE_MAX_CONNECTIONS_PER_USER:-10}
+      SSE_MAX_STREAM_LIFETIME_MS: ${SSE_MAX_STREAM_LIFETIME_MS:-1800000}
+      # API keys are minted only through this process's `api-keys` controller; the mcp process only
+      # verifies them.
+      API_KEY_DEFAULT_TTL_DAYS: ${API_KEY_DEFAULT_TTL_DAYS:-90}
     # mem_limit: 256m (down from 512m). Observed 100.0 MiB (2026-08-11) — a stateless NestJS process
     # with no in-process bundling step like `worker`'s Temporal `Worker.create`; 2.5x headroom is
     # enough.
@@ -468,6 +478,10 @@ services:
       # batch arrays, so a per-POST limit would let a single request drive hundreds of tool calls
       # against one decrement.
       MCP_RATE_LIMIT_PER_MINUTE: ${MCP_RATE_LIMIT_PER_MINUTE:-60}
+      # Applied before `authenticate`, keyed on the caller's IP rather than the verified actor
+      # MCP_RATE_LIMIT_PER_MINUTE above is keyed on — an unauthenticated caller has no actor yet.
+      MCP_PRE_AUTH_IP_RATE_LIMIT_WINDOW_MS: ${MCP_PRE_AUTH_IP_RATE_LIMIT_WINDOW_MS:-60000}
+      MCP_PRE_AUTH_IP_RATE_LIMIT_MAX_REQUESTS: ${MCP_PRE_AUTH_IP_RATE_LIMIT_MAX_REQUESTS:-20}
     # mem_limit matched to `api` rather than `worker`: this process serves requests and starts
     # workflows, it does not run the Temporal worker's startup bundling step.
     mem_limit: 256m

@@ -136,6 +136,21 @@ export const environmentSchema = z
     // the API.
     MCP_PORT: zNum(3002),
     MCP_RATE_LIMIT_PER_MINUTE: zNum(60),
+    // Applied in `src/mcp/main.ts` before `authenticate`, keyed on the caller's IP — distinct from
+    // MCP_RATE_LIMIT_PER_MINUTE above, which runs after authentication and is keyed on the
+    // verified actor. Tighter than the post-auth limit because an unverified caller costs a Mongo
+    // lookup per attempt and writes no audit row on rejection.
+    MCP_PRE_AUTH_IP_RATE_LIMIT_WINDOW_MS: zNum(60_000),
+    MCP_PRE_AUTH_IP_RATE_LIMIT_MAX_REQUESTS: zNum(20),
+
+    // Bounds concurrent SSE streams so one tenant or user cannot exhaust the server's
+    // open-connection budget, and bounds how long any single stream may stay open regardless.
+    SSE_MAX_CONNECTIONS_PER_TENANT: zNum(100),
+    SSE_MAX_CONNECTIONS_PER_USER: zNum(10),
+    SSE_MAX_STREAM_LIFETIME_MS: zNum(1_800_000),
+
+    /** Default lifetime of a newly minted API key when no explicit expiry is requested. */
+    API_KEY_DEFAULT_TTL_DAYS: zNum(90),
   })
   .superRefine((e, ctx) => {
     if (!isProdLike(e.NODE_ENV)) {
@@ -239,6 +254,16 @@ export const environmentSchema = z
       mcp: {
         port: e.MCP_PORT,
         rateLimitPerMinute: e.MCP_RATE_LIMIT_PER_MINUTE,
+        preAuthIpRateLimitWindowMs: e.MCP_PRE_AUTH_IP_RATE_LIMIT_WINDOW_MS,
+        preAuthIpRateLimitMaxRequests: e.MCP_PRE_AUTH_IP_RATE_LIMIT_MAX_REQUESTS,
+      },
+      sse: {
+        maxConnectionsPerTenant: e.SSE_MAX_CONNECTIONS_PER_TENANT,
+        maxConnectionsPerUser: e.SSE_MAX_CONNECTIONS_PER_USER,
+        maxStreamLifetimeMs: e.SSE_MAX_STREAM_LIFETIME_MS,
+      },
+      apiKeys: {
+        defaultTtlDays: e.API_KEY_DEFAULT_TTL_DAYS,
       },
     };
   });
@@ -260,6 +285,8 @@ export type SourcesConfig = EnvironmentConfig['sources'];
 export type ExtractionConfig = EnvironmentConfig['extraction'];
 export type SpendConfig = EnvironmentConfig['spend'];
 export type McpConfig = EnvironmentConfig['mcp'];
+export type SseConfig = EnvironmentConfig['sse'];
+export type ApiKeysConfig = EnvironmentConfig['apiKeys'];
 
 /**
  * `validate` hook for `ConfigModule.forRoot`. Throws a flattened, readable error

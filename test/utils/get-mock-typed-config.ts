@@ -30,5 +30,7 @@ export const getMockTypedConfig = (
     extraction: config.extraction,
     spend: config.spend,
     mcp: config.mcp,
+    sse: config.sse,
+    apiKeys: config.apiKeys,
   } as unknown as TypedConfigService;
 };

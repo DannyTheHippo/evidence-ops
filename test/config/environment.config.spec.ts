@@ -30,6 +30,12 @@ describe('validateEnvironment', () => {
       expect(result.throttle.limit).toBe(100);
       expect(result.mcp.port).toBe(3002);
       expect(result.mcp.rateLimitPerMinute).toBe(60);
+      expect(result.mcp.preAuthIpRateLimitWindowMs).toBe(60000);
+      expect(result.mcp.preAuthIpRateLimitMaxRequests).toBe(20);
+      expect(result.sse.maxConnectionsPerTenant).toBe(100);
+      expect(result.sse.maxConnectionsPerUser).toBe(10);
+      expect(result.sse.maxStreamLifetimeMs).toBe(1_800_000);
+      expect(result.apiKeys.defaultTtlDays).toBe(90);
     });
   });
 
@@ -161,6 +167,8 @@ describe('validateEnvironment', () => {
           'extraction',
           'spend',
           'mcp',
+          'sse',
+          'apiKeys',
         ].sort(),
       );
     });
@@ -280,6 +288,68 @@ describe('validateEnvironment', () => {
 
       expect(result.model.provider).toBe('openai');
       expect(result.openai.baseUrl).toBe('https://openai.internal.example/v1');
+    });
+  });
+
+  describe('SSE caps, the MCP pre-auth IP limiter, and the API key default TTL', () => {
+    it('coerces MCP_PRE_AUTH_IP_RATE_LIMIT_WINDOW_MS/MAX_REQUESTS from string to number', () => {
+      const result = validateEnvironment({
+        ...validEnv,
+        MCP_PRE_AUTH_IP_RATE_LIMIT_WINDOW_MS: '30000',
+        MCP_PRE_AUTH_IP_RATE_LIMIT_MAX_REQUESTS: '5',
+      });
+
+      expect(result.mcp.preAuthIpRateLimitWindowMs).toBe(30000);
+      expect(result.mcp.preAuthIpRateLimitMaxRequests).toBe(5);
+    });
+
+    it('coerces SSE_MAX_CONNECTIONS_PER_TENANT/PER_USER/SSE_MAX_STREAM_LIFETIME_MS from string to number', () => {
+      const result = validateEnvironment({
+        ...validEnv,
+        SSE_MAX_CONNECTIONS_PER_TENANT: '250',
+        SSE_MAX_CONNECTIONS_PER_USER: '20',
+        SSE_MAX_STREAM_LIFETIME_MS: '900000',
+      });
+
+      expect(result.sse.maxConnectionsPerTenant).toBe(250);
+      expect(result.sse.maxConnectionsPerUser).toBe(20);
+      expect(result.sse.maxStreamLifetimeMs).toBe(900000);
+    });
+
+    it('coerces API_KEY_DEFAULT_TTL_DAYS from string to number', () => {
+      const result = validateEnvironment({ ...validEnv, API_KEY_DEFAULT_TTL_DAYS: '30' });
+
+      expect(result.apiKeys.defaultTtlDays).toBe(30);
+    });
+
+    it('rejects a non-numeric MCP_PRE_AUTH_IP_RATE_LIMIT_MAX_REQUESTS', () => {
+      const env: Record<string, unknown> = {
+        ...validEnv,
+        MCP_PRE_AUTH_IP_RATE_LIMIT_MAX_REQUESTS: 'not-a-number',
+      };
+
+      expect(() => validateEnvironment(env)).toThrow(/Invalid environment configuration/);
+      expect(() => validateEnvironment(env)).toThrow(/MCP_PRE_AUTH_IP_RATE_LIMIT_MAX_REQUESTS/);
+    });
+
+    it('rejects a non-numeric SSE_MAX_STREAM_LIFETIME_MS', () => {
+      const env: Record<string, unknown> = {
+        ...validEnv,
+        SSE_MAX_STREAM_LIFETIME_MS: 'not-a-number',
+      };
+
+      expect(() => validateEnvironment(env)).toThrow(/Invalid environment configuration/);
+      expect(() => validateEnvironment(env)).toThrow(/SSE_MAX_STREAM_LIFETIME_MS/);
+    });
+
+    it('rejects a non-numeric API_KEY_DEFAULT_TTL_DAYS', () => {
+      const env: Record<string, unknown> = {
+        ...validEnv,
+        API_KEY_DEFAULT_TTL_DAYS: 'not-a-number',
+      };
+
+      expect(() => validateEnvironment(env)).toThrow(/Invalid environment configuration/);
+      expect(() => validateEnvironment(env)).toThrow(/API_KEY_DEFAULT_TTL_DAYS/);
     });
   });
 });
