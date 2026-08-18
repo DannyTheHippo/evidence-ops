@@ -72,6 +72,23 @@ export class Document extends AuditableDocument {
     default: 'unclassified',
   })
   sourceClass: DocumentSourceClass;
+
+  /**
+   * The `Source` this document's bytes were ingested from, absent for a browser upload (no source
+   * to attribute) and for a document created before this field existed and never touched by the
+   * `0026-document-source-backlink` backfill's first-wins resolution. `DocumentsService.upload`
+   * sets it going forward from the sync path only — a browser upload has no source to attribute.
+   */
+  @Prop({ type: Types.ObjectId, ref: 'Source' })
+  sourceId?: Types.ObjectId;
 }
 
 export const DocumentSchema = SchemaFactory.createForClass(Document);
+
+/**
+ * Declared here as well as in `migrations/0026-document-source-backlink.ts`, with the same key
+ * pattern, options and name — MongoDB refuses a second index on a key pattern it already carries
+ * under a different name, and which side loses depends on boot order. Backs a future "documents
+ * from this source" lookup without a collection scan.
+ */
+DocumentSchema.index({ tenantId: 1, sourceId: 1 }, { name: 'documents_tenantId_sourceId' });

@@ -304,11 +304,32 @@ describe('DocumentsService', () => {
       const version = buildMockVersion();
       mockDocumentVersionModel.create.mockResolvedValueOnce(version);
 
-      await service.upload(file, { title: 'Q3 Rent Roll' }, 'tenant-a', 'crm-export');
+      await service.upload(file, { title: 'Q3 Rent Roll' }, 'tenant-a', {
+        sourceClass: 'crm-export',
+      });
 
       expect(mockDocumentModel.create).toHaveBeenCalledWith(
         expect.objectContaining({ sourceClass: 'crm-export' }),
       );
+    });
+
+    it('should thread the caller-supplied sourceId onto a newly created document', async () => {
+      const file = buildFile();
+      const sourceId = new Types.ObjectId();
+      const mockDocument = buildMockDocument({ sourceId });
+      mockDocumentModel.create.mockResolvedValueOnce(mockDocument);
+      mockDocumentStore.put.mockResolvedValueOnce({
+        id: 'gridfs-id-1',
+        content: file.buffer,
+        contentType: file.mimetype,
+        metadata: {},
+      });
+      const version = buildMockVersion();
+      mockDocumentVersionModel.create.mockResolvedValueOnce(version);
+
+      await service.upload(file, { title: 'Q3 Rent Roll' }, 'tenant-a', { sourceId });
+
+      expect(mockDocumentModel.create).toHaveBeenCalledWith(expect.objectContaining({ sourceId }));
     });
 
     it('should thread requireApproval through to the ingest workflow input when set on the upload dto', async () => {

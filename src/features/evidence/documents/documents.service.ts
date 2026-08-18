@@ -107,6 +107,14 @@ interface UploadResult {
   isNewVersion: boolean;
 }
 
+/** Not on `UploadDocumentRequestDto`: a browser upload has neither a source class to inherit nor
+ * a source to attribute — only a connector sync (`SourcesService.syncOneFile`) knows the
+ * originating `Source` and passes both here for a new document to inherit. */
+interface UploadSourceOptions {
+  sourceClass?: DocumentSourceClass;
+  sourceId?: Types.ObjectId;
+}
+
 /**
  * `ingestDocumentVersion` — the Temporal workflow type name in
  * `src/workflows/ingest-document-version.workflow.ts` — is not exported as a constant anywhere in
@@ -162,10 +170,7 @@ export class DocumentsService {
     file: UploadedFileLike | undefined,
     dto: UploadDocumentRequestDto,
     tenantId: string,
-    // Not on `UploadDocumentRequestDto`: a browser upload has no source to inherit a class from,
-    // only a connector sync (`SourcesService.syncOneFile`) knows the originating `Source`'s
-    // `sourceClass` and passes it here for a new document to inherit.
-    sourceClass?: DocumentSourceClass,
+    source?: UploadSourceOptions,
   ): Promise<DocumentResponseDto> {
     if (!file) {
       throw new MissingFileException('A file is required');
@@ -205,7 +210,7 @@ export class DocumentsService {
           file,
           canonicalMimeType,
           tenantId,
-          sourceClass,
+          source,
         );
 
     // Fire-and-forget, mirroring `QaService.startQuestion`: a slow parse/embed must never block
@@ -687,7 +692,7 @@ export class DocumentsService {
     file: UploadedFileLike,
     canonicalMimeType: string,
     tenantId: string,
-    sourceClass?: DocumentSourceClass,
+    source?: UploadSourceOptions,
   ): Promise<UploadResult> {
     const title = dto.title ?? file.originalname;
     if (!title.trim()) {
@@ -697,14 +702,17 @@ export class DocumentsService {
     // `canonicalMimeType`, not `file.mimetype` — see the identical `contentType` comment on the
     // `documentStore.put` call below; the document row and the stored bytes must agree on the
     // disambiguated MIME, not the browser's raw (possibly ambiguous) one.
-    // `sourceClass` omitted (not `undefined`-assigned) when the caller has none — the schema's own
-    // `default: 'unclassified'` applies only when the key is absent from the create payload.
+    // `sourceClass`/`sourceId` each omitted (not `undefined`-assigned) when the caller has none —
+    // an explicit `undefined` would defeat `sourceClass`'s schema default, which applies only
+    // when the key is absent from the create payload, and `sourceId` has no default to defeat but
+    // the same conditional-spread shape keeps both fields consistent.
     const document = await this.documentModel.create({
       title,
       sourceKind,
       mimeType: canonicalMimeType,
       tenantId,
-      ...(sourceClass ? { sourceClass } : {}),
+      ...(source?.sourceClass ? { sourceClass: source.sourceClass } : {}),
+      ...(source?.sourceId ? { sourceId: source.sourceId } : {}),
     });
 
     // See the identical GridFS metadata comment in `addVersion` above.

@@ -831,7 +831,7 @@ describe('SourcesService', () => {
         expect.objectContaining({ originalname: 'new.pdf' }),
         { title: 'new.pdf' },
         DEFAULT_TENANT_ID,
-        'unclassified',
+        { sourceClass: 'unclassified', sourceId },
       );
 
       const persistedFileStates = getFinalizeUpdate(1).$set.fileStates;

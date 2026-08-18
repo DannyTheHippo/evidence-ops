@@ -369,7 +369,7 @@ export class SourcesService {
 
     const fileStates = [...source.fileStates];
     for (const file of files) {
-      await this.syncOneFile(file, fileStates, source.tenantId, source.sourceClass);
+      await this.syncOneFile(file, fileStates, source.tenantId, source.sourceClass, source._id);
     }
 
     const finalized = await this.finalizeSync(source._id, leaseToken, fileStates, 'ok');
@@ -411,6 +411,7 @@ export class SourcesService {
     fileStates: SourceFileState[],
     tenantId: string,
     sourceClass: DocumentSourceClass,
+    sourceId: Types.ObjectId,
   ): Promise<void> {
     const index = fileStates.findIndex((state) => state.path === file.relativePath);
     const existing = index === -1 ? undefined : fileStates[index];
@@ -461,8 +462,8 @@ export class SourcesService {
         buffer: content,
       };
 
-      // `sourceClass` only matters on the document-creation branch below — `addVersion` (existing
-      // branch) writes bytes onto a document that already has a `sourceClass`, unrelated to this
+      // `sourceClass`/`sourceId` only matter on the document-creation branch below — `addVersion`
+      // (existing branch) writes bytes onto a document that already has both, unrelated to this
       // sync attempt's source.
       const response = existing
         ? await this.documentsService.upload(
@@ -470,12 +471,10 @@ export class SourcesService {
             { documentId: existing.documentId.toString() },
             tenantId,
           )
-        : await this.documentsService.upload(
-            uploadedFile,
-            { title: filename },
-            tenantId,
+        : await this.documentsService.upload(uploadedFile, { title: filename }, tenantId, {
             sourceClass,
-          );
+            sourceId,
+          });
 
       const newState: SourceFileState = {
         path: file.relativePath,
