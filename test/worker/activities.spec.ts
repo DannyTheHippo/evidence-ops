@@ -2,6 +2,10 @@ import type { INestApplicationContext } from '@nestjs/common';
 import { ApplicationFailure } from '@temporalio/common';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ConflictsService } from '../../src/features/evidence/conflicts/conflicts.service';
+import {
+  CanonicalEntityService,
+  type CanonicalEntityListing,
+} from '../../src/features/evidence/facts/canonical-entity.service';
 import { FactsService } from '../../src/features/evidence/facts/facts.service';
 import { IngestionService } from '../../src/features/evidence/ingestion/ingestion.service';
 import { AgenticRetrievalService } from '../../src/features/evidence/qa/agentic-retrieval.service';
@@ -19,16 +23,17 @@ import { createActivities } from '../../src/worker/activities';
 /**
  * `app.get` resolves each service by class token regardless of call order, so a single mock
  * returning the right stub per token (rather than per call index) mirrors every other service
- * `createActivities` needs, not just the one under test in a given `it`. `findCellFacts` and
- * `findConflictedFactGroupsForChunks` default to resolving `[]` — the same "no grounding input"
- * shape `GroundingGateService.verify` itself defaults to — so a test that doesn't care about
- * cell facts/conflicts doesn't have to stub them.
+ * `createActivities` needs, not just the one under test in a given `it`. `findCellFacts`,
+ * `findConflictedFactGroupsForChunks` and `listCanonicalEntities` default to resolving `[]` — the
+ * same "no grounding input" shape `GroundingGateService.verify` itself defaults to — so a test that
+ * doesn't care about cell facts/conflicts/canonical entities doesn't have to stub them.
  */
 function buildApp(overrides: {
   ingestVersion?: jest.Mock;
   extractFacts?: jest.Mock;
   scanForConflicts?: jest.Mock;
   findCellFacts?: jest.Mock;
+  listCanonicalEntities?: jest.Mock;
   retrieve?: jest.Mock;
   gatherEvidence?: jest.Mock;
   synthesizeAnswer?: jest.Mock;
@@ -59,6 +64,12 @@ function buildApp(overrides: {
           overrides.findConflictedFactGroupsForChunks ?? jest.fn().mockResolvedValue([]),
         loadConflictForResolution: overrides.loadConflictForResolution ?? jest.fn(),
         recordResolution: overrides.recordResolution ?? jest.fn(),
+      },
+    ],
+    [
+      CanonicalEntityService,
+      {
+        listCanonicalEntities: overrides.listCanonicalEntities ?? jest.fn().mockResolvedValue([]),
       },
     ],
     [EvidenceRetrievalService, { retrieve: overrides.retrieve ?? jest.fn() }],
@@ -109,6 +120,20 @@ function buildClaim(overrides: Partial<Claim> = {}): Claim {
         quote: 'a cap rate of approximately 6.10%',
       },
     ],
+    ...overrides,
+  };
+}
+
+/** A `CanonicalEntityListing` as `CanonicalEntityService.listCanonicalEntities` returns it —
+ *  `canonicalNameNormalized`/`aliasesNormalized` pre-derived, matching the normalized form
+ *  `resolveQuestionEntity` (`scope-conflict-to-question.ts`) matches question text against. */
+function buildCanonicalEntity(
+  overrides: Partial<CanonicalEntityListing> = {},
+): CanonicalEntityListing {
+  return {
+    canonicalName: 'Northgate Business Park',
+    canonicalNameNormalized: 'northgate business park',
+    aliasesNormalized: [],
     ...overrides,
   };
 }
@@ -320,7 +345,7 @@ describe('createActivities', () => {
   // "hint matches but nothing verifies it" path, and the "hint doesn't even match" path — the last
   // two must never call `GroundingGateService.verify` (there are no claims to verify) and the
   // middle one proves the fail-closed guard actually *ran* the lookup rather than short-circuiting.
-  it('should upgrade an insufficient_evidence outcome to conflicting_evidence when the model hints at a contradiction and the server verifies an open conflict among the retrieved chunks', async () => {
+  it("should upgrade an insufficient_evidence outcome to conflicting_evidence when the model hints at a contradiction, the server verifies an open conflict among the retrieved chunks, and the question names that conflict group's own entity", async () => {
     const conflictId = 'conflict-1';
     const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
     const values = [
@@ -330,9 +355,13 @@ describe('createActivities', () => {
     const mockFindConflictedFactGroupsForChunks = jest
       .fn()
       .mockResolvedValue([{ conflictId, factKey, values }]);
+    const mockListCanonicalEntities = jest
+      .fn()
+      .mockResolvedValue([buildCanonicalEntity({ canonicalName: 'Northgate Business Park' })]);
     const mockVerify = jest.fn();
     const app = buildApp({
       findConflictedFactGroupsForChunks: mockFindConflictedFactGroupsForChunks,
+      listCanonicalEntities: mockListCanonicalEntities,
       verify: mockVerify,
     });
     const outcome = {
@@ -351,6 +380,7 @@ describe('createActivities', () => {
       outcome,
       retrievedChunks,
       tenantId: 'acme-corp',
+      questionText: 'What is the cap rate for Northgate Business Park?',
     });
 
     expect(mockFindConflictedFactGroupsForChunks).toHaveBeenCalledWith(
@@ -363,6 +393,195 @@ describe('createActivities', () => {
       claims: [],
       conflictIds: [conflictId],
     });
+  });
+
+  // Negative control (D1/scope-conflict-to-question.ts): two conflict groups sourced from the
+  // same retrieval — both legitimately reachable, e.g. from the same spreadsheet — but the
+  // question names only one property's own entity. The other property's values must never attach.
+  it("should attach only the conflict group whose entity the question names, never a different property's conflict group retrieved alongside it", async () => {
+    const northgateGroup = {
+      conflictId: 'conflict-northgate',
+      factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+      values: [
+        { value: 5.25, unit: 'percent', sourceChunkId: 'chunk-northgate-xlsx' },
+        { value: 6.1, unit: 'percent', sourceChunkId: 'chunk-northgate-prose' },
+      ],
+    };
+    const sablewoodGroup = {
+      conflictId: 'conflict-sablewood',
+      factKey: { entity: 'Sablewood Retail Court', metric: 'cap_rate', period: '2025-04' },
+      values: [
+        { value: 4.9, unit: 'percent', sourceChunkId: 'chunk-sablewood-xlsx' },
+        { value: 5.4, unit: 'percent', sourceChunkId: 'chunk-sablewood-prose' },
+      ],
+    };
+    const mockFindConflictedFactGroupsForChunks = jest
+      .fn()
+      .mockResolvedValue([northgateGroup, sablewoodGroup]);
+    const mockListCanonicalEntities = jest.fn().mockResolvedValue([
+      buildCanonicalEntity({
+        canonicalName: 'Northgate Business Park',
+        canonicalNameNormalized: 'northgate business park',
+      }),
+      buildCanonicalEntity({
+        canonicalName: 'Sablewood Retail Court',
+        canonicalNameNormalized: 'sablewood retail court',
+      }),
+    ]);
+    const app = buildApp({
+      findConflictedFactGroupsForChunks: mockFindConflictedFactGroupsForChunks,
+      listCanonicalEntities: mockListCanonicalEntities,
+    });
+    const outcome = {
+      kind: 'insufficient_evidence' as const,
+      reason:
+        'The retrieved evidence reports conflicting values for the same fact, so no single answer can be given with confidence.',
+      reasonCode: 'retrieved_evidence_contradicts_itself' as const,
+    };
+    const retrievedChunks: RetrievedChunk[] = [
+      buildRetrievedChunk({ chunkId: 'chunk-northgate-xlsx' }),
+      buildRetrievedChunk({ chunkId: 'chunk-sablewood-xlsx' }),
+    ];
+
+    const activities = createActivities(app);
+    const result = await activities.groundingCheck({
+      outcome,
+      retrievedChunks,
+      tenantId: 'acme-corp',
+      questionText: 'What is the cap rate for Sablewood Retail Court?',
+    });
+
+    expect(result).toEqual({
+      outcome: {
+        kind: 'conflicting_evidence',
+        factKey: sablewoodGroup.factKey,
+        values: sablewoodGroup.values,
+      },
+      claims: [],
+      conflictIds: [sablewoodGroup.conflictId],
+    });
+  });
+
+  it('should leave an insufficient_evidence outcome unchanged, never attaching either conflict group, when the question names none of the retrieved properties', async () => {
+    const northgateGroup = {
+      conflictId: 'conflict-northgate',
+      factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+      values: [{ value: 5.25, unit: 'percent', sourceChunkId: 'chunk-northgate-xlsx' }],
+    };
+    const sablewoodGroup = {
+      conflictId: 'conflict-sablewood',
+      factKey: { entity: 'Sablewood Retail Court', metric: 'cap_rate', period: '2025-04' },
+      values: [{ value: 4.9, unit: 'percent', sourceChunkId: 'chunk-sablewood-xlsx' }],
+    };
+    const app = buildApp({
+      findConflictedFactGroupsForChunks: jest
+        .fn()
+        .mockResolvedValue([northgateGroup, sablewoodGroup]),
+      listCanonicalEntities: jest.fn().mockResolvedValue([
+        buildCanonicalEntity({
+          canonicalName: 'Northgate Business Park',
+          canonicalNameNormalized: 'northgate business park',
+        }),
+        buildCanonicalEntity({
+          canonicalName: 'Sablewood Retail Court',
+          canonicalNameNormalized: 'sablewood retail court',
+        }),
+      ]),
+    });
+    const outcome = {
+      kind: 'insufficient_evidence' as const,
+      reason:
+        'The retrieved evidence reports conflicting values for the same fact, so no single answer can be given with confidence.',
+      reasonCode: 'retrieved_evidence_contradicts_itself' as const,
+    };
+
+    const activities = createActivities(app);
+    const result = await activities.groundingCheck({
+      outcome,
+      retrievedChunks: [buildRetrievedChunk()],
+      tenantId: 'acme-corp',
+      questionText: 'What is the going-in cap rate?',
+    });
+
+    expect(result).toEqual({ outcome, claims: [] });
+  });
+
+  it('should leave an insufficient_evidence outcome unchanged, never guessing between them, when the question names both retrieved properties', async () => {
+    const northgateGroup = {
+      conflictId: 'conflict-northgate',
+      factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+      values: [{ value: 5.25, unit: 'percent', sourceChunkId: 'chunk-northgate-xlsx' }],
+    };
+    const sablewoodGroup = {
+      conflictId: 'conflict-sablewood',
+      factKey: { entity: 'Sablewood Retail Court', metric: 'cap_rate', period: '2025-04' },
+      values: [{ value: 4.9, unit: 'percent', sourceChunkId: 'chunk-sablewood-xlsx' }],
+    };
+    const app = buildApp({
+      findConflictedFactGroupsForChunks: jest
+        .fn()
+        .mockResolvedValue([northgateGroup, sablewoodGroup]),
+      listCanonicalEntities: jest.fn().mockResolvedValue([
+        buildCanonicalEntity({
+          canonicalName: 'Northgate Business Park',
+          canonicalNameNormalized: 'northgate business park',
+        }),
+        buildCanonicalEntity({
+          canonicalName: 'Sablewood Retail Court',
+          canonicalNameNormalized: 'sablewood retail court',
+        }),
+      ]),
+    });
+    const outcome = {
+      kind: 'insufficient_evidence' as const,
+      reason:
+        'The retrieved evidence reports conflicting values for the same fact, so no single answer can be given with confidence.',
+      reasonCode: 'retrieved_evidence_contradicts_itself' as const,
+    };
+
+    const activities = createActivities(app);
+    const result = await activities.groundingCheck({
+      outcome,
+      retrievedChunks: [buildRetrievedChunk()],
+      tenantId: 'acme-corp',
+      questionText:
+        'Compare the cap rate for Northgate Business Park against Sablewood Retail Court.',
+    });
+
+    expect(result).toEqual({ outcome, claims: [] });
+  });
+
+  // Regression: `questionText` is optional (a replayed pre-deploy workflow history supplies none)
+  // — its absence must degrade to abstention, not a crash, even when exactly one conflict group
+  // would otherwise be attachable.
+  it('should leave an insufficient_evidence outcome unchanged when questionText is absent, even though exactly one conflict group is retrieved', async () => {
+    const conflictId = 'conflict-1';
+    const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+    const values = [{ value: 5.25, unit: 'percent', sourceChunkId: 'chunk-xlsx' }];
+    const app = buildApp({
+      findConflictedFactGroupsForChunks: jest
+        .fn()
+        .mockResolvedValue([{ conflictId, factKey, values }]),
+      listCanonicalEntities: jest
+        .fn()
+        .mockResolvedValue([buildCanonicalEntity({ canonicalName: 'Northgate Business Park' })]),
+    });
+    const outcome = {
+      kind: 'insufficient_evidence' as const,
+      reason:
+        'The retrieved evidence reports conflicting values for the same fact, so no single answer can be given with confidence.',
+      reasonCode: 'retrieved_evidence_contradicts_itself' as const,
+    };
+
+    const activities = createActivities(app);
+    // `questionText` deliberately omitted — the shape a pre-deploy workflow history replays with.
+    const result = await activities.groundingCheck({
+      outcome,
+      retrievedChunks: [buildRetrievedChunk({ chunkId: 'chunk-xlsx' })],
+      tenantId: 'acme-corp',
+    });
+
+    expect(result).toEqual({ outcome, claims: [] });
   });
 
   it('should leave an insufficient_evidence outcome unchanged when the model hints at a contradiction but no conflict is verified among the retrieved chunks (fail closed)', async () => {
@@ -626,6 +845,74 @@ describe('createActivities', () => {
     expect(result.outcome).toEqual({ kind: 'conflicting_evidence', factKey, values });
     expect(result.claims).toEqual([claim]);
     expect(result.conflictIds).toEqual([conflictId]);
+  });
+
+  // Negative control (D1/scope-conflict-to-question.ts): the claim's cited chunk and stated number
+  // do match a conflict group's value, but that group belongs to a different property than the one
+  // the question names — the question's own resolved entity must exclude it before the
+  // cited-chunk/numeric-token match ever runs, so the widening finds nothing to force.
+  it('should NOT force conflicting_evidence via either-side widening when the matching conflict group belongs to a different property than the one the question names', async () => {
+    const claim = buildClaim(); // statement states 6.10; citation cites 'chunk-1'
+    const sablewoodFactKey = {
+      entity: 'Sablewood Retail Court',
+      metric: 'cap_rate',
+      period: '2025-04',
+    };
+    const northgateFactKey = {
+      entity: 'Northgate Business Park',
+      metric: 'cap_rate',
+      period: '2025-03',
+    };
+    const mockVerify = jest.fn().mockReturnValue({
+      outcomeKind: 'answered',
+      claims: [claim],
+      droppedClaims: [],
+      violations: [],
+      claimCoverage: 1,
+    });
+    const mockFindConflictedFactGroupsForChunks = jest.fn().mockResolvedValue([
+      // Cites the claim's own chunk and states its own number — would force via the unscoped
+      // match, but belongs to Sablewood, not the Northgate property the question names.
+      {
+        conflictId: 'conflict-sablewood',
+        factKey: sablewoodFactKey,
+        values: [{ value: 6.1, unit: 'percent', sourceChunkId: 'chunk-1' }],
+      },
+      // The question's own property — retrieved alongside the other, but has nothing on the
+      // claim's cited chunk, so scoping to it finds no match either.
+      {
+        conflictId: 'conflict-northgate',
+        factKey: northgateFactKey,
+        values: [{ value: 5.25, unit: 'percent', sourceChunkId: 'chunk-northgate' }],
+      },
+    ]);
+    const mockListCanonicalEntities = jest.fn().mockResolvedValue([
+      buildCanonicalEntity({
+        canonicalName: 'Sablewood Retail Court',
+        canonicalNameNormalized: 'sablewood retail court',
+      }),
+      buildCanonicalEntity({
+        canonicalName: 'Northgate Business Park',
+        canonicalNameNormalized: 'northgate business park',
+      }),
+    ]);
+    const app = buildApp({
+      verify: mockVerify,
+      findConflictedFactGroupsForChunks: mockFindConflictedFactGroupsForChunks,
+      listCanonicalEntities: mockListCanonicalEntities,
+    });
+    const outcome = { kind: 'answered' as const, claims: [claim] };
+    const retrievedChunks: RetrievedChunk[] = [buildRetrievedChunk()];
+
+    const activities = createActivities(app);
+    const result = await activities.groundingCheck({
+      outcome,
+      retrievedChunks,
+      tenantId: 'default',
+      questionText: 'What is the cap rate for Northgate Business Park?',
+    });
+
+    expect(result.outcome).toEqual(outcome);
   });
 
   it('should NOT force conflicting_evidence via either-side widening when the surviving claim cites a different chunk than the conflicted value it states', async () => {

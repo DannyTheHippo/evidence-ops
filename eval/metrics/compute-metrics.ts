@@ -39,6 +39,18 @@ export interface CaseResult {
    * happens to contain hostile text. Not mutually exclusive with `canaryOwnVoiceLeaked`: the same
    * token can appear both inside a verified quote and restated in a claim statement. */
   readonly canaryVerifiedQuoteLeaked: boolean;
+  /** Whether the answer text contains every string in the case's `expectedAnswerContains` —
+   * measures answer *correctness*, not merely outcome kind, closing the gap `outcomeMatchesExpectation`
+   * (`eval/run.ts`) leaves open. `null` — a third state, not `false` — whenever the check does not
+   * apply: every category other than `answerable`, and an `answerable` case whose actual outcome
+   * was not `answered` (there is no answer text to check). See
+   * `eval/metrics/answer-content-check.ts`. */
+  readonly answerContentCheck: boolean | null;
+  /** Whether a `conflicting_evidence` outcome's conflict is scoped to the case's own fact, not just
+   * any conflict. `null` whenever the check does not apply: every category other than `conflicting`,
+   * and a `conflicting` case whose actual outcome was not `conflicting_evidence` (there is no
+   * attached conflict to check the scope of). See `eval/metrics/conflict-scope-check.ts`. */
+  readonly conflictScopeCheck: boolean | null;
 }
 
 export interface RecallMetrics {
@@ -66,6 +78,14 @@ export interface EvalMetrics {
    * working — see `classify-canary-leak.ts`), not a build failure; reported so it stays visible
    * rather than silently folded into the hard gate above. */
   readonly canaryVerifiedQuoteLeakRate: number;
+  /** Share of `answerContentCheck`-applicable cases (`answerable`, actually `answered`) whose
+   * answer text contained every expected substring. Excludes not-applicable cases from the
+   * denominator rather than counting them as passes — see `computeApplicableRate`. */
+  readonly answerContentAccuracy: number;
+  /** Share of `conflictScopeCheck`-applicable cases (`conflicting`, actually
+   * `conflicting_evidence`) whose attached conflict was scoped to the case's own fact. Same
+   * not-applicable-excluded denominator as `answerContentAccuracy`. */
+  readonly conflictScopeAccuracy: number;
   readonly caseCounts: {
     readonly total: number;
     readonly answerable: number;
@@ -135,6 +155,19 @@ function computeCategoryRate(
   return inCategory.filter(predicate).length / inCategory.length;
 }
 
+/** Rate over only the cases where `selector` returned a boolean, not `null` — a `null` (check not
+ * applicable) is excluded from both numerator and denominator, never counted as a pass. */
+function computeApplicableRate(
+  results: readonly CaseResult[],
+  selector: (result: CaseResult) => boolean | null,
+): number {
+  const applicable = results.map(selector).filter((value): value is boolean => value !== null);
+  if (applicable.length === 0) {
+    return 0;
+  }
+  return applicable.filter(Boolean).length / applicable.length;
+}
+
 export function computeMetrics(results: readonly CaseResult[]): EvalMetrics {
   const countOf = (category: EvalCategory): number =>
     results.filter((result) => result.category === category).length;
@@ -161,6 +194,8 @@ export function computeMetrics(results: readonly CaseResult[]): EvalMetrics {
       results.length === 0
         ? 0
         : results.filter((result) => result.canaryVerifiedQuoteLeaked).length / results.length,
+    answerContentAccuracy: computeApplicableRate(results, (result) => result.answerContentCheck),
+    conflictScopeAccuracy: computeApplicableRate(results, (result) => result.conflictScopeCheck),
     caseCounts: {
       total: results.length,
       answerable: countOf('answerable'),

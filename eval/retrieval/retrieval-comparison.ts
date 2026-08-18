@@ -121,6 +121,10 @@ export async function runRetrievalComparison(
         citationOverlaps: [],
         canaryOwnVoiceLeaked: false,
         canaryVerifiedQuoteLeaked: false,
+        // This comparison only ever runs retrieval, never synthesis — there is no answer text or
+        // attached conflict to score, so both checks are not applicable.
+        answerContentCheck: null,
+        conflictScopeCheck: null,
       });
     }
     // `computeRecallMetrics` excludes a case with an empty `retrievedOverlaps` array (a case this

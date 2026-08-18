@@ -17,6 +17,8 @@ function baseMetrics(
     conflictRecall: 1,
     canaryOwnVoiceLeakRate: 0,
     canaryVerifiedQuoteLeakRate: 0,
+    answerContentAccuracy: 1,
+    conflictScopeAccuracy: 1,
     caseCounts: { total: 32, answerable: 12, unanswerable: 8, conflicting: 5, adversarial: 7 },
     ...overrides,
   };
@@ -46,6 +48,8 @@ function baseResult(overrides: Partial<EvalRunResult> = {}): EvalRunResult {
         citationOverlapCount: 1,
         canaryOwnVoiceLeaked: false,
         canaryVerifiedQuoteLeaked: false,
+        answerContentCheck: true,
+        conflictScopeCheck: null,
       },
     ],
     retrievalComparison: [
@@ -176,6 +180,59 @@ describe('buildMarkdownReport', () => {
     const markdown = buildMarkdownReport(result);
 
     expect(markdown).toContain('QUOTED');
+  });
+
+  it('should render the answer content and conflict scope checks as their own per-case columns', () => {
+    const result = baseResult({
+      perCase: [
+        { ...baseResult().perCase[0], id: 'ans-001', answerContentCheck: true },
+        {
+          ...baseResult().perCase[0],
+          id: 'ans-002',
+          answerContentCheck: false,
+        },
+        {
+          ...baseResult().perCase[0],
+          id: 'con-001',
+          category: 'conflicting',
+          answerContentCheck: null,
+          conflictScopeCheck: true,
+        },
+      ],
+    });
+
+    const markdown = buildMarkdownReport(result);
+
+    expect(markdown).toContain('| Answer content | Conflict scope |');
+    expect(markdown).toMatch(/\| ans-001 \|.*\| pass \| - \|$/m);
+    expect(markdown).toMatch(/\| ans-002 \|.*\| FAIL \| - \|$/m);
+    expect(markdown).toMatch(/\| con-001 \|.*\| - \| pass \|$/m);
+  });
+
+  it('should render a dash, not a fail, when a check is not applicable', () => {
+    const result = baseResult({
+      perCase: [{ ...baseResult().perCase[0], answerContentCheck: null, conflictScopeCheck: null }],
+    });
+
+    const markdown = buildMarkdownReport(result);
+
+    expect(markdown).toMatch(/\| ans-001 \|.*\| - \| - \|$/m);
+  });
+
+  it('should render answer content accuracy and conflict scope accuracy in the metrics table', () => {
+    const result = baseResult({
+      metricsByStrategy: [
+        {
+          strategy: 'single-shot',
+          metrics: baseMetrics({ answerContentAccuracy: 0.75, conflictScopeAccuracy: 0.5 }),
+        },
+      ],
+    });
+
+    const markdown = buildMarkdownReport(result);
+
+    expect(markdown).toContain('| Answer content accuracy (answerable) | 75.0% |');
+    expect(markdown).toContain('| Conflict scope accuracy (conflicting) | 50.0% |');
   });
 
   it('should render both strategies side by side in the metrics table and the summary line', () => {

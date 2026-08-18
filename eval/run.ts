@@ -11,8 +11,10 @@ import casesJson from './dataset/cases.json';
 import { EvalDatasetSchema, type EvalCase } from './dataset/schema';
 import { ingestFixtures, type IngestedFixture } from './ingest-fixtures';
 import { loadExistingCorpus } from './load-existing-corpus';
+import { answerContainsExpectedStrings } from './metrics/answer-content-check';
 import { classifyCanaryLeak } from './metrics/classify-canary-leak';
 import { computeMetrics, type CaseOutcomeKind, type CaseResult } from './metrics/compute-metrics';
+import { conflictValuesOverlapExpectedLocators } from './metrics/conflict-scope-check';
 import { chunkOverlapsAnyLocator } from './metrics/locator-overlap';
 import { populateQdrantCollection, searchQdrantVector } from './qdrant/qdrant-benchmark-store';
 import { makeQdrantAwareSearch, type QdrantSearch } from './qdrant/qdrant-aware-search';
@@ -393,6 +395,39 @@ async function main(): Promise<void> {
         const recallHitRank =
           retrievedOverlaps.length > 0 ? retrievedOverlaps.indexOf(true) + 1 : 0;
 
+        // Two measured-only checks (never folded into `pass` — see the D2/P2 note on
+        // `outcomeMatchesExpectation` below): `answerContentCheck` scores answer *correctness* for
+        // `answerable` cases, and `conflictScopeCheck` scores whether a surfaced conflict is the
+        // case's own fact rather than any conflict at all. Both are `null` — a third state, not
+        // `false` — outside their applicable category/outcome combination; see
+        // `CaseResult.answerContentCheck`/`conflictScopeCheck`'s doc comments.
+        const answerContentCheck: boolean | null =
+          evalCase.category === 'answerable' && actualOutcomeKind === 'answered'
+            ? answerContainsExpectedStrings(
+                groundingResult.claims.map((claim) => claim.statement).join(' '),
+                evalCase.expectedAnswerContains ?? [],
+              )
+            : null;
+
+        const conflictScopeCheck: boolean | null =
+          evalCase.category === 'conflicting' &&
+          groundingResult.outcome.kind === 'conflicting_evidence'
+            ? await conflictValuesOverlapExpectedLocators(
+                groundingResult.outcome.values.map((value) => value.sourceChunkId),
+                (chunkId) => {
+                  const chunk = chunkByChunkId.get(chunkId);
+                  return chunk
+                    ? {
+                        filename: filenameByDocVersionId.get(chunk.docVersionId) ?? '',
+                        text: chunk.text,
+                        locator: chunk.locator,
+                      }
+                    : undefined;
+                },
+                evalCase.expectedLocators,
+              )
+            : null;
+
         caseResultsByStrategy[strategy].push({
           id: evalCase.id,
           category: evalCase.category,
@@ -402,6 +437,8 @@ async function main(): Promise<void> {
           claimCoverage: groundingResult.claimCoverage,
           canaryOwnVoiceLeaked: ownVoiceLeak,
           canaryVerifiedQuoteLeaked: verifiedQuoteLeak,
+          answerContentCheck,
+          conflictScopeCheck,
         });
 
         perCase.push({
@@ -413,6 +450,8 @@ async function main(): Promise<void> {
           actualOutcomeKind,
           // Only the hard (own-voice) leak fails a case — a verified-quote leak is accepted,
           // measured behaviour (see `EvalMetrics.canaryVerifiedQuoteLeakRate`'s doc comment).
+          // `answerContentCheck`/`conflictScopeCheck` are measured and reported only, never folded
+          // in here — a later phase gates on them once the baseline is known.
           pass:
             outcomeMatchesExpectation(
               evalCase.category,
@@ -428,6 +467,8 @@ async function main(): Promise<void> {
           costUsd: retrieval.costUsd,
           canaryOwnVoiceLeaked: ownVoiceLeak,
           canaryVerifiedQuoteLeaked: verifiedQuoteLeak,
+          answerContentCheck,
+          conflictScopeCheck,
         });
 
         console.log(

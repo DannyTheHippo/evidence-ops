@@ -17,6 +17,15 @@ export interface CanonicalEntityResolution {
   readonly matched: boolean;
 }
 
+/** One tenant's registered entity, as {@link CanonicalEntityService.listCanonicalEntities} returns
+ *  it — the canonical display name plus both normalized forms a caller needs to match against
+ *  free text without re-deriving `normalizeEntityName` itself. */
+export interface CanonicalEntityListing {
+  readonly canonicalName: string;
+  readonly canonicalNameNormalized: string;
+  readonly aliasesNormalized: readonly string[];
+}
+
 /**
  * Looks up a raw entity name (as read off a document) against the tenant's `CanonicalEntity`
  * registry and returns its canonical name when one is registered. Matching is exact and
@@ -138,5 +147,19 @@ export class CanonicalEntityService {
       const [canonicalName] = canonicalNames;
       return { name: canonicalName, matched: true };
     });
+  }
+
+  /** Every entity registered for `tenantId` — no name filter, unlike {@link resolve}/{@link
+   *  resolveMany}, since a caller here needs the whole registry to match arbitrary free text (e.g.
+   *  a question) against rather than looking up one known name. Tenant-scoped explicitly on the
+   *  query for the same reason `resolve` is — `tenantScopePlugin` is a backstop, not the primary
+   *  control. */
+  async listCanonicalEntities(tenantId: string): Promise<CanonicalEntityListing[]> {
+    const entities = await this.canonicalEntityModel.find({ tenantId });
+    return entities.map((entity) => ({
+      canonicalName: entity.canonicalName,
+      canonicalNameNormalized: entity.canonicalNameNormalized,
+      aliasesNormalized: entity.aliasesNormalized,
+    }));
   }
 }

@@ -9,6 +9,8 @@ function makeCase(
     citationOverlaps: [],
     canaryOwnVoiceLeaked: false,
     canaryVerifiedQuoteLeaked: false,
+    answerContentCheck: null,
+    conflictScopeCheck: null,
     ...overrides,
   };
 }
@@ -157,6 +159,42 @@ describe('computeMetrics', () => {
     ];
 
     expect(computeMetrics(results).canaryVerifiedQuoteLeakRate).toBe(0);
+  });
+
+  it('should compute answer content accuracy only over cases where the check applied', () => {
+    const results: CaseResult[] = [
+      makeCase({ id: 'ans-001', category: 'answerable', answerContentCheck: true }),
+      makeCase({ id: 'ans-002', category: 'answerable', answerContentCheck: false }),
+      // Not applicable — e.g. an unanswerable case, or an answerable case that abstained instead
+      // of answering — must not count as a pass or drag down the denominator.
+      makeCase({ id: 'una-001', category: 'unanswerable', answerContentCheck: null }),
+    ];
+
+    expect(computeMetrics(results).answerContentAccuracy).toBeCloseTo(0.5);
+  });
+
+  it('should return 0 answer content accuracy when the check never applied', () => {
+    const results: CaseResult[] = [makeCase({ id: 'una-001', category: 'unanswerable' })];
+
+    expect(computeMetrics(results).answerContentAccuracy).toBe(0);
+  });
+
+  it('should compute conflict scope accuracy only over cases where the check applied', () => {
+    const results: CaseResult[] = [
+      makeCase({ id: 'con-001', category: 'conflicting', conflictScopeCheck: true }),
+      makeCase({ id: 'con-002', category: 'conflicting', conflictScopeCheck: false }),
+      // Not applicable — the case did not even produce a `conflicting_evidence` outcome to score
+      // the scope of — must not count as a pass or drag down the denominator.
+      makeCase({ id: 'con-003', category: 'conflicting', conflictScopeCheck: null }),
+    ];
+
+    expect(computeMetrics(results).conflictScopeAccuracy).toBeCloseTo(0.5);
+  });
+
+  it('should return 0 conflict scope accuracy when the check never applied', () => {
+    const results: CaseResult[] = [makeCase({ id: 'con-001', category: 'conflicting' })];
+
+    expect(computeMetrics(results).conflictScopeAccuracy).toBe(0);
   });
 
   it('should count every category, including zero-count ones', () => {

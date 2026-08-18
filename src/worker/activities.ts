@@ -12,9 +12,18 @@ import {
   type RecordConflictResolutionInput,
   type RecordConflictResolutionResult,
 } from '../features/evidence/conflicts/conflicts.service';
+import {
+  CanonicalEntityService,
+  type CanonicalEntityListing,
+} from '../features/evidence/facts/canonical-entity.service';
 import { FactsService, type FactsExtractionResult } from '../features/evidence/facts/facts.service';
 import { AgenticRetrievalService } from '../features/evidence/qa/agentic-retrieval.service';
 import { extractNumericTokens } from '../features/evidence/qa/extract-numeric-tokens';
+import {
+  filterGroupsByEntity,
+  resolveQuestionEntity,
+  scopeConflictToQuestion,
+} from '../features/evidence/qa/scope-conflict-to-question';
 import { IngestionService } from '../features/evidence/ingestion/ingestion.service';
 import { SourcesService, type RunSyncResult } from '../features/evidence/sources/sources.service';
 import {
@@ -67,15 +76,25 @@ import type { IngestDocumentVersionResult } from '../workflows/types';
  * fact. Inherits bound 3's known remainders for the same reason the gate's own check does: a claim
  * stating a conflicted value in words ("six percent") is invisible to `extractNumericTokens`, and
  * two distinct facts sharing the exact same `value` on the same cited chunk would still cross-touch.
+ *
+ * `scopedEntity`, when given, narrows `conflictGroups` to the ones belonging to it
+ * (`filterGroupsByEntity`, `scope-conflict-to-question.ts`) before the cited-chunk/numeric-token
+ * match above ever runs — the caller resolves it once, from the question text, via
+ * `resolveQuestionEntity`. Absent, every group stays a candidate, unchanged from before entity
+ * scoping existed.
  */
 function findEitherSideConflict(
   claims: readonly Claim[],
   conflictGroups: readonly ConflictedFactGroup[],
+  scopedEntity?: CanonicalEntityListing,
 ): ConflictedFactGroup | undefined {
+  const candidateGroups = scopedEntity
+    ? filterGroupsByEntity(conflictGroups, scopedEntity)
+    : conflictGroups;
   for (const claim of claims) {
     const citedChunkIds = new Set(claim.citations.map((citation) => citation.chunkId));
     const claimedNumbers = extractNumericTokens(claim.statement);
-    const match = conflictGroups.find((group) =>
+    const match = candidateGroups.find((group) =>
       group.values.some(
         (value) => citedChunkIds.has(value.sourceChunkId) && claimedNumbers.includes(value.value),
       ),
@@ -117,6 +136,11 @@ export interface GroundingCheckActivityInput {
   readonly outcome: AnswerContract;
   readonly retrievedChunks: readonly RetrievedChunk[];
   readonly tenantId: string;
+  /** The question the answer was synthesized for — optional, not required, so a workflow history
+   *  replayed from before this field existed still supplies a valid input rather than failing on a
+   *  field it never carried. Absent, `resolveQuestionEntity` names no entity from an empty question,
+   *  so `groundingCheck` abstains (`insufficient_evidence`) rather than attaching any conflict. */
+  readonly questionText?: string;
 }
 
 export interface GroundingCheckActivityResult {
@@ -235,6 +259,7 @@ export function createActivities(app: INestApplicationContext): Activities {
   const ingestionService = app.get(IngestionService);
   const factsService = app.get(FactsService);
   const conflictsService = app.get(ConflictsService);
+  const canonicalEntityService = app.get(CanonicalEntityService);
   const evidenceRetrievalService = app.get(EvidenceRetrievalService);
   const agenticRetrievalService = app.get(AgenticRetrievalService);
   const synthesisService = app.get(SynthesisService);
@@ -303,26 +328,33 @@ export function createActivities(app: INestApplicationContext): Activities {
         if (input.outcome.kind === 'insufficient_evidence') {
           if (input.outcome.reasonCode === 'retrieved_evidence_contradicts_itself') {
             const chunkIds = input.retrievedChunks.map((chunk) => chunk.chunkId);
-            const conflictGroups = await conflictsService.findConflictedFactGroupsForChunks(
-              chunkIds,
-              input.tenantId,
+            const [conflictGroups, canonicalEntities] = await Promise.all([
+              conflictsService.findConflictedFactGroupsForChunks(chunkIds, input.tenantId),
+              canonicalEntityService.listCanonicalEntities(input.tenantId),
+            ]);
+            // Scopes the open conflict touched by the retrieved evidence to the question's own
+            // subject (`scopeConflictToQuestion`, `scope-conflict-to-question.ts`): attaches only
+            // when the question names exactly one canonical entity and exactly one retrieved
+            // conflict group belongs to it. There is no per-claim citation to narrow the choice by
+            // here (the model abstained, so there are no claims at all), only the retrieval scope
+            // and the question's own text — any other case falls through to the abstention below
+            // rather than guessing which property's disagreement the question meant.
+            const scopedGroup = scopeConflictToQuestion(
+              input.questionText ?? '',
+              conflictGroups,
+              canonicalEntities,
             );
-            // First open conflict touched by the retrieved evidence, same deterministic first-match
-            // convention `GroundingGateService.verify` uses for the `answered` branch below — there is
-            // no per-claim citation to narrow the choice by here (the model abstained, so there are no
-            // claims at all), only the retrieval scope itself.
-            const [firstGroup] = conflictGroups;
-            if (firstGroup) {
+            if (scopedGroup) {
               return {
                 outcome: {
                   kind: 'conflicting_evidence',
-                  factKey: firstGroup.factKey,
+                  factKey: scopedGroup.factKey,
                   // `AnswerContract`'s `values` (mutable, zod-inferred) doesn't accept
                   // `ConflictedFactGroup.values`'s `readonly ConflictedFactValue[]` directly.
-                  values: [...firstGroup.values],
+                  values: [...scopedGroup.values],
                 },
                 claims: [],
-                conflictIds: [firstGroup.conflictId],
+                conflictIds: [scopedGroup.conflictId],
               };
             }
           }
@@ -337,15 +369,19 @@ export function createActivities(app: INestApplicationContext): Activities {
         // gets returned as `outcome` (and, via `answer-question.workflow.ts`, what gets persisted).
         // "The model proposes, the application disposes": a model that claimed `answered` with every
         // citation later dropped must not have that claim persisted as-is (see ADR-0004's decision
-        // section for the outcome-level degradation rule this mirrors). `cellFacts` and
-        // `conflictedFactKeys` are both loaded here, scoped to `input.retrievedChunks` and
-        // `input.tenantId` (never the tenant's whole `extracted_facts`/`conflicts` collections) — see
-        // `FactsService.findCellFacts` and `ConflictsService.findConflictedFactGroupsForChunks` for
-        // why that scoping is load-bearing, not just an optimization.
+        // section for the outcome-level degradation rule this mirrors). `cellFacts`,
+        // `conflictedFactKeys` and the tenant's canonical entities are all loaded here, `cellFacts`/
+        // `conflictedFactKeys` scoped to `input.retrievedChunks` and `input.tenantId` (never the
+        // tenant's whole `extracted_facts`/`conflicts` collections) — see `FactsService.findCellFacts`
+        // and `ConflictsService.findConflictedFactGroupsForChunks` for why that scoping is
+        // load-bearing, not just an optimization. The canonical entities feed
+        // `resolveQuestionEntity` below, which the either-side widening check reuses to scope its own
+        // candidate groups to the question's subject.
         const chunkIds = input.retrievedChunks.map((chunk) => chunk.chunkId);
-        const [cellFactDocs, conflictGroups] = await Promise.all([
+        const [cellFactDocs, conflictGroups, canonicalEntities] = await Promise.all([
           factsService.findCellFacts(chunkIds, input.tenantId),
           conflictsService.findConflictedFactGroupsForChunks(chunkIds, input.tenantId),
+          canonicalEntityService.listCanonicalEntities(input.tenantId),
         ]);
 
         const cellFacts: GroundingCellFact[] = cellFactDocs.map((fact) => ({
@@ -376,8 +412,14 @@ export function createActivities(app: INestApplicationContext): Activities {
           // Either-side widening (ADR-0004, "SUB-DECISION"): the gate's own forcing above only ever
           // fires from `cellFacts`, deliberately `xlsx-cell`-only — see `findEitherSideConflict`'s
           // doc comment for why that stays narrow and this check runs here instead, over the same
-          // `conflictGroups` already loaded, rather than widening the gate's own input.
-          const eitherSideMatch = findEitherSideConflict(report.claims, conflictGroups);
+          // `conflictGroups` already loaded, rather than widening the gate's own input. Scoped to the
+          // question's single resolved entity when one exists, so a claim's own cited-chunk/numeric
+          // match still can't cross a claim into a different property's conflict group.
+          const eitherSideMatch = findEitherSideConflict(
+            report.claims,
+            conflictGroups,
+            resolveQuestionEntity(input.questionText ?? '', canonicalEntities) ?? undefined,
+          );
           if (eitherSideMatch) {
             outcome = {
               kind: 'conflicting_evidence',

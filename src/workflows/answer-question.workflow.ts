@@ -141,6 +141,7 @@ export async function answerQuestion(input: AnswerQuestionInput): Promise<Answer
     outcome,
     retrievedChunks: chunks,
     tenantId: input.tenantId,
+    questionText: input.questionText,
   });
 
   const persisted = await persistActivities.persistAnswer({

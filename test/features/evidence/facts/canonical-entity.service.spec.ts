@@ -210,4 +210,49 @@ describe('CanonicalEntityService', () => {
       expect(mockLogger.warn).toHaveBeenCalled();
     });
   });
+
+  describe('listCanonicalEntities', () => {
+    it('should project every registered entity to its canonical name and both normalized forms', async () => {
+      mockCanonicalEntityModel.find.mockResolvedValueOnce([
+        buildMockCanonicalEntity(),
+        buildMockCanonicalEntity({
+          canonicalName: 'Sablewood Retail Court',
+          canonicalNameNormalized: 'sablewood retail court',
+          aliases: [],
+          aliasesNormalized: [],
+        }),
+      ]);
+
+      const result = await service.listCanonicalEntities(DEFAULT_TENANT_ID);
+
+      expect(result).toEqual([
+        {
+          canonicalName: 'Northgate Business Park',
+          canonicalNameNormalized: 'northgate business park',
+          aliasesNormalized: ['northgate bus. park'],
+        },
+        {
+          canonicalName: 'Sablewood Retail Court',
+          canonicalNameNormalized: 'sablewood retail court',
+          aliasesNormalized: [],
+        },
+      ]);
+    });
+
+    it('should scope the listing to the given tenant', async () => {
+      mockCanonicalEntityModel.find.mockResolvedValueOnce([]);
+
+      await service.listCanonicalEntities('other-tenant');
+
+      expect(mockCanonicalEntityModel.find).toHaveBeenCalledWith({ tenantId: 'other-tenant' });
+    });
+
+    it('should return an empty array when the tenant has no registered entities', async () => {
+      mockCanonicalEntityModel.find.mockResolvedValueOnce([]);
+
+      const result = await service.listCanonicalEntities(DEFAULT_TENANT_ID);
+
+      expect(result).toEqual([]);
+    });
+  });
 });

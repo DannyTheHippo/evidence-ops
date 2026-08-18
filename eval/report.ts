@@ -35,6 +35,12 @@ export interface PerCaseReport {
   /** Soft, informational leak: a canary marker inside a gate-verified citation quote. See
    * `EvalMetrics.canaryVerifiedQuoteLeakRate`'s doc comment. */
   readonly canaryVerifiedQuoteLeaked: boolean;
+  /** Measured and reported only — never folded into `pass`. See `CaseResult.answerContentCheck`'s
+   * doc comment for the applicable/not-applicable rule. */
+  readonly answerContentCheck: boolean | null;
+  /** Measured and reported only — never folded into `pass`. See `CaseResult.conflictScopeCheck`'s
+   * doc comment for the applicable/not-applicable rule. */
+  readonly conflictScopeCheck: boolean | null;
 }
 
 /** One strategy's aggregate metrics — `EvalRunResult.metricsByStrategy` carries one entry per
@@ -100,6 +106,8 @@ function metricsComparisonTable(entries: readonly StrategyMetrics[]): string {
     row('Mean claim coverage', (metrics) => pct(metrics.claimCoverageMean)),
     row('Abstention accuracy (unanswerable)', (metrics) => pct(metrics.abstentionAccuracy)),
     row('Conflict recall (conflicting)', (metrics) => pct(metrics.conflictRecall)),
+    row('Answer content accuracy (answerable)', (metrics) => pct(metrics.answerContentAccuracy)),
+    row('Conflict scope accuracy (conflicting)', (metrics) => pct(metrics.conflictScopeAccuracy)),
     row(
       '**Canary own-voice leak rate (hard gate, must be 0)**',
       (metrics) => `**${pct(metrics.canaryOwnVoiceLeakRate)}**`,
@@ -130,14 +138,20 @@ function formatCostUsd(costUsd: number): string {
   return `$${costUsd.toFixed(4)}`;
 }
 
+/** Renders the tri-state `boolean | null` the two measured-only checks carry: `-` for `null`
+ * (not applicable to this case), never conflated with a `FAIL`. */
+function formatCheck(value: boolean | null): string {
+  return value === null ? '-' : value ? 'pass' : 'FAIL';
+}
+
 function perCaseTable(perCase: readonly PerCaseReport[]): string {
   const rows = perCase.map(
     (row) =>
-      `| ${row.id} | ${row.strategy} | ${row.category} | ${row.expectedOutcome} | ${row.actualOutcomeKind} | ${row.pass ? 'pass' : 'FAIL'} | ${row.recallHitRank ?? '-'} | ${row.citationOverlapCount}/${row.citationCount} | ${row.turns ?? '-'} | ${row.retrievedChunkCount} | ${row.costUsd !== undefined ? formatCostUsd(row.costUsd) : '-'} | ${row.canaryOwnVoiceLeaked ? 'LEAKED' : '-'} | ${row.canaryVerifiedQuoteLeaked ? 'QUOTED' : '-'} |`,
+      `| ${row.id} | ${row.strategy} | ${row.category} | ${row.expectedOutcome} | ${row.actualOutcomeKind} | ${row.pass ? 'pass' : 'FAIL'} | ${row.recallHitRank ?? '-'} | ${row.citationOverlapCount}/${row.citationCount} | ${row.turns ?? '-'} | ${row.retrievedChunkCount} | ${row.costUsd !== undefined ? formatCostUsd(row.costUsd) : '-'} | ${row.canaryOwnVoiceLeaked ? 'LEAKED' : '-'} | ${row.canaryVerifiedQuoteLeaked ? 'QUOTED' : '-'} | ${formatCheck(row.answerContentCheck)} | ${formatCheck(row.conflictScopeCheck)} |`,
   );
   return [
-    '| Case | Strategy | Category | Expected | Actual outcome | Result | Recall rank | Citation overlap | Turns | Chunks gathered | Cost | Canary (own voice) | Canary (verified quote) |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| Case | Strategy | Category | Expected | Actual outcome | Result | Recall rank | Citation overlap | Turns | Chunks gathered | Cost | Canary (own voice) | Canary (verified quote) | Answer content | Conflict scope |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
     ...rows,
   ].join('\n');
 }
