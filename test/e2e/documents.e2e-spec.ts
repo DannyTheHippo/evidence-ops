@@ -15,6 +15,10 @@ import {
   ConflictDocument,
 } from '../../src/database/schemas/evidence/conflict/conflict.schema';
 import {
+  Document,
+  DocumentDocument,
+} from '../../src/database/schemas/evidence/document/document.schema';
+import {
   DocumentVersion,
   DocumentVersionDocument,
 } from '../../src/database/schemas/evidence/document-version/document-version.schema';
@@ -66,6 +70,7 @@ describe('Documents (e2e)', () => {
   let comps: Buffer;
   let memo: Buffer;
   let fakeWorkflowEngine: FakeWorkflowEngine;
+  let documentModel: Model<DocumentDocument>;
   let documentVersionModel: Model<DocumentVersionDocument>;
   let evidenceChunkModel: Model<EvidenceChunkDocument>;
   let extractedFactModel: Model<ExtractedFactDocument>;
@@ -94,6 +99,7 @@ describe('Documents (e2e)', () => {
     );
     cookie = member.cookie;
 
+    documentModel = app.get<Model<DocumentDocument>>(getModelToken(Document.name));
     documentVersionModel = app.get<Model<DocumentVersionDocument>>(
       getModelToken(DocumentVersion.name),
     );
@@ -143,6 +149,29 @@ describe('Documents (e2e)', () => {
       ingestionAttemptToken: new Types.ObjectId(),
       ...overrides,
     });
+
+  // Direct model writes for pagination fixtures, following the `seedChunk` pattern above — bulk
+  // seeding through the multipart upload route would be needlessly slow for a test that only
+  // needs many rows to exist, not real ingested content.
+  const seedDocumentWithVersion = async (title: string) => {
+    const document = await documentModel.create({
+      title,
+      sourceKind: 'txt',
+      mimeType: 'text/plain',
+      tenantId,
+    });
+    const version = await documentVersionModel.create({
+      documentId: document._id,
+      versionNumber: 1,
+      sha256: createHash('sha256').update(title).digest('hex'),
+      sizeBytes: 1,
+      storageKey: `seed-${title}`,
+      tenantId,
+    });
+    document.currentVersionId = version._id;
+    await document.save();
+    return document;
+  };
 
   it('rejects an unauthenticated upload — the routes are not public', async () => {
     const response = await request(getTestServer(app))
@@ -390,6 +419,35 @@ describe('Documents (e2e)', () => {
       expect(frame.headers['content-type']).toContain('text/event-stream');
       expect(frame.headers['cache-control']).toContain('no-cache');
       expect(frame.headers['x-accel-buffering']).toBe('no');
+      expect(frame.data).toEqual(polled.body);
+    });
+
+    // The headline regression this cycle exists for: the stream used to hardcode the newest 20
+    // documents, so a tenant paging past that window saw the stream and the poll disagree. Seeding
+    // 21 fresh documents guarantees a non-empty page 2 regardless of how many other tests in this
+    // file already uploaded into the same tenant.
+    it('agrees with the polled GET on page 2 for a tenant with more than 20 documents', async () => {
+      for (let i = 0; i < 21; i += 1) {
+        await seedDocumentWithVersion(`Page 2 Fixture ${i}-${new Types.ObjectId().toString()}`);
+      }
+
+      const polled = await request(getTestServer(app))
+        .get('/api/v1/documents')
+        .query({ skip: 20, limit: 20 })
+        .set('Cookie', cookie);
+
+      const polledBody = polled.body as { docs: unknown[]; count: number };
+
+      const frame = await readSseEvent(
+        app,
+        '/api/v1/documents/events?skip=20&limit=20',
+        'documents',
+        { Cookie: cookie },
+      );
+      const body = frame.data as { docs: unknown[]; count: number };
+
+      expect(polledBody.count).toBeGreaterThan(20);
+      expect(body.docs.length).toBeGreaterThan(0);
       expect(frame.data).toEqual(polled.body);
     });
   });

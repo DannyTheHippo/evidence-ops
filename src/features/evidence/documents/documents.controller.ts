@@ -124,14 +124,19 @@ export class DocumentsController {
   @SkipThrottle()
   @ApiResponse(documentsApiExamples.stream)
   @ApiResponse(documentsApiExamples.streamConnectionLimitExceeded)
-  streamEvents(@CurrentUser() user: AuthenticatedRequest['user']): Observable<MessageEvent> {
+  streamEvents(
+    @Query() pagination: PaginationRequestDto,
+    @CurrentUser() user: AuthenticatedRequest['user'],
+  ): Observable<MessageEvent> {
     if (!user) {
       throw new UnauthorizedException('No token provided');
     }
 
     const release = acquireStreamSlot(user.tenantId, user.userId, this.config.sse);
 
-    return this.documentsService.streamList(user.tenantId, user.userId).pipe(finalize(release));
+    return this.documentsService
+      .streamList(user.tenantId, user.userId, pagination)
+      .pipe(finalize(release));
   }
 
   @Get(':id')

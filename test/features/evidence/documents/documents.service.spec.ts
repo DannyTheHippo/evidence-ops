@@ -1012,7 +1012,7 @@ describe('DocumentsService', () => {
       const events: MessageEvent[] = [];
 
       const subscription = service
-        .streamList('tenant-a', 'actor-1')
+        .streamList('tenant-a', 'actor-1', { skip: 0, limit: 20 })
         .subscribe((event) => events.push(event));
       await jest.advanceTimersByTimeAsync(0);
 
@@ -1035,13 +1035,31 @@ describe('DocumentsService', () => {
       subscription.unsubscribe();
     });
 
+    it('should thread the caller-supplied skip/limit through to `list`, not a hardcoded newest page', async () => {
+      primeOneDocumentTick();
+      const events: MessageEvent[] = [];
+
+      const subscription = service
+        .streamList('tenant-a', 'actor-1', { skip: 20, limit: 20 })
+        .subscribe((event) => events.push(event));
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(mockDocumentModel.find).toHaveBeenCalledWith({ tenantId: 'tenant-a' }, null, {
+        sort: { createdAt: -1 },
+        skip: 20,
+        limit: 20,
+      });
+
+      subscription.unsubscribe();
+    });
+
     it('should not re-emit an unchanged document list on the next tick', async () => {
       primeOneDocumentTick();
       primeOneDocumentTick();
       const events: MessageEvent[] = [];
 
       const subscription = service
-        .streamList('tenant-a', 'actor-1')
+        .streamList('tenant-a', 'actor-1', { skip: 0, limit: 20 })
         .subscribe((event) => events.push(event));
       await jest.advanceTimersByTimeAsync(0);
       const countAfterFirstTick = events.length;
@@ -1062,7 +1080,7 @@ describe('DocumentsService', () => {
       const events: MessageEvent[] = [];
 
       const subscription = service
-        .streamList('tenant-a', 'actor-1')
+        .streamList('tenant-a', 'actor-1', { skip: 0, limit: 20 })
         .subscribe((event) => events.push(event));
       await jest.advanceTimersByTimeAsync(0);
       await jest.advanceTimersByTimeAsync(SSE_HEARTBEAT_INTERVAL_MS);
@@ -1076,7 +1094,7 @@ describe('DocumentsService', () => {
       const events: MessageEvent[] = [];
       let completed = false;
 
-      service.streamList('tenant-a', 'actor-1').subscribe({
+      service.streamList('tenant-a', 'actor-1', { skip: 0, limit: 20 }).subscribe({
         next: (event) => events.push(event),
         complete: () => {
           completed = true;
@@ -1097,7 +1115,9 @@ describe('DocumentsService', () => {
       mockDocumentModel.find.mockRejectedValueOnce('a plain string rejection');
       const events: MessageEvent[] = [];
 
-      service.streamList('tenant-a', 'actor-1').subscribe((event) => events.push(event));
+      service
+        .streamList('tenant-a', 'actor-1', { skip: 0, limit: 20 })
+        .subscribe((event) => events.push(event));
       await jest.advanceTimersByTimeAsync(0);
 
       expect(events[0].type).toBe('error');
@@ -1115,7 +1135,7 @@ describe('DocumentsService', () => {
       const events: MessageEvent[] = [];
       let completed = false;
 
-      service.streamList('tenant-a', 'actor-1').subscribe({
+      service.streamList('tenant-a', 'actor-1', { skip: 0, limit: 20 }).subscribe({
         next: (event) => events.push(event),
         complete: () => {
           completed = true;
@@ -1136,7 +1156,7 @@ describe('DocumentsService', () => {
       mockUserModel.findById.mockResolvedValue({ tenantId: 'tenant-b' });
       let completed = false;
 
-      service.streamList('tenant-a', 'actor-1').subscribe({
+      service.streamList('tenant-a', 'actor-1', { skip: 0, limit: 20 }).subscribe({
         complete: () => {
           completed = true;
         },
@@ -1154,11 +1174,13 @@ describe('DocumentsService', () => {
       mockUserModel.findById.mockResolvedValue({ tenantId: 'tenant-a' });
       let completed = false;
 
-      const subscription = service.streamList('tenant-a', 'actor-1').subscribe({
-        complete: () => {
-          completed = true;
-        },
-      });
+      const subscription = service
+        .streamList('tenant-a', 'actor-1', { skip: 0, limit: 20 })
+        .subscribe({
+          complete: () => {
+            completed = true;
+          },
+        });
       await jest.advanceTimersByTimeAsync(0);
       await jest.advanceTimersByTimeAsync(SSE_REAUTH_INTERVAL_MS);
 
@@ -1173,7 +1195,7 @@ describe('DocumentsService', () => {
       mockUserModel.findById.mockResolvedValue({ tenantId: 'tenant-a' });
       let completed = false;
 
-      service.streamList('tenant-a', 'actor-1').subscribe({
+      service.streamList('tenant-a', 'actor-1', { skip: 0, limit: 20 }).subscribe({
         complete: () => {
           completed = true;
         },

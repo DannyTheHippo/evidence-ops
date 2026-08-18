@@ -50,11 +50,12 @@ export default function DocumentList() {
       });
   }, [skip]);
 
-  // The SSE stream (`documents.service.ts`'s `streamList`) hardcodes the newest page, so it is
-  // only correct while viewing page 1 — `url: null` disables the stream entirely on a later page
-  // and this component falls back to the plain paginated fetch below instead.
+  // The SSE stream (`documents.service.ts`'s `streamList`) follows whichever page `skip` names, so
+  // it stays live on every page, not only the first — the URL changing re-triggers
+  // `useEventStream`'s connection effect (keyed on `options.url`), closing the old `EventSource`
+  // and opening a fresh one scoped to the new page.
   const streamState = useEventStream<{ docs: EvidenceDocument[]; count: number }>({
-    url: skip === 0 ? documentEventsUrl() : null,
+    url: documentEventsUrl({ skip, limit: PAGE_SIZE }),
     events: ['documents', 'heartbeat'],
     onEvent: (name, data) => {
       // Heartbeat only keeps the connection's liveness fresh; only a `documents` frame carries a
@@ -66,11 +67,6 @@ export default function DocumentList() {
     },
     onFallback: refetch,
   });
-
-  // A later page has no stream to fall back from — refetch it directly whenever it changes.
-  useEffect(() => {
-    if (skip !== 0) refetch();
-  }, [skip, refetch]);
 
   const hasPending =
     documents?.some((doc) => doc.currentVersion.ingestionStatus === 'pending') ?? false;

@@ -427,6 +427,23 @@ describe('QA and Conflicts (e2e)', () => {
       expect(frame.headers['x-accel-buffering']).toBe('no');
       expect(frame.data).toEqual(polled.body);
     });
+
+    it('records only one audit row when the stream reopens against the same answer within the dedupe window', async () => {
+      const started = await request(getTestServer(app))
+        .post('/api/v1/questions')
+        .set('Cookie', cookie)
+        .send({ questionText: 'What is the cap rate?' });
+      const answerId = (started.body as AnswerBody).id;
+
+      await readSseEvent(app, `/api/v1/answers/${answerId}/events`, 'answer', { Cookie: cookie });
+      await readSseEvent(app, `/api/v1/answers/${answerId}/events`, 'answer', { Cookie: cookie });
+
+      const events = await auditEventModel.find({
+        action: 'qa.answer.viewed',
+        'subject.entityId': new Types.ObjectId(answerId),
+      });
+      expect(events).toHaveLength(1);
+    });
   });
 
   describe('GET /conflicts', () => {

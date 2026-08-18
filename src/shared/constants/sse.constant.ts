@@ -18,3 +18,8 @@ export const SSE_STREAM_ERROR_MESSAGE = 'Internal server error';
 // window a revoked or cross-tenant session can keep an already-open stream alive — worth trading
 // against the extra Mongo lookup a tighter interval would add on every open connection.
 export const SSE_REAUTH_INTERVAL_MS = 30_000;
+
+// The window `shouldRecordStreamView` (`stream-session.util.ts`) collapses a reconnecting client's
+// repeated stream opens into a single audit row for — long enough to absorb a burst of network-blip
+// reconnects, short enough that a caller genuinely coming back later still gets a fresh row.
+export const SSE_STREAM_VIEW_AUDIT_DEDUPE_WINDOW_MS = 300_000;

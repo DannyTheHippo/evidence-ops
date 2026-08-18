@@ -14,6 +14,7 @@ import {
   SSE_HEARTBEAT_INTERVAL_MS,
   SSE_REAUTH_INTERVAL_MS,
   SSE_STREAM_ERROR_MESSAGE,
+  SSE_STREAM_VIEW_AUDIT_DEDUPE_WINDOW_MS,
 } from '../../../../src/shared/constants/sse.constant';
 import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
@@ -382,6 +383,86 @@ describe('WorkflowRunsService', () => {
       expect(mockApprovalsService.peekPending).toHaveBeenCalledWith(
         { skip: 0, limit: 20 },
         'tenant-a',
+        'wf-1',
+      );
+
+      subscription.unsubscribe();
+    });
+
+    it('should not record a second audit row when the same run stream reopens within the dedupe window', async () => {
+      const run = buildRun();
+      mockWorkflowRunModel.findOne.mockResolvedValue(run);
+      mockWorkflowEngine.status.mockRejectedValue(new Error('no live handle'));
+      mockApprovalsService.peekPending.mockResolvedValue(emptyApprovalsPage);
+      mockAuditService.record.mockResolvedValue(undefined);
+
+      const first = service.streamRun(run._id.toString(), 'actor-1', 'tenant-a').subscribe();
+      await jest.advanceTimersByTimeAsync(0);
+      first.unsubscribe();
+
+      const second = service.streamRun(run._id.toString(), 'actor-1', 'tenant-a').subscribe();
+      await jest.advanceTimersByTimeAsync(0);
+      second.unsubscribe();
+
+      expect(mockAuditService.record).toHaveBeenCalledTimes(1);
+    });
+
+    it('should record another audit row once the dedupe window has fully elapsed', async () => {
+      const run = buildRun();
+      mockWorkflowRunModel.findOne.mockResolvedValue(run);
+      mockWorkflowEngine.status.mockRejectedValue(new Error('no live handle'));
+      mockApprovalsService.peekPending.mockResolvedValue(emptyApprovalsPage);
+      mockAuditService.record.mockResolvedValue(undefined);
+
+      const first = service.streamRun(run._id.toString(), 'actor-1', 'tenant-a').subscribe();
+      await jest.advanceTimersByTimeAsync(0);
+      first.unsubscribe();
+
+      await jest.advanceTimersByTimeAsync(SSE_STREAM_VIEW_AUDIT_DEDUPE_WINDOW_MS);
+
+      const second = service.streamRun(run._id.toString(), 'actor-1', 'tenant-a').subscribe();
+      await jest.advanceTimersByTimeAsync(0);
+      second.unsubscribe();
+
+      expect(mockAuditService.record).toHaveBeenCalledTimes(2);
+    });
+
+    it('should scope the approvals sub-stream to this run alone, not the tenant-wide pending inbox, and resolve the run only once', async () => {
+      const run = buildRun();
+      mockWorkflowRunModel.findOne.mockResolvedValue(run);
+      mockWorkflowEngine.status.mockRejectedValue(new Error('no live handle'));
+      mockApprovalsService.peekPending.mockResolvedValue(emptyApprovalsPage);
+      mockAuditService.record.mockResolvedValue(undefined);
+
+      const subscription = service.streamRun(run._id.toString(), 'actor-1', 'tenant-a').subscribe();
+      await jest.advanceTimersByTimeAsync(0);
+
+      // `run$` polls independently (own tick, own `peekRun`), so the shared `getInitialRun` behind
+      // `opened$`/`approvals$` accounts for exactly one of the two calls seen at t=0.
+      expect(mockWorkflowRunModel.findOne).toHaveBeenCalledTimes(2);
+      expect(mockApprovalsService.peekPending).toHaveBeenCalledWith(
+        expect.anything(),
+        'tenant-a',
+        run.workflowId,
+      );
+
+      subscription.unsubscribe();
+    });
+
+    it('should fall back to the unscoped pending inbox when the run has no resolvable workflowId', async () => {
+      const run = buildRun({ workflowId: undefined });
+      mockWorkflowRunModel.findOne.mockResolvedValue(run);
+      mockWorkflowEngine.status.mockRejectedValue(new Error('no live handle'));
+      mockApprovalsService.peekPending.mockResolvedValue(emptyApprovalsPage);
+      mockAuditService.record.mockResolvedValue(undefined);
+
+      const subscription = service.streamRun(run._id.toString(), 'actor-1', 'tenant-a').subscribe();
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(mockApprovalsService.peekPending).toHaveBeenCalledWith(
+        { skip: 0, limit: 20 },
+        'tenant-a',
+        undefined,
       );
 
       subscription.unsubscribe();

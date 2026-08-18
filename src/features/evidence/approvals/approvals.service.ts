@@ -84,14 +84,24 @@ export class ApprovalsService {
   /**
    * The audit-free half of `listPending` — reused by `WorkflowRunsService.streamRun`'s approvals
    * sub-stream, which ticks every 1.5s for the life of an open connection. `listPending` delegates
-   * here so the two paths cannot drift; only it, and `streamRun`'s own one-per-open record, ever
+   * here so the two paths cannot drift; only it, and `streamRun`'s own deduped opening record, ever
    * write the `approvals.listed`/`workflow-runs.viewed` audit rows.
+   *
+   * `workflowId`, when given, narrows the pending inbox to approvals requested by that one
+   * workflow — `streamRun` passes its run's own `workflowId` so a caller who names one run id sees
+   * only that run's approval, not the tenant's whole inbox. Omitted (the `GET /approvals` path,
+   * via `listPending`) returns the full tenant-scoped inbox as before.
    */
   async peekPending(
     dto: ListApprovalsRequestDto,
     tenantId: string,
+    workflowId?: string,
   ): Promise<DocumentResultWithCount<ApprovalResponseDto>> {
-    const filter = { tenantId, state: dto.state ?? 'pending' };
+    const filter = {
+      tenantId,
+      state: dto.state ?? 'pending',
+      ...(workflowId ? { workflowId } : {}),
+    };
 
     const [approvals, count] = await Promise.all([
       this.approvalModel.find(filter, null, {

@@ -100,3 +100,35 @@ export function acquireStreamSlot(
     releaseSlot(openConnectionsByUser, userId);
   };
 }
+
+// Per-process, keyed by an actor+subject pair. Evicted the same way `McpServerService
+// .applyFixedWindow` evicts its rate-limit windows — a full sweep on every call — so this stays
+// bounded to keys seen within the last `windowMs`, not to every actor+subject pair the process has
+// ever recorded a view for.
+const lastRecordedStreamViews = new Map<string, number>();
+
+/**
+ * Gates a stream's opening audit write so a reconnecting client's repeated opens against the same
+ * subject collapse to one recorded row per `windowMs` rather than one per open — an SSE stream
+ * that drops and reopens on every network blip would otherwise flood the audit log with rows that
+ * say nothing new. `true` the first time `key` is seen, or once `windowMs` has fully elapsed since
+ * the last `true` for that key; `false` while still inside the window. Meant to wrap the audit
+ * write in `QaService.streamAnswer`'s and `WorkflowRunsService.streamRun`'s `opened$` pipes, keyed
+ * on `actorId` plus the subject id so two different callers viewing the same subject are still
+ * each recorded.
+ */
+export function shouldRecordStreamView(key: string, windowMs: number): boolean {
+  const now = Date.now();
+  for (const [entryKey, recordedAt] of lastRecordedStreamViews) {
+    if (now - recordedAt >= windowMs) {
+      lastRecordedStreamViews.delete(entryKey);
+    }
+  }
+
+  if (lastRecordedStreamViews.has(key)) {
+    return false;
+  }
+
+  lastRecordedStreamViews.set(key, now);
+  return true;
+}

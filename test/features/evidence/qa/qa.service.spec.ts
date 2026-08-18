@@ -13,6 +13,7 @@ import {
   SSE_HEARTBEAT_INTERVAL_MS,
   SSE_REAUTH_INTERVAL_MS,
   SSE_STREAM_ERROR_MESSAGE,
+  SSE_STREAM_VIEW_AUDIT_DEDUPE_WINDOW_MS,
 } from '../../../../src/shared/constants/sse.constant';
 import { UserRole } from '../../../../src/shared/enums/user-role.enum';
 import { AuditService } from '../../../../src/shared/services/audit/audit.service';
@@ -368,6 +369,40 @@ describe('QaService', () => {
       expect(events[0].data).toEqual(expect.objectContaining({ runStatus: 'running' }));
 
       subscription.unsubscribe();
+    });
+
+    it('should not record a second audit row when the same answer stream reopens within the dedupe window', async () => {
+      const answer = buildAnswerDoc();
+      mockAnswerModel.findOne.mockResolvedValue(answer);
+      mockAuditService.record.mockResolvedValue(undefined);
+
+      const first = service.streamAnswer(answer._id.toString(), 'actor-1', 'tenant-a').subscribe();
+      await jest.advanceTimersByTimeAsync(0);
+      first.unsubscribe();
+
+      const second = service.streamAnswer(answer._id.toString(), 'actor-1', 'tenant-a').subscribe();
+      await jest.advanceTimersByTimeAsync(0);
+      second.unsubscribe();
+
+      expect(mockAuditService.record).toHaveBeenCalledTimes(1);
+    });
+
+    it('should record another audit row once the dedupe window has fully elapsed', async () => {
+      const answer = buildAnswerDoc();
+      mockAnswerModel.findOne.mockResolvedValue(answer);
+      mockAuditService.record.mockResolvedValue(undefined);
+
+      const first = service.streamAnswer(answer._id.toString(), 'actor-1', 'tenant-a').subscribe();
+      await jest.advanceTimersByTimeAsync(0);
+      first.unsubscribe();
+
+      await jest.advanceTimersByTimeAsync(SSE_STREAM_VIEW_AUDIT_DEDUPE_WINDOW_MS);
+
+      const second = service.streamAnswer(answer._id.toString(), 'actor-1', 'tenant-a').subscribe();
+      await jest.advanceTimersByTimeAsync(0);
+      second.unsubscribe();
+
+      expect(mockAuditService.record).toHaveBeenCalledTimes(2);
     });
 
     it('should not re-emit an unchanged answer on the next tick', async () => {

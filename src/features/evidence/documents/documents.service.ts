@@ -56,10 +56,6 @@ import {
   type WorkflowEngine,
 } from '../../../providers/workflow-engine/workflow-engine.interface';
 import {
-  DEFAULT_PAGINATION_LIMIT,
-  DEFAULT_PAGINATION_SKIP,
-} from '../../../shared/constants/pagination-defaults.constant';
-import {
   SSE_HEARTBEAT_INTERVAL_MS,
   SSE_REAUTH_INTERVAL_MS,
   SSE_STREAM_ERROR_MESSAGE,
@@ -279,6 +275,13 @@ export class DocumentsService {
    * Polling-on-the-server, deliberately not a MongoDB change stream — see
    * `QaService.streamAnswer`'s identical rejected-alternative note.
    *
+   * `pagination` is the caller's current `skip`/`limit`, threaded straight through to `list` —
+   * this stream mirrors a list the caller is paging through (`list`'s `sort: {createdAt: -1}`
+   * above), so stream and poll must agree on every page, not only the newest one. A hardcoded
+   * newest-page window here is what used to force the SPA to disable the stream past page 1
+   * (`DocumentList.tsx`'s former workaround); with the caller's own page threaded through instead,
+   * that stopgap is no longer needed.
+   *
    * No `peekList`/`list` split, unlike `qa`/`workflow-runs`/`approvals`: `list` above never
    * records an audit row to begin with (unlike `getAnswerById`/`findById`/`listPending`), so there
    * is nothing this tick could over-record and nothing to gate an opening audit write on either —
@@ -293,14 +296,16 @@ export class DocumentsService {
    * without it a client that never disconnects holds the slot forever. Short of either, the
    * connection still stays open until the client disconnects, same as before.
    */
-  streamList(tenantId: string, userId: string): Observable<MessageEvent> {
+  streamList(
+    tenantId: string,
+    userId: string,
+    pagination: PaginationRequestDto,
+  ): Observable<MessageEvent> {
     const documents$: Observable<DocumentsStreamEvent> = timer(
       0,
       DOCUMENTS_STREAM_INTERVAL_MS,
     ).pipe(
-      concatMap(() =>
-        this.list({ skip: DEFAULT_PAGINATION_SKIP, limit: DEFAULT_PAGINATION_LIMIT }, tenantId),
-      ),
+      concatMap(() => this.list(pagination, tenantId)),
       map(({ docs, count }) => ({
         docs: docs.map((doc) => toResponseDto(DocumentResponseDto, doc)),
         count,

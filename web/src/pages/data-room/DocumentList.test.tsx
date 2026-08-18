@@ -408,34 +408,11 @@ describe('DocumentList', () => {
       expect(screen.getByText('Q3 Rent Roll')).toBeInTheDocument();
     });
 
-    it('closes the stream and stops reporting live once paged past page 1', async () => {
-      const fetchMock = vi.fn().mockResolvedValue(
-        jsonResponse({
-          docs: [
-            {
-              id: 'doc-2',
-              title: 'Page Two Doc',
-              sourceKind: 'pdf',
-              mimeType: 'application/pdf',
-              currentVersion: {
-                id: 'v-2',
-                versionNumber: 1,
-                sha256: 'b'.repeat(64),
-                sizeBytes: 200,
-                ingestionStatus: 'completed',
-                createdAt: new Date().toISOString(),
-              },
-              createdAt: new Date().toISOString(),
-            },
-          ],
-          count: 25,
-        }),
-      );
-      vi.stubGlobal('fetch', fetchMock);
-
+    it('opens a fresh stream scoped to the new page when paging past page 1, closing the old one', async () => {
       renderList();
 
       const [firstPageSource] = FakeEventSource.instances;
+      expect(firstPageSource.url).toBe('/api/v1/documents/events?skip=0&limit=20');
       act(() => {
         firstPageSource.emit('documents', {
           docs: [
@@ -463,11 +440,39 @@ describe('DocumentList', () => {
 
       fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 
-      expect(await screen.findByText('Page Two Doc')).toBeInTheDocument();
-      // The SSE stream is not parameterisable to a page, so it disconnects entirely past page 1
-      // rather than keep reporting a "live" status that only holds true for page 1's rows.
+      // Paging changes the stream URL (`skip=20`), which re-triggers `useEventStream`'s connection
+      // effect: the page-1 socket closes and a fresh one opens scoped to the new page — the stream
+      // stays live on every page now, not only the first.
       expect(firstPageSource.closed).toBe(true);
-      expect(FakeEventSource.instances).toHaveLength(1);
+      expect(FakeEventSource.instances).toHaveLength(2);
+      const [, secondPageSource] = FakeEventSource.instances;
+      expect(secondPageSource.url).toBe('/api/v1/documents/events?skip=20&limit=20');
+      expect(secondPageSource.closed).toBe(false);
+
+      act(() => {
+        secondPageSource.emit('documents', {
+          docs: [
+            {
+              id: 'doc-2',
+              title: 'Page Two Doc',
+              sourceKind: 'pdf',
+              mimeType: 'application/pdf',
+              currentVersion: {
+                id: 'v-2',
+                versionNumber: 1,
+                sha256: 'b'.repeat(64),
+                sizeBytes: 200,
+                ingestionStatus: 'completed',
+                createdAt: new Date().toISOString(),
+              },
+              createdAt: new Date().toISOString(),
+            },
+          ],
+          count: 25,
+        });
+      });
+
+      expect(await screen.findByText('Page Two Doc')).toBeInTheDocument();
     });
   });
 });

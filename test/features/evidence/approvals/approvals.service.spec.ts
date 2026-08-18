@@ -185,6 +185,19 @@ describe('ApprovalsService', () => {
         { sort: { createdAt: -1 }, skip: 0, limit: 20 },
       );
     });
+
+    it('should narrow the filter to a single workflowId when given, scoping the pending inbox to one run', async () => {
+      mockApprovalModel.find.mockResolvedValueOnce([]);
+      mockApprovalModel.countDocuments.mockResolvedValueOnce(0);
+
+      await service.peekPending({ skip: 0, limit: 20 }, 'tenant-a', 'wf-1');
+
+      expect(mockApprovalModel.find).toHaveBeenCalledWith(
+        { tenantId: 'tenant-a', state: 'pending', workflowId: 'wf-1' },
+        null,
+        { sort: { createdAt: -1 }, skip: 0, limit: 20 },
+      );
+    });
   });
 
   describe('decide', () => {

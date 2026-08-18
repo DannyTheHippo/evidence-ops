@@ -29,12 +29,13 @@ import {
   SSE_HEARTBEAT_INTERVAL_MS,
   SSE_REAUTH_INTERVAL_MS,
   SSE_STREAM_ERROR_MESSAGE,
+  SSE_STREAM_VIEW_AUDIT_DEDUPE_WINDOW_MS,
 } from '../../../shared/constants/sse.constant';
 import { UserRole } from '../../../shared/enums/user-role.enum';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
-import { reauthTicks$ } from '../../../shared/utils/stream-session.util';
+import { reauthTicks$, shouldRecordStreamView } from '../../../shared/utils/stream-session.util';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import type { AnswerQuestionInput } from '../../../workflows/types';
 import type { AnswerContract, Citation, VerificationReport } from './contracts/answer.contract';
@@ -156,7 +157,7 @@ export class QaService {
    * an audit row per tick (every 1.5s for the life of an open connection) would flood the audit
    * log for what is still, from the caller's perspective, one "viewing an answer" action.
    * `getAnswerById` delegates here so the two paths cannot drift; only it, and `streamAnswer`'s
-   * one-per-open record, ever write the audit row.
+   * deduped opening record, ever write the audit row.
    */
   async peekAnswer(id: string, tenantId: string): Promise<AnswerEnvelope> {
     if (!Types.ObjectId.isValid(id)) {
@@ -211,18 +212,29 @@ export class QaService {
    * `concatMap(peekAnswer)` step below — everything downstream of that point stays the same.
    */
   streamAnswer(id: string, actorId: string, tenantId: string): Observable<MessageEvent> {
-    // One audit row per stream OPEN, not per tick. The initial peek here also gates the audit on
-    // existence — matching `getAnswerById`'s own audit-after-confirmation order — so a stream
-    // opened against an unknown id is never recorded as a view.
+    // At most one audit row per `SSE_STREAM_VIEW_AUDIT_DEDUPE_WINDOW_MS` per (actor, answer) pair,
+    // not one per stream OPEN — a reconnecting client would otherwise flood the audit log with rows
+    // that say nothing new (`shouldRecordStreamView`, `stream-session.util.ts`). The initial peek
+    // here still gates the write on existence — matching `getAnswerById`'s own
+    // audit-after-confirmation order — so a stream opened against an unknown id is never recorded
+    // as a view.
     const opened$ = defer(() => this.peekAnswer(id, tenantId)).pipe(
-      concatMap((answer) =>
-        this.auditService.record({
+      concatMap((answer) => {
+        if (
+          !shouldRecordStreamView(
+            `qa.answer.viewed:${actorId}:${answer.id}`,
+            SSE_STREAM_VIEW_AUDIT_DEDUPE_WINDOW_MS,
+          )
+        ) {
+          return of(undefined);
+        }
+        return this.auditService.record({
           action: 'qa.answer.viewed',
           actorId,
           subject: { entityType: 'Answer', entityId: answer.id },
           tenantId,
-        }),
-      ),
+        });
+      }),
       ignoreElements(),
     );
 

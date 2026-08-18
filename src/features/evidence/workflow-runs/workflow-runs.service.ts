@@ -36,11 +36,12 @@ import {
   SSE_HEARTBEAT_INTERVAL_MS,
   SSE_REAUTH_INTERVAL_MS,
   SSE_STREAM_ERROR_MESSAGE,
+  SSE_STREAM_VIEW_AUDIT_DEDUPE_WINDOW_MS,
 } from '../../../shared/constants/sse.constant';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
-import { reauthTicks$ } from '../../../shared/utils/stream-session.util';
+import { reauthTicks$, shouldRecordStreamView } from '../../../shared/utils/stream-session.util';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { ApprovalsService } from '../approvals/approvals.service';
 import { ApprovalResponseDto } from '../approvals/dtos/response/approval.response.dto';
@@ -143,6 +144,9 @@ export class WorkflowRunsService {
    * delegates here so the two paths cannot drift. Keeps the same live-engine-status fail-open
    * refresh `findById` documented above — the SSE `run` event must match the polled GET
    * byte-for-byte, so this cannot skip that step.
+   *
+   * `streamRun`'s opening record (below) is the other writer of this action, deduped via
+   * `shouldRecordStreamView`.
    */
   async peekRun(id: string, tenantId: string): Promise<WorkflowRunResult> {
     if (!Types.ObjectId.isValid(id)) {
@@ -171,28 +175,53 @@ export class WorkflowRunsService {
    * Polling-on-the-server, deliberately not a MongoDB change stream — see `QaService.streamAnswer`'s
    * identical rejected-alternative note.
    *
-   * Two independent named events on one connection: `run` (this row) and `approvals` (the tenant's
-   * whole pending-approval inbox). The latter is NOT this run's single matched approval —
-   * `WorkflowRunPage` (`web/src/pages/WorkflowRunPage.tsx`) already fetches `getWorkflowRunById` +
-   * `listApprovals()` in parallel and matches the pending approval to this run by `workflowId`
-   * client-side; mirroring that exact request shape here (rather than pre-filtering server-side)
-   * keeps this stream's `approvals` payload byte-identical to what `GET /approvals` returns and
-   * lets the SPA's existing match logic keep working unmodified. `run$` and `approvals$` tick on
-   * independent timers — nothing here audits per tick (`peekRun`/`ApprovalsService.peekPending`
-   * don't), so there is no cost to reading them on separate schedules.
+   * Two independent named events on one connection: `run` (this row) and `approvals` (this run's
+   * own pending approval, if any — scoped by `workflowId` via `ApprovalsService.peekPending`'s
+   * optional third argument, not the tenant's whole pending-approval inbox). Scoping server-side,
+   * rather than shipping the whole inbox for `WorkflowRunPage` to match by `workflowId`
+   * client-side the way it used to, is what closes two things at once: the pagination divergence
+   * this stream used to have from nowhere (an inbox has no "page" of its own to disagree about),
+   * and the wider exposure of naming any run id to see every pending approval in the tenant. A run
+   * whose `workflowId` cannot be resolved (a pre-D3 row minted before the field was threaded
+   * through — see `ApprovalsService.decide`'s identical note) falls back to the unscoped inbox,
+   * since there is no better key to filter by. `run$` and `approvals$` tick on independent timers —
+   * nothing here audits per tick (`peekRun`/`ApprovalsService.peekPending` don't), so there is no
+   * cost to reading them on separate schedules.
    */
   streamRun(id: string, actorId: string, tenantId: string): Observable<MessageEvent> {
-    // One audit row per stream OPEN, not per tick. The initial peek here also gates the audit on
-    // existence — matching `findById`'s own audit-after-confirmation order.
-    const opened$ = defer(() => this.peekRun(id, tenantId)).pipe(
-      concatMap((run) =>
-        this.auditService.record({
+    // Resolved once, lazily, and shared between the opening audit gate and `approvals$`'s scoping
+    // below — both need this run's existence-checked row, but only `workflowId` matters to
+    // `approvals$`, and that field is fixed at creation, so re-reading it every tick would be
+    // wasted work. A plain memoized `Promise`, not a multicast RxJS operator: `concat(opened$,
+    // merge(...))` further down already sequences `opened$` to resolve first, so by the time
+    // `approvals$` subscribes the promise is already settled and this just returns its cached value.
+    let initialRunPromise: Promise<WorkflowRunResult> | undefined;
+    const getInitialRun = (): Promise<WorkflowRunResult> => {
+      initialRunPromise ??= this.peekRun(id, tenantId);
+      return initialRunPromise;
+    };
+
+    // At most one audit row per `SSE_STREAM_VIEW_AUDIT_DEDUPE_WINDOW_MS` per (actor, run) pair, not
+    // one per stream OPEN — see `QaService.streamAnswer`'s identical `shouldRecordStreamView` use
+    // for why. The initial peek here still gates the write on existence — matching `findById`'s own
+    // audit-after-confirmation order.
+    const opened$ = defer(getInitialRun).pipe(
+      concatMap((run) => {
+        if (
+          !shouldRecordStreamView(
+            `workflow-runs.viewed:${actorId}:${run.id}`,
+            SSE_STREAM_VIEW_AUDIT_DEDUPE_WINDOW_MS,
+          )
+        ) {
+          return of(undefined);
+        }
+        return this.auditService.record({
           action: 'workflow-runs.viewed',
           actorId,
           subject: { entityType: 'WorkflowRun', entityId: run.id },
           tenantId,
-        }),
-      ),
+        });
+      }),
       ignoreElements(),
     );
 
@@ -205,22 +234,24 @@ export class WorkflowRunsService {
       map((data): WorkflowRunStreamEvent => ({ type: 'run', data })),
     );
 
-    const approvals$: Observable<WorkflowRunStreamEvent> = timer(
-      0,
-      WORKFLOW_RUN_STREAM_INTERVAL_MS,
-    ).pipe(
-      concatMap(() =>
-        this.approvalsService.peekPending(
-          { skip: DEFAULT_PAGINATION_SKIP, limit: DEFAULT_PAGINATION_LIMIT },
-          tenantId,
+    const approvals$: Observable<WorkflowRunStreamEvent> = defer(getInitialRun).pipe(
+      concatMap((run) =>
+        timer(0, WORKFLOW_RUN_STREAM_INTERVAL_MS).pipe(
+          concatMap(() =>
+            this.approvalsService.peekPending(
+              { skip: DEFAULT_PAGINATION_SKIP, limit: DEFAULT_PAGINATION_LIMIT },
+              tenantId,
+              run.workflowId,
+            ),
+          ),
+          map(({ docs, count }) => ({
+            docs: docs.map((doc) => toResponseDto(ApprovalResponseDto, doc)),
+            count,
+          })),
+          distinctUntilChanged((a, b) => JSON.stringify(a) === JSON.stringify(b)),
+          map((data): WorkflowRunStreamEvent => ({ type: 'approvals', data })),
         ),
       ),
-      map(({ docs, count }) => ({
-        docs: docs.map((doc) => toResponseDto(ApprovalResponseDto, doc)),
-        count,
-      })),
-      distinctUntilChanged((a, b) => JSON.stringify(a) === JSON.stringify(b)),
-      map((data): WorkflowRunStreamEvent => ({ type: 'approvals', data })),
     );
 
     const heartbeat$: Observable<WorkflowRunStreamEvent> = timer(

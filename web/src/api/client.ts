@@ -180,9 +180,15 @@ export function documentVersionContentUrl(versionId: string): string {
 }
 
 // A plain URL builder, not a `request<T>()` call — a browser-native EventSource consumes this
-// href directly, so there is no JSON body for `request<T>()` to parse.
-export function documentEventsUrl(): string {
-  return `${API}/documents/events`;
+// href directly, so there is no JSON body for `request<T>()` to parse. Takes the same `skip`/
+// `limit` as `listDocuments` — the stream mirrors whichever page the caller is on, so the two
+// must always agree on which documents to show.
+export function documentEventsUrl(params?: { skip?: number; limit?: number }): string {
+  const query = new URLSearchParams();
+  if (params?.skip !== undefined) query.set('skip', String(params.skip));
+  if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  const qs = query.toString();
+  return `${API}/documents/events${qs ? `?${qs}` : ''}`;
 }
 
 // What a citation actually points at — the stored evidence_chunks, not a re-parse of the source

@@ -1,7 +1,11 @@
 import { HttpStatus } from '@nestjs/common';
 import { firstValueFrom } from 'rxjs';
 import { StreamConnectionLimitExceededException } from '../../../src/shared/exceptions/stream-connection-limit.exception';
-import { acquireStreamSlot, reauthTicks$ } from '../../../src/shared/utils/stream-session.util';
+import {
+  acquireStreamSlot,
+  reauthTicks$,
+  shouldRecordStreamView,
+} from '../../../src/shared/utils/stream-session.util';
 
 describe('reauthTicks$', () => {
   const session = { userId: 'user-1', tenantId: 'tenant-a' };
@@ -195,5 +199,43 @@ describe('acquireStreamSlot', () => {
       maxConnectionsPerUser: 1,
     });
     release2();
+  });
+});
+
+describe('shouldRecordStreamView', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('should return true the first time a key is seen', () => {
+    expect(shouldRecordStreamView('dedupe-key-a', 1000)).toBe(true);
+  });
+
+  it('should return false for the same key while still inside the window', () => {
+    expect(shouldRecordStreamView('dedupe-key-b', 1000)).toBe(true);
+
+    jest.advanceTimersByTime(999);
+
+    expect(shouldRecordStreamView('dedupe-key-b', 1000)).toBe(false);
+  });
+
+  it('should return true again for the same key once the window has fully elapsed', () => {
+    expect(shouldRecordStreamView('dedupe-key-c', 1000)).toBe(true);
+
+    jest.advanceTimersByTime(1000);
+
+    expect(shouldRecordStreamView('dedupe-key-c', 1000)).toBe(true);
+  });
+
+  it('should track two different keys independently', () => {
+    expect(shouldRecordStreamView('dedupe-key-d1', 1000)).toBe(true);
+    expect(shouldRecordStreamView('dedupe-key-d2', 1000)).toBe(true);
+
+    // 'd1' is still inside its own window; 'd2' being a distinct key must not affect it.
+    expect(shouldRecordStreamView('dedupe-key-d1', 1000)).toBe(false);
   });
 });

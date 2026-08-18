@@ -562,6 +562,45 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       expect(frame.headers['x-accel-buffering']).toBe('no');
       expect(frame.data).toEqual(polled.body);
     });
+
+    // Proves the `approvals` frame is scoped to this run's own `workflowId`, not the tenant's whole
+    // pending inbox — a second pending approval requested by a different workflow must never appear
+    // here, even though `GET /approvals` (unscoped) would return both.
+    it('scopes the approvals frame to this run alone, excluding a pending approval from a different workflow', async () => {
+      const run = await workflowRunModel.create({
+        workflowId: `wf-scope-own-${new Types.ObjectId().toString()}`,
+        status: 'running',
+        tenantId,
+      });
+      const ownApproval = await approvalModel.create({
+        subject: { entityType: 'Conflict', entityId: new Types.ObjectId() },
+        action: 'resolve_conflict',
+        summary: "This run's own pending approval.",
+        workflowId: run.workflowId,
+        state: 'pending',
+        tenantId,
+      });
+      await approvalModel.create({
+        subject: { entityType: 'Conflict', entityId: new Types.ObjectId() },
+        action: 'resolve_conflict',
+        summary: 'A different run entirely.',
+        workflowId: `wf-scope-other-${new Types.ObjectId().toString()}`,
+        state: 'pending',
+        tenantId,
+      });
+
+      const frame = await readSseEvent(
+        app,
+        `/api/v1/workflow-runs/${run._id.toString()}/events`,
+        'approvals',
+        { Cookie: cookie },
+      );
+
+      const body = frame.data as { docs: ApprovalBody[]; count: number };
+      expect(body.count).toBe(1);
+      expect(body.docs).toHaveLength(1);
+      expect(body.docs[0].id).toBe(ownApproval._id.toString());
+    });
   });
 
   describe('GET /workflow-runs', () => {
