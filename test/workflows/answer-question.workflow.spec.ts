@@ -6,7 +6,6 @@ interface ActivityStubs {
   synthesizeAnswer: jest.Mock;
   groundingCheck: jest.Mock;
   persistAnswer: jest.Mock;
-  retrieveEvidenceAgentic: jest.Mock;
 }
 
 interface ProxyActivitiesOptions {
@@ -31,7 +30,6 @@ jest.mock('@temporalio/workflow', () => {
     synthesizeAnswer: jest.fn(),
     groundingCheck: jest.fn(),
     persistAnswer: jest.fn(),
-    retrieveEvidenceAgentic: jest.fn(),
   };
   return {
     activityStubs,
@@ -48,7 +46,7 @@ const { activityStubs } = temporalWorkflowMock;
 // (during the `answerQuestion` import above) and before any `afterEach(jest.resetAllMocks)`
 // wipes `proxyActivities.mock.calls` — a later `describe` block reading `.mock.calls` directly
 // would see an empty array once the first spec's cleanup has run. Order matches the source file's
-// declaration order: retrieval, synthesis, grounding, persist, agentic retrieval.
+// declaration order: retrieval, synthesis, grounding, persist.
 const proxyActivitiesCalls = [...temporalWorkflowMock.proxyActivities.mock.calls];
 
 const input: AnswerQuestionInput = {
@@ -122,10 +120,9 @@ describe('answerQuestion', () => {
   });
 });
 
-describe('answerQuestion retrieval strategy branch', () => {
+describe('answerQuestion retrieval', () => {
   beforeEach(() => {
     activityStubs.retrieveEvidence.mockResolvedValue([{ chunkId: 'chunk-1' }]);
-    activityStubs.retrieveEvidenceAgentic.mockResolvedValue([{ chunkId: 'chunk-2' }]);
     activityStubs.synthesizeAnswer.mockResolvedValue({
       contract: { kind: 'insufficient_evidence', reason: 'none' },
       usage: { promptTokens: 10, completionTokens: 5, costUsd: 0.001 },
@@ -144,60 +141,15 @@ describe('answerQuestion retrieval strategy branch', () => {
     jest.resetAllMocks();
   });
 
-  it('should call retrieveEvidence, unchanged, when retrievalStrategy is absent', async () => {
+  it('should call retrieveEvidence and pass its chunks through to synthesizeAnswer unchanged', async () => {
     await answerQuestion(input);
 
     expect(activityStubs.retrieveEvidence).toHaveBeenCalledWith({
       questionText: input.questionText,
       tenantId: input.tenantId,
     });
-    expect(activityStubs.retrieveEvidenceAgentic).not.toHaveBeenCalled();
-  });
-
-  it("should call retrieveEvidence when retrievalStrategy is explicitly 'single-shot'", async () => {
-    await answerQuestion({ ...input, retrievalStrategy: 'single-shot' });
-
-    expect(activityStubs.retrieveEvidence).toHaveBeenCalled();
-    expect(activityStubs.retrieveEvidenceAgentic).not.toHaveBeenCalled();
-  });
-
-  it("should call retrieveEvidenceAgentic when retrievalStrategy is 'agentic' and actorId/role are both present", async () => {
-    await answerQuestion({
-      ...input,
-      retrievalStrategy: 'agentic',
-      actorId: 'user-1',
-      role: 'member',
-    });
-
-    expect(activityStubs.retrieveEvidenceAgentic).toHaveBeenCalledWith({
-      questionText: input.questionText,
-      tenantId: input.tenantId,
-      actorId: 'user-1',
-      role: 'member',
-    });
-    expect(activityStubs.retrieveEvidence).not.toHaveBeenCalled();
-  });
-
-  // Replay safety: a stale history that predates `actorId`/`role` (or a caller that sets
-  // `retrievalStrategy` without them) must still fall back to the unchanged single-shot path
-  // rather than calling `retrieveEvidenceAgentic` with an incomplete `ToolExecutionContext`.
-  it("should fall back to retrieveEvidence when retrievalStrategy is 'agentic' but actorId/role are absent", async () => {
-    await answerQuestion({ ...input, retrievalStrategy: 'agentic' });
-
-    expect(activityStubs.retrieveEvidence).toHaveBeenCalled();
-    expect(activityStubs.retrieveEvidenceAgentic).not.toHaveBeenCalled();
-  });
-
-  it('should pass agentic retrieval chunks through to synthesizeAnswer unchanged, same as single-shot chunks', async () => {
-    await answerQuestion({
-      ...input,
-      retrievalStrategy: 'agentic',
-      actorId: 'user-1',
-      role: 'admin',
-    });
-
     expect(activityStubs.synthesizeAnswer).toHaveBeenCalledWith(
-      expect.objectContaining({ chunks: [{ chunkId: 'chunk-2' }] }),
+      expect.objectContaining({ chunks: [{ chunkId: 'chunk-1' }] }),
     );
   });
 });
@@ -234,19 +186,5 @@ describe('proxyActivities retry configuration', () => {
   it('should mark a missing tenantId non-retryable for persistAnswer', () => {
     const [persistOptions] = proxyActivitiesCalls[3];
     expect(persistOptions.retry?.nonRetryableErrorTypes).toEqual(['MissingTenantId']);
-  });
-
-  it("should mark a missing tenantId, the same model-spend/schema failures as synthesizeAnswer, and Voyage's deterministic failures non-retryable for retrieveEvidenceAgentic", () => {
-    const [agenticOptions] = proxyActivitiesCalls[4];
-    expect(agenticOptions.retry?.nonRetryableErrorTypes).toEqual([
-      'MissingTenantId',
-      'ModelBudgetExceededError',
-      'UnknownModelPricingError',
-      'ModelSchemaValidationError',
-      'TenantSpendLimitExceededError',
-      'ModelRequestMissingTenantError',
-      'VoyageApiKeyMissingError',
-      'VoyageInvalidResponseError',
-    ]);
   });
 });

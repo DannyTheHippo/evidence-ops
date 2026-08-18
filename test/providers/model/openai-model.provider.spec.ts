@@ -2,36 +2,21 @@ import { z } from 'zod/v4';
 import { ModelBudgetExceededError } from '../../../src/providers/model/errors/model-budget-exceeded.error';
 import { ModelSchemaValidationError } from '../../../src/providers/model/errors/model-schema-validation.error';
 import { OpenAiInvalidResponseError } from '../../../src/providers/model/errors/openai-invalid-response.error';
-import { OpenAiMalformedToolArgumentsError } from '../../../src/providers/model/errors/openai-malformed-tool-arguments.error';
 import { OpenAiRequestFailedError } from '../../../src/providers/model/errors/openai-request-failed.error';
 import { UnknownModelPricingError } from '../../../src/providers/model/errors/unknown-model-pricing.error';
-import type {
-  ModelRequest,
-  ModelToolChoice,
-} from '../../../src/providers/model/model-provider.interface';
+import type { ModelRequest } from '../../../src/providers/model/model-provider.interface';
 import { computeOpenAiCostUsd } from '../../../src/providers/model/openai-pricing.table';
 import {
   OpenAiModelProvider,
   type OpenAiClock,
 } from '../../../src/providers/model/openai-model.provider';
-import { getMockToolRequest } from '../../utils/get-mock-tool-request';
 import { getMockTypedConfig } from '../../utils/get-mock-typed-config';
 
 interface OpenAiRequestBody {
   readonly model: string;
-  readonly messages: {
-    role: string;
-    content: string;
-    tool_calls?: { id: string; type: string; function: { name: string; arguments: string } }[];
-    tool_call_id?: string;
-  }[];
+  readonly messages: { role: string; content: string }[];
   readonly max_completion_tokens: number;
   readonly response_format?: { type: string; json_schema: { name: string; schema: unknown } };
-  readonly tools?: {
-    type: string;
-    function: { name: string; description: string; parameters: unknown };
-  }[];
-  readonly tool_choice?: unknown;
 }
 
 /** Full `openai` namespace defaults for a configured provider; the default mock model (`gpt-5.1`)
@@ -56,38 +41,6 @@ function buildResponse(
 ): Response {
   const body = {
     choices: [{ message: { content }, finish_reason: finishReason }],
-    usage: { prompt_tokens: 10, completion_tokens: 5, ...usage },
-  };
-
-  return {
-    ok: true,
-    status: 200,
-    headers: { get: () => null },
-    json: () => Promise.resolve(body),
-    text: () => Promise.resolve(JSON.stringify(body)),
-  } as unknown as Response;
-}
-
-/** A response carrying a `tool_calls` array instead of text content — the shape a `finish_reason:
- * 'tool_calls'` completion returns. */
-function buildToolCallResponse(
-  toolCalls: readonly { id: string; name: string; arguments: string }[],
-  usage: OpenAiUsageOverrides = {},
-): Response {
-  const body = {
-    choices: [
-      {
-        message: {
-          content: null,
-          tool_calls: toolCalls.map((call) => ({
-            id: call.id,
-            type: 'function',
-            function: { name: call.name, arguments: call.arguments },
-          })),
-        },
-        finish_reason: 'tool_calls',
-      },
-    ],
     usage: { prompt_tokens: 10, completion_tokens: 5, ...usage },
   };
 
@@ -523,167 +476,5 @@ describe('OpenAiModelProvider', () => {
     // Initial attempt plus the two transport retries this provider allows, mirroring the
     // Anthropic SDK's own default retry count.
     expect(fetchMock).toHaveBeenCalledTimes(3);
-  });
-
-  describe('tool calls', () => {
-    const toolRequest: ModelRequest<undefined> = {
-      ...baseRequest,
-      tools: [
-        {
-          name: 'lookup_price',
-          description: 'Looks up the current price for a stock ticker.',
-          inputSchema: z.object({ ticker: z.string() }),
-        },
-      ],
-      toolChoice: 'auto',
-    };
-
-    it('should send tools mapped to {type: "function", function: {name, description, parameters}}', async () => {
-      fetchMock.mockResolvedValueOnce(buildResponse('Paris'));
-      const provider = buildProvider();
-
-      await provider.generate(toolRequest);
-
-      const body = lastRequestBody();
-      expect(body.tools).toHaveLength(1);
-      expect(body.tools?.[0]).toMatchObject({
-        type: 'function',
-        function: {
-          name: 'lookup_price',
-          description: 'Looks up the current price for a stock ticker.',
-        },
-      });
-      expect(body.tools?.[0].function.parameters).toMatchObject({
-        type: 'object',
-        properties: { ticker: { type: 'string' } },
-      });
-    });
-
-    it.each<[ModelToolChoice, unknown]>([
-      ['auto', 'auto'],
-      ['none', 'none'],
-      ['required', 'required'],
-      [{ tool: 'lookup_price' }, { type: 'function', function: { name: 'lookup_price' } }],
-    ])('should map ModelToolChoice %j to OpenAI tool_choice %j', async (toolChoice, expected) => {
-      fetchMock.mockResolvedValueOnce(buildResponse('Paris'));
-      const provider = buildProvider();
-
-      await provider.generate({ ...toolRequest, toolChoice });
-
-      const body = lastRequestBody();
-      expect(body.tool_choice).toEqual(expected);
-    });
-
-    it('should map a tool_calls completion into ModelResult.toolCalls with input as a parsed object', async () => {
-      fetchMock.mockResolvedValueOnce(
-        buildToolCallResponse([
-          { id: 'call_1', name: 'lookup_price', arguments: '{"ticker":"ACME"}' },
-        ]),
-      );
-      const provider = buildProvider();
-
-      const result = await provider.generate(toolRequest);
-
-      expect(result.stopReason).toBe('tool_use');
-      expect(result.toolCalls).toEqual([
-        { id: 'call_1', name: 'lookup_price', input: { ticker: 'ACME' } },
-      ]);
-    });
-
-    it('should throw OpenAiMalformedToolArgumentsError when a tool call arguments string does not parse as JSON', async () => {
-      fetchMock.mockResolvedValueOnce(
-        buildToolCallResponse([{ id: 'call_1', name: 'lookup_price', arguments: 'not json' }]),
-      );
-      const provider = buildProvider();
-
-      const error = await provider.generate(toolRequest).catch((e: unknown) => e);
-
-      expect(error).toBeInstanceOf(OpenAiMalformedToolArgumentsError);
-      expect((error as OpenAiMalformedToolArgumentsError).toolCallId).toBe('call_1');
-      expect((error as OpenAiMalformedToolArgumentsError).rawArguments).toBe('not json');
-    });
-
-    it('should map finish_reason to end_turn for a normal completion once tools are offered, with no toolCalls', async () => {
-      fetchMock.mockResolvedValueOnce(buildResponse('Paris', {}, 'stop'));
-      const provider = buildProvider();
-
-      const result = await provider.generate(toolRequest);
-
-      expect(result.stopReason).toBe('end_turn');
-      expect(result.toolCalls).toBeUndefined();
-    });
-
-    it('should leave stopReason and toolCalls unset on a tool-free request — regression guard for existing callers', async () => {
-      fetchMock.mockResolvedValueOnce(buildResponse('Paris'));
-      const provider = buildProvider();
-
-      const result = await provider.generate(baseRequest);
-
-      expect(result.stopReason).toBeUndefined();
-      expect(result.toolCalls).toBeUndefined();
-    });
-
-    it('should send an assistant message with tool_calls and a role: "tool" message carrying tool_call_id', async () => {
-      fetchMock.mockResolvedValueOnce(buildResponse('259.75 USD'));
-      const provider = buildProvider();
-
-      await provider.generate({
-        ...toolRequest,
-        messages: [
-          ...toolRequest.messages,
-          {
-            role: 'assistant',
-            content: '',
-            toolCalls: [{ id: 'call_1', name: 'lookup_price', input: { ticker: 'ACME' } }],
-          },
-          { role: 'tool', content: '259.75 USD', toolCallId: 'call_1' },
-        ],
-      });
-
-      const body = lastRequestBody();
-      expect(body.messages.at(-2)).toEqual({
-        role: 'assistant',
-        content: '',
-        tool_calls: [
-          {
-            id: 'call_1',
-            type: 'function',
-            function: { name: 'lookup_price', arguments: '{"ticker":"ACME"}' },
-          },
-        ],
-      });
-      expect(body.messages.at(-1)).toEqual({
-        role: 'tool',
-        content: '259.75 USD',
-        tool_call_id: 'call_1',
-      });
-    });
-
-    it('should send the same neutral tool request in OpenAI tools/tool_choice/tool_calls shape', async () => {
-      fetchMock.mockResolvedValueOnce(buildResponse('259.75 USD'));
-      const provider = buildProvider();
-
-      await provider.generate(getMockToolRequest());
-
-      const body = lastRequestBody();
-      expect(body.tool_choice).toBe('auto');
-      expect(body.tools?.[0].function.name).toBe('lookup_price');
-      expect(body.messages[1]).toEqual({
-        role: 'assistant',
-        content: '',
-        tool_calls: [
-          {
-            id: 'call_1',
-            type: 'function',
-            function: { name: 'lookup_price', arguments: '{"ticker":"ACME"}' },
-          },
-        ],
-      });
-      expect(body.messages[2]).toEqual({
-        role: 'tool',
-        content: '259.75 USD',
-        tool_call_id: 'call_1',
-      });
-    });
   });
 });

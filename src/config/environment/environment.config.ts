@@ -106,15 +106,6 @@ export const environmentSchema = z
 
     RETRIEVAL_FUSION: z.enum(['server', 'app']).default('server'),
     RETRIEVAL_LIMIT: zNum(12),
-    // 'single-shot' keeps today's one-query-one-answer path; 'agentic' lets the model iterate
-    // (search, inspect, search again) before synthesis runs. Defaults to the unchanged path so no
-    // deployment picks up the new loop without opting in.
-    RETRIEVAL_STRATEGY: z.enum(['single-shot', 'agentic']).default('single-shot'),
-
-    // Hard caps on the agentic retrieval loop — reached regardless of what the model would still
-    // like to search, so a stuck or adversarial loop cannot run indefinitely or unboundedly.
-    AGENTIC_MAX_ITERATIONS: zNum(8),
-    AGENTIC_MAX_COST_USD: zNum(1),
 
     EXTRACTION_CHUNK_CONCURRENCY: zNum(2),
 
@@ -228,11 +219,6 @@ export const environmentSchema = z
       retrieval: {
         fusion: e.RETRIEVAL_FUSION,
         limit: e.RETRIEVAL_LIMIT,
-        strategy: e.RETRIEVAL_STRATEGY,
-      },
-      agenticRetrieval: {
-        maxIterations: e.AGENTIC_MAX_ITERATIONS,
-        maxCostUsd: e.AGENTIC_MAX_COST_USD,
       },
       telemetry: {
         otlpEndpoint: e.OTEL_EXPORTER_OTLP_ENDPOINT,
@@ -269,7 +255,6 @@ export type OpenAiConfig = EnvironmentConfig['openai'];
 export type VoyageConfig = EnvironmentConfig['voyage'];
 export type TemporalConfig = EnvironmentConfig['temporal'];
 export type RetrievalConfig = EnvironmentConfig['retrieval'];
-export type AgenticRetrievalConfig = EnvironmentConfig['agenticRetrieval'];
 export type TelemetryConfig = EnvironmentConfig['telemetry'];
 export type SourcesConfig = EnvironmentConfig['sources'];
 export type ExtractionConfig = EnvironmentConfig['extraction'];

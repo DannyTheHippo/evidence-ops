@@ -13,10 +13,6 @@ import type { ToolExecutionContext, ToolExecutionStep } from './types/tool-defin
  */
 const STEP_MINIMUM_ROLE: Readonly<Record<string, UserRole>> = {
   'qa-answer': UserRole.Member,
-  // Read-only evidence search performed on behalf of a user who can already ask a question —
-  // granting it more than `qa-answer` requires would gate the same caller's own tool calls behind
-  // a role they don't need to invoke the question in the first place.
-  'agentic-retrieval': UserRole.Member,
   'data-room-export': UserRole.Admin,
   // `search_evidence`/`get_answer` over MCP (`src/mcp/mcp-tools.ts`) — both read-only and scoped
   // to the caller's own tenant by the verified PAT's `context.tenantId`, the same floor as asking

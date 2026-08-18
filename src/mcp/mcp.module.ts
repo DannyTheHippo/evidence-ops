@@ -20,14 +20,13 @@ import { PatTokenVerifier } from './pat-token.verifier';
  *
  * `ApiKeysModule` supplies `TOKEN_VERIFIER` (`PatTokenVerifier`'s dependency). `QaModule` supplies
  * `EvidenceRetrievalService` and `QaService`; `ConflictsModule` supplies `ConflictsService` —
- * together the three tool handlers this surface registers. Like `QaModule` itself, this module
- * re-provides `ToolExecutorService` **and** `TOOL_AUTHZ_HOOK` together rather than only rebinding
- * the token: Nest resolves a provider's constructor dependencies in the module that declares the
- * provider, so declaring only the binding here would still hand `McpServerService` the instance
- * `QaModule` constructed — bound to `QaModule`'s own `StepPolicyAuthzHook`, not a defect, but a
- * second, independent `ToolExecutorService` instance (own registry) is what this surface's own
- * `mcp-read`/`mcp-mutate` steps need. `AuthzModule`'s `DenyAllAuthzHook` default is untouched by
- * either binding.
+ * together the three tool handlers this surface registers. This module re-provides
+ * `ToolExecutorService` **and** `TOOL_AUTHZ_HOOK` together rather than only rebinding the token:
+ * Nest resolves a provider's constructor dependencies in the module that declares the provider, so
+ * declaring only the binding here would still hand `McpServerService` whatever instance a
+ * different module constructed. Declaring both directly here gives this module its own instance,
+ * bound to its own `StepPolicyAuthzHook`, with its own registry for this surface's `mcp-read`/
+ * `mcp-mutate` steps. `AuthzModule`'s `DenyAllAuthzHook` default is untouched by this binding.
  */
 @Module({
   imports: [

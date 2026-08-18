@@ -9,24 +9,23 @@ for what is deliberately not built.
 
 There is one compose file, `docker-compose.yml`, and one env file, `.env`. `.env` is short by
 design: the secrets (`JWT_SECRET`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `VOYAGE_API_KEY`), the
-two spend ceilings that bound what those keys can spend (`MODEL_SPEND_DAILY_LIMIT_USD`,
-`AGENTIC_MAX_COST_USD`), and `MODEL_PROVIDER`. `.env.example` is the copy-and-fill reference and
-lists exactly that set. `api`, `worker` and `mcp` each load `.env` with `required: false`, so a
-missing file does not fail `up`; the application's own config validation catches what actually
-matters (below).
+one spend ceiling that bounds what those keys can spend (`MODEL_SPEND_DAILY_LIMIT_USD`), and
+`MODEL_PROVIDER`. `.env.example` is the copy-and-fill reference and lists exactly that set. `api`,
+`worker` and `mcp` each load `.env` with `required: false`, so a missing file does not fail `up`;
+the application's own config validation catches what actually matters (below).
 
 Every non-secret knob the stack runs under is declared in `docker-compose.yml` itself, in the
 top-level `x-app-environment` anchor merged into all three application services, with worker-only
-knobs (Voyage embedding settings, agentic iteration cap, extraction concurrency, inbox path, source
-sync interval) added on `worker` and MCP-only knobs on `mcp`. Most use `${VAR:-default}`, so an
-operator overrides from the shell without editing the file.
+knobs (Voyage embedding settings, extraction concurrency, inbox path, source sync interval) added
+on `worker` and MCP-only knobs on `mcp`. Most use `${VAR:-default}`, so an operator overrides from
+the shell without editing the file.
 
 Two mechanics decide which value a container actually sees, and they point in opposite directions:
 
 - An inline `environment:` value **always beats** `env_file`. That is why the knobs live in compose
-  and not in `.env` — and equally why the two spend ceilings are deliberately **absent** from
-  compose. Declaring a ceiling inline would silently override the one an operator set in `.env`,
-  which is the opposite of what a ceiling is for.
+  and not in `.env` — and equally why the spend ceiling is deliberately **absent** from compose.
+  Declaring it inline would silently override the one an operator set in `.env`, which is the
+  opposite of what a ceiling is for.
 - Compose also reads `.env` when interpolating `${VAR:-default}`. For every knob written in that
   form, a `.env` entry does not lose to the inline value — it *becomes* it. A stray `NODE_ENV` or
   `MONGO_HOST_PORT` line in `.env` therefore changes the deployment, quietly. Keep the file to the

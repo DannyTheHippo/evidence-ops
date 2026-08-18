@@ -1,10 +1,7 @@
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { z } from 'zod';
-import {
-  AGENTIC_RETRIEVAL_STEP,
-  SEARCH_EVIDENCE_TOOL_NAME,
-} from '../../../../src/features/evidence/qa/agentic-retrieval-tools';
+import { SEARCH_EVIDENCE_TOOL_NAME } from '../../../../src/features/evidence/retrieval/evidence-tools';
 import { TOOL_AUTHZ_HOOK } from '../../../../src/features/platform/authz/authz-hook.interface';
 import { MCP_MUTATE_STEP, MCP_READ_STEP } from '../../../../src/mcp/mcp-tools';
 import { StepPolicyAuthzHook } from '../../../../src/features/platform/authz/step-policy.authz-hook';
@@ -100,26 +97,6 @@ describe('StepPolicyAuthzHook', () => {
         allowed: false,
         reason: "role 'superadmin' is not a recognized role; refusing 'echo' by default",
       });
-    });
-
-    it('should allow the agentic-retrieval step for a member — the same minimum qa-answer grants', () => {
-      const decision = hook.authorize({
-        step: AGENTIC_RETRIEVAL_STEP,
-        toolName: SEARCH_EVIDENCE_TOOL_NAME,
-        context: buildContext(UserRole.Member),
-      });
-
-      expect(decision).toEqual({ allowed: true });
-    });
-
-    it('should allow the agentic-retrieval step for an admin', () => {
-      const decision = hook.authorize({
-        step: AGENTIC_RETRIEVAL_STEP,
-        toolName: SEARCH_EVIDENCE_TOOL_NAME,
-        context: buildContext(UserRole.Admin),
-      });
-
-      expect(decision).toEqual({ allowed: true });
     });
 
     it('should allow the mcp-read step for a member — the same minimum qa-answer grants', () => {
@@ -248,11 +225,11 @@ describe('StepPolicyAuthzHook', () => {
       expect(result).toEqual({ kind: 'executed', result: 'should never run' });
     });
 
-    // The exact shape `QaModule` presents in production (see its own doc comment): the
-    // `AGENTIC_RETRIEVAL_STEP` constant and `SEARCH_EVIDENCE_TOOL_NAME`, not a stand-in tool name,
-    // so this pins the map-key/step-constant coupling `STEP_MINIMUM_ROLE` and `AGENTIC_RETRIEVAL_STEP`
-    // share across their two files.
-    it('should execute search_evidence on the agentic-retrieval step for a member — the minimum qa-answer requires', async () => {
+    it('should execute search_evidence on the qa-answer step for a member — the minimum that step requires', async () => {
+      const step: ToolExecutionStep = {
+        stepId: 'qa-answer',
+        allowedTools: [SEARCH_EVIDENCE_TOOL_NAME],
+      };
       toolExecutor.registerTool({
         name: SEARCH_EVIDENCE_TOOL_NAME,
         argsSchema: z.object({ query: z.string().min(1) }),
@@ -260,7 +237,7 @@ describe('StepPolicyAuthzHook', () => {
       });
 
       const result = await toolExecutor.execute({
-        step: AGENTIC_RETRIEVAL_STEP,
+        step,
         toolName: SEARCH_EVIDENCE_TOOL_NAME,
         rawArgs: { query: 'cap rate' },
         context: buildContext(UserRole.Member),

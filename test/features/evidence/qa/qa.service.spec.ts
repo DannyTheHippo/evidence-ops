@@ -3,7 +3,6 @@ import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { Types } from 'mongoose';
-import { TypedConfigService } from '../../../../src/config/environment/typed-config.service';
 import { Answer } from '../../../../src/database/schemas/evidence/answer/answer.schema';
 import { AnswerNotFoundException } from '../../../../src/features/evidence/qa/exceptions/qa.exception';
 import { ANSWER_STREAM_INTERVAL_MS } from '../../../../src/features/evidence/qa/qa.constant';
@@ -18,7 +17,6 @@ import { AuditService } from '../../../../src/shared/services/audit/audit.servic
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
 import { getMockModel } from '../../../utils/get-mock-model';
-import { getMockTypedConfig } from '../../../utils/get-mock-typed-config';
 
 describe('QaService', () => {
   let service: QaService;
@@ -33,7 +31,6 @@ describe('QaService', () => {
         QaService,
         { provide: getModelToken(Answer.name), useValue: mockAnswerModel },
         { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
-        { provide: TypedConfigService, useValue: getMockTypedConfig() },
         { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: mockLogger },
       ],
@@ -47,7 +44,7 @@ describe('QaService', () => {
   });
 
   describe('startQuestion', () => {
-    it('should create a queued Answer, start the workflow with the default single-shot retrieval strategy, and record an audit event', async () => {
+    it('should create a queued Answer, start the workflow, and record an audit event', async () => {
       const answerId = new Types.ObjectId();
       const actorId = new Types.ObjectId().toString();
       mockAnswerModel.create.mockResolvedValueOnce({ _id: answerId, runStatus: 'queued' });
@@ -70,9 +67,6 @@ describe('QaService', () => {
         answerId: answerId.toString(),
         questionText: 'What is the cap rate?',
         tenantId: 'tenant-a',
-        retrievalStrategy: 'single-shot',
-        actorId,
-        role: UserRole.Member,
       });
       expect(mockAuditService.record).toHaveBeenCalledWith({
         action: 'qa.question.started',
@@ -81,46 +75,6 @@ describe('QaService', () => {
         tenantId: 'tenant-a',
       });
       expect(result).toEqual({ id: answerId.toString(), runStatus: 'queued' });
-    });
-
-    // `config.retrieval.strategy` is read once, here, and passed through verbatim — never inside
-    // the workflow (see `QaService.startQuestion`'s own doc comment) — so an `'agentic'` config
-    // reaches `workflowEngine.start` unchanged, alongside the caller's own `actorId`/`role`.
-    it("should pass an 'agentic' config.retrieval.strategy through to the workflow input", async () => {
-      const agenticModule: TestingModule = await Test.createTestingModule({
-        providers: [
-          QaService,
-          { provide: getModelToken(Answer.name), useValue: mockAnswerModel },
-          { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
-          {
-            provide: TypedConfigService,
-            useValue: getMockTypedConfig({
-              retrieval: { fusion: 'server', limit: 12, strategy: 'agentic' },
-            }),
-          },
-          { provide: AuditService, useValue: mockAuditService },
-          { provide: AppLogger, useValue: mockLogger },
-        ],
-      }).compile();
-      const agenticService = agenticModule.get<QaService>(QaService);
-
-      const answerId = new Types.ObjectId();
-      const actorId = new Types.ObjectId().toString();
-      mockAnswerModel.create.mockResolvedValueOnce({ _id: answerId, runStatus: 'queued' });
-      mockWorkflowEngine.start.mockResolvedValueOnce({ id: 'wf-1', status: 'running' });
-      mockAuditService.record.mockResolvedValueOnce(undefined);
-
-      await agenticService.startQuestion({
-        questionText: 'What is the cap rate?',
-        actorId,
-        role: UserRole.Admin,
-        tenantId: 'tenant-a',
-      });
-
-      expect(mockWorkflowEngine.start).toHaveBeenCalledWith(
-        'answerQuestion',
-        expect.objectContaining({ retrievalStrategy: 'agentic', actorId, role: UserRole.Admin }),
-      );
     });
   });
 

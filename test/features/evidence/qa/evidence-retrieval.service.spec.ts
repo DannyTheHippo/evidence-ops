@@ -41,7 +41,7 @@ describe('EvidenceRetrievalService', () => {
     retrievalOverrides: Partial<ReturnType<typeof getMockTypedConfig>['retrieval']> = {},
   ): Promise<EvidenceRetrievalService> => {
     const config = getMockTypedConfig({
-      retrieval: { fusion: 'server', limit: 12, strategy: 'single-shot', ...retrievalOverrides },
+      retrieval: { fusion: 'server', limit: 12, ...retrievalOverrides },
     });
 
     const module: TestingModule = await Test.createTestingModule({

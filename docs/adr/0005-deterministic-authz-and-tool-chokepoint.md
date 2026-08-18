@@ -1,10 +1,10 @@
 # ADR-0005 — Deterministic authorization behind one tool chokepoint
 
 - **Status:** Accepted — `ToolExecutorService` implemented, unit-tested to 100% branch coverage,
-  exercised by the canary security suite, and **wired to two production callers**: the agentic
-  retrieval loop (`src/features/evidence/qa/agentic-retrieval.service.ts`) and the MCP surface
-  (`src/mcp/`). `DenyAllAuthzHook` remains the default binding; a module opts into
-  `StepPolicyAuthzHook` by re-providing the service and the hook together — see ADR-0015
+  exercised by the canary security suite, and **wired to one production caller**: the MCP surface
+  (`McpServerService`, `src/mcp/`), the only class in the codebase that injects it. `DenyAllAuthzHook`
+  remains the default binding; a module opts into `StepPolicyAuthzHook` by re-providing the service
+  and the hook together — see ADR-0016
 - **Date:** 2026-08-10
 - **Supersedes:** —
 

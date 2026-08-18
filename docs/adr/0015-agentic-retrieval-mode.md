@@ -1,9 +1,17 @@
 # ADR-0015 — Agentic retrieval mode: the loop gathers, it never answers
 
-- **Status:** Accepted — `AgenticRetrievalService` implemented, wired into `answerQuestion` behind
-  `input.retrievalStrategy === 'agentic'`, unit-tested including the fabrication-resistance test
-  described below; default deployment behavior is unchanged (`RETRIEVAL_STRATEGY` defaults to
-  `'single-shot'`)
+- **Status:** Superseded (2026-08-18) — `AgenticRetrievalService`, the `retrieveEvidenceAgentic`
+  activity, the `answer-question` workflow's strategy branch, and the config vars
+  `RETRIEVAL_STRATEGY` / `AGENTIC_MAX_ITERATIONS` / `AGENTIC_MAX_COST_USD` are removed from the
+  codebase. Two reasons: the mode duplicates a capability an enterprise buyer can already purchase
+  (Claude Enterprise, Hebbia), and with the loop gone the model-side tool-calling plumbing it alone
+  exercised (`ModelRequest.tools`, `ModelResult.toolCalls`/`stopReason`, the `'tool'` message role,
+  both vendor tool-mapping paths) had zero remaining production callers. `searchEvidenceToolDefinition`
+  and `buildSearchEvidenceTool` survive the removal, relocated to
+  `src/features/evidence/retrieval/evidence-tools.ts`, where they still serve the MCP surface
+  (ADR-0016) — this ADR's design rationale and the three config defaults below are kept as the
+  historical record of a mechanism that shipped, was verified safe, and was later decided not worth
+  the standing maintenance cost.
 - **Date:** 2026-08-17
 - **Supersedes:** —
 

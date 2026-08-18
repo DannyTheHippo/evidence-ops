@@ -25,7 +25,6 @@ export const getMockTypedConfig = (
     voyage: config.voyage,
     temporal: config.temporal,
     retrieval: config.retrieval,
-    agenticRetrieval: config.agenticRetrieval,
     telemetry: config.telemetry,
     sources: config.sources,
     extraction: config.extraction,

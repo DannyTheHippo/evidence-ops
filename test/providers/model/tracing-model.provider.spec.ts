@@ -167,42 +167,4 @@ describe('TracingModelProvider', () => {
     const span = onlySpan();
     expect(JSON.stringify({ attributes: span.attributes })).not.toContain(SECRET_PROMPT);
   });
-
-  it('should record tool-call count and names on the span when the result carries tool calls', async () => {
-    const provider = new TracingModelProvider(inner, telemetry, false);
-    inner.enqueueToolCall([
-      { id: 'call_1', name: 'lookup', input: { id: '1' } },
-      { id: 'call_2', name: 'search', input: { query: 'lease term' } },
-    ]);
-
-    await provider.generate(request);
-    const span = onlySpan();
-
-    expect(span.attributes['evidence.tool_call.count']).toBe(2);
-    expect(span.attributes['evidence.tool_call.names']).toEqual(['lookup', 'search']);
-  });
-
-  it('should not record tool-call attributes when the result carries no tool calls', async () => {
-    const provider = new TracingModelProvider(inner, telemetry, false);
-    inner.enqueueResult({ output: SECRET_COMPLETION });
-
-    await provider.generate(request);
-    const span = onlySpan();
-
-    expect(span.attributes['evidence.tool_call.count']).toBeUndefined();
-    expect(span.attributes['evidence.tool_call.names']).toBeUndefined();
-  });
-
-  it('should never attach a tool call input to a span, even with capture on', async () => {
-    // `input` is model-generated content reaching the trust boundary, same class of risk as
-    // prompt/completion text — only `id`/`name` are developer-defined identifiers safe to trace.
-    const SECRET_TOOL_INPUT = 'CANARY-TOOL-INPUT-must-never-be-traced';
-    const provider = new TracingModelProvider(inner, telemetry, true);
-    inner.enqueueToolCall([{ id: 'call_1', name: 'lookup', input: { id: SECRET_TOOL_INPUT } }]);
-
-    await provider.generate(request);
-    const span = onlySpan();
-
-    expect(JSON.stringify(span.attributes)).not.toContain(SECRET_TOOL_INPUT);
-  });
 });

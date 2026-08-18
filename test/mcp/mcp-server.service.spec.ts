@@ -5,13 +5,12 @@ import { Test } from '@nestjs/testing';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { TypedConfigService } from '../../src/config/environment/typed-config.service';
 import { ConflictsService } from '../../src/features/evidence/conflicts/conflicts.service';
-import {
-  FETCH_CHUNKS_TOOL_NAME,
-  SEARCH_EVIDENCE_TOOL_NAME,
-  searchEvidenceToolDefinition,
-} from '../../src/features/evidence/qa/agentic-retrieval-tools';
 import { EvidenceRetrievalService } from '../../src/features/evidence/qa/evidence-retrieval.service';
 import { QaService } from '../../src/features/evidence/qa/qa.service';
+import {
+  SEARCH_EVIDENCE_TOOL_NAME,
+  searchEvidenceToolDefinition,
+} from '../../src/features/evidence/retrieval/evidence-tools';
 import {
   TOKEN_VERIFIER,
   type TokenVerifier,
@@ -199,7 +198,7 @@ describe('McpServerService', () => {
         required: ['answerId'],
         // Advertised strictness matches what `ToolExecutorService.registerTool` actually
         // enforces (`applyStrictRecursively`) — see `mcp-tools.ts`'s doc comment on why this
-        // schema, unlike its `agentic-retrieval-tools.ts` sibling, calls `.strict()`.
+        // schema, unlike its `evidence-tools.ts` sibling, calls `.strict()`.
         additionalProperties: false,
       });
       expect(Object.keys(getAnswerSchema.properties ?? {})).toEqual(['answerId']);
@@ -247,20 +246,18 @@ describe('McpServerService', () => {
     });
 
     // A tool description is the only instruction an MCP client gets about what a call returns, and
-    // this surface's `search_evidence` returns something different from the agentic loop's: full
-    // chunk text, with no `fetch_chunks` to follow up through (neither registered here nor allowed
-    // by `MCP_READ_STEP`, asserted above). Advertising the loop's own description would tell a
-    // client to call a tool this process does not have — hence `mcpSearchEvidenceToolDefinition`.
-    it('should advertise a search_evidence description that promises no fetch step this surface lacks', async () => {
+    // this surface's `search_evidence` returns something different from the shared base
+    // definition's own description: full chunk text rather than a short snippet — hence
+    // `mcpSearchEvidenceToolDefinition` overriding `description` while reusing everything else.
+    it('should advertise a search_evidence description that returns full chunk text', async () => {
       const { service } = await buildHarness();
       const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
 
       const { tools } = await client.listTools();
 
       const searchEvidence = tools.find((tool) => tool.name === SEARCH_EVIDENCE_TOOL_NAME);
-      expect(searchEvidence?.description).not.toContain(FETCH_CHUNKS_TOOL_NAME);
       expect(searchEvidence?.description).toContain('in full');
-      expect(searchEvidenceToolDefinition.description).toContain(FETCH_CHUNKS_TOOL_NAME);
+      expect(searchEvidenceToolDefinition.description).not.toContain('in full');
     });
   });
 

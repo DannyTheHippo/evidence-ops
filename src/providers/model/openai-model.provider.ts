@@ -1,8 +1,7 @@
 import { Injectable, Optional } from '@nestjs/common';
-import { toJSONSchema, z } from 'zod/v4';
+import { z } from 'zod/v4';
 import { TypedConfigService } from '../../config/environment/typed-config.service';
 import { OpenAiInvalidResponseError } from './errors/openai-invalid-response.error';
-import { OpenAiMalformedToolArgumentsError } from './errors/openai-malformed-tool-arguments.error';
 import { OpenAiRequestFailedError } from './errors/openai-request-failed.error';
 import { ModelBudgetExceededError } from './errors/model-budget-exceeded.error';
 import { ModelSchemaValidationError } from './errors/model-schema-validation.error';
@@ -14,10 +13,6 @@ import type {
   ModelProviderInfo,
   ModelRequest,
   ModelResult,
-  ModelStopReason,
-  ModelToolCall,
-  ModelToolChoice,
-  ModelToolDefinition,
   ModelUsage,
 } from './model-provider.interface';
 import {
@@ -28,7 +23,6 @@ import {
 import { computeOpenAiCostUsd, OPENAI_PRICING } from './openai-pricing.table';
 import {
   toOpenAiStructuredOutputFormat,
-  withoutSchemaKeyword,
   type OpenAiStructuredOutputFormat,
 } from './to-openai-structured-output.util';
 
@@ -43,38 +37,10 @@ const MAX_TRANSPORT_RETRIES = 2;
 const RETRY_BASE_DELAY_MS = 1_000;
 const RETRY_MAX_DELAY_MS = 30_000;
 
-interface OpenAiToolCall {
-  readonly id: string;
-  readonly type: 'function';
-  readonly function: { readonly name: string; readonly arguments: string };
-}
-
 interface OpenAiChatMessage {
-  readonly role: 'system' | 'user' | 'assistant' | 'tool';
+  readonly role: 'system' | 'user' | 'assistant';
   readonly content: string;
-  /** Only meaningful on an `'assistant'` message — mirrors `ModelMessage.toolCalls`. */
-  readonly tool_calls?: readonly OpenAiToolCall[];
-  /** Only meaningful on a `'tool'` message: the `OpenAiToolCall.id` this result answers. */
-  readonly tool_call_id?: string;
 }
-
-interface OpenAiToolDefinition {
-  readonly type: 'function';
-  readonly function: {
-    readonly name: string;
-    readonly description: string;
-    readonly parameters: Record<string, unknown>;
-  };
-}
-
-type OpenAiToolChoice =
-  'auto' | 'none' | 'required' | { type: 'function'; function: { name: string } };
-
-const openAiToolCallSchema = z.object({
-  id: z.string(),
-  type: z.literal('function'),
-  function: z.object({ name: z.string(), arguments: z.string() }),
-});
 
 const openAiUsageSchema = z.object({
   prompt_tokens: z.number(),
@@ -88,15 +54,11 @@ const openAiChatCompletionResponseSchema = z.object({
   choices: z
     .array(
       z.object({
-        // `content` is `null` on a tool-call completion — the model produced a `tool_calls`
-        // array instead of text; `extractOutput` below coalesces that to `''`.
+        // Nullable defensively — `extractOutput` below coalesces a `null` content to `''` rather
+        // than throw, since a self-hosted server's exact null-vs-absent behaviour is not pinned.
         message: z.object({
           content: z.string().nullable().optional(),
-          tool_calls: z.array(openAiToolCallSchema).optional(),
         }),
-        // Absent from a self-hosted server response that skips it; `stopReason` on `ModelResult`
-        // is then correctly left unset rather than guessed.
-        finish_reason: z.string().optional(),
       }),
     )
     .min(1),
@@ -119,26 +81,6 @@ const REAL_CLOCK: OpenAiClock = {
 };
 
 function toOpenAiMessage(message: ModelMessage): OpenAiChatMessage {
-  if (message.role === 'tool') {
-    if (!message.toolCallId) {
-      throw new Error(
-        "A 'tool'-role ModelMessage must carry toolCallId — it identifies which " +
-          'tool_calls entry this result answers',
-      );
-    }
-    return { role: 'tool', content: message.content, tool_call_id: message.toolCallId };
-  }
-  if (message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0) {
-    return {
-      role: 'assistant',
-      content: message.content,
-      tool_calls: message.toolCalls.map((call) => ({
-        id: call.id,
-        type: 'function',
-        function: { name: call.name, arguments: JSON.stringify(call.input) },
-      })),
-    };
-  }
   return { role: message.role, content: message.content };
 }
 
@@ -150,74 +92,6 @@ function toOpenAiMessages(request: {
     ? [{ role: 'system', content: request.system }]
     : [];
   return [...systemMessage, ...request.messages.map(toOpenAiMessage)];
-}
-
-/** Reuses the same `toJSONSchema` call `toOpenAiStructuredOutputFormat` makes, minus its
- * union-root wrapping — a tool's `inputSchema` is always the parameter object itself, never a
- * root union OpenAI's strict mode would reject. */
-function toOpenAiTools(
-  tools: readonly ModelToolDefinition[] | undefined,
-): OpenAiToolDefinition[] | undefined {
-  if (!tools || tools.length === 0) {
-    return undefined;
-  }
-  return tools.map((tool) => ({
-    type: 'function',
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: withoutSchemaKeyword(toJSONSchema(tool.inputSchema, { reused: 'inline' })),
-    },
-  }));
-}
-
-function toOpenAiToolChoice(toolChoice: ModelToolChoice | undefined): OpenAiToolChoice | undefined {
-  if (!toolChoice) {
-    return undefined;
-  }
-  if (toolChoice === 'auto' || toolChoice === 'none' || toolChoice === 'required') {
-    return toolChoice;
-  }
-  return { type: 'function', function: { name: toolChoice.tool } };
-}
-
-/** Closed over the three reasons `ModelStopReason` documents — any other `finish_reason` (or its
- * absence, e.g. a self-hosted server that omits the field) maps to `undefined` rather than a
- * fabricated guess. */
-function toModelStopReason(finishReason: string | undefined): ModelStopReason | undefined {
-  switch (finishReason) {
-    case 'stop':
-      return 'end_turn';
-    case 'tool_calls':
-      return 'tool_use';
-    case 'length':
-      return 'max_tokens';
-    default:
-      return undefined;
-  }
-}
-
-/** OpenAI encodes each call's arguments as a JSON string, not an object — a string that fails to
- * parse is a malformed vendor response, so it fails the call rather than reaching a caller as an
- * unparsed string or crashing `generate` with an uncaught `SyntaxError`. */
-function extractToolCalls(response: OpenAiChatCompletionResponse): ModelToolCall[] {
-  const toolCalls = response.choices[0].message.tool_calls ?? [];
-  return toolCalls.map((call) => {
-    try {
-      return {
-        id: call.id,
-        name: call.function.name,
-        input: JSON.parse(call.function.arguments) as unknown,
-      };
-    } catch (error) {
-      throw new OpenAiMalformedToolArgumentsError(
-        call.id,
-        call.function.name,
-        call.function.arguments,
-        error,
-      );
-    }
-  });
 }
 
 function extractOutput(response: OpenAiChatCompletionResponse): string {
@@ -329,27 +203,13 @@ export class OpenAiModelProvider implements ModelProvider {
     // partitioning and spend attribution only, see `ModelRequest`'s own doc comment) have no
     // vendor-API counterpart and must never reach the wire.
     const baseMessages = toOpenAiMessages(request);
-    const tools = toOpenAiTools(request.tools);
-    const toolChoice = toOpenAiToolChoice(request.toolChoice);
-    const first = await this.callChatCompletions(
-      baseMessages,
-      request.maxTokens,
-      responseFormat,
-      tools,
-      toolChoice,
-    );
+    const first = await this.callChatCompletions(baseMessages, request.maxTokens, responseFormat);
 
     if (!schema || !validationSchema) {
-      // `stopReason`/`toolCalls` only carry information once a caller offers `tools` — a
-      // tool-free request keeps returning exactly what it returned before this field existed.
-      const finishReason = request.tools ? first.choices[0].finish_reason : undefined;
-      const stopReason = request.tools ? toModelStopReason(finishReason) : undefined;
       return {
         output: extractOutput(first) as ModelOutput<TSchema>,
         usage: toModelUsage(first.usage),
         costUsd: costUsdForUsage(this.info.model, first.usage),
-        ...(stopReason ? { stopReason } : {}),
-        ...(stopReason === 'tool_use' ? { toolCalls: extractToolCalls(first) } : {}),
       };
     }
 
@@ -378,13 +238,7 @@ export class OpenAiModelProvider implements ModelProvider {
       },
     ];
 
-    const retry = await this.callChatCompletions(
-      retryMessages,
-      request.maxTokens,
-      responseFormat,
-      tools,
-      toolChoice,
-    );
+    const retry = await this.callChatCompletions(retryMessages, request.maxTokens, responseFormat);
     const retryText = extractOutput(retry);
     const retryParsed = safeParseModelJson(retryText, validationSchema);
     const usage = sumUsage(toModelUsage(first.usage), toModelUsage(retry.usage));
@@ -440,8 +294,6 @@ export class OpenAiModelProvider implements ModelProvider {
     messages: readonly OpenAiChatMessage[],
     maxCompletionTokens: number,
     responseFormat: OpenAiStructuredOutputFormat | undefined,
-    tools?: readonly OpenAiToolDefinition[],
-    toolChoice?: OpenAiToolChoice,
   ): Promise<OpenAiChatCompletionResponse> {
     const { apiKey, baseUrl, timeoutMs } = this.config.openai;
     const url = `${baseUrl}${CHAT_COMPLETIONS_PATH}`;
@@ -452,8 +304,6 @@ export class OpenAiModelProvider implements ModelProvider {
       response_format: responseFormat
         ? { type: responseFormat.type, json_schema: responseFormat.json_schema }
         : undefined,
-      tools,
-      tool_choice: toolChoice,
     });
 
     // Omitted entirely when no key is configured, not sent as `Bearer undefined` — this is what

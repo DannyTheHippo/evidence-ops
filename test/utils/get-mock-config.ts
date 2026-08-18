@@ -64,12 +64,6 @@ export const getMockConfig = (): EnvironmentConfig => ({
   retrieval: {
     fusion: 'server',
     limit: 12,
-    strategy: 'single-shot',
-  },
-
-  agenticRetrieval: {
-    maxIterations: 8,
-    maxCostUsd: 1,
   },
 
   telemetry: {

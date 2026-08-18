@@ -1,10 +1,10 @@
 import { z } from 'zod';
 import { z as z4 } from 'zod/v4';
+import type { ConflictsService } from '../features/evidence/conflicts/conflicts.service';
 import {
   SEARCH_EVIDENCE_TOOL_NAME,
   searchEvidenceToolDefinition,
-} from '../features/evidence/qa/agentic-retrieval-tools';
-import type { ConflictsService } from '../features/evidence/conflicts/conflicts.service';
+} from '../features/evidence/retrieval/evidence-tools';
 import type { QaService } from '../features/evidence/qa/qa.service';
 import type { ModelToolDefinition } from '../providers/model/model-provider.interface';
 import type {
@@ -17,8 +17,8 @@ export const GET_ANSWER_TOOL_NAME = 'get_answer';
 export const REQUEST_RESOLUTION_TOOL_NAME = 'request_resolution';
 
 /** The step this process presents to `ToolExecutorService.execute` for every read-only tool call
- *  it proxies — `search_evidence` reused as-is from the agentic retrieval loop
- *  (`buildSearchEvidenceTool` in `../features/evidence/qa/agentic-retrieval-tools.ts`) plus
+ *  it proxies — `search_evidence` reused as-is from the retrieval feature
+ *  (`buildSearchEvidenceTool` in `../features/evidence/retrieval/evidence-tools.ts`) plus
  *  `get_answer`. Kept disjoint from `MCP_MUTATE_STEP` below — a read token and a mutating token
  *  stay distinguishable in policy because the two never share a step. */
 export const MCP_READ_STEP: ToolExecutionStep = {
@@ -34,14 +34,12 @@ export const MCP_MUTATE_STEP: ToolExecutionStep = {
 };
 
 /**
- * `search_evidence` as this surface advertises it. The handler is `agentic-retrieval-tools.ts`'s
+ * `search_evidence` as this surface advertises it. The handler is `evidence-tools.ts`'s
  * `buildSearchEvidenceTool` unchanged, and `searchEvidenceToolDefinition.inputSchema` is reused as
- * declared there; only the description differs, because what a caller receives differs. The
- * agentic loop truncates each hit to a preview and offers `fetch_chunks` to read one in full;
- * this surface registers no `fetch_chunks` (`MCP_READ_STEP` does not allow it either), so
- * `McpServerService` serializes the retrieval result as it stands and every hit arrives with its
- * full chunk text. Advertising the loop's wording here would promise a snippet, and a follow-up
- * tool, that this surface does not have.
+ * declared there; only the description differs, because what a caller receives differs.
+ * `McpServerService` serializes the retrieval result as it stands, so every hit arrives with its
+ * full chunk text — the base definition's own description promises only a short snippet, which
+ * would understate what this surface actually returns.
  */
 export const mcpSearchEvidenceToolDefinition: ModelToolDefinition = {
   ...searchEvidenceToolDefinition,
@@ -53,9 +51,9 @@ export const mcpSearchEvidenceToolDefinition: ModelToolDefinition = {
 };
 
 const getAnswerArgsSchema = z.object({ answerId: z.string().min(1) });
-// `.strict()` here (unlike `agentic-retrieval-tools.ts`'s sibling schemas, which feed a model
-// call rather than an advertised `tools/list` entry) so the JSON Schema this surface advertises
-// declares `additionalProperties: false` — matching, not merely approximating, the strictness
+// `.strict()` here (unlike `evidence-tools.ts`'s sibling schema, which feeds a model call rather
+// than an advertised `tools/list` entry) so the JSON Schema this surface advertises declares
+// `additionalProperties: false` — matching, not merely approximating, the strictness
 // `ToolExecutorService.registerTool` enforces on every registered tool regardless.
 const getAnswerInputSchema = z4.object({ answerId: z4.string().min(1) }).strict();
 

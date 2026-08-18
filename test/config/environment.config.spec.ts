@@ -156,7 +156,6 @@ describe('validateEnvironment', () => {
           'voyage',
           'temporal',
           'retrieval',
-          'agenticRetrieval',
           'telemetry',
           'sources',
           'extraction',
@@ -188,9 +187,6 @@ describe('validateEnvironment', () => {
       expect(result.temporal.taskQueue).toBe('evidence-ops');
       expect(result.retrieval.fusion).toBe('server');
       expect(result.retrieval.limit).toBe(12);
-      expect(result.retrieval.strategy).toBe('single-shot');
-      expect(result.agenticRetrieval.maxIterations).toBe(8);
-      expect(result.agenticRetrieval.maxCostUsd).toBe(1);
       expect(result.extraction.chunkConcurrency).toBe(2);
       expect(result.spend.dailyLimitUsd).toBe(50);
     });
@@ -219,30 +215,6 @@ describe('validateEnvironment', () => {
 
       expect(result.retrieval.limit).toBe(20);
       expect(result.extraction.chunkConcurrency).toBe(4);
-    });
-
-    it('coerces AGENTIC_MAX_ITERATIONS and AGENTIC_MAX_COST_USD from string to number', () => {
-      const result = validateEnvironment({
-        ...validEnv,
-        AGENTIC_MAX_ITERATIONS: '5',
-        AGENTIC_MAX_COST_USD: '2.5',
-      });
-
-      expect(result.agenticRetrieval.maxIterations).toBe(5);
-      expect(result.agenticRetrieval.maxCostUsd).toBe(2.5);
-    });
-
-    it('rejects an unknown RETRIEVAL_STRATEGY value', () => {
-      const env: Record<string, unknown> = { ...validEnv, RETRIEVAL_STRATEGY: 'multi-shot' };
-
-      expect(() => validateEnvironment(env)).toThrow(/Invalid environment configuration/);
-      expect(() => validateEnvironment(env)).toThrow(/RETRIEVAL_STRATEGY/);
-    });
-
-    it('accepts the agentic retrieval strategy', () => {
-      const result = validateEnvironment({ ...validEnv, RETRIEVAL_STRATEGY: 'agentic' });
-
-      expect(result.retrieval.strategy).toBe('agentic');
     });
 
     it.each([

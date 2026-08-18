@@ -64,10 +64,8 @@ flowchart LR
 - Retrieval is hybrid in one store: lexical `$search` and dense `$vectorSearch` fused by
   `$rankFusion` (`k = 60`). Both pipelines live together because provenance — version, hash,
   locator — must sit on the hit. Tenant filters run _inside_ each pipeline, not after fusion.
-- `RETRIEVAL_STRATEGY` picks how retrieval is driven. `single-shot` (the default) issues one
-  hybrid query. `agentic` gives the model a search-and-read loop before synthesis, bounded by an
-  iteration cap and a cost budget it cannot talk its way past, with every tool call routed through
-  the same chokepoint. Both strategies feed the identical synthesis and gate path afterwards.
+- Retrieval issues one hybrid query per question and feeds the result straight into synthesis and
+  the grounding gate.
 - Ingest is a durable workflow: chunk + embed → extract facts (multi-pass agreement on prose, so a
   conflict scan is not fed a lottery) → conflict scan. Entity names are reconciled only against a
   registry of canonical names and their explicit aliases, matched exactly under normalisation —
@@ -127,9 +125,10 @@ The same evidence is reachable from an AI client over MCP, so the platform can b
 tooling a person already trusts rather than being one more destination app. The MCP server is its
 own process — `npm run mcp:dev` on the host loop, the `mcp` service under the `full` profile in a
 containerized stack. It authenticates with the personal access tokens the API Keys page mints, and
-exposes three tools: search evidence, fetch a started answer, and propose a conflict resolution. Every tool call goes through `ToolExecutorService` — the same chokepoint the agentic
-retrieval loop executes through — and each handler then calls the very service method the REST
-surface calls. Nothing here re-implements validation, authorization, or the work itself.
+exposes three tools: search evidence, fetch a started answer, and propose a conflict resolution. Every tool call goes through `ToolExecutorService`, the same deterministic chokepoint every tool
+call in this codebase is required to route through, and each handler then calls the very service
+method the REST surface calls. Nothing here re-implements validation, authorization, or the work
+itself.
 
 There is deliberately no tool that approves anything. The mutating tool can only start a workflow
 that parks on a human's approval, and the approval itself has no AI-reachable surface at all.
@@ -300,20 +299,19 @@ below, which is a different failure mode with no other fix.
 
 There is one compose file, and the split between it and `.env` is deliberate:
 
-- **`.env` holds six values**: four credentials — `JWT_SECRET`, `ANTHROPIC_API_KEY`,
-  `OPENAI_API_KEY`, `VOYAGE_API_KEY` — and the two spend ceilings,
-  `MODEL_SPEND_DAILY_LIMIT_USD` and `AGENTIC_MAX_COST_USD`. `api`, `worker` and `mcp` load it with
-  `required: false`, so a missing file does not fail `up`. Keeping it this short is what makes it
-  auditable and safe to talk about.
+- **`.env` holds five values**: four credentials — `JWT_SECRET`, `ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `VOYAGE_API_KEY` — and the one spend ceiling, `MODEL_SPEND_DAILY_LIMIT_USD`.
+  `api`, `worker` and `mcp` load it with `required: false`, so a missing file does not fail `up`.
+  Keeping it this short is what makes it auditable and safe to talk about.
 - **Every non-secret knob is declared in `docker-compose.yml`**, in the top-level
   `x-app-environment` anchor merged into `api`, `worker` and `mcp`. Worker-only knobs — Voyage
-  settings, the agentic iteration cap, extraction concurrency, source inbox and sync interval — are
-  added on `worker`, because that is the process where every model and embedding call runs; the MCP
-  port and rate limit are added on `mcp` for the same reason. Each is written `${VAR:-default}`, so
-  an override comes from the shell without editing the file.
+  settings, extraction concurrency, source inbox and sync interval — are added on `worker`, because
+  that is the process where every model and embedding call runs; the MCP port and rate limit are
+  added on `mcp` for the same reason. Each is written `${VAR:-default}`, so an override comes from
+  the shell without editing the file.
 - **An inline `environment:` value always beats `env_file`.** A knob in the anchor is authoritative
-  for the container whatever `.env` says. That is also why **the two spend ceilings are deliberately
-  absent from compose**: declaring either there would silently override the ceiling an operator set
+  for the container whatever `.env` says. That is also why **the spend ceiling is deliberately
+  absent from compose**: declaring it there would silently override the ceiling an operator set
   in `.env`, which is the one place a money bound should be settable.
 - **The stack defaults to `NODE_ENV=production`**, and that is what makes config validation refuse
   to boot without a `JWT_SECRET` rather than dev-defaulting one. A missing model or embedding key

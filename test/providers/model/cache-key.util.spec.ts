@@ -2,7 +2,6 @@ import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod/v4';
 import { computeCacheKey, type CacheKeyInput } from '../../../src/providers/model/cache-key.util';
-import type { ModelToolDefinition } from '../../../src/providers/model/model-provider.interface';
 
 const EVAL_MODEL_CACHE_DIR = path.join(__dirname, '../../../eval/cache/model');
 
@@ -111,77 +110,14 @@ describe('computeCacheKey', () => {
     expect(withPassOrdinal).not.toBe(withoutPassOrdinal);
   });
 
-  // Corpus-compatibility proof, not just an assertion: every fixture under `eval/cache/model/`
-  // was recorded before `tools`/`toolChoice` existed on `CacheKeyInput`. This literal hash was
-  // captured from `computeCacheKey(baseInput)` against the pre-`tools` version of this file
-  // (`git show HEAD:src/providers/model/cache-key.util.ts` at the commit before this change) and
-  // must stay byte-identical — a single character of drift here is exactly what would silently
-  // invalidate every committed fixture.
-  it('should hash a tool-free request identically to before tools/toolChoice existed on CacheKeyInput', () => {
+  // Corpus-compatibility proof, not just an assertion: every one of the 477 committed fixtures
+  // under `eval/cache/model/` is filed under a hash of a tool-free request just like `baseInput`.
+  // This literal must stay byte-identical — a single character of drift here is exactly what
+  // would silently invalidate every one of those fixtures.
+  it('should hash a tool-free request to the pinned digest the committed eval replay corpus depends on', () => {
     expect(computeCacheKey(baseInput)).toBe(
       '758b825f4eb2012f7bd708229d7c499daa7f4849935acf0a9d0febdc10689e1d',
     );
-  });
-
-  const oneTool: readonly ModelToolDefinition[] = [
-    {
-      name: 'lookup',
-      description: 'Looks something up.',
-      inputSchema: z.object({ id: z.string() }),
-    },
-  ];
-
-  it('should produce the same key whether tools is omitted or explicitly undefined', () => {
-    const omitted = computeCacheKey(baseInput);
-    const explicitlyUndefined = computeCacheKey({ ...baseInput, tools: undefined });
-
-    expect(explicitlyUndefined).toBe(omitted);
-  });
-
-  it('should differ between a tool-free request and one offering a tool', () => {
-    const withoutTools = computeCacheKey(baseInput);
-    const withTools = computeCacheKey({ ...baseInput, tools: oneTool });
-
-    expect(withTools).not.toBe(withoutTools);
-  });
-
-  it('should differ when the tool input schema shape changes', () => {
-    const a = computeCacheKey({ ...baseInput, tools: oneTool });
-    const b = computeCacheKey({
-      ...baseInput,
-      tools: [{ ...oneTool[0], inputSchema: z.object({ id: z.number() }) }],
-    });
-
-    expect(a).not.toBe(b);
-  });
-
-  it('should produce the same key whether toolChoice is omitted or explicitly undefined', () => {
-    const omitted = computeCacheKey(baseInput);
-    const explicitlyUndefined = computeCacheKey({ ...baseInput, toolChoice: undefined });
-
-    expect(explicitlyUndefined).toBe(omitted);
-  });
-
-  it('should differ between a request with no toolChoice and one forcing "required"', () => {
-    const withoutToolChoice = computeCacheKey({ ...baseInput, tools: oneTool });
-    const withToolChoice = computeCacheKey({
-      ...baseInput,
-      tools: oneTool,
-      toolChoice: 'required',
-    });
-
-    expect(withToolChoice).not.toBe(withoutToolChoice);
-  });
-
-  it('should differ between forcing a specific tool and any other toolChoice', () => {
-    const required = computeCacheKey({ ...baseInput, tools: oneTool, toolChoice: 'required' });
-    const forcedTool = computeCacheKey({
-      ...baseInput,
-      tools: oneTool,
-      toolChoice: { tool: 'lookup' },
-    });
-
-    expect(forcedTool).not.toBe(required);
   });
 
   // Real-corpus proof: `computeCacheKey`'s own output — a lowercase hex sha256 digest — is the

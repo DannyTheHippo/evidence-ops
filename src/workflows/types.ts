@@ -52,32 +52,11 @@ export interface IngestDocumentVersionResult {
  * doesn't cross the determinism fence. `persistAnswer` updates that row rather than creating a
  * second one; see `AnswerPersistenceService`'s doc comment for the fail-closed behavior when it's
  * missing.
- *
- * `retrievalStrategy` picks which retrieval activity the workflow calls — `'single-shot'` (or
- * absent) takes the unchanged `retrieveEvidence` path; `'agentic'` takes `retrieveEvidenceAgentic`
- * instead. Read once, by `QaService.startQuestion`, from `config.retrieval.strategy` before this
- * workflow starts; the workflow itself never reads config (that would cross the determinism fence)
- * and only ever branches on this field. Optional so a workflow already mid-flight when this field
- * was added replays with it absent and takes the single-shot path, the same in-flight-history
- * reasoning `ResolveConflictWorkflowInput.ruleFired` documents above.
- *
- * `actorId`/`role` are the caller's own identity, threaded from `QaController`/`QaService` the same
- * fields-not-imports way `answerId` is: `retrieveEvidenceAgentic`'s tool calls need a server-derived
- * `ToolExecutionContext` (`src/features/platform/authz/types/tool-definition.type.ts`), and that
- * context is never fabricated activity-side. `role` is a plain string union, not the `UserRole`
- * enum `src/shared/enums/**` declares, for the same determinism-fence reason `ruleFired` stays a
- * plain union; the activity maps it back to `UserRole` explicitly. Both optional for the same
- * mid-flight-replay reason `retrievalStrategy` is: the agentic branch below only runs when all
- * three of `retrievalStrategy`, `actorId`, and `role` are present, so a stale history with none of
- * them falls back to single-shot rather than erroring.
  */
 export interface AnswerQuestionInput {
   readonly answerId: string;
   readonly questionText: string;
   readonly tenantId: string;
-  readonly retrievalStrategy?: 'single-shot' | 'agentic';
-  readonly actorId?: string;
-  readonly role?: 'admin' | 'member';
 }
 
 /**

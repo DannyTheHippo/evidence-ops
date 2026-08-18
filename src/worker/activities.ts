@@ -17,7 +17,6 @@ import {
   type CanonicalEntityListing,
 } from '../features/evidence/facts/canonical-entity.service';
 import { FactsService, type FactsExtractionResult } from '../features/evidence/facts/facts.service';
-import { AgenticRetrievalService } from '../features/evidence/qa/agentic-retrieval.service';
 import { extractNumericTokens } from '../features/evidence/qa/extract-numeric-tokens';
 import {
   filterGroupsByEntity,
@@ -57,7 +56,6 @@ import {
   type ApprovalRequest,
   type ApprovalResult,
 } from '../providers/approval-channel/approval-channel.interface';
-import { UserRole } from '../shared/enums/user-role.enum';
 import type { AlsContext } from '../shared/types/als-context.type';
 import type { IngestDocumentVersionResult } from '../workflows/types';
 
@@ -112,20 +110,6 @@ export interface LoadConflictActivityInput {
   readonly tenantId: string;
 }
 
-/**
- * `actorId`/`role` are the workflow's own plain-field carry of the caller's identity
- * (`AnswerQuestionInput`'s own doc comment) — this activity is the one place that turns them into
- * the server-derived `ToolExecutionContext` `AgenticRetrievalService.gatherEvidence`'s tool calls
- * need. `role` stays a plain string union here, matching `AnswerQuestionInput.role`, and is mapped
- * to `UserRole` only inside `createActivities` below, never in the interface itself.
- */
-export interface RetrieveEvidenceAgenticActivityInput {
-  readonly questionText: string;
-  readonly tenantId: string;
-  readonly actorId: string;
-  readonly role: 'admin' | 'member';
-}
-
 export interface SynthesizeAnswerActivityInput {
   readonly questionText: string;
   readonly chunks: readonly RetrievedChunk[];
@@ -175,12 +159,6 @@ export interface Activities {
   extractFacts(documentVersionId: string, tenantId: string): Promise<FactsExtractionResult>;
   scanForConflicts(tenantId: string, factKeys?: readonly FactKey[]): Promise<ConflictScanResult>;
   retrieveEvidence(input: RetrieveEvidenceInput): Promise<RetrievedChunk[]>;
-  // Same return shape as `retrieveEvidence` above — `GatherEvidenceResult`'s `iterations`,
-  // `costUsd`, and `terminationReason` are logged service-side (`AgenticRetrievalService
-  // .gatherEvidence`'s own debug line) and discarded here, not threaded through, so
-  // `synthesizeAnswer` below consumes an identical `RetrievedChunk[]` regardless of which
-  // retrieval activity produced it.
-  retrieveEvidenceAgentic(input: RetrieveEvidenceAgenticActivityInput): Promise<RetrievedChunk[]>;
   synthesizeAnswer(input: SynthesizeAnswerActivityInput): Promise<SynthesizeAnswerResult>;
   groundingCheck(input: GroundingCheckActivityInput): Promise<GroundingCheckActivityResult>;
   persistAnswer(input: PersistAnswerInput): Promise<PersistAnswerResult>;
@@ -261,7 +239,6 @@ export function createActivities(app: INestApplicationContext): Activities {
   const conflictsService = app.get(ConflictsService);
   const canonicalEntityService = app.get(CanonicalEntityService);
   const evidenceRetrievalService = app.get(EvidenceRetrievalService);
-  const agenticRetrievalService = app.get(AgenticRetrievalService);
   const synthesisService = app.get(SynthesisService);
   const groundingGateService = app.get(GroundingGateService);
   const answerPersistenceService = app.get(AnswerPersistenceService);
@@ -283,22 +260,6 @@ export function createActivities(app: INestApplicationContext): Activities {
 
     retrieveEvidence: (input) =>
       withTenantScope(als, input.tenantId, () => evidenceRetrievalService.retrieve(input)),
-
-    retrieveEvidenceAgentic: (input) =>
-      withTenantScope(als, input.tenantId, async () => {
-        const result = await agenticRetrievalService.gatherEvidence({
-          questionText: input.questionText,
-          context: {
-            tenantId: input.tenantId,
-            actorId: input.actorId,
-            // `role` crosses back from `AnswerQuestionInput`'s plain-union carry to the real
-            // `UserRole` enum `ToolExecutionContext` declares — the workflow-side type stays a
-            // plain union so it never imports the enum across the determinism fence.
-            role: input.role as UserRole,
-          },
-        });
-        return [...result.chunks];
-      }),
 
     synthesizeAnswer: (input) =>
       synthesisService.synthesizeAnswer({

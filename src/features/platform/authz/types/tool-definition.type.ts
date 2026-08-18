@@ -47,9 +47,10 @@ export interface ToolExecutionContext {
   readonly actorId: string;
   readonly role: UserRole;
   /** The verified caller's own email, when the surface that built this context resolved one
-   *  (`PatTokenVerifier` does, from `VerifiedIdentity.email`). Optional — the interactive HTTP
-   *  path and the agentic-retrieval activity build a context from a JWT/workflow input that carries
-   *  no email, and neither needs to. A handler that wants an approver-facing identity string reads
-   *  this before falling back to `actorId`. */
+   *  (`PatTokenVerifier` does, from `VerifiedIdentity.email`) — the sole production builder of
+   *  this type today, so this field is always set on a live context. Optional at the type level
+   *  regardless, so a future non-MCP caller with no email to resolve does not need to fabricate
+   *  one. A handler that wants an approver-facing identity string reads this before falling back
+   *  to `actorId`. */
   readonly email?: string;
 }

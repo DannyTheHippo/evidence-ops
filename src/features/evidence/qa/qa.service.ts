@@ -16,7 +16,6 @@ import {
   takeWhile,
   timer,
 } from 'rxjs';
-import { TypedConfigService } from '../../../config/environment/typed-config.service';
 import { Answer, AnswerDocument } from '../../../database/schemas/evidence/answer/answer.schema';
 import type {
   AnswerRunStatus,
@@ -95,7 +94,6 @@ export class QaService {
     @Inject(WORKFLOW_ENGINE)
     private readonly workflowEngine: WorkflowEngine,
 
-    private readonly config: TypedConfigService,
     private readonly auditService: AuditService,
     private readonly logger: AppLogger,
   ) {
@@ -107,12 +105,6 @@ export class QaService {
    * so `persistAnswer` updates this same row instead of creating an unrelated one — `GET
    * /api/v1/answers/:id` (`getAnswerById` below) only ever observes completion because both sides
    * now agree on one id.
-   *
-   * `config.retrieval.strategy` is read here, once, and passed to the workflow as a plain field —
-   * never read inside `answerQuestion` itself, which would cross the determinism fence (see
-   * `AnswerQuestionInput.retrievalStrategy`'s doc comment). `actorId`/`role` are threaded through
-   * unconditionally alongside it, the server-derived identity `retrieveEvidenceAgentic`'s tool
-   * calls need if the agentic branch runs.
    */
   async startQuestion(input: StartQuestionInput): Promise<StartQuestionResult> {
     const answer = await this.answerModel.create({
@@ -125,9 +117,6 @@ export class QaService {
       answerId: answer._id.toString(),
       questionText: input.questionText,
       tenantId: input.tenantId,
-      retrievalStrategy: this.config.retrieval.strategy,
-      actorId: input.actorId,
-      role: input.role,
     } satisfies AnswerQuestionInput);
 
     await this.auditService.record({

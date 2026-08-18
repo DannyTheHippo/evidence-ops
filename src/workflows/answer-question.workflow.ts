@@ -72,64 +72,18 @@ const persistActivities = proxyActivities<Pick<Activities, 'persistAnswer'>>({
   },
 });
 
-// Paid, non-idempotent, and iterative: `AgenticRetrievalService.gatherEvidence` can spend up to
-// `config.agenticRetrieval.maxIterations` model calls (plus a Voyage-backed `search_evidence` tool
-// call per turn) before it returns, so this group's timeout is sized for the whole loop rather than
-// a single turn — generous relative to `synthesisActivities`' single-call budget above. A retried
-// agentic loop re-spends real money the same way a retried `synthesizeAnswer` does, so this group
-// keeps the same low `maximumAttempts` that group uses, for the same reason.
-const agenticRetrievalActivities = proxyActivities<Pick<Activities, 'retrieveEvidenceAgentic'>>({
-  startToCloseTimeout: '5 minutes',
-  scheduleToCloseTimeout: '10 minutes',
-  retry: {
-    maximumAttempts: 2,
-    // A missing tenantId never appears by retrying (`requireTenantId` in `activities.ts`). The
-    // five model-spend/schema errors mirror `synthesisActivities` above, since every loop turn
-    // makes the same kind of model call `synthesizeAnswer` does; `ModelBudgetExceededError` is
-    // caught inside `gatherEvidence` itself and never actually propagates out of the activity, but
-    // is listed here anyway as defence in depth against that catch ever being removed. The two
-    // Voyage errors cover `search_evidence`, which calls `EvidenceRetrievalService.retrieve` (the
-    // same Voyage-backed embedding call `retrievalActivities` above makes) on every tool
-    // invocation, and are deterministic for a given input the same way they are there.
-    nonRetryableErrorTypes: [
-      'MissingTenantId',
-      'ModelBudgetExceededError',
-      'UnknownModelPricingError',
-      'ModelSchemaValidationError',
-      'TenantSpendLimitExceededError',
-      'ModelRequestMissingTenantError',
-      'VoyageApiKeyMissingError',
-      'VoyageInvalidResponseError',
-    ],
-  },
-});
-
 /**
  * Second workflow in the tree (ADR-0003): retrieve → synthesize → verify grounding → persist.
  * Orchestration only — every side effect (the Mongo hybrid search, the model call, the
  * verification pass, the Mongo write) lives in an activity; this function just sequences their
  * results and threads `tenantId` through unopened to every activity that scopes on it
- * (`retrieveEvidence`/`retrieveEvidenceAgentic`, `synthesizeAnswer`, `groundingCheck`,
- * `persistAnswer`).
+ * (`retrieveEvidence`, `synthesizeAnswer`, `groundingCheck`, `persistAnswer`).
  */
 export async function answerQuestion(input: AnswerQuestionInput): Promise<AnswerQuestionResult> {
-  // Deterministic branch on `input` fields only — never on config, which would cross the
-  // determinism fence (see `AnswerQuestionInput.retrievalStrategy`'s doc comment). Requiring
-  // `actorId`/`role` alongside `retrievalStrategy` here, not just at the type level, is what keeps
-  // a stale history recorded before any of the three fields existed on the same single-shot path a
-  // history recorded before only `retrievalStrategy` existed takes.
-  const chunks =
-    input.retrievalStrategy === 'agentic' && input.actorId && input.role
-      ? await agenticRetrievalActivities.retrieveEvidenceAgentic({
-          questionText: input.questionText,
-          tenantId: input.tenantId,
-          actorId: input.actorId,
-          role: input.role,
-        })
-      : await retrievalActivities.retrieveEvidence({
-          questionText: input.questionText,
-          tenantId: input.tenantId,
-        });
+  const chunks = await retrievalActivities.retrieveEvidence({
+    questionText: input.questionText,
+    tenantId: input.tenantId,
+  });
 
   const { contract: outcome, usage } = await synthesisActivities.synthesizeAnswer({
     questionText: input.questionText,

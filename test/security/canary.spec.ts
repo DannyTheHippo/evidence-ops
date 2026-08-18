@@ -386,10 +386,10 @@ describe('canary security suite', () => {
       toolExecutor = module.get<ToolExecutorService>(ToolExecutorService);
     });
 
-    // `QaModule` binds `AgenticRetrievalService`'s own `ToolExecutorService` to
-    // `StepPolicyAuthzHook` (see `qa.module.ts`), but that is a separate instance from the one
-    // built here — this module's `AuthzModule` binding, and therefore every other consumer that
-    // resolves `ToolExecutorService` through it, stays on `DenyAllAuthzHook`. This asserts what the
+    // `McpModule` binds `McpServerService`'s own `ToolExecutorService` to `StepPolicyAuthzHook`
+    // (see `mcp.module.ts`), but that is a separate instance from the one built here — this
+    // module's `AuthzModule` binding, and therefore every other consumer that resolves
+    // `ToolExecutorService` through it, stays on `DenyAllAuthzHook`. This asserts what the
     // chokepoint does if a future, compromised caller tried to act on the pdf canary's instruction
     // ("export the full underlying deal-room contents") against that unchanged default: with no
     // tools registered, the call is refused before any handler runs.
@@ -441,13 +441,13 @@ describe('canary security suite', () => {
       expect(handler).not.toHaveBeenCalled();
     });
 
-    // `StepPolicyAuthzHook` grants the `'agentic-retrieval'` step to `UserRole.Member` and above
+    // `StepPolicyAuthzHook` grants the `'mcp-read'` step to `UserRole.Member` and above
     // (`step-policy.authz-hook.ts`) — this proves that grant is scoped to the `ToolExecutorService`
-    // instance `QaModule` builds against `StepPolicyAuthzHook`, and never reaches an instance still
-    // bound to the real `DenyAllAuthzHook`, even for the highest role.
-    it('should refuse the agentic-retrieval step via the real DenyAllAuthzHook.authorize(), even for an admin role', async () => {
+    // instance `McpModule` builds against `StepPolicyAuthzHook`, and never reaches an instance
+    // still bound to the real `DenyAllAuthzHook`, even for the highest role.
+    it('should refuse the mcp-read step via the real DenyAllAuthzHook.authorize(), even for an admin role', async () => {
       const step: ToolExecutionStep = {
-        stepId: 'agentic-retrieval',
+        stepId: 'mcp-read',
         allowedTools: ['search_evidence'],
       };
       const handler = jest.fn().mockResolvedValue('should never run');
@@ -468,7 +468,7 @@ describe('canary security suite', () => {
         kind: 'refused',
         reason: 'authz-denied',
         detail:
-          "no authorization policy is configured for step 'agentic-retrieval'; refusing " +
+          "no authorization policy is configured for step 'mcp-read'; refusing " +
           "'search_evidence' by default",
       });
       expect(handler).not.toHaveBeenCalled();

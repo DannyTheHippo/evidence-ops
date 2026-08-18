@@ -8,7 +8,6 @@ import {
 } from '../../src/features/evidence/facts/canonical-entity.service';
 import { FactsService } from '../../src/features/evidence/facts/facts.service';
 import { IngestionService } from '../../src/features/evidence/ingestion/ingestion.service';
-import { AgenticRetrievalService } from '../../src/features/evidence/qa/agentic-retrieval.service';
 import { AnswerPersistenceService } from '../../src/features/evidence/qa/answer-persistence.service';
 import type { Claim } from '../../src/features/evidence/qa/contracts/answer.contract';
 import { EvidenceRetrievalService } from '../../src/features/evidence/qa/evidence-retrieval.service';
@@ -16,7 +15,6 @@ import { GroundingGateService } from '../../src/features/evidence/qa/grounding-g
 import { SynthesisService } from '../../src/features/evidence/qa/synthesis.service';
 import type { RetrievedChunk } from '../../src/features/evidence/qa/types/retrieved-chunk.type';
 import { APPROVAL_CHANNEL } from '../../src/providers/approval-channel/approval-channel.interface';
-import { UserRole } from '../../src/shared/enums/user-role.enum';
 import type { AlsContext } from '../../src/shared/types/als-context.type';
 import { createActivities } from '../../src/worker/activities';
 
@@ -35,7 +33,6 @@ function buildApp(overrides: {
   findCellFacts?: jest.Mock;
   listCanonicalEntities?: jest.Mock;
   retrieve?: jest.Mock;
-  gatherEvidence?: jest.Mock;
   synthesizeAnswer?: jest.Mock;
   verify?: jest.Mock;
   findConflictedFactGroupsForChunks?: jest.Mock;
@@ -73,7 +70,6 @@ function buildApp(overrides: {
       },
     ],
     [EvidenceRetrievalService, { retrieve: overrides.retrieve ?? jest.fn() }],
-    [AgenticRetrievalService, { gatherEvidence: overrides.gatherEvidence ?? jest.fn() }],
     [SynthesisService, { synthesizeAnswer: overrides.synthesizeAnswer ?? jest.fn() }],
     [GroundingGateService, { verify: overrides.verify ?? jest.fn() }],
     [AnswerPersistenceService, { persist: overrides.persist ?? jest.fn() }],
@@ -271,35 +267,6 @@ describe('createActivities', () => {
 
     expect(mockRetrieve).toHaveBeenCalledWith(input);
     expect(result).toEqual([{ chunkId: 'chunk-1' }]);
-  });
-
-  it('should delegate retrieveEvidenceAgentic to AgenticRetrievalService.gatherEvidence, building a ToolExecutionContext from the input and returning only the gathered chunks', async () => {
-    const chunks: RetrievedChunk[] = [buildRetrievedChunk()];
-    const mockGatherEvidence = jest.fn().mockResolvedValue({
-      chunks,
-      iterations: 3,
-      costUsd: 0.12,
-      terminationReason: 'no-tool-call',
-    });
-    const app = buildApp({ gatherEvidence: mockGatherEvidence });
-    const input = {
-      questionText: 'What is the cap rate?',
-      tenantId: 'acme',
-      actorId: 'user-1',
-      role: 'member' as const,
-    };
-
-    const activities = createActivities(app);
-    const result = await activities.retrieveEvidenceAgentic(input);
-
-    expect(mockGatherEvidence).toHaveBeenCalledWith({
-      questionText: 'What is the cap rate?',
-      context: { tenantId: 'acme', actorId: 'user-1', role: UserRole.Member },
-    });
-    // Only `chunks` reaches the caller — `iterations`/`costUsd`/`terminationReason` are discarded
-    // here, matching `retrieveEvidence`'s own `RetrievedChunk[]` return shape (see the `Activities`
-    // interface's own doc comment on `retrieveEvidenceAgentic`).
-    expect(result).toEqual(chunks);
   });
 
   it('should delegate synthesizeAnswer to SynthesisService.synthesizeAnswer, renaming questionText to question and threading tenantId through', async () => {

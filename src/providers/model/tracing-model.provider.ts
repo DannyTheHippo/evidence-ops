@@ -73,14 +73,6 @@ export class TracingModelProvider implements ModelProvider {
           provider: this.info.provider,
           taskClass: request.taskClass,
         });
-        if (result.toolCalls && result.toolCalls.length > 0) {
-          // Count and names only, never `ModelToolCall.input` — see this constant's own doc
-          // comment in `span-attributes.constants.ts`.
-          span.setAttributes({
-            [EVIDENCE_ATTRIBUTES.TOOL_CALL_COUNT]: result.toolCalls.length,
-            [EVIDENCE_ATTRIBUTES.TOOL_CALL_NAMES]: result.toolCalls.map((call) => call.name),
-          });
-        }
         if (this.captureModelContent) {
           span.addEvent(GEN_AI_CONTENT_EVENTS.COMPLETION, {
             'gen_ai.completion': JSON.stringify(result.output),

@@ -83,10 +83,9 @@ export interface ExecuteToolInput {
 
 /**
  * The single chokepoint every tool call MUST route through — "the model proposes, the application
- * disposes" applied to tool use. Its callers are `AgenticRetrievalService` (the retrieval loop's
- * `search_evidence`/`fetch_chunks`) and `McpServerService` (the external MCP surface); both
- * delegate here rather than re-implementing validation or authorization. Deliberately thin — a
- * registry, a step allowlist, an authz hook, and zod-strict argument validation.
+ * disposes" applied to tool use. Its sole caller is `McpServerService` (the external MCP surface),
+ * which delegates here rather than re-implementing validation or authorization. Deliberately
+ * thin — a registry, a step allowlist, an authz hook, and zod-strict argument validation.
  *
  * Fails CLOSED at every one of its four gates, evaluated in this order, deliberately before any
  * work is done on the untrusted argument payload:

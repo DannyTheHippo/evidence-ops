@@ -54,7 +54,6 @@ x-app-environment: &app-environment
   OPENAI_TIMEOUT_MS: ${OPENAI_TIMEOUT_MS:-60000}
   RETRIEVAL_FUSION: ${RETRIEVAL_FUSION:-server}
   RETRIEVAL_LIMIT: ${RETRIEVAL_LIMIT:-12}
-  RETRIEVAL_STRATEGY: ${RETRIEVAL_STRATEGY:-single-shot}
   # Off by default: on, spans carry prompt and completion text, which puts evidence content in the
   # tracing backend and widens the trust boundary to whoever can read traces.
   OTEL_CAPTURE_MODEL_CONTENT: ${OTEL_CAPTURE_MODEL_CONTENT:-false}
@@ -416,9 +415,6 @@ services:
       VOYAGE_MAX_RETRIES: ${VOYAGE_MAX_RETRIES:-5}
       VOYAGE_MAX_RETRY_WAIT_MS: ${VOYAGE_MAX_RETRY_WAIT_MS:-300000}
       VOYAGE_REQUEST_TIMEOUT_MS: ${VOYAGE_REQUEST_TIMEOUT_MS:-30000}
-      # `AGENTIC_MAX_COST_USD` is deliberately not here — it is a spend ceiling and lives in `.env`
-      # beside the keys it bounds. An inline value would override whatever an operator set there.
-      AGENTIC_MAX_ITERATIONS: ${AGENTIC_MAX_ITERATIONS:-8}
       EXTRACTION_CHUNK_CONCURRENCY: ${EXTRACTION_CHUNK_CONCURRENCY:-2}
       # Container-relative, and nothing mounts a host directory onto it: the local-folder connector
       # reads this path inside the container, so a pilot ingesting from the host needs a bind mount

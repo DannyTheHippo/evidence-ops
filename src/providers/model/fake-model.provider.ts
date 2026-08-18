@@ -5,7 +5,6 @@ import type {
   ModelProviderInfo,
   ModelRequest,
   ModelResult,
-  ModelToolCall,
   ModelUsage,
 } from './model-provider.interface';
 
@@ -30,13 +29,6 @@ export class FakeModelProvider implements ModelProvider {
 
   enqueueResult(result: Partial<ModelResult<z.ZodType | undefined>> & { output: unknown }): void {
     this.queue.push({ usage: ZERO_USAGE, costUsd: 0, ...result });
-  }
-
-  /** Convenience for `enqueueResult` when the queued turn is a tool call rather than a final
-   * answer — sets `stopReason: 'tool_use'` and the given `toolCalls`, defaulting `output` to an
-   * empty string (Anthropic's own shape for a tool-only turn: no leading text block). */
-  enqueueToolCall(toolCalls: readonly ModelToolCall[], output: unknown = ''): void {
-    this.enqueueResult({ output, stopReason: 'tool_use', toolCalls });
   }
 
   enqueueError(error: Error): void {

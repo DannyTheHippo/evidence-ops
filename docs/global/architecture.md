@@ -9,8 +9,8 @@ Three runtime processes over one database, plus a Temporal server.
   parse, and database write in the evidence pipeline happens here.
 - **MCP process** (`src/mcp/main.ts`) — a narrow, PAT-authenticated tool surface for AI clients.
   Serves Streamable HTTP from a hand-built Express app over the `McpModule` DI slice, and
-  implements no behaviour of its own: every tool call routes through `ToolExecutorService` — the
-  chokepoint it shares with the agentic retrieval loop — and lands on the same service methods the
+  implements no behaviour of its own: every tool call routes through `ToolExecutorService` —
+  the deterministic authorization chokepoint (ADR-0005) — and lands on the same service methods the
   REST controllers call. See [The MCP surface](#the-mcp-surface).
 
 All three read the same Mongo (`mongodb/mongodb-atlas-local`), which is where hybrid retrieval
@@ -61,7 +61,7 @@ flowchart TB
   subgraph Services["Nest services (shared by the API, worker and MCP DI graphs)"]
     Ing["IngestionService · parsers (pdf/docx/xlsx/pptx/csv/tsv/text) · chunker"]
     Facts["FactsService · prose + xlsx extractors · CanonicalEntityService"]
-    Retr["EvidenceRetrievalService · AgenticRetrievalService"]
+    Retr["EvidenceRetrievalService"]
     Syn["SynthesisService — the model call that drafts the answer"]
     Gate["GroundingGateService + verify-claim — deterministic, no model"]
     Persist["AnswerPersistenceService · ConflictsService"]
@@ -121,10 +121,10 @@ Workflow files import `Activities` with `import type` only, so the statement is 
 bundler sees a graph — that is why `answer-question.workflow.ts` can name an activity that pulls in
 mongoose without pulling mongoose into the workflow bundle.
 
-**Probabilistic work is confined to activities.** `synthesizeAnswer`, `extractFacts`, and
-`retrieveEvidenceAgentic` are the activities that call a model; `retrieveEvidence` and the ingestion
-path call the embedding provider. The grounding check is an activity too, but a pure one — no model,
-no network, no database read beyond the scoped fact/conflict lookups it is handed.
+**Probabilistic work is confined to activities.** `synthesizeAnswer` and `extractFacts` are the
+activities that call a model; `retrieveEvidence` and the ingestion path call the embedding provider.
+The grounding check is an activity too, but a pure one — no model, no network, no database read
+beyond the scoped fact/conflict lookups it is handed.
 
 ## The answer path, and where the gate sits
 
@@ -157,14 +157,6 @@ sequenceDiagram
   U->>A: GET /api/v1/answers/:id
   A-->>U: outcome, exposed only once runStatus is completed
 ```
-
-The `retrieveEvidence` step is the one that swaps: `answerQuestion` reads a `retrievalStrategy`
-field carried on its own input (`config.retrieval.strategy`, read once in `QaService` and passed
-across the fence as a plain value) and proxies `retrieveEvidenceAgentic` instead when it is
-`agentic` **and** the input also carries the server-derived `actorId`/`role` those tool calls need.
-The condition tests those fields at runtime, not only in the type, so a history that lacks any of
-them replays down the single-shot branch rather than failing. Everything downstream of retrieval is
-identical on both branches.
 
 Two things this diagram is making explicit:
 
@@ -257,15 +249,6 @@ Index definitions live in `migrations/0003-search-indexes.ts`; the store duplica
 rather than importing them (`tsconfig.build.json` scopes `rootDir` to `src`), and
 `test/features/evidence/retrieval/search-indexes.integration-spec.ts` is what keeps the two
 definitions honest against a live server.
-
-`RETRIEVAL_STRATEGY` selects how retrieval is driven, one level above fusion. `single-shot` (the
-default) issues one hybrid query. `agentic` hands `AgenticRetrievalService` a `search_evidence` /
-`fetch_chunks` loop bounded by `AGENTIC_MAX_ITERATIONS` and `AGENTIC_MAX_COST_USD`; every tool call
-in that loop goes through `ToolExecutorService` under the `agentic-retrieval` step, and the loop
-reports which of four conditions ended it — the model stopping, the iteration cap, the cost budget,
-or every attempted call being refused. That last one is kept distinct because an empty result from
-a refused loop is a different failure from an empty corpus. Both strategies hand the same
-`RetrievedChunk[]` shape to the unchanged synthesis and gate path.
 
 ## The MCP surface
 
@@ -378,12 +361,13 @@ counters gain a `_total` suffix, so `evidence_ops.grounding.claims_dropped` is q
 - `docs/adr/0002-single-store-hybrid-retrieval.md` — why one store rather than a separate vector DB.
 - `docs/adr/0003-temporal-from-day-one.md` — the determinism fence and the process split.
 - `docs/adr/0004-grounding-gate-and-citation-contract.md` — what the gate does and does not verify.
-- `docs/adr/0005-deterministic-authz-and-tool-chokepoint.md` — the tool chokepoint that the agentic
-  retrieval loop and the MCP surface both execute through.
+- `docs/adr/0005-deterministic-authz-and-tool-chokepoint.md` — the tool chokepoint the MCP surface
+  executes through.
 - `docs/adr/0006-model-access-behind-a-decorated-provider.md` — why model access sits behind a
   decorator chain rather than a direct SDK call.
 - `docs/adr/0012-source-connector-seam.md` — the connector seam behind `SOURCE_CONNECTOR`.
-- `docs/adr/0015-agentic-retrieval-mode.md` — the bounded tool loop and its termination conditions.
+- `docs/adr/0015-agentic-retrieval-mode.md` — superseded; the removed multi-turn retrieval loop's
+  design rationale, kept as a historical record.
 - `docs/adr/0016-mcp-server-surface.md` — the MCP surface, its two steps, and why approvals are not
   reachable from it.
 - `docs/adr/0017-survivorship-policy.md` — the deterministic rules that propose a conflict winner.

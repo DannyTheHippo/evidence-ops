@@ -7,9 +7,9 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { toJSONSchema } from 'zod/v4';
 import { TypedConfigService } from '../config/environment/typed-config.service';
 import { ConflictsService } from '../features/evidence/conflicts/conflicts.service';
-import { buildSearchEvidenceTool } from '../features/evidence/qa/agentic-retrieval-tools';
 import { EvidenceRetrievalService } from '../features/evidence/qa/evidence-retrieval.service';
 import { QaService } from '../features/evidence/qa/qa.service';
+import { buildSearchEvidenceTool } from '../features/evidence/retrieval/evidence-tools';
 import type { ToolExecutionResult } from '../features/platform/authz/tool-executor.service';
 import { ToolExecutorService } from '../features/platform/authz/tool-executor.service';
 import type {
@@ -176,8 +176,9 @@ export class McpServerService {
    *
    * Every `tools/call` writes exactly one row of its own here, at the boundary rather than inside
    * the services the tools delegate to: a read-only tool like `search_evidence` audits nothing on
-   * its own (`EvidenceRetrievalService.retrieve` is shared with the worker's agentic retrieval
-   * loop, where a row per iteration is noise), and a refusal never reaches a service at all. The
+   * its own (`EvidenceRetrievalService.retrieve` is shared with the worker's single-shot retrieval
+   * activity, where a row per question is already recorded at `qa.question.started`), and a
+   * refusal never reaches a service at all. The
    * row carries the tool name, the outcome, and — on a refusal — the chokepoint's reason, but
    * never the arguments: those are model-controlled and can carry corpus text, so what is recorded
    * answers "who called what, when", not "what did the payload say". The write fails CLOSED: it is

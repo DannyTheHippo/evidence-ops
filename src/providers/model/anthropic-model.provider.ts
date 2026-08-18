@@ -13,10 +13,6 @@ import type {
   ModelProviderInfo,
   ModelRequest,
   ModelResult,
-  ModelStopReason,
-  ModelToolCall,
-  ModelToolChoice,
-  ModelToolDefinition,
   ModelUsage,
 } from './model-provider.interface';
 import {
@@ -26,103 +22,8 @@ import {
 } from './model-output-validation.util';
 import { toStructuredOutputFormat } from './structured-output-format.util';
 
-/** A `'tool'`-role `ModelMessage` has no dedicated role on Anthropic's side — it becomes a `user`
- * message whose content is a single `tool_result` block naming the `tool_use_id` it answers. */
-function toAnthropicToolResultMessage(message: ModelMessage): Anthropic.MessageParam {
-  if (!message.toolCallId) {
-    throw new Error(
-      "A 'tool'-role ModelMessage must carry toolCallId — it identifies which " +
-        'tool_use call this result answers',
-    );
-  }
-  return {
-    role: 'user',
-    content: [{ type: 'tool_result', tool_use_id: message.toolCallId, content: message.content }],
-  };
-}
-
-/** An assistant message with `toolCalls` set becomes `tool_use` content blocks, preceded by a
- * `text` block only when there is text alongside the calls. */
-function toAnthropicAssistantMessage(message: ModelMessage): Anthropic.MessageParam {
-  const toolUseBlocks: Anthropic.ToolUseBlockParam[] = (message.toolCalls ?? []).map((call) => ({
-    type: 'tool_use',
-    id: call.id,
-    name: call.name,
-    input: call.input,
-  }));
-  const content: Anthropic.ContentBlockParam[] = message.content
-    ? [{ type: 'text', text: message.content }, ...toolUseBlocks]
-    : toolUseBlocks;
-  return { role: 'assistant', content };
-}
-
 function toAnthropicMessages(messages: readonly ModelMessage[]): Anthropic.MessageParam[] {
-  return messages.map((message) => {
-    if (message.role === 'tool') {
-      return toAnthropicToolResultMessage(message);
-    }
-    if (message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0) {
-      return toAnthropicAssistantMessage(message);
-    }
-    return { role: message.role, content: message.content };
-  });
-}
-
-/** `Tool.InputSchema` requires an object-rooted JSON Schema — every tool this codebase defines
- * has an object `inputSchema`, so the cast holds; reuses `toStructuredOutputFormat`'s conversion
- * rather than a second `toJSONSchema` call. */
-function toAnthropicTools(
-  tools: readonly ModelToolDefinition[] | undefined,
-): Anthropic.Tool[] | undefined {
-  if (!tools || tools.length === 0) {
-    return undefined;
-  }
-  return tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    input_schema: toStructuredOutputFormat(tool.inputSchema).schema as Anthropic.Tool.InputSchema,
-  }));
-}
-
-function toAnthropicToolChoice(
-  toolChoice: ModelToolChoice | undefined,
-): Anthropic.ToolChoice | undefined {
-  if (!toolChoice) {
-    return undefined;
-  }
-  if (toolChoice === 'auto') {
-    return { type: 'auto' };
-  }
-  if (toolChoice === 'none') {
-    return { type: 'none' };
-  }
-  if (toolChoice === 'required') {
-    return { type: 'any' };
-  }
-  return { type: 'tool', name: toolChoice.tool };
-}
-
-/** Closed over the three reasons `ModelStopReason` documents — every other Anthropic
- * `stop_reason` (`pause_turn`, `refusal`, `model_context_window_exceeded`, `null`) maps to
- * `undefined` rather than a fabricated guess. */
-function toModelStopReason(stopReason: Anthropic.StopReason | null): ModelStopReason | undefined {
-  switch (stopReason) {
-    case 'end_turn':
-    case 'stop_sequence':
-      return 'end_turn';
-    case 'tool_use':
-      return 'tool_use';
-    case 'max_tokens':
-      return 'max_tokens';
-    default:
-      return undefined;
-  }
-}
-
-function extractToolCalls(message: Anthropic.Message): ModelToolCall[] {
-  return message.content
-    .filter((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use')
-    .map((block) => ({ id: block.id, name: block.name, input: block.input }));
+  return messages.map((message) => ({ role: message.role, content: message.content }));
 }
 
 function extractText(message: Anthropic.Message): string {
@@ -196,8 +97,6 @@ export class AnthropicModelProvider implements ModelProvider {
       system: request.system,
       messages: toAnthropicMessages(request.messages),
       output_config: schema ? { format: toStructuredOutputFormat(schema) } : undefined,
-      tools: toAnthropicTools(request.tools),
-      tool_choice: toAnthropicToolChoice(request.toolChoice),
       // No `temperature` — this model tier rejects it outright (`400 invalid_request_error:
       // \`temperature\` is deprecated for this model`), so sampling cannot be pinned. See
       // ADR-0006 for what that means for run-to-run reproducibility.
@@ -206,15 +105,10 @@ export class AnthropicModelProvider implements ModelProvider {
     const first = await this.client.messages.create(baseParams);
 
     if (!schema) {
-      // `stopReason`/`toolCalls` only carry information once a caller offers `tools` — a
-      // tool-free request keeps returning exactly what it returned before this field existed.
-      const stopReason = request.tools ? toModelStopReason(first.stop_reason) : undefined;
       return {
         output: extractText(first) as ModelOutput<TSchema>,
         usage: toModelUsage(first.usage),
         costUsd: costUsdForUsage(this.info.model, first.usage),
-        ...(stopReason ? { stopReason } : {}),
-        ...(stopReason === 'tool_use' ? { toolCalls: extractToolCalls(first) } : {}),
       };
     }
 

@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type {
-  AgenticRetrievalConfig,
   AnthropicConfig,
   AppConfig,
   AuthConfig,
@@ -61,9 +60,6 @@ export class TypedConfigService {
   }
   get retrieval(): RetrievalConfig {
     return this.config.get('retrieval', { infer: true });
-  }
-  get agenticRetrieval(): AgenticRetrievalConfig {
-    return this.config.get('agenticRetrieval', { infer: true });
   }
   get telemetry(): TelemetryConfig {
     return this.config.get('telemetry', { infer: true });
