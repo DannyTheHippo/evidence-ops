@@ -34,11 +34,15 @@ export const createApplicationConfig = async (app: INestApplication): Promise<Ap
   // so CSP stays off and the other secure-header defaults (HSTS, no-sniff, etc.) apply.
   app.use(helmet({ contentSecurityPolicy: false }));
 
+  // No `Authorization` here: this process's only credential path is `JwtAuthGuard`'s session
+  // cookie (`resolveSessionCookieName`), sent by the browser automatically — a request carrying
+  // this header has nothing this process reads it for. The MCP surface's own bearer-token auth
+  // (`pat-token.verifier.ts`) is a separate process with its own bootstrap, not this one.
   app.enableCors({
     origin: corsConfig.origin,
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS', 'HEAD'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Content-Length', 'X-Requested-With'],
+    allowedHeaders: ['Content-Type', 'Content-Length', 'X-Requested-With'],
   });
 
   app.setGlobalPrefix('api');

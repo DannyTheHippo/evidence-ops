@@ -200,6 +200,25 @@ describe('acquireStreamSlot', () => {
     });
     release2();
   });
+
+  it('should treat a missing counter as zero rather than propagating NaN, even though the acquire/release invariant guarantees this never happens through the public API', () => {
+    const release = acquireStreamSlot('tenant-cap-g', 'user-cap-g', {
+      maxConnectionsPerTenant: 1,
+      maxConnectionsPerUser: 1,
+    });
+
+    const getSpy = jest.spyOn(Map.prototype, 'get').mockReturnValue(undefined);
+    release();
+    getSpy.mockRestore();
+
+    // `?? 0` read the forced-missing entry as already-zero and deleted it, so a fresh acquire on
+    // the same key succeeds under the same cap rather than being blocked by a corrupted counter.
+    const release2 = acquireStreamSlot('tenant-cap-g', 'user-cap-g', {
+      maxConnectionsPerTenant: 1,
+      maxConnectionsPerUser: 1,
+    });
+    release2();
+  });
 });
 
 describe('shouldRecordStreamView', () => {

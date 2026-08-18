@@ -40,9 +40,12 @@ export function estimateEmbeddingTokens(inputs: readonly string[]): number {
  * Reserves a worst-case token estimate before calling the delegate, then either settles with the
  * actual cost (from the delegate's real `usage.totalTokens`) on success or releases the
  * reservation on any delegate failure, so a reservation can never leak against a call that never
- * happened. The estimate can only overstate cost, never understate it — an undercount would let a
- * call transiently push spend past the ceiling before the next reserve catches it up, where an
- * overcount only ever refuses a call early that would have fit.
+ * happened. The 1-char-per-4-tokens heuristic is only an approximation — dense-script text (CJK)
+ * tokenizes closer to 1 char per token, so a large CJK input can reserve well under its actual
+ * cost. `settle` still writes the real cost from `usage.totalTokens` afterward, so an
+ * undercount's only consequence is a transient one: spend can push past the ceiling for the
+ * duration of one in-flight call before the next `reserve` sees the corrected total and catches it
+ * up.
  */
 @Injectable()
 export class SpendGuardEmbeddingProvider implements EmbeddingProvider {

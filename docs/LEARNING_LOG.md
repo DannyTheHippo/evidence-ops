@@ -936,8 +936,9 @@ than its role, so a token that clears a step's floor can call every tool that st
 
 ## 014 — Agentic retrieval: the loop gathers, and that boundary is the safety property
 
-**ADR:** [0015](./adr/0015-agentic-retrieval-mode.md) · **Code:**
-`src/features/evidence/qa/agentic-retrieval.service.ts`, `agentic-retrieval-tools.ts`
+**ADR:** [0015](./adr/0015-agentic-retrieval-mode.md), whose Status line carries the removal
+record — the mechanism this entry teaches was later removed from the codebase, so the code
+references below describe a design that no longer exists on disk.
 
 **The concept.** Single-shot retrieval runs one search per question and hands whatever it finds to
 whatever comes next. It is correct for a question the corpus answers in one search and blind to a

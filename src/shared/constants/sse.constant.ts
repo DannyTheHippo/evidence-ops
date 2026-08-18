@@ -14,9 +14,11 @@ export const SSE_STREAM_ERROR_MESSAGE = 'Internal server error';
 
 // How often each of the three SSE streams (`QaService.streamAnswer`, `WorkflowRunsService.streamRun`,
 // `DocumentsService.streamList`) re-reads the connecting user via `reauthTicks$`
-// (`stream-session.util.ts`) and closes if the session is gone or moved tenants. This is the
-// window a revoked or cross-tenant session can keep an already-open stream alive — worth trading
-// against the extra Mongo lookup a tighter interval would add on every open connection.
+// (`stream-session.util.ts`) and closes if the user row is gone or now names a different tenant.
+// This is the window a deleted user or a cross-tenant move can keep an already-open stream alive —
+// worth trading against the extra Mongo lookup a tighter interval would add on every open
+// connection. It is not a logout window: logout revokes nothing, so this tick never closes a
+// stream on that basis.
 export const SSE_REAUTH_INTERVAL_MS = 30_000;
 
 // The window `shouldRecordStreamView` (`stream-session.util.ts`) collapses a reconnecting client's

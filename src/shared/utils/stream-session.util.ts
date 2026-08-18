@@ -11,10 +11,12 @@ export interface StreamSession {
 /**
  * Emits once and completes the moment a periodic re-read of `session.userId` comes back absent or
  * naming a different tenant than `session.tenantId`. An SSE connection's subscription outlives the
- * request that opened it, so this is the only way a stream learns the browser logged out, the
- * account was removed, or it moved tenants mid-connection — none of which the initial
- * `@CurrentUser()` check at subscribe time can ever see. Meant to be piped into a live stream via
- * `takeUntil`.
+ * request that opened it, so this is the only way a stream detects the user row being deleted or
+ * moved to a different tenant mid-connection — none of which the initial `@CurrentUser()` check at
+ * subscribe time can ever see. It does not detect a browser logout: `AuthService.logout` writes an
+ * audit row and revokes nothing, so a stream opened before a logout stays open until this tick's own
+ * termination conditions fire, same as any other still-valid session. Meant to be piped into a live
+ * stream via `takeUntil`.
  *
  * A `reload` rejection (a transient read failure) is folded into the same "no session" branch
  * rather than left to propagate: this is a permission gate, and a permission gate that cannot
@@ -48,10 +50,13 @@ const openConnectionsByTenant = new Map<string, number>();
 const openConnectionsByUser = new Map<string, number>();
 
 function releaseSlot(counts: Map<string, number>, key: string): void {
-  // `key` is always present with a count of at least 1: `acquireStreamSlot` sets both counters
-  // before it returns the release closure, and that closure's `released` flag blocks a second
-  // call. The assertion states that invariant rather than adding an unreachable fallback branch.
-  const count = counts.get(key) as number;
+  // `key` is always present with a count of at least 1 in practice: `acquireStreamSlot` sets both
+  // counters before it returns the release closure, and that closure's `released` flag blocks a
+  // second call. `?? 0` guards that invariant rather than trusting it with an unchecked cast — if
+  // it ever broke, a bare cast would send a missing entry down the decrement branch below
+  // (`undefined <= 1` is `false`) and write `NaN` over the counter, silently disabling the cap for
+  // that key; reading a missing entry as already-zero instead deletes it, a safe no-op.
+  const count = counts.get(key) ?? 0;
   if (count <= 1) {
     counts.delete(key);
   } else {

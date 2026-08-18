@@ -337,9 +337,11 @@ services:
       # this process now that its host-port publish above is loopback-only.
       TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
       # SSE streams are served only by this process. Caps bound how many concurrent streams one
-      # tenant or user may hold open; the lifetime bounds how long any single stream may run
-      # regardless of cap, forcing a periodic re-subscribe (and re-auth) rather than an indefinite
-      # connection.
+      # tenant or user may hold open, across all three SSE routes. The lifetime only bounds the
+      # document-list stream (`DocumentsService.streamList`) — the only one of the three with no
+      # terminal state of its own to close the connection on — forcing a periodic re-subscribe (and
+      # re-auth) rather than an indefinite connection; the answer and workflow-run streams close on
+      # their own terminal state well before this would ever fire.
       SSE_MAX_CONNECTIONS_PER_TENANT: ${SSE_MAX_CONNECTIONS_PER_TENANT:-100}
       SSE_MAX_CONNECTIONS_PER_USER: ${SSE_MAX_CONNECTIONS_PER_USER:-10}
       SSE_MAX_STREAM_LIFETIME_MS: ${SSE_MAX_STREAM_LIFETIME_MS:-1800000}

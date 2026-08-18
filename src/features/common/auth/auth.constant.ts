@@ -1,7 +1,7 @@
 import { isProdLike } from '../../../config/environment/environment.config';
 
-// Same JWT the guard already accepts as a Bearer token; the cookie is a second transport for it,
-// not a second credential.
+// `JwtAuthGuard` accepts this cookie as its only credential path — no Authorization header, so an
+// XSS-stolen bearer token authenticates nothing here.
 export const AUTH_COOKIE_NAME = 'eo_session';
 
 // The browser refuses to store a `__Host-`-prefixed cookie unless it also carries `Secure` and no

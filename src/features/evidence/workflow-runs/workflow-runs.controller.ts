@@ -67,9 +67,12 @@ export class WorkflowRunsController {
   // Nest applies its own values after any caller-set ones.
   // `@SkipThrottle()` exempts this route from the global throttler entirely — an unbounded,
   // unthrottled, long-lived connection with a `WORKFLOW_RUN_STREAM_INTERVAL_MS` DB tick.
-  // Per-tenant and per-user open-connection caps are enforced below instead (`acquireStreamSlot`,
-  // config'd via `TypedConfigService.sse`), refusing with 429 rather than accepting past the
-  // process's budget.
+  // Per-tenant and per-user open-connection caps are enforced below (`acquireStreamSlot`, config'd
+  // via `TypedConfigService.sse`), refusing with 429 once a tenant or user already has its
+  // configured number of streams open. That bounds concurrency, not request rate — a burst of opens
+  // that each close immediately never pushes concurrency past what a single lingering one would, so
+  // this is not a throttling substitute; it exists to cap how much of the process's connection
+  // budget one tenant or user can hold at once.
   @Sse(':id/events')
   @Version('1')
   @SkipThrottle()
