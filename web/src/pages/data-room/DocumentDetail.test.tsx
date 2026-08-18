@@ -95,6 +95,11 @@ describe('DocumentDetail', () => {
     expect(await screen.findByText('Q3 Rent Roll')).toBeInTheDocument();
     const downloadLink = screen.getByRole('link', { name: 'Download' });
     expect(downloadLink).toHaveAttribute('href', '/api/v1/documents/versions/v-1/content');
+    // sizeBytes and mimeType are on the wire; a raw byte count would tell a reader nothing.
+    expect(screen.getByText('100 B')).toBeInTheDocument();
+    expect(
+      screen.getByText('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+    ).toBeInTheDocument();
   });
 
   it('shows a calm not-found notice for a missing or already-deleted document', async () => {

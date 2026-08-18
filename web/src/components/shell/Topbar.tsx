@@ -1,6 +1,7 @@
-import { IconMenu } from '../icons';
-import Button from '../ui/Button';
+import { IconChevronDown, IconMenu } from '../icons';
+import { useSession } from '../../lib/use-session';
 import IconButton from '../ui/IconButton';
+import Menu from '../ui/Menu';
 import ConnectionStatus from './ConnectionStatus';
 import { ThemeToggle } from './ThemeToggle';
 
@@ -12,8 +13,24 @@ interface TopbarProps {
 
 /** The chrome header above routed content: the drawer trigger (visible only below 768px, per
  * `.menu-toggle` in shell.css), the current page's breadcrumb, connection status, theme control,
- * and logout. */
+ * and the account menu. Reads its own session via `useSession()` — `App.tsx` composes this
+ * component without passing session data down, and the hook's cache means this costs no extra
+ * probe beyond the one `App` already triggered. */
 export default function Topbar({ breadcrumbLabel, onOpenMenu, onLogout }: TopbarProps) {
+  const session = useSession();
+  const me = session.status === 'authed' ? session.me : null;
+  const accountLabel = me ? me.email : 'Account';
+  const accountInitial = me ? me.email.charAt(0).toUpperCase() : '?';
+
+  const accountItems = me
+    ? [
+        { label: me.email },
+        { label: me.role === 'admin' ? 'Admin' : 'Member' },
+        { label: `Member since ${new Date(me.createdAt).toLocaleDateString()}` },
+        { label: 'Logout', onSelect: onLogout },
+      ]
+    : [{ label: 'Logout', onSelect: onLogout }];
+
   return (
     <header className="topbar">
       <IconButton
@@ -25,12 +42,22 @@ export default function Topbar({ breadcrumbLabel, onOpenMenu, onLogout }: Topbar
         onClick={onOpenMenu}
       />
       <span className="breadcrumb">{breadcrumbLabel}</span>
-      <span className="topbar-spacer" />
-      <ConnectionStatus />
-      <ThemeToggle />
-      <Button variant="ghost" size="sm" onClick={onLogout}>
-        Logout
-      </Button>
+      <div className="topbar-end">
+        <ConnectionStatus />
+        <ThemeToggle />
+        <Menu
+          trigger={
+            <>
+              <span className="account-avatar" aria-hidden="true">
+                {accountInitial}
+              </span>
+              <span className="sr-only">{accountLabel}</span>
+              <IconChevronDown />
+            </>
+          }
+          items={accountItems}
+        />
+      </div>
     </header>
   );
 }

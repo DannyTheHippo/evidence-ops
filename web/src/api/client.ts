@@ -106,7 +106,7 @@ export function getMe(): Promise<Me> {
 
 // ── Documents ────────────────────────────────────────────────────────────
 
-export type DocumentSourceKind = 'pdf' | 'docx' | 'xlsx';
+export type DocumentSourceKind = 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv' | 'tsv' | 'txt' | 'md';
 export type DocumentVersionIngestionStatus = 'pending' | 'completed' | 'failed';
 
 export interface DocumentVersion {
@@ -152,8 +152,15 @@ export function uploadDocument(
   return request<EvidenceDocument>('/documents', { method: 'POST', body: formData });
 }
 
-export function listDocuments(): Promise<WithCount<EvidenceDocument>> {
-  return request<WithCount<EvidenceDocument>>('/documents');
+export function listDocuments(params?: {
+  skip?: number;
+  limit?: number;
+}): Promise<WithCount<EvidenceDocument>> {
+  const query = new URLSearchParams();
+  if (params?.skip !== undefined) query.set('skip', String(params.skip));
+  if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  const qs = query.toString();
+  return request<WithCount<EvidenceDocument>>(`/documents${qs ? `?${qs}` : ''}`);
 }
 
 export function getDocumentById(id: string): Promise<DocumentWithVersions> {
@@ -272,6 +279,9 @@ export interface Answer {
   // then (see qa.controller.ts / answer.response.dto.ts).
   outcome?: AnswerOutcome;
   claimCoverage?: number;
+  // Number of evidence chunks retrieved for this run. Present only once runStatus is
+  // 'completed', same gate as outcome above.
+  retrievedChunkCount?: number;
   citations: Citation[];
   conflictIds: string[];
   createdAt: string;
@@ -367,10 +377,12 @@ export interface Conflict {
 }
 
 export function listConflicts(params?: {
+  skip?: number;
   limit?: number;
   status?: ConflictStatus;
 }): Promise<WithCount<Conflict>> {
   const query = new URLSearchParams();
+  if (params?.skip !== undefined) query.set('skip', String(params.skip));
   if (params?.limit !== undefined) query.set('limit', String(params.limit));
   if (params?.status) query.set('status', params.status);
   const qs = query.toString();
@@ -413,8 +425,14 @@ export interface Approval {
   createdAt: string;
 }
 
-export function listApprovals(params?: { state?: ApprovalState }): Promise<WithCount<Approval>> {
+export function listApprovals(params?: {
+  skip?: number;
+  limit?: number;
+  state?: ApprovalState;
+}): Promise<WithCount<Approval>> {
   const query = new URLSearchParams();
+  if (params?.skip !== undefined) query.set('skip', String(params.skip));
+  if (params?.limit !== undefined) query.set('limit', String(params.limit));
   if (params?.state) query.set('state', params.state);
   const qs = query.toString();
   return request<WithCount<Approval>>(`/approvals${qs ? `?${qs}` : ''}`);

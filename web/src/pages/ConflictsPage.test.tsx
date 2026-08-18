@@ -105,17 +105,19 @@ function renderPage() {
 // resolution-request call — dispatch by URL rather than by call order.
 function fetchStub(resolution?: () => Response, conflicts: unknown[] = [openConflict]) {
   return vi.fn((url: string, _init?: RequestInit) => {
-    if (url === '/api/v1/conflicts') {
+    if (url === '/api/v1/conflicts/conflict-1/resolution-requests' && resolution) {
+      return Promise.resolve(resolution());
+    }
+    // Paginated (and, in some tests, filtered) — matched by prefix so the pager/filter query
+    // string does not have to be spelled out at every call site.
+    if (url === '/api/v1/conflicts' || url.startsWith('/api/v1/conflicts?')) {
       return Promise.resolve(jsonResponse({ docs: conflicts, count: conflicts.length }));
     }
-    if (url === '/api/v1/documents') {
+    if (url === '/api/v1/documents' || url.startsWith('/api/v1/documents?')) {
       return Promise.resolve(jsonResponse({ docs: [documentFixture], count: 1 }));
     }
     if (url === '/api/v1/documents/doc-1') {
       return Promise.resolve(jsonResponse({ ...documentFixture, versions: [documentVersion] }));
-    }
-    if (url === '/api/v1/conflicts/conflict-1/resolution-requests' && resolution) {
-      return Promise.resolve(resolution());
     }
     return Promise.reject(new Error(`Unhandled fetch: ${url}`));
   });
@@ -220,14 +222,14 @@ describe('ConflictsPage', () => {
     });
   });
 
-  it('shows how many conflicts are visible against the total when the list is truncated', async () => {
+  it('shows the pager total and keeps Next enabled when the list is truncated', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string) => {
-        if (url === '/api/v1/conflicts') {
+        if (url === '/api/v1/conflicts' || url.startsWith('/api/v1/conflicts?')) {
           return Promise.resolve(jsonResponse({ docs: [openConflict], count: 47 }));
         }
-        if (url === '/api/v1/documents') {
+        if (url === '/api/v1/documents' || url.startsWith('/api/v1/documents?')) {
           return Promise.resolve(jsonResponse({ docs: [documentFixture], count: 1 }));
         }
         if (url === '/api/v1/documents/doc-1') {
@@ -239,16 +241,88 @@ describe('ConflictsPage', () => {
 
     renderPage();
 
-    expect(await screen.findByText('Showing 1 of 47.')).toBeInTheDocument();
+    expect(await screen.findByText('47 total')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
   });
 
-  it('shows no truncation notice when the full conflict list fits on the page', async () => {
+  it('disables Next once the full conflict list fits on the page', async () => {
     vi.stubGlobal('fetch', fetchStub());
 
     renderPage();
 
     await screen.findByText('Northgate Business Park');
-    expect(screen.queryByText(/^Showing /)).not.toBeInTheDocument();
+    expect(screen.getByText('1 total')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+  });
+
+  it('pages past the first 20 conflicts, sending skip/limit on the request', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/conflicts?skip=20&limit=20') {
+        return Promise.resolve(jsonResponse({ docs: [recencyConflict], count: 47 }));
+      }
+      if (url === '/api/v1/conflicts' || url.startsWith('/api/v1/conflicts?')) {
+        return Promise.resolve(jsonResponse({ docs: [openConflict], count: 47 }));
+      }
+      if (url === '/api/v1/documents' || url.startsWith('/api/v1/documents?')) {
+        return Promise.resolve(jsonResponse({ docs: [documentFixture], count: 1 }));
+      }
+      if (url === '/api/v1/documents/doc-1') {
+        return Promise.resolve(jsonResponse({ ...documentFixture, versions: [documentVersion] }));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    await screen.findByText('Northgate Business Park');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    expect(await screen.findByText('Recommended · recency')).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => url === '/api/v1/conflicts?skip=20&limit=20')).toBe(
+      true,
+    );
+  });
+
+  it('applies the status filter on submit and resets paging to the first page', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/conflicts?skip=0&limit=20&status=resolved') {
+        return Promise.resolve(jsonResponse({ docs: [recencyConflict], count: 1 }));
+      }
+      if (url === '/api/v1/conflicts' || url.startsWith('/api/v1/conflicts?')) {
+        return Promise.resolve(jsonResponse({ docs: [openConflict], count: 47 }));
+      }
+      if (url === '/api/v1/documents' || url.startsWith('/api/v1/documents?')) {
+        return Promise.resolve(jsonResponse({ docs: [documentFixture], count: 1 }));
+      }
+      if (url === '/api/v1/documents/doc-1') {
+        return Promise.resolve(jsonResponse({ ...documentFixture, versions: [documentVersion] }));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    await screen.findByText('Northgate Business Park');
+    // Advance to page 2 first, so the filter submit below is what proves skip resets to 0.
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText('47 total');
+
+    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'resolved' } });
+    // Selecting the filter alone must not refire the fetch — only Apply does.
+    expect(fetchMock.mock.calls.some(([url]) => url.includes('status=resolved'))).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+
+    expect(await screen.findByText('Recommended · recency')).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => url === '/api/v1/conflicts?skip=0&limit=20&status=resolved',
+      ),
+    ).toBe(true);
   });
 
   it('shows a per-row error when the resolution request fails', async () => {

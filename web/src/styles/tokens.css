@@ -64,6 +64,9 @@
   --tracking-mono-id: 0.01em;
   --leading-tight: 1.25;
   --leading-normal: 1.55;
+  /* Reading measure for prose that would otherwise run the full container width — the apparatus
+     quote column and page-level description/loading/empty text. */
+  --measure-reading: 60ch;
 
   /* Spacing — 4px base */
   --space-1: 0.25rem;
@@ -75,6 +78,10 @@
   --space-8: 2rem;
   --space-10: 2.5rem;
   --space-12: 3rem;
+  /* Density — semantic aliases over the spacing scale, tunable independently of it: row rhythm
+     for an actionable/table row, and the gap between a claim and its evidence in the apparatus. */
+  --density-row: var(--space-3);
+  --apparatus-gap: var(--space-4);
 
   /* Shape */
   --radius: 8px;
@@ -84,6 +91,14 @@
   --shadow: 0 1px 2px rgba(20, 22, 30, 0.04), 0 6px 16px rgba(20, 22, 30, 0.06);
   --shadow-pop: 0 2px 6px rgba(16, 20, 28, 0.08), 0 12px 32px rgba(16, 20, 28, 0.16);
   --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--signal);
+  --ledger-bar-height: 8px;
+
+  /* Motion — cross-cutting timing values for transitions and looping animations, named by role
+     rather than speed so a call site never has to guess which token maps to which duration. */
+  --motion-press: 0.12s;
+  --motion-row-hover: 0.1s;
+  --motion-shimmer: 1.4s;
+  --motion-pulse: 1.6s;
 
   /* Provenance rail */
   --rail-width: 2px;
@@ -93,7 +108,7 @@
   --rail-line-degraded: var(--status-caution-ink);
 }
 
-@media (prefers-color-scheme: dark) {
+@media screen and (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
     /* Surfaces */
     --bg: #0e131b;
@@ -142,51 +157,58 @@
 }
 
 /* Plain CSS has no "same as" mechanism, so this block is kept in sync with the
-   media-query block above by hand. */
-:root[data-theme='dark'] {
-  /* Surfaces */
-  --bg: #0e131b;
-  --surface: #161c26;
-  --surface-2: #1c2330;
-  --surface-3: #232b3a;
-  --hairline: #2a3242;
-  --hairline-strong: #3a4358;
+   media-query block above by hand.
 
-  /* Text */
-  --ink: #e8ecf3;
-  --ink-dim: #b7c0d1;
-  --muted: #8b96ab;
+   Both dark blocks are scoped to `screen`. On paper the ink is stripped to white but a dark
+   palette's own light ink is not, so a dark surface prints as near-invisible text; the base
+   `:root` light palette is what a printed page inherits instead. The scope is explicit on both
+   rather than relying on the browser treating a print render as light. */
+@media screen {
+  :root[data-theme='dark'] {
+    /* Surfaces */
+    --bg: #0e131b;
+    --surface: #161c26;
+    --surface-2: #1c2330;
+    --surface-3: #232b3a;
+    --hairline: #2a3242;
+    --hairline-strong: #3a4358;
 
-  --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b96ab' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    /* Text */
+    --ink: #e8ecf3;
+    --ink-dim: #b7c0d1;
+    --muted: #8b96ab;
 
-  /* Signal */
-  --signal: #55c2df;
-  --signal-press: #3fa6c2;
-  --signal-ink: #071013;
-  --signal-soft: rgba(85, 194, 223, 0.14);
-  --signal-line: rgba(85, 194, 223, 0.4);
+    --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b96ab' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
-  /* Status */
-  --status-verified-bg: rgba(78, 207, 156, 0.14);
-  --status-verified-ink: #4ecf9c;
-  --status-verified-line: rgba(78, 207, 156, 0.4);
-  --status-caution-bg: rgba(224, 172, 61, 0.14);
-  --status-caution-ink: #e0ac3d;
-  --status-caution-line: rgba(224, 172, 61, 0.4);
-  --status-reject-bg: rgba(242, 135, 154, 0.14);
-  --status-reject-ink: #f2879a;
-  --status-reject-line: rgba(242, 135, 154, 0.4);
-  --status-info-bg: rgba(127, 168, 234, 0.14);
-  --status-info-ink: #7fa8ea;
-  --status-info-line: rgba(127, 168, 234, 0.4);
-  --status-neutral-bg: var(--surface-3);
-  --status-neutral-ink: var(--ink-dim);
-  --status-neutral-line: var(--hairline-strong);
+    /* Signal */
+    --signal: #55c2df;
+    --signal-press: #3fa6c2;
+    --signal-ink: #071013;
+    --signal-soft: rgba(85, 194, 223, 0.14);
+    --signal-line: rgba(85, 194, 223, 0.4);
 
-  --shadow: 0 1px 0 rgba(255, 255, 255, 0.02), 0 8px 24px rgba(0, 0, 0, 0.35);
-  --shadow-pop: 0 2px 6px rgba(0, 0, 0, 0.3), 0 16px 40px rgba(0, 0, 0, 0.5);
-  --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--signal);
-  color-scheme: dark;
+    /* Status */
+    --status-verified-bg: rgba(78, 207, 156, 0.14);
+    --status-verified-ink: #4ecf9c;
+    --status-verified-line: rgba(78, 207, 156, 0.4);
+    --status-caution-bg: rgba(224, 172, 61, 0.14);
+    --status-caution-ink: #e0ac3d;
+    --status-caution-line: rgba(224, 172, 61, 0.4);
+    --status-reject-bg: rgba(242, 135, 154, 0.14);
+    --status-reject-ink: #f2879a;
+    --status-reject-line: rgba(242, 135, 154, 0.4);
+    --status-info-bg: rgba(127, 168, 234, 0.14);
+    --status-info-ink: #7fa8ea;
+    --status-info-line: rgba(127, 168, 234, 0.4);
+    --status-neutral-bg: var(--surface-3);
+    --status-neutral-ink: var(--ink-dim);
+    --status-neutral-line: var(--hairline-strong);
+
+    --shadow: 0 1px 0 rgba(255, 255, 255, 0.02), 0 8px 24px rgba(0, 0, 0, 0.35);
+    --shadow-pop: 0 2px 6px rgba(0, 0, 0, 0.3), 0 16px 40px rgba(0, 0, 0, 0.5);
+    --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--signal);
+    color-scheme: dark;
+  }
 }
 
 :root[data-theme='light'] {

@@ -49,11 +49,12 @@ describe('VersionRow', () => {
     vi.unstubAllGlobals();
   });
 
-  it('shows a download link for the version', () => {
+  it('shows a download link for the version, with its size formatted for a reader', () => {
     renderRow();
 
     const downloadLink = screen.getByRole('link', { name: 'Download' });
     expect(downloadLink).toHaveAttribute('href', '/api/v1/documents/versions/v-1/content');
+    expect(screen.getByText('100 B')).toBeInTheDocument();
   });
 
   it('shows the parser reason on a failed version', () => {

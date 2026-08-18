@@ -14,28 +14,28 @@ import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import Field from '../components/ui/Field';
 import Skeleton from '../components/ui/Skeleton';
-import Table, { TableHeaderCell } from '../components/ui/Table';
+import Table, { RowLink, TableHeaderCell, TableRow } from '../components/ui/Table';
 import { notify } from '../components/ui/toast';
+import { formatInterval } from '../lib/format-interval';
+import { isTerminalRun } from '../lib/workflow-runs';
 
 const DEFAULT_POLL_INTERVAL_MS = 1500;
 const PAGE_SIZE = 20;
 
 // An in-flight sync outranks everything else the row could report — it supersedes whatever status
 // the last completed sync left behind. Disabled is neutral regardless of a carried error, since the
-// row is not currently acting on its schedule either way. A carried lastSyncError only reads as
-// rejected once the source is both enabled and idle; anything left over synced cleanly.
+// row is not currently acting on its schedule either way. A carried lastSyncError reads as caution
+// once the source is both enabled and idle — a stalled folder sync is a "watch this", not the
+// verification-grade rejection the same tone means elsewhere in the app — so it never turns an
+// otherwise-healthy list alarming.
 function sourceStatusTone(
   source: Source,
   isPolling: boolean,
 ): { tone: 'verified' | 'caution' | 'rejected' | 'info' | 'neutral'; label: string } {
   if (isPolling) return { tone: 'info', label: 'syncing' };
   if (!source.enabled) return { tone: 'neutral', label: 'disabled' };
-  if (source.lastSyncError) return { tone: 'rejected', label: 'failed' };
+  if (source.lastSyncError) return { tone: 'caution', label: 'failed' };
   return { tone: 'verified', label: 'enabled' };
-}
-
-function isTerminalRun(status: WorkflowRun['status']): boolean {
-  return status === 'completed' || status === 'failed';
 }
 
 function SourceRow({
@@ -116,11 +116,12 @@ function SourceRow({
   const status = sourceStatusTone(source, isPolling);
 
   return (
-    <tr>
+    <TableRow to={`/sources/${source.id}`}>
       <td>
-        <Link to={`/sources/${source.id}`}>{source.name}</Link>
+        <RowLink to={`/sources/${source.id}`}>{source.name}</RowLink>
       </td>
       <td className="cell-sub mono">{source.path}</td>
+      <td className="cell-sub">{formatInterval(source.intervalMs)}</td>
       <td>
         <Badge tone={status.tone}>{status.label}</Badge>
       </td>
@@ -161,7 +162,7 @@ function SourceRow({
           </p>
         )}
       </td>
-    </tr>
+    </TableRow>
   );
 }
 
@@ -294,7 +295,7 @@ export default function SourcesPage({
       </section>
 
       {error && (
-        <p className="error" role="alert">
+        <p className="error error--page" role="alert">
           {error}
         </p>
       )}
@@ -315,6 +316,7 @@ export default function SourcesPage({
               <tr>
                 <TableHeaderCell>Name</TableHeaderCell>
                 <TableHeaderCell>Path</TableHeaderCell>
+                <TableHeaderCell>Interval</TableHeaderCell>
                 <TableHeaderCell>Status</TableHeaderCell>
                 <TableHeaderCell>Last sync</TableHeaderCell>
                 <TableHeaderCell>Files</TableHeaderCell>

@@ -9,7 +9,9 @@ import {
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Skeleton from '../../components/ui/Skeleton';
+import { IconDownload } from '../../components/icons';
 import { truncateSha256 } from '../../lib/identifiers';
+import { formatBytes } from './format-size';
 
 function ingestionTone(
   status: DocumentVersionIngestionStatus,
@@ -49,6 +51,7 @@ export default function VersionRow({ version }: { version: DocumentVersion }) {
     <>
       <tr>
         <td className="num">v{version.versionNumber}</td>
+        <td className="num">{formatBytes(version.sizeBytes)}</td>
         <td>
           <Badge tone={ingestionTone(version.ingestionStatus)}>{version.ingestionStatus}</Badge>
           {version.ingestionFailureReason && (
@@ -66,6 +69,7 @@ export default function VersionRow({ version }: { version: DocumentVersion }) {
               {expanded ? 'Hide chunks' : 'View chunks'}
             </Button>
             <a className="btn btn--secondary btn--sm" href={documentVersionContentUrl(version.id)}>
+              <IconDownload />
               Download
             </a>
           </div>
@@ -73,7 +77,7 @@ export default function VersionRow({ version }: { version: DocumentVersion }) {
       </tr>
       {expanded && (
         <tr>
-          <td colSpan={4}>
+          <td colSpan={5}>
             {loading && <Skeleton label="Loading chunks…" lines={2} />}
             {error && (
               <p className="error" role="alert">

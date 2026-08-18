@@ -1,17 +1,12 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import {
-  answerEventsUrl,
-  getAnswerById,
-  listConflicts,
-  startQuestion,
-  type Answer,
-} from '../api/client';
-import AnswerView, { type ConflictChunkResolution } from '../components/AnswerView';
+import { answerEventsUrl, getAnswerById, startQuestion, type Answer } from '../api/client';
+import AnswerView from '../components/AnswerView';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import Field from '../components/ui/Field';
+import Skeleton from '../components/ui/Skeleton';
 import { notify } from '../components/ui/toast';
-import { buildDocumentVersionIndex, type ResolvedVersion } from '../lib/document-index';
+import { useAnswerEnrichment } from '../lib/use-answer-enrichment';
 import { useEventStream } from '../lib/use-event-stream';
 
 const DEFAULT_POLL_INTERVAL_MS = 1500;
@@ -59,10 +54,6 @@ export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: A
   const [answer, setAnswer] = useState<Answer | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [documentIndex, setDocumentIndex] = useState<Map<string, ResolvedVersion>>(new Map());
-  const [conflictChunkIndex, setConflictChunkIndex] = useState<
-    Map<string, ConflictChunkResolution>
-  >(new Map());
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -135,58 +126,7 @@ export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: A
     };
   }, [answerId, streamState, isTerminalRunStatus, pollIntervalMs]);
 
-  // Resolves citation/conflict-value document titles once there is something to resolve — a
-  // conflicting_evidence outcome carries no citations, so that outcome alone must still trigger
-  // this. Failure here must not affect answer rendering — see document-index.ts.
-  useEffect(() => {
-    if (answer?.runStatus !== 'completed') return;
-    const hasCitations = answer.citations.length > 0;
-    const hasConflict = answer.outcome?.kind === 'conflicting_evidence';
-    if (!hasCitations && !hasConflict) return;
-    let cancelled = false;
-
-    buildDocumentVersionIndex()
-      .then((index) => {
-        if (!cancelled) setDocumentIndex(index);
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-    };
-  }, [answer?.runStatus, answer?.citations, answer?.outcome]);
-
-  // Resolves conflicting_evidence source chunks to a document title + locator. Narrowed to this
-  // answer's conflictIds; listConflicts({ limit: 100 }) is the API's max page size, so a chunk
-  // belonging to a conflict past the first 100 falls back to its raw sourceChunkId below —
-  // acceptable at demo scale, upgradeable to server-side enrichment without changing this contract.
-  useEffect(() => {
-    if (answer?.runStatus !== 'completed' || answer.outcome?.kind !== 'conflicting_evidence')
-      return;
-    if (answer.conflictIds.length === 0) return;
-    let cancelled = false;
-
-    listConflicts({ limit: 100 })
-      .then(({ docs }) => {
-        if (cancelled) return;
-        const index = new Map<string, ConflictChunkResolution>();
-        for (const conflict of docs) {
-          if (!answer.conflictIds.includes(conflict.id)) continue;
-          for (const value of conflict.values) {
-            index.set(value.sourceChunkId, {
-              documentVersionId: value.documentVersionId,
-              locator: value.locator,
-            });
-          }
-        }
-        setConflictChunkIndex(index);
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-    };
-  }, [answer?.runStatus, answer?.outcome, answer?.conflictIds]);
+  const { documentIndex, conflictChunkIndex } = useAnswerEnrichment(answer);
 
   const isInFlight = answer?.runStatus === 'queued' || answer?.runStatus === 'running';
 
@@ -244,9 +184,14 @@ export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: A
           </div>
 
           {isInFlight && (
-            <p className="notice notice--info">
-              <span className="live-dot" /> Answering…
-            </p>
+            <>
+              <p className="notice notice--info">
+                <span className="live-dot" /> Answering…
+              </p>
+              {/* The outcome arrives as one atomic snapshot, never incrementally, so this stands
+                  in for the ledger and apparatus rows rather than filling progressively. */}
+              <Skeleton label="Answering…" lines={6} />
+            </>
           )}
 
           {answer.runStatus === 'failed' && (

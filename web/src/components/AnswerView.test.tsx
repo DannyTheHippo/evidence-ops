@@ -44,9 +44,10 @@ describe('AnswerView', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('renders an answered outcome via the provenance rail', () => {
+  it('renders an answered outcome via the provenance rail, with the ledger above it', () => {
     renderView(
       baseAnswer({
+        retrievedChunkCount: 4,
         outcome: {
           kind: 'answered',
           claims: [
@@ -64,9 +65,12 @@ describe('AnswerView', () => {
             },
           ],
         },
+        verificationReport: { verifiedClaimCount: 1, totalClaimCount: 1, droppedClaims: [] },
       }),
     );
 
+    expect(screen.getByText('4 chunks retrieved')).toBeInTheDocument();
+    expect(screen.getByText('1 of 1 claims verified against the source')).toBeInTheDocument();
     expect(screen.getByText('The cap rate is 6.1%.')).toBeInTheDocument();
     expect(screen.getByText('Cap rate: 6.1%')).toBeInTheDocument();
     expect(screen.getByText('p.2')).toBeInTheDocument();
@@ -108,16 +112,22 @@ describe('AnswerView', () => {
       ]),
     );
 
+    expect(
+      screen.getByText('Contradiction found for Northgate Business Park — cap_rate (2025-03)'),
+    ).toBeInTheDocument();
     expect(screen.getByText('6.1 percent')).toBeInTheDocument();
     expect(screen.getByText('6.4 percent')).toBeInTheDocument();
     expect(screen.getByText('Rent Roll Q1 — p.2')).toBeInTheDocument();
     expect(screen.getByText('chunk-c')).toBeInTheDocument();
   });
 
-  it('renders the verification panel disclosure for a dropped claim', () => {
+  it('shows the reason for a dropped claim always, and the raw statement only behind its own disclosure', () => {
     renderView(
       baseAnswer({
-        outcome: { kind: 'insufficient_evidence', reason: 'No document mentions occupancy.' },
+        outcome: {
+          kind: 'answered',
+          claims: [{ statement: 'The cap rate is 6.1%.', citations: [] }],
+        },
         verificationReport: {
           verifiedClaimCount: 1,
           totalClaimCount: 2,
@@ -128,16 +138,52 @@ describe('AnswerView', () => {
       }),
     );
 
-    expect(screen.getByText('1 of 2 claims verified against the source')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('1 claim dropped — not verified against the source'));
-    expect(screen.getByText('Occupancy is 95%.')).toBeInTheDocument();
+    expect(
+      screen.getByText('1 claim dropped — not verified against the source'),
+    ).toBeInTheDocument();
     expect(screen.getByText('No retrieved chunk supports this figure.')).toBeInTheDocument();
+    // jsdom keeps a closed <details>'s content in the DOM; only visibility reflects `open`.
+    expect(screen.getByText('Occupancy is 95%.')).not.toBeVisible();
+
+    fireEvent.click(screen.getByText('Show statement'));
+
+    expect(screen.getByText('Occupancy is 95%.')).toBeVisible();
   });
 
-  it('renders the fully-verified notice, not a disclosure, when nothing was dropped', () => {
+  it('reframes the dropped-claims band as the reason for the abstention when the outcome is insufficient_evidence', () => {
     renderView(
       baseAnswer({
-        outcome: { kind: 'insufficient_evidence', reason: 'No document mentions occupancy.' },
+        outcome: {
+          kind: 'insufficient_evidence',
+          reason: 'grounding gate verified 0 of 1 claim(s); every citation failed verification',
+        },
+        verificationReport: {
+          verifiedClaimCount: 0,
+          totalClaimCount: 1,
+          droppedClaims: [
+            { statement: 'Occupancy is 95%.', reason: 'No retrieved chunk supports this figure.' },
+          ],
+        },
+      }),
+    );
+
+    expect(
+      screen.getByText(
+        'No claim could be verified against the source — this is why the model abstained.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/claim dropped — not verified against the source/),
+    ).not.toBeInTheDocument();
+  });
+
+  it('renders the fully-verified notice and no dropped-claims band when nothing was dropped', () => {
+    renderView(
+      baseAnswer({
+        outcome: {
+          kind: 'answered',
+          claims: [{ statement: 'The cap rate is 6.1%.', citations: [] }],
+        },
         verificationReport: { verifiedClaimCount: 1, totalClaimCount: 1, droppedClaims: [] },
       }),
     );
@@ -148,11 +194,11 @@ describe('AnswerView', () => {
     expect(screen.queryByText(/claim.*dropped/)).not.toBeInTheDocument();
   });
 
-  it('omits the verification panel when the answer carries no verification report', () => {
+  it('omits the dropped-claims band when the answer carries no verification report', () => {
     renderView(
       baseAnswer({ outcome: { kind: 'insufficient_evidence', reason: 'No evidence found.' } }),
     );
 
-    expect(screen.queryByText(/claims verified against the source/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/dropped/)).not.toBeInTheDocument();
   });
 });

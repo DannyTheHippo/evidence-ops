@@ -66,12 +66,9 @@
   text-transform: uppercase;
   color: var(--muted);
 }
+/* Base list reset (list-style, margin, padding, flex-column) lives in primitives.css's shared
+   .chunk-list/.sidebar-list/.citations/.approval-list/.timeline/.dashboard-answers rule. */
 .sidebar-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
   gap: var(--space-1);
 }
 .sidebar-link {
@@ -153,9 +150,6 @@
   color: var(--ink);
   white-space: nowrap;
 }
-.topbar-spacer {
-  margin-left: auto;
-}
 .connection-status {
   display: flex;
   align-items: center;
@@ -163,6 +157,27 @@
 /* Only meaningful once the sidebar collapses into the drawer below 768px; hidden above that. */
 .menu-toggle {
   display: none;
+}
+
+/* Right-hand control cluster: connection status, theme toggle, account menu. */
+.topbar-end {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-left: auto;
+}
+.account-avatar {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+  color: var(--ink-dim);
+  font-size: var(--text-xs);
+  font-weight: 600;
 }
 
 /* ── Responsive ──────────────────────────────────────────────────────────── */

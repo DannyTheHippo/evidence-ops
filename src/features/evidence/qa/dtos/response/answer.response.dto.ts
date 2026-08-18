@@ -49,6 +49,15 @@ export class AnswerResponseDto {
   })
   claimCoverage?: number;
 
+  @Expose()
+  @ApiProperty({
+    required: false,
+    example: 12,
+    description:
+      "Number of evidence chunks retrieved for this run, present only once runStatus is 'completed'.",
+  })
+  retrievedChunkCount?: number;
+
   // Same conditional-presence rule as `outcome` above — the verification report is computed
   // alongside the outcome on completion, so a queued, running, or failed answer must not expose a
   // stale or absent value under this key.

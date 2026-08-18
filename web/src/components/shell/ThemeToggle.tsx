@@ -79,7 +79,7 @@ export function ThemeToggle() {
       onClick={handleCycle}
     >
       <Icon />
-      <span className="theme-toggle-label">{current.label}</span>
+      <span>{current.label}</span>
     </Button>
   );
 }

@@ -122,9 +122,10 @@ describe('SourcesPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load sources');
   });
 
-  it('lists a populated source with its status, last sync, and file count', async () => {
+  it('lists a populated source with its status, interval, last sync, and file count', async () => {
     const source = makeSource({
       enabled: false,
+      intervalMs: 300_000,
       lastSyncAt: '2026-08-01T12:00:00.000Z',
       lastSyncStatus: 'failed',
       lastSyncError: 'ENOENT: no such directory',
@@ -141,6 +142,7 @@ describe('SourcesPage', () => {
       screen.getByRole('table', { name: 'Sources syncing documents into this data room' }),
     ).toBeInTheDocument();
     expect(screen.getByText('deal-room')).toBeInTheDocument();
+    expect(screen.getByText('Every 5 minutes')).toBeInTheDocument();
     expect(screen.getByText('disabled')).toBeInTheDocument();
     expect(
       screen.getByText(new Date(source.lastSyncAt as string).toLocaleString()),
@@ -148,6 +150,41 @@ describe('SourcesPage', () => {
     expect(screen.getByText('failed')).toBeInTheDocument();
     expect(screen.getByText('ENOENT: no such directory')).toBeInTheDocument();
     expect(screen.getByText('7')).toBeInTheDocument();
+  });
+
+  it('shows a default-interval label for a source with no configured interval', async () => {
+    const source = makeSource({ intervalMs: undefined });
+    stubFetch({
+      [LIST_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('Default interval')).toBeInTheDocument();
+  });
+
+  it('flags an enabled source with a carried sync error as failed, not disabled', async () => {
+    const source = makeSource({ enabled: true, lastSyncError: 'ENOENT: no such directory' });
+    stubFetch({
+      [LIST_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('failed')).toBeInTheDocument();
+    expect(screen.queryByText('disabled')).not.toBeInTheDocument();
+  });
+
+  it('links each source row to its detail page via a reachable row link', async () => {
+    const source = makeSource();
+    stubFetch({
+      [LIST_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+    });
+
+    renderPage();
+
+    const link = await screen.findByRole('link', { name: 'Deal Room Inbox' });
+    expect(link).toHaveAttribute('href', '/sources/source-1');
   });
 
   it('shows the total source count alongside Previous/Next, disabled at the ends', async () => {

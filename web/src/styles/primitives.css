@@ -15,9 +15,9 @@
   cursor: pointer;
   white-space: nowrap;
   transition:
-    background 0.12s ease,
-    border-color 0.12s ease,
-    opacity 0.12s ease;
+    background var(--motion-press) ease,
+    border-color var(--motion-press) ease,
+    opacity var(--motion-press) ease;
 }
 .btn:disabled {
   opacity: 0.5;
@@ -75,6 +75,29 @@
   border: 0;
 }
 
+/* ── Lists ───────────────────────────────────────────────────────────────── */
+
+/* Un-styled list turned into a vertical flex stack. The shared reset lives in one place so every
+   list using it carries identical base behaviour; each site below layers only the margin or gap
+   that differs from it. */
+.chunk-list,
+.sidebar-list,
+.citations,
+.approval-list,
+.timeline,
+.dashboard-answers,
+.actionable-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chunk-list,
+.citations {
+  gap: var(--space-3);
+}
+
 /* ── Cards / panels ──────────────────────────────────────────────────────── */
 
 .card {
@@ -88,21 +111,34 @@
 .card--narrow {
   max-width: 420px;
 }
-.card-head {
+/* Title row for a section header, with or without a card border: title (plus an optional
+   .eyebrow above it) on the start edge, an optional trailing action on the end edge. */
+.card-head,
+.section-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
   margin-bottom: var(--space-4);
 }
+/* Section heading inside a card or a `.section-head`. Sits a full step above body text and level
+   with `.dialog-title`, so the page reads as page title → section → body rather than one flat
+   weight; it renders at most twice per page, which is what lets it carry that size. */
 .card-title {
-  font-size: var(--text-md);
+  font-size: var(--text-lg);
   font-weight: 600;
 }
 .card-meta {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   color: var(--muted);
+}
+/* Pushes a mono meta slug to the end of its flex row instead of reading inline after the text
+   before it — the right-aligned counterpart to .cell-sub inside a table cell. */
+.card-meta--end {
+  margin-left: auto;
+  text-align: right;
+  white-space: nowrap;
 }
 
 /* ── Table / data grid ───────────────────────────────────────────────────── */
@@ -144,7 +180,7 @@
   border-bottom: none;
 }
 .grid tbody tr {
-  transition: background 0.1s ease;
+  transition: background var(--motion-row-hover) ease;
 }
 .grid tbody tr:hover td {
   background: var(--surface-2);
@@ -158,13 +194,20 @@
   text-align: right;
   white-space: nowrap;
 }
-.chunk-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
+/* A row carrying a destination (`TableRow`'s `to`) reads as a pointer target; the actual link
+   lives in `.row-link` below, this only signals the row-wide click enhancement layered on it. */
+.row--linked {
+  cursor: pointer;
+}
+/* Focus lands on the real `.row-link` anchor, not the row itself, so this reaches for it via
+   `:focus-within` to give keyboard navigation the same row-wide affordance as a mouse hover. */
+.row--linked:focus-within td {
+  background: var(--surface-2);
+}
+/* Fills its cell so the anchor's own hit target and focus ring span the full cell rather than
+   just the inline run of text inside it. */
+.row-link {
+  display: block;
 }
 
 /* ── Badges ──────────────────────────────────────────────────────────────── */
@@ -257,18 +300,6 @@
   font-weight: 600;
   color: var(--ink-dim);
 }
-.form input {
-  padding: var(--space-3) var(--space-3);
-  background: var(--surface);
-  color: var(--ink);
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--radius-sm);
-  font-family: inherit;
-  font-size: var(--text-md);
-}
-.form input:focus-visible {
-  border-color: var(--signal-line);
-}
 .form-hint {
   font-weight: 400;
   color: var(--muted);
@@ -294,6 +325,16 @@
 /* Pushes the result count away from the buttons, to the end of the row. */
 .pager > .cell-sub:last-child {
   margin-left: auto;
+}
+
+/* Filters or actions standing beside a heading rather than stacked in a full-width card.
+   align-items: flex-end keeps a labelled control's input flush with a plain button beside it. */
+.control-row {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
 }
 
 /* ── Field / Select ──────────────────────────────────────────────────────── */
@@ -398,9 +439,20 @@
   font-size: var(--text-sm);
   margin: var(--space-3) 0;
 }
+/* A page that failed to load and shows nothing but this message reads better held to the
+   reading measure than stretched across the full container. */
+.error--page {
+  max-width: var(--measure-reading);
+}
 
 /* ── Skeleton ────────────────────────────────────────────────────────────── */
 
+/* Loading placeholder container. Capped at the reading measure so a page-level skeleton doesn't
+   stretch shimmer bars across the full 1272px container while the real content it stands in for
+   would never run that wide either. */
+.skeleton {
+  max-width: var(--measure-reading);
+}
 .skeleton-lines {
   display: flex;
   flex-direction: column;
@@ -416,7 +468,7 @@
     var(--surface-2) 75%
   );
   background-size: 200% 100%;
-  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+  animation: skeleton-shimmer var(--motion-shimmer) ease-in-out infinite;
 }
 .skeleton-line:last-child {
   width: 60%;
@@ -455,7 +507,7 @@
   font-size: var(--text-sm);
   color: var(--muted);
   margin: 0;
-  max-width: 32rem;
+  max-width: var(--measure-reading);
 }
 .empty-state-action {
   margin-top: var(--space-2);
@@ -480,6 +532,64 @@
   margin: 0 0 var(--space-4);
   font-size: var(--text-lg);
   font-weight: 600;
+}
+
+/* ── Menu ────────────────────────────────────────────────────────────────── */
+
+.menu {
+  position: relative;
+  display: inline-block;
+}
+.menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.menu-trigger:hover {
+  background: var(--surface-2);
+}
+.menu-surface {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--space-2));
+  z-index: 20;
+  min-width: 12rem;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+}
+.menu-item {
+  display: block;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  color: var(--ink);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.menu-item:hover,
+.menu-item:focus-visible {
+  background: var(--surface-2);
+}
+.menu-item[aria-disabled='true'] {
+  color: var(--muted);
+  cursor: default;
 }
 
 /* ── Toast ───────────────────────────────────────────────────────────────── */

@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ApiError, getAnswerById, listConflicts, type Answer } from '../api/client';
-import AnswerView, { type ConflictChunkResolution } from '../components/AnswerView';
+import { ApiError, getAnswerById, type Answer } from '../api/client';
+import AnswerView from '../components/AnswerView';
 import Badge from '../components/ui/Badge';
 import Skeleton from '../components/ui/Skeleton';
-import { buildDocumentVersionIndex, type ResolvedVersion } from '../lib/document-index';
+import { useAnswerEnrichment } from '../lib/use-answer-enrichment';
 
 // A run still in flight or failed shows its run status as a badge — matches AnswersPage's own
 // tone assignment for the same three non-completed states.
@@ -22,10 +22,6 @@ export default function AnswerDetailPage() {
   const [answer, setAnswer] = useState<Answer | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [documentIndex, setDocumentIndex] = useState<Map<string, ResolvedVersion>>(new Map());
-  const [conflictChunkIndex, setConflictChunkIndex] = useState<
-    Map<string, ConflictChunkResolution>
-  >(new Map());
 
   useEffect(() => {
     if (!id) return;
@@ -44,57 +40,7 @@ export default function AnswerDetailPage() {
       });
   }, [id]);
 
-  // Resolves citation/conflict-value document titles for a completed answer — mirrors AskPage's
-  // own effect. Failure here must not affect answer rendering — see document-index.ts.
-  useEffect(() => {
-    if (answer?.runStatus !== 'completed') return;
-    const hasCitations = answer.citations.length > 0;
-    const hasConflict = answer.outcome?.kind === 'conflicting_evidence';
-    if (!hasCitations && !hasConflict) return;
-    let cancelled = false;
-
-    buildDocumentVersionIndex()
-      .then((index) => {
-        if (!cancelled) setDocumentIndex(index);
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-    };
-  }, [answer?.runStatus, answer?.citations, answer?.outcome]);
-
-  // Resolves conflicting_evidence source chunks to a document title + locator — mirrors AskPage's
-  // own effect. Narrowed to this answer's conflictIds; listConflicts({ limit: 100 }) is the API's
-  // max page size, so a chunk belonging to a conflict past the first 100 falls back to its raw
-  // sourceChunkId in AnswerView.
-  useEffect(() => {
-    if (answer?.runStatus !== 'completed' || answer.outcome?.kind !== 'conflicting_evidence')
-      return;
-    if (answer.conflictIds.length === 0) return;
-    let cancelled = false;
-
-    listConflicts({ limit: 100 })
-      .then(({ docs }) => {
-        if (cancelled) return;
-        const index = new Map<string, ConflictChunkResolution>();
-        for (const conflict of docs) {
-          if (!answer.conflictIds.includes(conflict.id)) continue;
-          for (const value of conflict.values) {
-            index.set(value.sourceChunkId, {
-              documentVersionId: value.documentVersionId,
-              locator: value.locator,
-            });
-          }
-        }
-        setConflictChunkIndex(index);
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-    };
-  }, [answer?.runStatus, answer?.outcome, answer?.conflictIds]);
+  const { documentIndex, conflictChunkIndex } = useAnswerEnrichment(answer);
 
   return (
     <div className="view view--flow view--roomy">

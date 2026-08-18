@@ -1,4 +1,10 @@
-import type { ReactNode, ThHTMLAttributes } from 'react';
+import {
+  useRef,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+  type ThHTMLAttributes,
+} from 'react';
+import { Link } from 'react-router-dom';
 
 interface TableProps {
   caption: string;
@@ -26,5 +32,61 @@ export function TableHeaderCell({ children, ...rest }: ThHTMLAttributes<HTMLTabl
     <th scope="col" {...rest}>
       {children}
     </th>
+  );
+}
+
+interface TableRowProps {
+  to?: string;
+  children: ReactNode;
+  className?: string;
+}
+
+/** `<tr>` that optionally carries a destination. With `to`, a plain left click anywhere in the
+ * row activates the `RowLink` rendered inside one of its cells — but that `RowLink`, not this
+ * handler, is the mechanism of record: it is what a keyboard or screen-reader user actually
+ * reaches, and this only defers to it for a mouse user who clicked elsewhere in the row. The
+ * handler steps aside for a modified click (reserved for the link's own open-in-new-tab
+ * behaviour), a click that landed on another interactive control, and a click that produced a
+ * text selection — an unconditional row-covering overlay would paint above the row's own inline
+ * text and block that selection outright, which is why this is a click listener and not a `<a>`
+ * stretched across the row. Without `to`, this is an unmodified `<tr>`. */
+export function TableRow({ to, children, className }: TableRowProps) {
+  const rowRef = useRef<HTMLTableRowElement | null>(null);
+
+  const handleClick = (event: ReactMouseEvent<HTMLTableRowElement>) => {
+    if (!to) return;
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) {
+      return;
+    }
+    if (event.defaultPrevented) return;
+    if (window.getSelection()?.toString()) return;
+    const target = event.target as HTMLElement;
+    if (target.closest('a, button, input, select, textarea, label')) return;
+    rowRef.current?.querySelector<HTMLAnchorElement>('a[data-row-link]')?.click();
+  };
+
+  return (
+    <tr
+      ref={rowRef}
+      className={to ? ['row--linked', className].filter(Boolean).join(' ') : className}
+      onClick={to ? handleClick : undefined}
+    >
+      {children}
+    </tr>
+  );
+}
+
+interface RowLinkProps {
+  to: string;
+  children: ReactNode;
+}
+
+/** The real, keyboard-reachable and screen-reader-visible anchor a `TableRow`'s click-anywhere
+ * enhancement defers to. Render it once, inside the row's primary cell. */
+export function RowLink({ to, children }: RowLinkProps) {
+  return (
+    <Link to={to} data-row-link className="row-link">
+      {children}
+    </Link>
   );
 }

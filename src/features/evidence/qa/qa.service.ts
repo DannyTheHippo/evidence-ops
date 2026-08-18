@@ -63,6 +63,7 @@ export interface AnswerEnvelope {
   readonly conflictIds: string[];
   readonly createdAt: Date;
   readonly usage?: AnswerUsage;
+  readonly retrievedChunkCount?: number;
 }
 
 /**
@@ -279,7 +280,9 @@ export class QaService {
       // client reading this envelope on a queued/running/failed answer must see no outcome at
       // all, not a stale or premature one.
       outcome: answer.runStatus === 'completed' ? answer.outcome : undefined,
-      claimCoverage: answer.claimCoverage,
+      // Same withholding rule as `outcome` above — `claimCoverage` is written alongside the
+      // outcome on completion (see `answer-persistence.service.ts`), so it follows the same gate.
+      claimCoverage: answer.runStatus === 'completed' ? answer.claimCoverage : undefined,
       // Same withholding rule as `outcome` above — the verification report is computed alongside
       // the outcome on completion (see `answer-persistence.service.ts`), so it follows the same gate.
       verificationReport: answer.runStatus === 'completed' ? answer.verificationReport : undefined,
@@ -292,6 +295,11 @@ export class QaService {
       // Same withholding rule as `outcome` above — usage is written alongside outcome on
       // completion (see `answer-persistence.service.ts`), so it follows the same gate.
       usage: answer.runStatus === 'completed' ? answer.usage : undefined,
+      // Same withholding rule as `outcome` above. No optional chaining on `retrievedChunkIds` —
+      // the schema default (`[]`) guarantees the array is always present, so a defensive `?.`
+      // here would mask a real absence rather than express one.
+      retrievedChunkCount:
+        answer.runStatus === 'completed' ? answer.retrievedChunkIds.length : undefined,
     };
   }
 }

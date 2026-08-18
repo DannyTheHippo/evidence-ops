@@ -6,7 +6,7 @@ import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import Select from '../components/ui/Select';
 import Skeleton from '../components/ui/Skeleton';
-import Table, { TableHeaderCell } from '../components/ui/Table';
+import Table, { RowLink, TableHeaderCell, TableRow } from '../components/ui/Table';
 
 const PAGE_SIZE = 25;
 
@@ -92,24 +92,17 @@ export default function AnswersPage() {
         </div>
       </div>
 
-      <section className="card">
-        <div className="card-head">
-          <h2 className="card-title">Filters</h2>
-        </div>
-        <form onSubmit={handleFilter} className="form">
-          <Select
-            label="Run status"
-            options={RUN_STATUS_OPTIONS}
-            value={runStatus}
-            onChange={(value) => setRunStatus(value as AnswerRunStatus | '')}
-          />
-          <div className="form-actions">
-            <Button type="submit" variant="primary">
-              Apply filters
-            </Button>
-          </div>
-        </form>
-      </section>
+      <form onSubmit={handleFilter} className="control-row">
+        <Select
+          label="Run status"
+          options={RUN_STATUS_OPTIONS}
+          value={runStatus}
+          onChange={(value) => setRunStatus(value as AnswerRunStatus | '')}
+        />
+        <Button type="submit" variant="primary">
+          Apply filters
+        </Button>
+      </form>
 
       {error && (
         <p className="error" role="alert">
@@ -147,20 +140,19 @@ export default function AnswersPage() {
                 <TableHeaderCell>Outcome</TableHeaderCell>
                 <TableHeaderCell>Claim coverage</TableHeaderCell>
                 <TableHeaderCell>Created</TableHeaderCell>
-                <TableHeaderCell>
-                  <span className="sr-only">View</span>
-                </TableHeaderCell>
               </tr>
             </thead>
             <tbody>
               {answers.map((answer) => {
                 const badge = outcomeBadge(answer);
                 return (
-                  <tr key={answer.id}>
+                  <TableRow key={answer.id} to={`/answers/${answer.id}`}>
                     <td>
-                      <span className="cell-truncate" title={answer.questionText}>
-                        {answer.questionText}
-                      </span>
+                      <RowLink to={`/answers/${answer.id}`}>
+                        <span className="cell-truncate" title={answer.questionText}>
+                          {answer.questionText}
+                        </span>
+                      </RowLink>
                     </td>
                     <td>
                       <Badge tone={badge.tone}>{badge.label}</Badge>
@@ -171,10 +163,7 @@ export default function AnswersPage() {
                         : '—'}
                     </td>
                     <td className="cell-sub">{new Date(answer.createdAt).toLocaleString()}</td>
-                    <td className="cell-sub">
-                      <Link to={`/answers/${answer.id}`}>View</Link>
-                    </td>
-                  </tr>
+                  </TableRow>
                 );
               })}
             </tbody>

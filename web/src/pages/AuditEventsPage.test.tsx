@@ -5,6 +5,14 @@ import { RequireAdmin } from '../App';
 import { clearSession } from '../lib/auth';
 import AuditEventsPage from './AuditEventsPage';
 
+function renderPage() {
+  return render(
+    <MemoryRouter>
+      <AuditEventsPage />
+    </MemoryRouter>,
+  );
+}
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -36,6 +44,18 @@ const event = {
   createdAt: '2026-08-01T12:00:00.000Z',
 };
 
+// ApiKey carries no detail route in the SPA, unlike Document — the two events together prove the
+// subject cell links only when a route actually exists.
+const unroutedEvent = {
+  id: 'event-2',
+  actor: 'admin@example.com',
+  action: 'apiKey.revoked',
+  subject: { entityType: 'ApiKey', entityId: 'key-1' },
+  timestamp: '2026-08-01T13:00:00.000Z',
+  correlationId: 'corr-2',
+  createdAt: '2026-08-01T13:00:00.000Z',
+};
+
 // Dispatches by URL, matching ApprovalsPage.test.tsx's stubFetch shape.
 function stubFetch(routes: Record<string, () => Response>): void {
   const fetchMock = vi.fn((url: string) => {
@@ -53,12 +73,12 @@ describe('AuditEventsPage', () => {
     clearSession();
   });
 
-  it('lists audit events with actor, action, subject and timestamp', async () => {
+  it('lists audit events with actor, action, subject, correlation id and timestamp', async () => {
     stubFetch({
       '/api/v1/audit-events?skip=0&limit=25': () => jsonResponse({ docs: [event], count: 1 }),
     });
 
-    render(<AuditEventsPage />);
+    renderPage();
 
     expect(screen.getByText('Loading…')).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('Loading…');
@@ -66,10 +86,28 @@ describe('AuditEventsPage', () => {
     expect(await screen.findByText('document.deleted')).toBeInTheDocument();
     expect(screen.getByText('admin@example.com')).toBeInTheDocument();
     expect(screen.getByText('Document doc-1')).toBeInTheDocument();
+    expect(screen.getByText('corr-1')).toBeInTheDocument();
     expect(screen.getByText(new Date(event.timestamp).toLocaleString())).toBeInTheDocument();
     expect(
       screen.getByRole('table', { name: 'Audit events matching the current filters' }),
     ).toBeInTheDocument();
+  });
+
+  it('links a subject with a detail route, and leaves one without a route as plain text', async () => {
+    stubFetch({
+      '/api/v1/audit-events?skip=0&limit=25': () =>
+        jsonResponse({ docs: [event, unroutedEvent], count: 2 }),
+    });
+
+    renderPage();
+    await screen.findByText('document.deleted');
+
+    expect(screen.getByRole('link', { name: 'Document doc-1' })).toHaveAttribute(
+      'href',
+      '/documents/doc-1',
+    );
+    expect(screen.getByText('ApiKey key-1')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'ApiKey key-1' })).not.toBeInTheDocument();
   });
 
   it('reads as empty when no events match', async () => {
@@ -77,7 +115,7 @@ describe('AuditEventsPage', () => {
       '/api/v1/audit-events?skip=0&limit=25': () => jsonResponse({ docs: [], count: 0 }),
     });
 
-    render(<AuditEventsPage />);
+    renderPage();
 
     expect(await screen.findByText('No audit events match these filters.')).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
@@ -89,7 +127,7 @@ describe('AuditEventsPage', () => {
         jsonResponse({ message: 'Audit log unavailable' }, 500),
     });
 
-    render(<AuditEventsPage />);
+    renderPage();
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Audit log unavailable');
   });
@@ -109,7 +147,7 @@ describe('AuditEventsPage', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<AuditEventsPage />);
+    renderPage();
     await screen.findByText('document.deleted');
 
     fireEvent.change(screen.getByLabelText('Action'), { target: { value: 'document.deleted' } });
@@ -140,7 +178,7 @@ describe('AuditEventsPage', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<AuditEventsPage />);
+    renderPage();
     await screen.findByText('document.deleted');
 
     expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   decideApproval,
@@ -15,10 +15,21 @@ import Button from '../components/ui/Button';
 import Dialog from '../components/ui/Dialog';
 import EmptyState from '../components/ui/EmptyState';
 import Field from '../components/ui/Field';
+import Select from '../components/ui/Select';
 import Skeleton from '../components/ui/Skeleton';
 import { notify } from '../components/ui/toast';
 import { useSession } from '../lib/use-session';
 import { shortId } from '../lib/identifiers';
+
+const PAGE_SIZE = 20;
+
+// No "All states" entry — the server substitutes `pending` when the param is omitted
+// (`approvals.service.ts`'s `peekPending`), so omitting the filter never means "every state".
+const STATE_OPTIONS: { value: ApprovalState; label: string }[] = [
+  { value: 'pending', label: 'Pending' },
+  { value: 'approved', label: 'Approved' },
+  { value: 'rejected', label: 'Rejected' },
+];
 
 const stateTone: Record<ApprovalState, 'caution' | 'verified' | 'rejected'> = {
   pending: 'caution',
@@ -121,6 +132,13 @@ function ApprovalRow({
         </span>
       </p>
       <p className="cell-sub">Requested {new Date(approval.createdAt).toLocaleString()}</p>
+      {approval.state !== 'pending' && approval.decidedAt && (
+        <p className="cell-sub">
+          Decided {new Date(approval.decidedAt).toLocaleString()}
+          {approval.decidedBy ? ` by ${approval.decidedBy}` : ''}
+        </p>
+      )}
+      {approval.decisionReason && <p className="cell-sub">Reason: {approval.decisionReason}</p>}
 
       {conflict &&
         (conflict.ruleFired === 'none' ? (
@@ -138,7 +156,10 @@ function ApprovalRow({
         ))}
 
       <div className="form-actions">
-        {canDecide && (
+        {/* `decide()` (`approvals.service.ts`) rejects a non-pending approval outright, so the
+            filter above can surface an already-decided approval without offering controls that
+            would only 409. */}
+        {canDecide && approval.state === 'pending' && (
           <>
             <Button variant="primary" onClick={() => setPendingDecision('approved')}>
               Approve
@@ -151,7 +172,7 @@ function ApprovalRow({
         {/* The server's RolesGuard is the actual gate — this notice only explains an absence the
             API would enforce anyway, rather than showing a control that fails on click. It waits
             for the session probe to land, so an admin is never told they are not one. */}
-        {sessionResolved && !canDecide && (
+        {sessionResolved && !canDecide && approval.state === 'pending' && (
           <p className="cell-sub">Deciding approvals requires an admin.</p>
         )}
         {approval.workflowId && (
@@ -219,6 +240,12 @@ export default function ApprovalsPage() {
   const [count, setCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [conflictsById, setConflictsById] = useState<Map<string, Conflict>>(new Map());
+  const [skip, setSkip] = useState(0);
+  const [state, setState] = useState<ApprovalState>('pending');
+  // Only this, not `state` itself, drives the fetch — the filter applies on submit, not on every
+  // selection change (AnswersPage.tsx follows the same split). There is no "unset" value to fall
+  // back to — every option is a concrete state, matching what the server actually filters on.
+  const [appliedState, setAppliedState] = useState<ApprovalState>('pending');
   const session = useSession();
   // Fails CLOSED on the still-loading probe too, not just anon/error — a member (or a session
   // that hasn't resolved yet) never sees the decide controls flash in before the check lands.
@@ -226,15 +253,22 @@ export default function ApprovalsPage() {
   const sessionResolved = session.status !== 'loading';
 
   useEffect(() => {
-    listApprovals()
+    listApprovals({ skip, limit: PAGE_SIZE, state: appliedState })
       .then(({ docs, count: total }) => {
         setApprovals(docs);
         setCount(total);
+        setError(null);
       })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'Failed to load approvals');
       });
-  }, []);
+  }, [skip, appliedState]);
+
+  function handleFilter(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setSkip(0);
+    setAppliedState(state);
+  }
 
   // A conflict-resolution approval carries no proposal of its own — `subject.entityId` is the
   // conflict id, and the proposal (winner, rule, explanation) lives on the conflict. Fetched only
@@ -255,9 +289,12 @@ export default function ApprovalsPage() {
     };
   }, [approvals]);
 
-  // A decided approval leaves the pending inbox — this page's own GET /approvals call is
-  // unfiltered and the server defaults an unfiltered request to pending rows, so removing it
-  // locally on success matches what a re-fetch would show anyway.
+  const hasPrev = skip > 0;
+  const hasNext = skip + PAGE_SIZE < count;
+
+  // A decided approval leaves the pending inbox — decide controls only render on a pending-state
+  // row (`decide()` in `approvals.service.ts` rejects anything else), so removing it locally on
+  // success matches what a re-fetch of the pending filter would show anyway.
   function handleDecided(id: string) {
     setApprovals((current) => current?.filter((approval) => approval.id !== id) ?? current);
     setCount((current) => Math.max(0, current - 1));
@@ -273,25 +310,38 @@ export default function ApprovalsPage() {
         </div>
       </div>
 
+      <form onSubmit={handleFilter} className="control-row">
+        <Select
+          label="State"
+          options={STATE_OPTIONS}
+          value={state}
+          onChange={(value) => setState(value as ApprovalState)}
+        />
+        <Button type="submit" variant="primary">
+          Apply filters
+        </Button>
+      </form>
+
       {error && (
-        <p className="error" role="alert">
+        <p className="error error--page" role="alert">
           {error}
         </p>
       )}
 
       {!approvals && !error && <Skeleton label="Loading…" />}
 
-      {approvals && approvals.length === 0 && (
+      {approvals && approvals.length === 0 && appliedState === 'pending' && (
         <EmptyState
           title="Nothing waiting on you"
           description="Every approval has been decided. New requests appear here as workflows park on them."
         />
       )}
 
-      {approvals && approvals.length > 0 && approvals.length < count && (
-        <p className="cell-sub">
-          Showing {approvals.length} of {count}.
-        </p>
+      {approvals && approvals.length === 0 && appliedState !== 'pending' && (
+        <EmptyState
+          title="No approvals match this filter."
+          description="Clear or adjust the state filter above."
+        />
       )}
 
       <ul className="approval-list">
@@ -310,6 +360,30 @@ export default function ApprovalsPage() {
           />
         ))}
       </ul>
+
+      {approvals && (
+        <div className="pager">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={!hasPrev}
+            onClick={() => setSkip((s) => Math.max(0, s - PAGE_SIZE))}
+          >
+            Previous
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={!hasNext}
+            onClick={() => setSkip((s) => s + PAGE_SIZE)}
+          >
+            Next
+          </Button>
+          <span className="cell-sub">{count} total</span>
+        </div>
+      )}
     </div>
   );
 }

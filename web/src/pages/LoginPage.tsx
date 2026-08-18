@@ -1,7 +1,7 @@
 import type { FormEvent } from 'react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { login, register } from '../api/client';
+import { ApiError, login, register } from '../api/client';
 import Button from '../components/ui/Button';
 import Field from '../components/ui/Field';
 
@@ -26,12 +26,13 @@ export default function LoginPage() {
       await login(email, password);
       await navigate('/');
     } catch (err: unknown) {
+      // A server-authored ApiError message (e.g. "Invalid email or password") is specific and
+      // safe to show verbatim. Anything else — a dropped connection, a CORS failure — is a raw
+      // browser exception string, not something to put in front of a first-time visitor.
       setError(
-        err instanceof Error
+        err instanceof ApiError
           ? err.message
-          : mode === 'login'
-            ? 'Failed to sign in. Check your email and password and try again.'
-            : 'Failed to create your account. Try again.',
+          : 'Could not reach the server. Check your connection and try again.',
       );
     } finally {
       setLoading(false);

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { logout } from './api/client';
+import { IconInfoSquare } from './components/icons';
 import Sidebar, { NAV_LABELS } from './components/shell/Sidebar';
 import Topbar from './components/shell/Topbar';
 import EmptyState from './components/ui/EmptyState';
@@ -52,6 +53,7 @@ function breadcrumbFor(pathname: string): string {
 function NotFoundView() {
   return (
     <EmptyState
+      icon={<IconInfoSquare size={24} />}
       title="Page not found"
       description="The page you're looking for doesn't exist. Head back to somewhere that does."
       action={

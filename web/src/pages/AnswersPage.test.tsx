@@ -105,6 +105,11 @@ describe('AnswersPage', () => {
     expect(
       screen.getByRole('table', { name: 'Answered questions and their grounding' }),
     ).toBeInTheDocument();
+
+    expect(screen.getByRole('link', { name: answered.questionText })).toHaveAttribute(
+      'href',
+      '/answers/answer-1',
+    );
   });
 
   it('shows the run status, not an outcome, for an answer that has not completed', async () => {

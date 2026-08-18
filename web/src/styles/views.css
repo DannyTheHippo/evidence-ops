@@ -36,32 +36,6 @@
 .answer-outcome {
   margin-top: var(--space-4);
 }
-.claims {
-  list-style: none;
-  margin: var(--space-4) 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-}
-.claim {
-  border-top: 1px solid var(--hairline);
-  padding-top: var(--space-4);
-}
-.claim-statement {
-  margin: 0 0 var(--space-3);
-  font-size: var(--text-md);
-  font-weight: 500;
-  line-height: var(--leading-normal);
-}
-.citations {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
 .citation-quote {
   margin: 0 0 var(--space-2);
   padding: 0;
@@ -101,24 +75,12 @@
   background: var(--signal-soft);
 }
 
-/* ── Approvals ───────────────────────────────────────────────────────────── */
-
-.approval-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-}
-
 /* ── Timeline ────────────────────────────────────────────────────────────── */
 
+/* Base list reset lives in primitives.css's shared .chunk-list/.sidebar-list/.citations/
+   .approval-list/.timeline/.dashboard-answers rule; .approval-list needs no override. */
 .timeline {
-  list-style: none;
   margin: var(--space-4) 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
   gap: var(--space-3);
 }
 /* An un-reached step recedes through ink weight and a bare left edge, not
@@ -164,7 +126,7 @@
   border-radius: 50%;
   background: var(--status-caution-ink);
   box-shadow: 0 0 0 0 var(--status-caution-line);
-  animation: pulse 1.6s ease-out infinite;
+  animation: pulse var(--motion-pulse) ease-out infinite;
 }
 @keyframes pulse {
   0% {
@@ -218,76 +180,207 @@
 
 /* ── Dashboard ───────────────────────────────────────────────────────────── */
 
-.dashboard-tiles {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: var(--space-4);
-  margin-bottom: var(--space-6);
-}
-.dashboard-tile {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: var(--space-5) var(--space-6);
-  color: inherit;
-  transition:
-    border-color 0.12s ease,
-    background 0.12s ease;
-}
-.dashboard-tile:hover {
-  border-color: var(--signal-line);
-  background: var(--signal-soft);
-  text-decoration: none;
-}
-.dashboard-tile-label {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--ink-dim);
-}
-.dashboard-tile-value {
-  font-size: var(--text-2xl);
-  font-weight: 700;
-  color: var(--ink);
-  font-variant-numeric: tabular-nums;
-}
+/* Base list reset for .dashboard-answers lives in primitives.css's shared list-reset rule; it
+   needs no override here. */
 
-.dashboard-answers {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-}
+/* A list row naming one specific item, with room for trailing status or meta, that links to
+   where you act on it. .dashboard-answer is this pattern applied to a recent-answers list. */
+.actionable-row,
 .dashboard-answer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
-  padding: var(--space-3) 0;
+  padding: var(--density-row) 0;
   border-top: 1px solid var(--hairline);
 }
+.actionable-row:first-child,
 .dashboard-answer:first-child {
   border-top: none;
   padding-top: 0;
 }
+.actionable-row-name,
 .dashboard-answer-question {
   overflow-wrap: anywhere;
 }
 
-.dashboard-account {
-  margin-top: var(--space-2);
-}
-
-/* ── Ask density + verification headline ────────────────────────────────── */
+/* ── Ask density ─────────────────────────────────────────────────────────── */
 .view--roomy .card {
   padding: var(--space-6) var(--space-8);
 }
-.verification-headline {
-  margin: var(--space-5) 0 var(--space-2);
-  font-size: var(--text-2xl);
+
+/* ── Verification ledger ─────────────────────────────────────────────────── */
+/* The retrieval-to-verification funnel at the head of every completed answer. Sits above the
+   apparatus, so it renders before ProvenanceRail/the conflict block in DOM order. */
+.ledger {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-5);
+}
+.ledger-line {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-dim);
+}
+/* Proportional funnel bar: one flex segment per claim, verified and not-asserted tones only, so
+   the row divides itself without a computed width. Frozen status tones carry the meaning. */
+.ledger-bar {
+  display: flex;
+  gap: 1px;
+  height: var(--ledger-bar-height);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  margin: var(--space-1) 0;
+}
+.ledger-bar-segment {
+  flex: 1 0 0;
+}
+.ledger-bar-segment--verified {
+  background: var(--status-verified-ink);
+}
+.ledger-bar-segment--caution {
+  background: var(--status-caution-ink);
+}
+
+/* Container for the answer's verification content, below the apparatus. Spacing only — its own
+   visual treatment belongs to whatever renders inside it. */
+.verification {
+  margin-top: var(--space-5);
+}
+
+/* ── Dropped claims band ─────────────────────────────────────────────────── */
+/* Subordinate to the apparatus: count and server-authored reason are always visible; the raw
+   model statement — free text that failed verification — sits behind a per-item disclosure. */
+.dropped-claims-headline {
+  margin: 0 0 var(--space-2);
   font-weight: 600;
+}
+.dropped-claims-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.dropped-claim {
+  border-top: 1px solid var(--status-caution-line);
+  padding-top: var(--space-2);
+}
+.dropped-claim:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.dropped-claim-reason {
+  margin: 0;
+}
+.dropped-claim-disclosure {
+  margin-top: var(--space-1);
+}
+.dropped-claim-disclosure summary {
+  cursor: pointer;
+  font-size: var(--text-xs);
+}
+.dropped-claim-statement {
+  margin: var(--space-1) 0 0;
+  font-style: italic;
+}
+
+/* ── Print ───────────────────────────────────────────────────────────────── */
+/* Deliberately last in the cascade: every rule below overrides an unconditional rule from an
+   earlier stylesheet (base, primitives, shell, rail), and @media print carries no specificity of
+   its own — the tie is broken by source order alone, so this block only works sitting after all
+   six imports. No selector here needed raised specificity or !important; each one either ties and
+   wins on file order, or sets a property (print-color-adjust) nothing else declares. */
+@media print {
+  /* body/#root/.shell/.shell-main/.container/.panel form a fixed-height, scroll-clipped chain
+     built for an on-screen viewport (base.css's `body { overflow: hidden }` and
+     `#root { height: 100vh }`); on paper that chain crops everything past the first page instead
+     of letting the document flow across as many as it needs. */
+  body {
+    overflow: visible;
+  }
+  #root,
+  .shell,
+  .shell-main,
+  .container,
+  .panel {
+    display: block;
+    height: auto;
+    overflow: visible;
+  }
+
+  /* Chrome that exists to operate the app, not to be read on paper. `.toast-stack` is
+     `position: fixed`, which print pagination repeats on every page it would otherwise land on
+     if left visible. */
+  .skip-link,
+  .sidebar,
+  .topbar,
+  .toast-stack {
+    display: none;
+  }
+
+  /* Meaning carried purely by `background` is dropped by default printing (the browser's own
+     "background graphics" option, off by default) unless told to render exactly as authored.
+     Scoped to the three places state or proportion is encoded that way — the funnel bar, the
+     rail's filled-vs-outline node marker, the badge's status silhouette — rather than applied
+     globally, which would also print every card and surface tint. */
+  .ledger-bar,
+  .rail-node::before,
+  .badge::before {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  /* The 2-up citation grid is sized for an 880px-plus screen container; a printed page's content
+     box is narrower than that at standard letter/A4 margins, and a two-column layout there would
+     cramp both the quote and its locator/digest slug. Force a single column regardless of the
+     container query's own verdict. */
+  .apparatus-citations {
+    grid-template-columns: 1fr;
+  }
+
+  /* Native table-header repetition needs the header row out of `position: sticky` — sticky has
+     no print-time viewport to stick to, so left on it would pin the header to one page instead of
+     repeating it on every page the table spans. */
+  .grid thead {
+    display: table-header-group;
+  }
+  .grid thead th {
+    position: static;
+  }
+  .grid tbody tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Keep one citation card, one dropped-claim entry, and the ledger block from splitting midway
+     across a page boundary. The citations grid as a whole still paginates freely across pages —
+     this only protects each individual card's own legibility. */
+  .apparatus-citation,
+  .dropped-claim,
+  .ledger {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* A heading — or the apparatus's claim line, which functions as one here — stranded alone at
+     the foot of a page reads as a mistake; keep each attached to the content that follows it. The
+     head group it sits inside stays intact for the same reason. */
+  h1,
+  h2,
+  .page-title,
+  .card-title,
+  .eyebrow,
+  .apparatus-claim {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+  .page-head,
+  .card-head,
+  .section-head {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
 }

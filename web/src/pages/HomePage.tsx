@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  getMe,
   listAnswers,
   listApprovals,
   listConflicts,
@@ -9,21 +8,21 @@ import {
   listSources,
   type Answer,
   type AnswerRunStatus,
-  type Me,
+  type Approval,
+  type Conflict,
+  type EvidenceDocument,
   type Source,
 } from '../api/client';
 import Badge from '../components/ui/Badge';
-import EmptyState from '../components/ui/EmptyState';
 import Skeleton from '../components/ui/Skeleton';
 
-interface CountTileState {
+type BadgeTone = 'verified' | 'caution' | 'info' | 'rejected' | 'neutral';
+
+interface FetchState<T> {
+  docs: T[] | null;
   count: number | null;
   error: string | null;
 }
-
-const EMPTY_COUNT_TILE: CountTileState = { count: null, error: null };
-
-type BadgeTone = 'verified' | 'caution' | 'info' | 'rejected' | 'neutral';
 
 // A run still in flight or failed shows its run status, never a premature outcome — matches
 // AnswersPage's own tone assignment for the same three non-completed states.
@@ -32,16 +31,6 @@ const RUN_STATUS_TONE: Record<Exclude<AnswerRunStatus, 'completed'>, BadgeTone> 
   running: 'info',
   failed: 'rejected',
 };
-
-interface SourcesTileState {
-  sources: Source[] | null;
-  error: string | null;
-}
-
-interface AnswersTileState {
-  answers: Answer[] | null;
-  error: string | null;
-}
 
 /** Maps an answer to the Badge tone/label the recent-answers row shows. All three completed
  * outcomes are equally valid results — `insufficient_evidence` is an honest abstention, not a
@@ -63,87 +52,267 @@ function outcomeBadge(answer: Answer): { tone: BadgeTone; label: string } {
   }
 }
 
-function CountTile({
-  to,
-  label,
-  loadingLabel,
-  state,
-}: {
+interface WorkQueueItem {
+  key: string;
+  name: string;
   to: string;
-  label: string;
-  loadingLabel: string;
-  state: CountTileState;
+  typeLabel: string;
+  createdAt: string;
+}
+
+/** Pending approvals and open conflicts as one queue rather than two boxes — both are the same
+ * kind of thing to a reader: a specific item that needs a decision. Neither carries a per-item
+ * route, so each row links to the list page that holds the decide/resolve control for it. */
+function WorkQueueSection({
+  approvals,
+  conflicts,
+}: {
+  approvals: FetchState<Approval>;
+  conflicts: FetchState<Conflict>;
 }) {
+  const items: WorkQueueItem[] = [
+    ...(approvals.docs ?? []).map((approval) => ({
+      key: `approval-${approval.id}`,
+      name: approval.summary,
+      to: '/approvals',
+      typeLabel: 'Approval',
+      createdAt: approval.createdAt,
+    })),
+    ...(conflicts.docs ?? []).map((conflict) => ({
+      key: `conflict-${conflict.id}`,
+      name: `${conflict.factKey.entity} — ${conflict.factKey.metric} (${conflict.factKey.period})`,
+      to: '/conflicts',
+      typeLabel: 'Conflict',
+      createdAt: conflict.createdAt,
+      // ISO 8601 timestamps sort correctly as plain strings, so no Date parsing is needed here.
+    })),
+  ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  const loading = !approvals.docs && !conflicts.docs;
+
   return (
-    <Link to={to} className="dashboard-tile">
-      <span className="dashboard-tile-label">{label}</span>
-      {state.error && (
+    <section className="card">
+      <div className="card-head">
+        <h2 className="card-title">Work queue</h2>
+        {!approvals.error &&
+          !conflicts.error &&
+          (approvals.count !== null || conflicts.count !== null) && (
+            <span className="card-meta card-meta--end">
+              {approvals.count ?? 0} pending approvals · {conflicts.count ?? 0} open conflicts
+            </span>
+          )}
+      </div>
+      {approvals.error && (
         <p className="error" role="alert">
-          {state.error}
+          {approvals.error}
         </p>
       )}
-      {!state.error && state.count === null && <Skeleton label={loadingLabel} lines={1} />}
-      {!state.error && state.count !== null && (
-        <span className="dashboard-tile-value">{state.count}</span>
+      {conflicts.error && (
+        <p className="error" role="alert">
+          {conflicts.error}
+        </p>
       )}
-    </Link>
+      {loading && !approvals.error && !conflicts.error && <Skeleton label="Loading work queue…" />}
+      {!loading && items.length === 0 && <p className="cell-sub">Nothing needs your attention.</p>}
+      {items.length > 0 && (
+        <ul className="actionable-list">
+          {items.map((item) => (
+            <li key={item.key} className="actionable-row">
+              <Link to={item.to} className="actionable-row-name">
+                {item.name}
+              </Link>
+              <Badge tone="caution">{item.typeLabel}</Badge>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
-function SourceHealthTile({ state }: { state: SourcesTileState }) {
-  const failing = state.sources?.filter((source) => source.lastSyncError) ?? [];
-  const enabledCount = state.sources?.filter((source) => source.enabled).length ?? 0;
+interface CorpusHealthItem {
+  key: string;
+  name: string;
+  to: string;
+  typeLabel: string;
+  detail: string;
+}
+
+/** Failed ingestions and failed syncs as one queue, the same "specific item, not a count" shape as
+ * the work queue above. An ingestion failure has no other alert anywhere in the app today — Data
+ * Room shows `ingestionStatus` per row, but only to someone already browsing it — and
+ * `lastSyncError` is otherwise visible only on the Sources pages. */
+function CorpusHealthSection({
+  documents,
+  sources,
+}: {
+  documents: FetchState<EvidenceDocument>;
+  sources: FetchState<Source>;
+}) {
+  const failedDocs = (documents.docs ?? []).filter(
+    (doc) => doc.currentVersion.ingestionStatus === 'failed',
+  );
+  const failedSources = (sources.docs ?? []).filter((source) => source.lastSyncError);
+
+  const items: CorpusHealthItem[] = [
+    ...failedDocs.map((doc) => ({
+      key: `document-${doc.id}`,
+      name: doc.title,
+      to: `/documents/${doc.id}`,
+      typeLabel: 'Ingestion failed',
+      detail: doc.currentVersion.ingestionFailureReason ?? 'No reason recorded.',
+    })),
+    ...failedSources.map((source) => ({
+      key: `source-${source.id}`,
+      name: source.name,
+      to: `/sources/${source.id}`,
+      typeLabel: 'Sync failed',
+      detail: source.lastSyncError ?? 'No reason recorded.',
+    })),
+  ];
+
+  const loading = !documents.docs && !sources.docs;
 
   return (
-    <Link to="/sources" className="dashboard-tile">
-      <span className="dashboard-tile-label">Source health</span>
-      {state.error && (
+    <section className="card">
+      <div className="card-head">
+        <h2 className="card-title">Corpus health</h2>
+      </div>
+      {documents.error && (
         <p className="error" role="alert">
-          {state.error}
+          {documents.error}
         </p>
       )}
-      {!state.error && state.sources === null && (
-        <Skeleton label="Loading source health…" lines={1} />
+      {sources.error && (
+        <p className="error" role="alert">
+          {sources.error}
+        </p>
       )}
-      {!state.error && state.sources !== null && failing.length > 0 && (
-        <>
-          <Badge tone="rejected">
-            {failing.length} sync {failing.length === 1 ? 'error' : 'errors'}
-          </Badge>
-          <p className="cell-sub">{failing[0]?.lastSyncError}</p>
-        </>
+      {loading && !documents.error && !sources.error && <Skeleton label="Loading corpus health…" />}
+      {!loading && items.length === 0 && <p className="cell-sub">No failed ingestions or syncs.</p>}
+      {items.length > 0 && (
+        <ul className="actionable-list">
+          {items.map((item) => (
+            <li key={item.key} className="actionable-row">
+              <span>
+                <Link to={item.to} className="actionable-row-name">
+                  {item.name}
+                </Link>
+                <span className="card-meta"> — {item.detail}</span>
+              </span>
+              <Badge tone="rejected">{item.typeLabel}</Badge>
+            </li>
+          ))}
+        </ul>
       )}
-      {!state.error && state.sources !== null && failing.length === 0 && (
-        <span className="dashboard-tile-value">{enabledCount}</span>
+    </section>
+  );
+}
+
+function RecentAnswersSection({ answers }: { answers: FetchState<Answer> }) {
+  return (
+    <section className="card">
+      <div className="card-head">
+        <h2 className="card-title">Recent answers</h2>
+      </div>
+      {answers.error && (
+        <p className="error" role="alert">
+          {answers.error}
+        </p>
       )}
-    </Link>
+      {!answers.error && !answers.docs && <Skeleton label="Loading recent answers…" />}
+      {!answers.error && answers.docs && answers.docs.length === 0 && (
+        <p className="cell-sub">No answers yet.</p>
+      )}
+      {!answers.error && answers.docs && answers.docs.length > 0 && (
+        <ul className="dashboard-answers">
+          {answers.docs.map((answer) => {
+            const badge = outcomeBadge(answer);
+            return (
+              <li key={answer.id} className="dashboard-answer">
+                <Link to={`/answers/${answer.id}`} className="dashboard-answer-question">
+                  {answer.questionText}
+                </Link>
+                <Badge tone={badge.tone}>{badge.label}</Badge>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+interface ChecklistStep {
+  key: string;
+  label: string;
+  done: boolean;
+  to: string;
+  cta: string;
+}
+
+/** The guided first-run path: connect evidence, wait for it to ingest, ask a question. Each step
+ * marks done from a live signal rather than a stored flag, so it reflects the tenant's actual state
+ * even if a step is completed outside this page (e.g. a source added from a direct link). */
+function FirstRunChecklist({ steps }: { steps: ChecklistStep[] }) {
+  return (
+    <section className="card">
+      <div className="card-head">
+        <h2 className="card-title">Get started</h2>
+      </div>
+      <ul className="actionable-list">
+        {steps.map((step) => (
+          <li key={step.key} className="actionable-row">
+            <span className="actionable-row-name">{step.label}</span>
+            {step.done ? (
+              <Badge tone="verified">Done</Badge>
+            ) : (
+              <Link to={step.to} className="btn btn--secondary btn--sm">
+                {step.cta}
+              </Link>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
 export default function HomePage() {
-  const [me, setMe] = useState<Me | null>(null);
-  const [meError, setMeError] = useState<string | null>(null);
-  const [approvals, setApprovals] = useState<CountTileState>(EMPTY_COUNT_TILE);
-  const [conflicts, setConflicts] = useState<CountTileState>(EMPTY_COUNT_TILE);
-  const [documents, setDocuments] = useState<CountTileState>(EMPTY_COUNT_TILE);
-  const [sources, setSources] = useState<SourcesTileState>({ sources: null, error: null });
-  const [answers, setAnswers] = useState<AnswersTileState>({ answers: null, error: null });
-
-  useEffect(() => {
-    getMe()
-      .then(setMe)
-      .catch((err: unknown) => {
-        setMeError(err instanceof Error ? err.message : 'Failed to load account');
-      });
-  }, []);
+  const [approvals, setApprovals] = useState<FetchState<Approval>>({
+    docs: null,
+    count: null,
+    error: null,
+  });
+  const [conflicts, setConflicts] = useState<FetchState<Conflict>>({
+    docs: null,
+    count: null,
+    error: null,
+  });
+  const [documents, setDocuments] = useState<FetchState<EvidenceDocument>>({
+    docs: null,
+    count: null,
+    error: null,
+  });
+  const [sources, setSources] = useState<FetchState<Source>>({
+    docs: null,
+    count: null,
+    error: null,
+  });
+  const [answers, setAnswers] = useState<FetchState<Answer>>({
+    docs: null,
+    count: null,
+    error: null,
+  });
 
   // Passing `state: 'pending'` explicitly rather than relying on the endpoint's own pending
   // default, so the intent reads from this call site rather than from the API's behaviour.
   useEffect(() => {
-    listApprovals({ state: 'pending' })
-      .then(({ count }) => setApprovals({ count, error: null }))
+    listApprovals({ state: 'pending', limit: 5 })
+      .then(({ docs, count }) => setApprovals({ docs, count, error: null }))
       .catch((err: unknown) => {
         setApprovals({
+          docs: null,
           count: null,
           error: err instanceof Error ? err.message : 'Failed to load approvals',
         });
@@ -151,21 +320,26 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    listConflicts({ status: 'open', limit: 1 })
-      .then(({ count }) => setConflicts({ count, error: null }))
+    listConflicts({ status: 'open', limit: 5 })
+      .then(({ docs, count }) => setConflicts({ docs, count, error: null }))
       .catch((err: unknown) => {
         setConflicts({
+          docs: null,
           count: null,
           error: err instanceof Error ? err.message : 'Failed to load conflicts',
         });
       });
   }, []);
 
+  // Corpus health scans the newest 100 documents/sources for a failure — the server caps `limit`
+  // at 100, and there is no dedicated "failed only" filter, so a failure older than this window is
+  // invisible here even though it still exists on Data Room / Sources.
   useEffect(() => {
-    listDocuments()
-      .then(({ count }) => setDocuments({ count, error: null }))
+    listDocuments({ limit: 100 })
+      .then(({ docs, count }) => setDocuments({ docs, count, error: null }))
       .catch((err: unknown) => {
         setDocuments({
+          docs: null,
           count: null,
           error: err instanceof Error ? err.message : 'Failed to load documents',
         });
@@ -173,17 +347,12 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    listSources()
-      .then(({ docs }) => {
-        // Rendering below filters and reads .length off this array unconditionally — a
-        // malformed response must fail this tile here rather than throw during render and
-        // take the rest of the dashboard down with it.
-        if (!Array.isArray(docs)) throw new Error('Malformed sources response');
-        setSources({ sources: docs, error: null });
-      })
+    listSources({ limit: 100 })
+      .then(({ docs, count }) => setSources({ docs, count, error: null }))
       .catch((err: unknown) => {
         setSources({
-          sources: null,
+          docs: null,
+          count: null,
           error: err instanceof Error ? err.message : 'Failed to load sources',
         });
       });
@@ -191,28 +360,52 @@ export default function HomePage() {
 
   useEffect(() => {
     listAnswers({ limit: 5 })
-      .then(({ docs }) => {
-        if (!Array.isArray(docs)) throw new Error('Malformed answers response');
-        setAnswers({ answers: docs, error: null });
-      })
+      .then(({ docs, count }) => setAnswers({ docs, count, error: null }))
       .catch((err: unknown) => {
         setAnswers({
-          answers: null,
+          docs: null,
+          count: null,
           error: err instanceof Error ? err.message : 'Failed to load recent answers',
         });
       });
   }, []);
 
-  // A brand-new tenant has no documents, no sources, and no answers — the tile row and recent
-  // answers list would show nothing but zeroes, so this replaces them with onboarding guidance
-  // instead. Waits for all three signals to have actually loaded (rather than treating the
-  // still-loading `null` state as "empty") so the dashboard never flashes onboarding first.
+  // The checklist and the empty-tenant supersession below both wait for all three funnel signals
+  // to have actually loaded, rather than treating a still-loading `null` as "not done yet", so the
+  // page never flashes onboarding at a tenant that already has a corpus.
+  const funnelLoaded = documents.count !== null && sources.count !== null && answers.count !== null;
+  const hasCorpus = (documents.count ?? 0) > 0 || (sources.count ?? 0) > 0;
+  const hasIngestedDocument = (documents.docs ?? []).some(
+    (doc) => doc.currentVersion.ingestionStatus === 'completed',
+  );
+  const hasAnswer = (answers.count ?? 0) > 0;
   const isEmptyTenant =
-    documents.count === 0 &&
-    sources.sources !== null &&
-    sources.sources.length === 0 &&
-    answers.answers !== null &&
-    answers.answers.length === 0;
+    funnelLoaded && documents.count === 0 && sources.count === 0 && answers.count === 0;
+  const funnelComplete = funnelLoaded && hasCorpus && hasIngestedDocument && hasAnswer;
+
+  const steps: ChecklistStep[] = [
+    {
+      key: 'connect',
+      label: 'Add a source or upload a document',
+      done: hasCorpus,
+      to: '/sources',
+      cta: 'Add a source',
+    },
+    {
+      key: 'ingest',
+      label: 'Wait for ingestion to complete',
+      done: hasIngestedDocument,
+      to: '/documents',
+      cta: 'View documents',
+    },
+    {
+      key: 'ask',
+      label: 'Ask a question',
+      done: hasAnswer,
+      to: '/ask',
+      cta: 'Ask a question',
+    },
+  ];
 
   return (
     <div className="view view--flow">
@@ -225,101 +418,15 @@ export default function HomePage() {
       </div>
 
       {isEmptyTenant ? (
-        <EmptyState
-          title="Nothing here yet"
-          description="Connect a source or upload a document, then ask a question to get started."
-          action={
-            <div className="form-actions">
-              <Link className="btn btn--primary" to="/sources">
-                Connect a source
-              </Link>
-              <Link className="btn btn--secondary" to="/documents">
-                Upload a document
-              </Link>
-            </div>
-          }
-        />
+        <FirstRunChecklist steps={steps} />
       ) : (
         <>
-          <div className="dashboard-tiles">
-            <CountTile
-              to="/approvals"
-              label="Pending approvals"
-              loadingLabel="Loading pending approvals…"
-              state={approvals}
-            />
-            <CountTile
-              to="/conflicts"
-              label="Open conflicts"
-              loadingLabel="Loading open conflicts…"
-              state={conflicts}
-            />
-            <CountTile
-              to="/documents"
-              label="Documents"
-              loadingLabel="Loading documents…"
-              state={documents}
-            />
-            <SourceHealthTile state={sources} />
-          </div>
-
-          <section className="card">
-            <div className="card-head">
-              <h2 className="card-title">Recent answers</h2>
-            </div>
-            {answers.error && (
-              <p className="error" role="alert">
-                {answers.error}
-              </p>
-            )}
-            {!answers.error && answers.answers === null && (
-              <Skeleton label="Loading recent answers…" />
-            )}
-            {!answers.error && answers.answers !== null && answers.answers.length === 0 && (
-              <p className="cell-sub">No answers yet.</p>
-            )}
-            {!answers.error && answers.answers !== null && answers.answers.length > 0 && (
-              <ul className="dashboard-answers">
-                {answers.answers.map((answer) => {
-                  const badge = outcomeBadge(answer);
-                  return (
-                    <li key={answer.id} className="dashboard-answer">
-                      <Link to={`/answers/${answer.id}`} className="dashboard-answer-question">
-                        {answer.questionText}
-                      </Link>
-                      <Badge tone={badge.tone}>{badge.label}</Badge>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </section>
+          <WorkQueueSection approvals={approvals} conflicts={conflicts} />
+          <CorpusHealthSection documents={documents} sources={sources} />
+          <RecentAnswersSection answers={answers} />
+          {funnelLoaded && !funnelComplete && <FirstRunChecklist steps={steps} />}
         </>
       )}
-
-      <section className="card card--narrow dashboard-account">
-        <div className="card-head">
-          <h2 className="card-title">Account</h2>
-        </div>
-        {me && (
-          <dl className="form">
-            <div>
-              <dt>Email</dt>
-              <dd>{me.email}</dd>
-            </div>
-            <div>
-              <dt>Member since</dt>
-              <dd>{new Date(me.createdAt).toLocaleDateString()}</dd>
-            </div>
-          </dl>
-        )}
-        {!me && !meError && <Skeleton label="Loading account…" lines={2} />}
-        {meError && (
-          <p className="error" role="alert">
-            {meError}
-          </p>
-        )}
-      </section>
     </div>
   );
 }

@@ -104,11 +104,13 @@ h2 {
   color: var(--muted);
   font-size: var(--text-sm);
   margin: var(--space-2) 0 0;
+  max-width: var(--measure-reading);
 }
 .eyebrow {
   display: inline-block;
   font-size: var(--text-2xs);
   font-weight: 600;
+  line-height: var(--leading-tight);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--muted);
@@ -143,6 +145,15 @@ h2 {
    keywords are required here, since the user's colours replace the tokens. */
 @media (forced-colors: active) {
   :focus-visible {
+    outline: 2px solid CanvasText;
+    outline-offset: 2px;
+  }
+  /* The skip link and the main region set `outline: none` above and rely on the shadow ring
+     instead, and a media query adds no specificity — so the bare `:focus-visible` rule above loses
+     to both. Named explicitly, they would be the only two focusable things in the app with no
+     indicator at all here, and they are the two the keyboard entry path depends on. */
+  .skip-link:focus-visible,
+  #main-content:focus-visible {
     outline: 2px solid CanvasText;
     outline-offset: 2px;
   }

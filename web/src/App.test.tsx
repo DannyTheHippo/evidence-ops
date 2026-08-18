@@ -104,7 +104,10 @@ describe('App / RequireAuth', () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Logout' }));
+    // Logout lives inside the topbar's account menu, so the menu has to be open before the item
+    // exists in the tree at all.
+    fireEvent.click(await screen.findByRole('button', { name: 'user@example.com' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Logout' }));
 
     expect(await screen.findByRole('heading', { name: 'Evidence Ops' })).toBeInTheDocument();
     expect(clearSessionSpy).toHaveBeenCalled();
@@ -299,7 +302,9 @@ describe('App / shell', () => {
     );
 
     expect(screen.queryByRole('navigation', { name: 'Primary' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Logout' })).not.toBeInTheDocument();
+    // The account menu trigger, not a Logout button — Logout moved inside the menu, so querying
+    // for it here would pass whether or not the chrome rendered.
+    expect(screen.queryByRole('button', { name: 'Account' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Evidence Ops' })).toBeInTheDocument();
   });
 

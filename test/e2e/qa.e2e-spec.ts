@@ -45,6 +45,7 @@ interface AnswerBody {
   runStatus: string;
   outcome?: unknown;
   claimCoverage?: number;
+  retrievedChunkCount?: number;
   verificationReport?: VerificationReport;
   citations?: unknown[];
   conflictIds?: string[];
@@ -230,6 +231,7 @@ describe('QA and Conflicts (e2e)', () => {
         claimCoverage: 0.8,
         verificationReport,
         usage: { promptTokens: 1240, completionTokens: 180, costUsd: 0.0042 },
+        retrievedChunkIds: ['chunk-1', 'chunk-2', 'chunk-3'],
       });
 
       const response = await request(getTestServer(app))
@@ -240,6 +242,7 @@ describe('QA and Conflicts (e2e)', () => {
       expect(response.status).toBe(200);
       expect(body.runStatus).toBe('completed');
       expect(body.claimCoverage).toBe(0.8);
+      expect(body.retrievedChunkCount).toBe(3);
       expect(body.outcome).toEqual({
         kind: 'answered',
         claims: [{ statement: 'The cap rate is approximately 6.10%.', citations: [citation] }],
@@ -252,6 +255,7 @@ describe('QA and Conflicts (e2e)', () => {
           'runStatus',
           'outcome',
           'claimCoverage',
+          'retrievedChunkCount',
           'verificationReport',
           'citations',
           'conflictIds',

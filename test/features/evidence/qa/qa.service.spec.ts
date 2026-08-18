@@ -184,6 +184,7 @@ describe('QaService', () => {
         claims: [{ statement: 's', citations: [citation] }],
         conflictIds: [conflictId],
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        retrievedChunkIds: ['chunk-1', 'chunk-2'],
       });
       mockAuditService.record.mockResolvedValueOnce(undefined);
 
@@ -205,6 +206,7 @@ describe('QaService', () => {
         citations: [citation],
         conflictIds: [conflictId.toString()],
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        retrievedChunkCount: 2,
       });
     });
 
@@ -231,6 +233,7 @@ describe('QaService', () => {
         claims: [],
         conflictIds: [],
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        retrievedChunkIds: [],
       });
       mockAuditService.record.mockResolvedValueOnce(undefined);
 
@@ -240,6 +243,7 @@ describe('QaService', () => {
       expect(result.verificationReport).toBeUndefined();
       expect(result.citations).toEqual([]);
       expect(result.conflictIds).toEqual([]);
+      expect(result.retrievedChunkCount).toBeUndefined();
     });
   });
 
@@ -281,6 +285,7 @@ describe('QaService', () => {
       claims: [],
       conflictIds: [],
       createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      retrievedChunkIds: ['chunk-1'],
       ...overrides,
     });
 
@@ -311,6 +316,7 @@ describe('QaService', () => {
           conflictIds: [],
           createdAt: answer.createdAt,
           usage: undefined,
+          retrievedChunkCount: 1,
         },
       ]);
     });
@@ -377,6 +383,7 @@ describe('QaService', () => {
       claims: [],
       conflictIds: [],
       createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      retrievedChunkIds: [],
       ...overrides,
     });
 

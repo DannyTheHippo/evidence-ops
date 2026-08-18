@@ -6,6 +6,7 @@ import {
   type ApiKey,
   type MintedApiKey,
 } from '../api/client';
+import { IconCopy } from '../components/icons';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import Dialog from '../components/ui/Dialog';
@@ -183,6 +184,7 @@ export default function ApiKeysPage() {
           <p className="mono">{minted.token}</p>
           <div className="form-actions">
             <Button variant="secondary" size="sm" onClick={() => void handleCopy()}>
+              <IconCopy />
               {copied ? 'Copied' : 'Copy'}
             </Button>
             <Button

@@ -39,6 +39,15 @@ describe('ProvenanceRail', () => {
     expect(screen.queryByText('Unverified')).not.toBeInTheDocument();
   });
 
+  it('exposes both the rail and its citations as accessible lists', () => {
+    renderRail({
+      kind: 'answered',
+      claims: [{ statement: 'Occupancy was 94% as of March 2025.', citations: [citation()] }],
+    });
+
+    expect(screen.getAllByRole('list')).toHaveLength(2);
+  });
+
   it('renders a neutral node for an answered claim with no citations', () => {
     renderRail({
       kind: 'answered',

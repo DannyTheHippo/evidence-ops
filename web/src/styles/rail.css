@@ -60,35 +60,71 @@
   border-color: var(--rail-line-degraded);
 }
 
-.rail-node-statement {
-  margin: 0 0 var(--space-2);
-  font-weight: 600;
+/* ── Apparatus ────────────────────────────────────────────────────────────── */
+/* The claim/evidence treatment inside each rail node: a display-treated claim line, the quote as
+   the body column at reading measure, and the locator/digest as a right-aligned mono slug. */
+
+/* Named containment scope for the apparatus's 2-up citation layout, declared on the answer's own
+   outcome wrapper — not the shared .card class, which would make every card on sixteen pages a
+   containment context for a layout only one page needs. A media query cannot stand in for this:
+   the persisted sidebar-collapse state swings card inner width by 156px with no viewport change
+   to observe. */
+.answer-outcome {
+  container: answer / inline-size;
 }
 
-.rail-citations {
+.apparatus-claim {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-md);
+  font-weight: 600;
+  line-height: var(--leading-tight);
+}
+
+/* Single column by default — the fallback both for a narrow container and for a node with no
+   citations at all, which never renders this element in the first place. The container query
+   below is the only rule that ever widens it. */
+.apparatus-citations {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--apparatus-gap);
+}
+@container answer (min-width: 880px) {
+  .apparatus-citations {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 /* --surface, not --surface-2 — the trace chip below is the --surface-2 surface, and it needs
    to read as a distinct chip rather than blend into its own card. */
-.rail-citation {
+.apparatus-citation {
   background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-4);
 }
-.rail-citation-quote {
-  margin: 0 0 var(--space-1);
+/* A lone citation spans both columns rather than sitting narrow in one — 2-up only reads as a
+   layout once there is a second card to pair it with. */
+.apparatus-citation:only-child {
+  grid-column: 1 / -1;
 }
-.rail-citation-locator {
-  margin: 0 0 var(--space-1);
+.apparatus-quote {
+  margin: 0 0 var(--space-2);
+  max-width: var(--measure-reading);
+}
+.apparatus-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.apparatus-locator {
+  margin: 0;
   color: var(--muted);
   font-size: var(--text-xs);
+  overflow-wrap: anywhere;
 }
 
 .trace-chip {
@@ -101,6 +137,7 @@
   color: var(--ink-dim);
   border-radius: var(--radius-xs);
   padding: 0 var(--space-1);
+  overflow-wrap: anywhere;
 }
 a.trace-chip:hover {
   text-decoration: underline;
@@ -110,9 +147,25 @@ a.trace-chip:hover {
   .rail-node {
     padding-left: var(--space-3);
     border-left-width: 3px;
-    border-left-style: solid;
   }
-  .rail-node::before {
-    display: none;
+}
+
+/* forced-colors (Windows High Contrast) overrides border-color and background to system
+   colours, which collapses verified and neutral into each other — their only discriminator
+   otherwise is the marker fill. border-width and border-style are not forced, so the three
+   states stay distinct here on those alone: solid and double-width for verified, dashed for
+   degraded (inherited from the base rule), dotted for neutral. */
+@media (forced-colors: active) {
+  .rail-node--verified {
+    border-left-width: calc(var(--rail-width) * 2);
+  }
+  .rail-node--verified::before {
+    border-width: 3px;
+  }
+  .rail-node--neutral {
+    border-left-style: dotted;
+  }
+  .rail-node--neutral::before {
+    border-style: dotted;
   }
 }

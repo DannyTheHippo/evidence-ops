@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import HomePage from './HomePage';
@@ -10,11 +10,32 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-const me = {
-  id: 'user-1',
-  email: 'user@example.com',
-  role: 'member',
-  createdAt: '2026-01-15T09:30:00.000Z',
+const documentOk = {
+  id: 'doc-1',
+  title: 'Lease Agreement.pdf',
+  sourceKind: 'pdf',
+  mimeType: 'application/pdf',
+  currentVersion: {
+    id: 'version-1',
+    versionNumber: 1,
+    sha256: 'a'.repeat(64),
+    sizeBytes: 1024,
+    ingestionStatus: 'completed',
+    createdAt: new Date().toISOString(),
+  },
+  createdAt: new Date().toISOString(),
+};
+
+const documentFailed = {
+  ...documentOk,
+  id: 'doc-2',
+  title: 'Q3 Financials.xlsx',
+  currentVersion: {
+    ...documentOk.currentVersion,
+    id: 'version-2',
+    ingestionStatus: 'failed',
+    ingestionFailureReason: 'XLSX parse failed: corrupt workbook',
+  },
 };
 
 const sourceOk = {
@@ -25,6 +46,13 @@ const sourceOk = {
   enabled: true,
   fileCount: 3,
   createdAt: new Date().toISOString(),
+};
+
+const failingSource = {
+  ...sourceOk,
+  id: 'source-2',
+  name: 'Second Source',
+  lastSyncError: 'Permission denied listing /deal-room',
 };
 
 const answered = {
@@ -64,26 +92,47 @@ const stillRunning = {
   outcome: undefined,
 };
 
+const approvalPending = {
+  id: 'approval-1',
+  subject: { entityType: 'Conflict', entityId: 'conflict-9' },
+  action: 'resolve-conflict',
+  summary: 'Approve resolving the occupancy rate conflict',
+  state: 'pending',
+  createdAt: new Date().toISOString(),
+};
+
+const conflictOpen = {
+  id: 'conflict-1',
+  factKey: { entity: 'Northgate', metric: 'occupancy', period: '2025-03' },
+  factIds: ['fact-1', 'fact-2'],
+  values: [],
+  magnitude: 0.1,
+  status: 'open',
+  createdAt: new Date().toISOString(),
+  ruleFired: 'none',
+  explanation: 'No policy rule fired for this fact.',
+};
+
 interface RouteOverrides {
   approvals?: () => Response;
   conflicts?: () => Response;
   documents?: () => Response;
   sources?: () => Response;
   answers?: () => Response;
-  me?: () => Response;
 }
 
 // Every list route is keyed by its exact URL, query string included — a stub that only
-// matched by path would silently accept a count from the wrong call.
+// matched by path would silently accept a response from the wrong call.
 function stubFetch(overrides: RouteOverrides = {}): ReturnType<typeof vi.fn> {
   const routes: Record<string, () => Response> = {
-    '/api/v1/auth/me': overrides.me ?? (() => jsonResponse(me)),
-    '/api/v1/approvals?state=pending':
-      overrides.approvals ?? (() => jsonResponse({ docs: [], count: 12 })),
-    '/api/v1/conflicts?limit=1&status=open':
-      overrides.conflicts ?? (() => jsonResponse({ docs: [], count: 7 })),
-    '/api/v1/documents': overrides.documents ?? (() => jsonResponse({ docs: [], count: 340 })),
-    '/api/v1/sources': overrides.sources ?? (() => jsonResponse({ docs: [sourceOk], count: 1 })),
+    '/api/v1/approvals?limit=5&state=pending':
+      overrides.approvals ?? (() => jsonResponse({ docs: [], count: 0 })),
+    '/api/v1/conflicts?limit=5&status=open':
+      overrides.conflicts ?? (() => jsonResponse({ docs: [], count: 0 })),
+    '/api/v1/documents?limit=100':
+      overrides.documents ?? (() => jsonResponse({ docs: [documentOk], count: 1 })),
+    '/api/v1/sources?limit=100':
+      overrides.sources ?? (() => jsonResponse({ docs: [sourceOk], count: 1 })),
     '/api/v1/answers?limit=5':
       overrides.answers ?? (() => jsonResponse({ docs: [answered], count: 1 })),
   };
@@ -110,76 +159,57 @@ describe('HomePage', () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders tile counts from each response's count field, not the length of its docs page", async () => {
-    // Every route below returns a single-item (or empty) docs page paired with a much larger
-    // count — a length-based render would show 0 or 1 everywhere instead of these totals.
+  it('names a specific pending approval and open conflict in the work queue, each linking to where it is decided', async () => {
     stubFetch({
-      approvals: () => jsonResponse({ docs: [], count: 12 }),
-      conflicts: () => jsonResponse({ docs: [], count: 7 }),
-      documents: () => jsonResponse({ docs: [answered], count: 340 }),
+      approvals: () => jsonResponse({ docs: [approvalPending], count: 4 }),
+      conflicts: () => jsonResponse({ docs: [conflictOpen], count: 2 }),
     });
 
     renderPage();
 
     expect(screen.getByRole('heading', { name: 'Home' })).toBeInTheDocument();
-    expect(await screen.findByText('12')).toBeInTheDocument();
-    expect(screen.getByText('7')).toBeInTheDocument();
-    expect(screen.getByText('340')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Pending approvals/ })).toHaveAttribute(
-      'href',
-      '/approvals',
-    );
-    expect(screen.getByRole('link', { name: /Open conflicts/ })).toHaveAttribute(
+    expect(
+      await screen.findByText('Approve resolving the occupancy rate conflict'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: 'Approve resolving the occupancy rate conflict' }),
+    ).toHaveAttribute('href', '/approvals');
+
+    expect(screen.getByText('Northgate — occupancy (2025-03)')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Northgate — occupancy (2025-03)' })).toHaveAttribute(
       'href',
       '/conflicts',
     );
-    expect(screen.getByRole('link', { name: /Documents/ })).toHaveAttribute('href', '/documents');
-    expect(screen.getByRole('link', { name: /Source health/ })).toHaveAttribute('href', '/sources');
 
-    // Source health counts enabled sources from the returned docs — the endpoint has no
-    // dedicated "enabled count" field — so this checks that path separately from the others.
-    expect(screen.getByText('1')).toBeInTheDocument();
-
-    expect(await screen.findByText('user@example.com')).toBeInTheDocument();
+    expect(screen.getByText('4 pending approvals · 2 open conflicts')).toBeInTheDocument();
   });
 
-  it('shows onboarding guidance instead of the dashboard for a brand-new tenant', async () => {
+  it('surfaces a failed ingestion and a failed sync in corpus health, naming the item and its reason', async () => {
     stubFetch({
-      documents: () => jsonResponse({ docs: [], count: 0 }),
-      sources: () => jsonResponse({ docs: [], count: 0 }),
-      answers: () => jsonResponse({ docs: [], count: 0 }),
+      documents: () => jsonResponse({ docs: [documentOk, documentFailed], count: 2 }),
+      sources: () => jsonResponse({ docs: [sourceOk, failingSource], count: 2 }),
     });
 
     renderPage();
 
-    expect(await screen.findByText('Nothing here yet')).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        'Connect a source or upload a document, then ask a question to get started.',
-      ),
-    ).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Connect a source' })).toHaveAttribute(
+    expect(await screen.findByText('Q3 Financials.xlsx')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Q3 Financials.xlsx' })).toHaveAttribute(
       'href',
-      '/sources',
+      '/documents/doc-2',
     );
-    expect(screen.getByRole('link', { name: 'Upload a document' })).toHaveAttribute(
+    expect(screen.getByText(/XLSX parse failed: corrupt workbook/)).toBeInTheDocument();
+    expect(screen.getByText('Ingestion failed')).toBeInTheDocument();
+
+    expect(screen.getByRole('link', { name: 'Second Source' })).toHaveAttribute(
       'href',
-      '/documents',
+      '/sources/source-2',
     );
-    expect(screen.queryByRole('link', { name: /Pending approvals/ })).not.toBeInTheDocument();
-  });
+    expect(screen.getByText(/Permission denied listing \/deal-room/)).toBeInTheDocument();
+    expect(screen.getByText('Sync failed')).toBeInTheDocument();
 
-  it('keeps the other tiles rendering when a single tile fails to load', async () => {
-    stubFetch({
-      approvals: () => jsonResponse({ message: 'Approvals service unavailable' }, 500),
-    });
-
-    renderPage();
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('Approvals service unavailable');
-    expect(await screen.findByText('7')).toBeInTheDocument();
-    expect(screen.getByText('340')).toBeInTheDocument();
-    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    // documentOk and sourceOk both ingested/synced cleanly and must not appear as failures.
+    expect(screen.queryByText('Lease Agreement.pdf')).not.toBeInTheDocument();
+    expect(screen.queryByText('Deal Room Inbox')).not.toBeInTheDocument();
   });
 
   it('shows all three answer outcomes as distinct badges, and a run status for one still in flight', async () => {
@@ -213,19 +243,65 @@ describe('HomePage', () => {
     );
   });
 
-  it('surfaces a failing sync as the source health headline instead of a bare count', async () => {
-    const failingSource = {
-      ...sourceOk,
-      id: 'source-2',
-      lastSyncError: 'Permission denied listing /deal-room',
-    };
+  it('shows the first-run checklist alone, superseding the other three sections, for a brand-new tenant', async () => {
     stubFetch({
-      sources: () => jsonResponse({ docs: [sourceOk, failingSource], count: 2 }),
+      documents: () => jsonResponse({ docs: [], count: 0 }),
+      sources: () => jsonResponse({ docs: [], count: 0 }),
+      answers: () => jsonResponse({ docs: [], count: 0 }),
     });
 
     renderPage();
 
-    expect(await screen.findByText('1 sync error')).toBeInTheDocument();
-    expect(screen.getByText('Permission denied listing /deal-room')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Get started' })).toBeInTheDocument();
+    expect(screen.getByText('Add a source or upload a document')).toBeInTheDocument();
+    expect(screen.getByText('Wait for ingestion to complete')).toBeInTheDocument();
+    // "Ask a question" is both the step label and the still-undone step's call-to-action link, so
+    // this scopes the match to the label span rather than colliding with the link text.
+    expect(
+      screen.getByText('Ask a question', { selector: '.actionable-row-name' }),
+    ).toBeInTheDocument();
+
+    expect(screen.queryByRole('heading', { name: 'Work queue' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Corpus health' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Recent answers' })).not.toBeInTheDocument();
+  });
+
+  it('marks a checklist step done once its signal is satisfied, without hiding the other sections', async () => {
+    stubFetch({
+      documents: () => jsonResponse({ docs: [], count: 0 }),
+      sources: () => jsonResponse({ docs: [sourceOk], count: 1 }),
+      answers: () => jsonResponse({ docs: [], count: 0 }),
+    });
+
+    renderPage();
+
+    expect(await screen.findByRole('heading', { name: 'Get started' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Work queue' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Corpus health' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Recent answers' })).toBeInTheDocument();
+
+    const connectStep = screen.getByText('Add a source or upload a document').closest('li');
+    expect(connectStep).not.toBeNull();
+    expect(within(connectStep as HTMLElement).getByText('Done')).toBeInTheDocument();
+
+    const ingestStep = screen.getByText('Wait for ingestion to complete').closest('li');
+    expect(ingestStep).not.toBeNull();
+    expect(
+      within(ingestStep as HTMLElement).getByRole('link', { name: 'View documents' }),
+    ).toBeInTheDocument();
+  });
+
+  it('keeps the other sections rendering when a single fetch fails', async () => {
+    stubFetch({
+      approvals: () => jsonResponse({ message: 'Approvals service unavailable' }, 500),
+    });
+
+    renderPage();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Approvals service unavailable');
+    expect(screen.getByRole('heading', { name: 'Work queue' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Corpus health' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Recent answers' })).toBeInTheDocument();
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
   });
 });

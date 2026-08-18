@@ -75,7 +75,7 @@ export default function DocumentDetail({ id }: { id: string }) {
       </div>
 
       {error && (
-        <p className="error" role="alert">
+        <p className="error error--page" role="alert">
           {error}
         </p>
       )}
@@ -86,11 +86,18 @@ export default function DocumentDetail({ id }: { id: string }) {
 
       {doc && (
         <>
+          <div className="section-head">
+            <h2 className="card-title">Versions</h2>
+            <span className="card-meta card-meta--end">{doc.sourceKind}</span>
+          </div>
+          <p className="cell-sub mono">{doc.mimeType}</p>
+
           <section className="panel">
             <Table caption={`Versions of ${doc.title}.`}>
               <thead>
                 <tr>
                   <TableHeaderCell>Version</TableHeaderCell>
+                  <TableHeaderCell>Size</TableHeaderCell>
                   <TableHeaderCell>Ingestion</TableHeaderCell>
                   <TableHeaderCell>sha256</TableHeaderCell>
                   <TableHeaderCell>Actions</TableHeaderCell>

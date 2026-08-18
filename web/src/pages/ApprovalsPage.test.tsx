@@ -119,7 +119,8 @@ describe('ApprovalsPage', () => {
   it('lists a pending approval showing the conflicting values, source, and request timestamp', async () => {
     stubFetch({
       '/api/v1/auth/me': () => jsonResponse(admin),
-      '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 1 }),
+      '/api/v1/approvals?skip=0&limit=20&state=pending': () =>
+        jsonResponse({ docs: [pendingApproval], count: 1 }),
       '/api/v1/conflicts': () => jsonResponse({ docs: [authorityConflict], count: 1 }),
     });
 
@@ -142,7 +143,8 @@ describe('ApprovalsPage', () => {
   it("shows the conflict's authority-rule recommendation as a suggestion, not a decision", async () => {
     stubFetch({
       '/api/v1/auth/me': () => jsonResponse(admin),
-      '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 1 }),
+      '/api/v1/approvals?skip=0&limit=20&state=pending': () =>
+        jsonResponse({ docs: [pendingApproval], count: 1 }),
       '/api/v1/conflicts': () => jsonResponse({ docs: [authorityConflict], count: 1 }),
     });
 
@@ -163,7 +165,7 @@ describe('ApprovalsPage', () => {
   it('shows a recency-rule recommendation the same way', async () => {
     stubFetch({
       '/api/v1/auth/me': () => jsonResponse(admin),
-      '/api/v1/approvals': () =>
+      '/api/v1/approvals?skip=0&limit=20&state=pending': () =>
         jsonResponse({
           docs: [
             { ...pendingApproval, subject: { entityType: 'Conflict', entityId: 'conflict-2' } },
@@ -186,7 +188,7 @@ describe('ApprovalsPage', () => {
   it('shows no recommendation when the policy declines to pick a winner, but still shows why', async () => {
     stubFetch({
       '/api/v1/auth/me': () => jsonResponse(admin),
-      '/api/v1/approvals': () =>
+      '/api/v1/approvals?skip=0&limit=20&state=pending': () =>
         jsonResponse({
           docs: [
             { ...pendingApproval, subject: { entityType: 'Conflict', entityId: 'conflict-3' } },
@@ -210,7 +212,8 @@ describe('ApprovalsPage', () => {
     const fetchMock = vi.fn((url: string) => {
       const routes: Record<string, () => Response> = {
         '/api/v1/auth/me': () => jsonResponse(admin),
-        '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 1 }),
+        '/api/v1/approvals?skip=0&limit=20&state=pending': () =>
+          jsonResponse({ docs: [pendingApproval], count: 1 }),
       };
       const handler = routes[url];
       if (!handler) return Promise.reject(new Error(`Unhandled fetch: ${url}`));
@@ -240,7 +243,8 @@ describe('ApprovalsPage', () => {
     const fetchMock = vi.fn((url: string, _init?: RequestInit) => {
       const routes: Record<string, () => Response> = {
         '/api/v1/auth/me': () => jsonResponse(admin),
-        '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 1 }),
+        '/api/v1/approvals?skip=0&limit=20&state=pending': () =>
+          jsonResponse({ docs: [pendingApproval], count: 1 }),
         '/api/v1/approvals/approval-1/decision': () =>
           jsonResponse({ ...pendingApproval, state: 'approved', decidedBy: admin.email }),
       };
@@ -278,7 +282,7 @@ describe('ApprovalsPage', () => {
   it('rejects a pending approval via the dialog and removes it from the inbox', async () => {
     const fetchMock = vi.fn((url: string, _init?: RequestInit) => {
       if (url === '/api/v1/auth/me') return Promise.resolve(jsonResponse(admin));
-      if (url === '/api/v1/approvals') {
+      if (url === '/api/v1/approvals?skip=0&limit=20&state=pending') {
         return Promise.resolve(jsonResponse({ docs: [pendingApproval], count: 1 }));
       }
       if (url === '/api/v1/approvals/approval-1/decision') {
@@ -312,7 +316,8 @@ describe('ApprovalsPage', () => {
     const fetchMock = vi.fn((url: string) => {
       const routes: Record<string, () => Response> = {
         '/api/v1/auth/me': () => jsonResponse(admin),
-        '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 1 }),
+        '/api/v1/approvals?skip=0&limit=20&state=pending': () =>
+          jsonResponse({ docs: [pendingApproval], count: 1 }),
       };
       const handler = routes[url];
       if (!handler) return Promise.reject(new Error(`Unhandled fetch: ${url}`));
@@ -336,7 +341,8 @@ describe('ApprovalsPage', () => {
   it('a member sees why deciding is unavailable, and cannot reach the decide controls', async () => {
     stubFetch({
       '/api/v1/auth/me': () => jsonResponse(member),
-      '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 1 }),
+      '/api/v1/approvals?skip=0&limit=20&state=pending': () =>
+        jsonResponse({ docs: [pendingApproval], count: 1 }),
     });
 
     renderPage();
@@ -354,7 +360,7 @@ describe('ApprovalsPage', () => {
     });
     const fetchMock = vi.fn((url: string) => {
       if (url === '/api/v1/auth/me') return pendingMe;
-      if (url === '/api/v1/approvals') {
+      if (url === '/api/v1/approvals?skip=0&limit=20&state=pending') {
         return Promise.resolve(jsonResponse({ docs: [pendingApproval], count: 1 }));
       }
       if (url === '/api/v1/conflicts') {
@@ -380,35 +386,145 @@ describe('ApprovalsPage', () => {
     expect(screen.queryByText('Deciding approvals requires an admin.')).not.toBeInTheDocument();
   });
 
-  it('shows how many approvals are visible against the total when the inbox is truncated', async () => {
+  it('shows the pager total and keeps Next enabled when the inbox is truncated', async () => {
     stubFetch({
       '/api/v1/auth/me': () => jsonResponse(admin),
-      '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 32 }),
+      '/api/v1/approvals?skip=0&limit=20&state=pending': () =>
+        jsonResponse({ docs: [pendingApproval], count: 32 }),
       '/api/v1/conflicts': () => jsonResponse({ docs: [authorityConflict], count: 1 }),
     });
 
     renderPage();
 
-    expect(await screen.findByText('Showing 1 of 32.')).toBeInTheDocument();
+    expect(await screen.findByText('32 total')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
   });
 
-  it('shows no truncation notice when the full inbox fits on the page', async () => {
+  it('disables Next once the full inbox fits on the page', async () => {
     stubFetch({
       '/api/v1/auth/me': () => jsonResponse(admin),
-      '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 1 }),
+      '/api/v1/approvals?skip=0&limit=20&state=pending': () =>
+        jsonResponse({ docs: [pendingApproval], count: 1 }),
       '/api/v1/conflicts': () => jsonResponse({ docs: [authorityConflict], count: 1 }),
     });
 
     renderPage();
 
     await screen.findByText(pendingApproval.summary);
-    expect(screen.queryByText(/^Showing /)).not.toBeInTheDocument();
+    expect(screen.getByText('1 total')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+  });
+
+  it('pages past the first 20 approvals, sending skip/limit and the applied state', async () => {
+    const otherPageApproval = {
+      ...pendingApproval,
+      id: 'approval-2',
+      summary: 'Resolve a different conflict entirely.',
+    };
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/auth/me') return Promise.resolve(jsonResponse(admin));
+      if (url === '/api/v1/approvals?skip=20&limit=20&state=pending') {
+        return Promise.resolve(jsonResponse({ docs: [otherPageApproval], count: 25 }));
+      }
+      if (url === '/api/v1/approvals?skip=0&limit=20&state=pending') {
+        return Promise.resolve(jsonResponse({ docs: [pendingApproval], count: 25 }));
+      }
+      if (url === '/api/v1/conflicts') {
+        return Promise.resolve(jsonResponse({ docs: [authorityConflict], count: 1 }));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    await screen.findByText(pendingApproval.summary);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    expect(await screen.findByText(otherPageApproval.summary)).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => url === '/api/v1/approvals?skip=20&limit=20&state=pending',
+      ),
+    ).toBe(true);
+  });
+
+  it('applies the state filter on submit, resets paging, and offers no "All states" option', async () => {
+    const page2PendingApproval = {
+      ...pendingApproval,
+      id: 'approval-2',
+      summary: 'Resolve a different conflict entirely.',
+    };
+    const approvedApproval = {
+      ...pendingApproval,
+      id: 'approval-3',
+      state: 'approved' as const,
+      decidedBy: 'reviewer@example.com',
+      decidedAt: '2026-08-05T10:15:00.000Z',
+      decisionReason: 'Evidence checks out.',
+    };
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/auth/me') return Promise.resolve(jsonResponse(admin));
+      if (url === '/api/v1/approvals?skip=20&limit=20&state=pending') {
+        return Promise.resolve(jsonResponse({ docs: [page2PendingApproval], count: 25 }));
+      }
+      if (url === '/api/v1/approvals?skip=0&limit=20&state=pending') {
+        return Promise.resolve(jsonResponse({ docs: [pendingApproval], count: 25 }));
+      }
+      if (url === '/api/v1/approvals?skip=0&limit=20&state=approved') {
+        return Promise.resolve(jsonResponse({ docs: [approvedApproval], count: 1 }));
+      }
+      if (url === '/api/v1/conflicts') {
+        return Promise.resolve(jsonResponse({ docs: [authorityConflict], count: 1 }));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    await screen.findByText(pendingApproval.summary);
+    // No "All states" entry — every option is a state the server can actually filter on
+    // (approvals.service.ts's `peekPending` substitutes `pending` for an omitted param, so an
+    // "all" option would silently mean "pending").
+    expect(screen.queryByRole('option', { name: /all states/i })).not.toBeInTheDocument();
+
+    // Advance to page 2 first, so the filter submit below is what proves skip resets to 0. Waits
+    // on page 2's own distinct row, not just the shared "25 total" count, so the assertion below
+    // cannot race ahead of the page-2 fetch actually resolving.
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText(page2PendingApproval.summary);
+
+    fireEvent.change(screen.getByLabelText('State'), { target: { value: 'approved' } });
+    expect(fetchMock.mock.calls.some(([url]) => url.includes('state=approved'))).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+
+    expect(await screen.findByText(approvedApproval.summary)).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => url === '/api/v1/approvals?skip=0&limit=20&state=approved',
+      ),
+    ).toBe(true);
+    // An already-decided approval shows no decide controls — deciding it would only 409.
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument();
+    // The decision itself — who, when, and why — is read back rather than collected and discarded.
+    expect(
+      screen.getByText(
+        `Decided ${new Date(approvedApproval.decidedAt).toLocaleString()} by reviewer@example.com`,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Reason: Evidence checks out.')).toBeInTheDocument();
   });
 
   it('navigates to the workflow run when "View run" finds one', async () => {
     stubFetch({
       '/api/v1/auth/me': () => jsonResponse(admin),
-      '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 1 }),
+      '/api/v1/approvals?skip=0&limit=20&state=pending': () =>
+        jsonResponse({ docs: [pendingApproval], count: 1 }),
       '/api/v1/workflow-runs?workflowId=wf-1': () =>
         jsonResponse({
           docs: [
@@ -433,7 +549,8 @@ describe('ApprovalsPage', () => {
   it('shows an error when "View run" finds no run for the workflow', async () => {
     stubFetch({
       '/api/v1/auth/me': () => jsonResponse(admin),
-      '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 1 }),
+      '/api/v1/approvals?skip=0&limit=20&state=pending': () =>
+        jsonResponse({ docs: [pendingApproval], count: 1 }),
       '/api/v1/workflow-runs?workflowId=wf-1': () => jsonResponse({ docs: [], count: 0 }),
     });
 

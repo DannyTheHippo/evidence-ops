@@ -110,21 +110,23 @@ export default function ProvenanceRail({ outcome, documentIndex }: ProvenanceRai
   const nodes = buildRailNodes(outcome);
 
   return (
-    <ul className="rail">
+    <ul className="rail" role="list">
       {nodes.map((node) => (
         <li key={node.key} className={`rail-node rail-node--${node.state}`}>
           <span className="sr-only">{STATE_LABEL[node.state]}</span>
-          <p className="rail-node-statement">{node.statement}</p>
+          <p className="apparatus-claim">{node.statement}</p>
           {node.citations.length > 0 && (
-            <ul className="rail-citations">
+            <ul className="apparatus-citations" role="list">
               {node.citations.map((citation, index) => (
-                <li key={index} className="rail-citation">
-                  <blockquote className="rail-citation-quote">{citation.quote}</blockquote>
-                  <p className="rail-citation-locator mono">{formatLocator(citation.locator)}</p>
-                  <TraceChip
-                    citation={citation}
-                    resolved={documentIndex.get(citation.docVersionId)}
-                  />
+                <li key={index} className="apparatus-citation">
+                  <blockquote className="apparatus-quote">{citation.quote}</blockquote>
+                  <div className="apparatus-meta">
+                    <p className="apparatus-locator mono">{formatLocator(citation.locator)}</p>
+                    <TraceChip
+                      citation={citation}
+                      resolved={documentIndex.get(citation.docVersionId)}
+                    />
+                  </div>
                 </li>
               ))}
             </ul>

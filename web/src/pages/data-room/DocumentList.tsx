@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { Link } from 'react-router-dom';
 import {
   documentEventsUrl,
   listDocuments,
@@ -12,11 +11,13 @@ import Button from '../../components/ui/Button';
 import EmptyState from '../../components/ui/EmptyState';
 import Field from '../../components/ui/Field';
 import Skeleton from '../../components/ui/Skeleton';
-import Table, { TableHeaderCell } from '../../components/ui/Table';
+import Table, { RowLink, TableHeaderCell, TableRow } from '../../components/ui/Table';
 import { notify } from '../../components/ui/toast';
 import { useEventStream } from '../../lib/use-event-stream';
+import { formatBytes } from './format-size';
 
 const POLL_INTERVAL_MS = 3000;
+const PAGE_SIZE = 20;
 
 function ingestionTone(
   status: DocumentVersionIngestionStatus,
@@ -30,13 +31,14 @@ export default function DocumentList() {
   const [documents, setDocuments] = useState<EvidenceDocument[] | null>(null);
   const [count, setCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [skip, setSkip] = useState(0);
   const [title, setTitle] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   const refetch = useCallback(() => {
-    listDocuments()
+    listDocuments({ skip, limit: PAGE_SIZE })
       .then(({ docs, count: total }) => {
         setDocuments(docs);
         setCount(total);
@@ -45,10 +47,13 @@ export default function DocumentList() {
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'Failed to load documents');
       });
-  }, []);
+  }, [skip]);
 
+  // The SSE stream (`documents.service.ts`'s `streamList`) hardcodes the newest page, so it is
+  // only correct while viewing page 1 — `url: null` disables the stream entirely on a later page
+  // and this component falls back to the plain paginated fetch below instead.
   const streamState = useEventStream<{ docs: EvidenceDocument[]; count: number }>({
-    url: documentEventsUrl(),
+    url: skip === 0 ? documentEventsUrl() : null,
     events: ['documents', 'heartbeat'],
     onEvent: (name, data) => {
       // Heartbeat only keeps the connection's liveness fresh; only a `documents` frame carries a
@@ -60,6 +65,11 @@ export default function DocumentList() {
     },
     onFallback: refetch,
   });
+
+  // A later page has no stream to fall back from — refetch it directly whenever it changes.
+  useEffect(() => {
+    if (skip !== 0) refetch();
+  }, [skip, refetch]);
 
   const hasPending =
     documents?.some((doc) => doc.currentVersion.ingestionStatus === 'pending') ?? false;
@@ -102,6 +112,9 @@ export default function DocumentList() {
     if (errors.length > 0) setUploadError(errors.join('; '));
   }
 
+  const hasPrev = skip > 0;
+  const hasNext = skip + PAGE_SIZE < count;
+
   return (
     <div className="view view--flow">
       <div className="page-head">
@@ -128,13 +141,18 @@ export default function DocumentList() {
               />
             )}
           </Field>
-          <Field label="File" hint="PDF, DOCX or XLSX, up to 50 MB each">
+          {/* Mirrors UPLOAD_EXTENSION_ALLOWLIST in documents.constant.ts — the eight kinds the
+              upload gate accepts. A narrower list here hides formats the server would take. */}
+          <Field
+            label="File"
+            hint="PDF, Word, Excel, PowerPoint, CSV, TSV, Markdown or text, up to 50 MB each"
+          >
             {(inputProps) => (
               <input
                 type="file"
                 required
                 multiple
-                accept=".pdf,.docx,.xlsx"
+                accept=".pdf,.docx,.xlsx,.pptx,.csv,.tsv,.txt,.md"
                 onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
                 {...inputProps}
               />
@@ -154,7 +172,7 @@ export default function DocumentList() {
       </section>
 
       {error && (
-        <p className="error" role="alert">
+        <p className="error error--page" role="alert">
           {error}
         </p>
       )}
@@ -176,17 +194,22 @@ export default function DocumentList() {
                 <TableHeaderCell>Title</TableHeaderCell>
                 <TableHeaderCell>Source</TableHeaderCell>
                 <TableHeaderCell>Version</TableHeaderCell>
+                <TableHeaderCell>Size</TableHeaderCell>
                 <TableHeaderCell>Ingestion</TableHeaderCell>
               </tr>
             </thead>
             <tbody>
               {documents.map((doc) => (
-                <tr key={doc.id}>
+                <TableRow key={doc.id} to={`/documents/${doc.id}`}>
                   <td>
-                    <Link to={`/documents/${doc.id}`}>{doc.title}</Link>
+                    <RowLink to={`/documents/${doc.id}`}>{doc.title}</RowLink>
                   </td>
-                  <td className="cell-sub">{doc.sourceKind}</td>
+                  <td>
+                    {doc.sourceKind}
+                    <p className="cell-sub">{doc.mimeType}</p>
+                  </td>
                   <td className="num">v{doc.currentVersion.versionNumber}</td>
+                  <td className="num">{formatBytes(doc.currentVersion.sizeBytes)}</td>
                   <td>
                     <Badge tone={ingestionTone(doc.currentVersion.ingestionStatus)}>
                       {doc.currentVersion.ingestionStatus}
@@ -195,17 +218,35 @@ export default function DocumentList() {
                       <p className="cell-sub">{doc.currentVersion.ingestionFailureReason}</p>
                     )}
                   </td>
-                </tr>
+                </TableRow>
               ))}
             </tbody>
           </Table>
         </section>
       )}
 
-      {documents && documents.length > 0 && documents.length < count && (
-        <p className="cell-sub">
-          Showing {documents.length} of {count}.
-        </p>
+      {documents && (
+        <div className="pager">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={!hasPrev}
+            onClick={() => setSkip((s) => Math.max(0, s - PAGE_SIZE))}
+          >
+            Previous
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={!hasNext}
+            onClick={() => setSkip((s) => s + PAGE_SIZE)}
+          >
+            Next
+          </Button>
+          <span className="cell-sub">{count} total</span>
+        </div>
       )}
     </div>
   );

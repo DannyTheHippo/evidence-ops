@@ -1,13 +1,37 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { listAuditEvents, type AuditEventView } from '../api/client';
+import { Link } from 'react-router-dom';
+import { listAuditEvents, type AuditEventSubject, type AuditEventView } from '../api/client';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import Field from '../components/ui/Field';
 import Select from '../components/ui/Select';
 import Skeleton from '../components/ui/Skeleton';
 import Table, { TableHeaderCell } from '../components/ui/Table';
+import { shortId } from '../lib/identifiers';
 
 const PAGE_SIZE = 25;
+
+// The subject types that carry a detail route the SPA actually renders. ApiKey, Approval,
+// Conflict and User have no per-id page, and DocumentVersion has no route at all (the SPA reads
+// versions through their owning document) — those four render as plain text below.
+const ENTITY_ROUTE_BASE: Partial<Record<string, string>> = {
+  Answer: '/answers',
+  Document: '/documents',
+  Source: '/sources',
+  WorkflowRun: '/workflow-runs',
+};
+
+function AuditSubject({ subject }: { subject: AuditEventSubject }) {
+  const base = ENTITY_ROUTE_BASE[subject.entityType];
+  const label = `${subject.entityType} ${shortId(subject.entityId)}`;
+  return base ? (
+    <Link to={`${base}/${subject.entityId}`} title={subject.entityId}>
+      {label}
+    </Link>
+  ) : (
+    <span title={subject.entityId}>{label}</span>
+  );
+}
 
 // `subject.entityType` carries no schema-level enum — every audit-emitting service call site
 // (api-keys, approvals, audit-events, conflicts, documents, qa, retrieval, sources,
@@ -153,6 +177,7 @@ export default function AuditEventsPage() {
                 <TableHeaderCell>Actor</TableHeaderCell>
                 <TableHeaderCell>Action</TableHeaderCell>
                 <TableHeaderCell>Subject</TableHeaderCell>
+                <TableHeaderCell>Correlation</TableHeaderCell>
                 <TableHeaderCell>Timestamp</TableHeaderCell>
               </tr>
             </thead>
@@ -162,7 +187,10 @@ export default function AuditEventsPage() {
                   <td className="cell-sub">{event.actor}</td>
                   <td>{event.action}</td>
                   <td className="cell-sub">
-                    {event.subject.entityType} {event.subject.entityId}
+                    <AuditSubject subject={event.subject} />
+                  </td>
+                  <td className="cell-sub mono" title={event.correlationId}>
+                    {shortId(event.correlationId)}
                   </td>
                   <td className="cell-sub">{new Date(event.timestamp).toLocaleString()}</td>
                 </tr>

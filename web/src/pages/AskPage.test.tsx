@@ -340,10 +340,16 @@ describe('AskPage', () => {
 
     await screen.findByText('1 of 2 claims verified against the source');
 
-    fireEvent.click(screen.getByText('1 claim dropped — not verified against the source'));
+    expect(
+      screen.getByText(
+        'No claim could be verified against the source — this is why the model abstained.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText('No retrieved chunk supports this figure.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Show statement'));
 
     expect(screen.getByText('Occupancy is 95%.')).toBeInTheDocument();
-    expect(screen.getByText('No retrieved chunk supports this figure.')).toBeInTheDocument();
   });
 
   it('replaces polling with SSE, applying a named answer event and closing the source on a terminal one', async () => {

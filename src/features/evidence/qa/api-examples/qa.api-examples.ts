@@ -17,6 +17,7 @@ const exampleCompletedAnswer = {
     claims: [{ statement: 'The cap rate is approximately 6.10%.', citations: [] }],
   },
   claimCoverage: 1,
+  retrievedChunkCount: 8,
   verificationReport: { verifiedClaimCount: 1, totalClaimCount: 1, droppedClaims: [] },
   citations: [],
   conflictIds: [],

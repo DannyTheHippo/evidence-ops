@@ -5,7 +5,7 @@ import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import Skeleton from '../components/ui/Skeleton';
-import Table, { TableHeaderCell } from '../components/ui/Table';
+import Table, { RowLink, TableHeaderCell, TableRow } from '../components/ui/Table';
 import { shortId, workflowTypeLabel } from '../lib/identifiers';
 
 const PAGE_SIZE = 25;
@@ -49,7 +49,7 @@ export default function RunsPage() {
       </div>
 
       {error && (
-        <p className="error" role="alert">
+        <p className="error error--page" role="alert">
           {error}
         </p>
       )}
@@ -80,11 +80,11 @@ export default function RunsPage() {
             </thead>
             <tbody>
               {runs.map((run) => (
-                <tr key={run.id}>
+                <TableRow key={run.id} to={`/workflow-runs/${run.id}`}>
                   <td>
-                    <Link to={`/workflow-runs/${run.id}`}>
+                    <RowLink to={`/workflow-runs/${run.id}`}>
                       {workflowTypeLabel(run.workflowType)}
-                    </Link>
+                    </RowLink>
                     <p className="cell-sub mono" title={run.workflowId}>
                       {shortId(run.workflowId)}
                     </p>
@@ -96,7 +96,7 @@ export default function RunsPage() {
                     )}
                   </td>
                   <td className="cell-sub">{new Date(run.createdAt).toLocaleString()}</td>
-                </tr>
+                </TableRow>
               ))}
             </tbody>
           </Table>

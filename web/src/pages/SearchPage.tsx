@@ -11,7 +11,7 @@ import { formatLocator } from '../lib/locator';
 
 const QUERY_MAX_LENGTH = 500;
 const RATE_LIMIT_MESSAGE =
-  'Search is limited to 10 queries per minute — each search spends a live embedding call. Wait a moment, then try again.';
+  'Search is limited to 10 queries per minute — each search spends a live embedding call. Wait up to a minute, then try again.';
 
 interface ResultRowProps {
   chunk: RetrievedChunkView;

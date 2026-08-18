@@ -94,9 +94,20 @@ describe('DocumentList', () => {
       // A failed row that shows only the word "failed" throws away the one thing the API knows
       // about the failure.
       expect(screen.getByText('PDF parse failed: no extractable text layer')).toBeInTheDocument();
+      // sizeBytes and mimeType are on the wire; a raw byte count would tell a reader nothing.
+      expect(screen.getByText('100 B')).toBeInTheDocument();
+      expect(
+        screen.getByText('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+      ).toBeInTheDocument();
+      expect(screen.getAllByText('application/pdf')).toHaveLength(2);
+      // The row is reachable as a real link, not just a click handler on the <tr>.
+      expect(screen.getByRole('link', { name: 'Q3 Rent Roll' })).toHaveAttribute(
+        'href',
+        '/documents/doc-1',
+      );
     });
 
-    it('shows how many documents are visible against the total when the list is truncated', async () => {
+    it('shows the pager total and disables Previous on the first page when the list is truncated', async () => {
       const documents = {
         docs: [
           {
@@ -122,7 +133,59 @@ describe('DocumentList', () => {
 
       renderList();
 
-      expect(await screen.findByText('Showing 1 of 25.')).toBeInTheDocument();
+      expect(await screen.findByText('25 total')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
+    });
+
+    it('pages past the first 20 documents with skip/limit, and back again', async () => {
+      const pageOf = (id: string, count: number) => ({
+        docs: [
+          {
+            id,
+            title: id,
+            sourceKind: 'pdf',
+            mimeType: 'application/pdf',
+            currentVersion: {
+              id: `${id}-v1`,
+              versionNumber: 1,
+              sha256: 'a'.repeat(64),
+              sizeBytes: 100,
+              ingestionStatus: 'completed',
+              createdAt: new Date().toISOString(),
+            },
+            createdAt: new Date().toISOString(),
+          },
+        ],
+        count,
+      });
+
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/api/v1/documents?skip=20&limit=20') {
+          return Promise.resolve(jsonResponse(pageOf('doc-page-2', 25)));
+        }
+        return Promise.resolve(jsonResponse(pageOf('doc-page-1', 25)));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      renderList();
+
+      expect(await screen.findByText('doc-page-1')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+      expect(await screen.findByText('doc-page-2')).toBeInTheDocument();
+      expect(
+        fetchMock.mock.calls.some(
+          ([calledUrl]) => calledUrl === '/api/v1/documents?skip=20&limit=20',
+        ),
+      ).toBe(true);
+      expect(screen.getByRole('button', { name: 'Previous' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
+
+      expect(await screen.findByText('doc-page-1')).toBeInTheDocument();
     });
 
     it('shows a loading state before the document list arrives', async () => {
@@ -343,6 +406,68 @@ describe('DocumentList', () => {
       });
 
       expect(screen.getByText('Q3 Rent Roll')).toBeInTheDocument();
+    });
+
+    it('closes the stream and stops reporting live once paged past page 1', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        jsonResponse({
+          docs: [
+            {
+              id: 'doc-2',
+              title: 'Page Two Doc',
+              sourceKind: 'pdf',
+              mimeType: 'application/pdf',
+              currentVersion: {
+                id: 'v-2',
+                versionNumber: 1,
+                sha256: 'b'.repeat(64),
+                sizeBytes: 200,
+                ingestionStatus: 'completed',
+                createdAt: new Date().toISOString(),
+              },
+              createdAt: new Date().toISOString(),
+            },
+          ],
+          count: 25,
+        }),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+
+      renderList();
+
+      const [firstPageSource] = FakeEventSource.instances;
+      act(() => {
+        firstPageSource.emit('documents', {
+          docs: [
+            {
+              id: 'doc-1',
+              title: 'Q3 Rent Roll',
+              sourceKind: 'xlsx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              currentVersion: {
+                id: 'v-1',
+                versionNumber: 1,
+                sha256: 'a'.repeat(64),
+                sizeBytes: 100,
+                ingestionStatus: 'completed',
+                createdAt: new Date().toISOString(),
+              },
+              createdAt: new Date().toISOString(),
+            },
+          ],
+          count: 25,
+        });
+      });
+      await screen.findByText('Q3 Rent Roll');
+      expect(firstPageSource.closed).toBe(false);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+      expect(await screen.findByText('Page Two Doc')).toBeInTheDocument();
+      // The SSE stream is not parameterisable to a page, so it disconnects entirely past page 1
+      // rather than keep reporting a "live" status that only holds true for page 1's rows.
+      expect(firstPageSource.closed).toBe(true);
+      expect(FakeEventSource.instances).toHaveLength(1);
     });
   });
 });
