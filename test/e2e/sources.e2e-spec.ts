@@ -84,6 +84,7 @@ const FRESH_SOURCE_KEYS = [
 describe('Sources (e2e)', () => {
   let app: INestApplication;
   let cookie: string;
+  let memberCookie: string;
   let tenantId: string;
   let sourceModel: Model<SourceDocument>;
 
@@ -92,6 +93,16 @@ describe('Sources (e2e)', () => {
 
     const credentials = { email: 'sources-e2e@example.com', password: 'correct-horse-battery' };
     ({ cookie, tenantId } = await registerTestUser(app, credentials));
+
+    // Registering provisions a brand-new tenant with the registrant as its admin. Co-tenanting the
+    // member into that same tenant lets both callers see the same seeded rows, so only the role
+    // (admin vs. member) is the variable under test — same technique as `documents.e2e-spec.ts`.
+    const member = await registerTestUser(
+      app,
+      { email: 'sources-member-e2e@example.com', password: 'correct-horse-battery' },
+      { role: 'member', tenantId },
+    );
+    memberCookie = member.cookie;
 
     sourceModel = app.get<Model<SourceDocument>>(getModelToken(Source.name));
   });
@@ -139,6 +150,17 @@ describe('Sources (e2e)', () => {
         .send({ name, kind: 'local-folder', path: 'deal-room-2' });
 
       expect(response.status).toBe(409);
+    });
+
+    // Regression for the T3 audit: creating a source configures ingestion for the whole tenant, so
+    // it is admin-only, unlike document upload which any Member can already do.
+    it('returns 403 for a Member', async () => {
+      const response = await request(getTestServer(app))
+        .post('/api/v1/sources')
+        .set('Cookie', memberCookie)
+        .send({ name: `Member Source ${Date.now()}`, kind: 'local-folder', path: 'deal-room' });
+
+      expect(response.status).toBe(403);
     });
   });
 
@@ -319,6 +341,25 @@ describe('Sources (e2e)', () => {
 
       expect(response.status).toBe(404);
     });
+
+    // Regression for the T3 audit: disabling a source silently halts corpus freshness for the
+    // whole tenant, so it is admin-only, the same reasoning as `create`.
+    it('returns 403 for a Member', async () => {
+      const created = await sourceModel.create({
+        name: `Member Patch Source ${Date.now()}`,
+        kind: 'local-folder',
+        path: 'deal-room',
+        tenantId,
+        enabled: true,
+      });
+
+      const response = await request(getTestServer(app))
+        .patch(`/api/v1/sources/${created._id.toString()}`)
+        .set('Cookie', memberCookie)
+        .send({ enabled: false });
+
+      expect(response.status).toBe(403);
+    });
   });
 
   describe('POST /sources/:id/sync', () => {
@@ -378,6 +419,24 @@ describe('Sources (e2e)', () => {
         .set('Cookie', cookie);
 
       expect(response.status).toBe(404);
+    });
+
+    // Regression for the T3 audit's deliberate decision to leave this route ungated: syncing
+    // operates a source an admin already configured and enabled, rather than changing that
+    // configuration, so a Member is allowed here unlike `create`/PATCH above.
+    it('starts a sync for a Member', async () => {
+      const created = await sourceModel.create({
+        name: `Member Sync Source ${Date.now()}`,
+        kind: 'local-folder',
+        path: 'deal-room',
+        tenantId,
+      });
+
+      const response = await request(getTestServer(app))
+        .post(`/api/v1/sources/${created._id.toString()}/sync`)
+        .set('Cookie', memberCookie);
+
+      expect(response.status).toBe(202);
     });
   });
 });

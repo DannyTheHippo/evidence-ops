@@ -124,6 +124,26 @@ describe('Retrieval (e2e)', () => {
       // hook `aggregate()`, so the store's filter is the only place tenant scoping is provable.
       expect(fakeRetrievalStore.queries[0].filter).toEqual({ tenantId });
     });
+
+    // Regression for the explicit `@RequireRole(Member, Admin)` floor: this route stated no role
+    // requirement before, which the `RolesGuard` opt-in default already treated as "any
+    // authenticated user", so a Member could always reach it — this proves the explicit floor
+    // didn't quietly narrow that to Admin only.
+    it('allows a Member to search — the explicit floor grants the same access as before', async () => {
+      fakeRetrievalStore.setHits([]);
+      const { cookie: memberCookie } = await registerTestUser(
+        app,
+        { email: 'retrieval-e2e-member@example.com', password: 'correct-horse-battery' },
+        { role: 'member', tenantId },
+      );
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/retrieval/search')
+        .set('Cookie', memberCookie)
+        .query({ query: 'What is the cap rate?' });
+
+      expect(response.status).toBe(200);
+    });
   });
 
   // Placed at the very end of this suite deliberately: the per-handler throttle bucket persists

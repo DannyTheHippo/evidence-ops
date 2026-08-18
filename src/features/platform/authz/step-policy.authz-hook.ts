@@ -12,8 +12,6 @@ import type { ToolExecutionContext, ToolExecutionStep } from './types/tool-defin
  * explicit addition here, never by omission.
  */
 const STEP_MINIMUM_ROLE: Readonly<Record<string, UserRole>> = {
-  'qa-answer': UserRole.Member,
-  'data-room-export': UserRole.Admin,
   // `search_evidence`/`get_answer` over MCP (`src/mcp/mcp-tools.ts`) — both read-only and scoped
   // to the caller's own tenant by the verified PAT's `context.tenantId`, the same floor as asking
   // a question in the first place.
@@ -21,9 +19,9 @@ const STEP_MINIMUM_ROLE: Readonly<Record<string, UserRole>> = {
   // `request_resolution` over MCP — the durable human approval it starts (ADR-0009) bounds
   // outcome risk, not request risk: every call writes a `WorkflowRun` and an `Approval` inbox row,
   // reachable by an AI client holding a long-lived PAT while reading corpus content that can carry
-  // prompt injection. Floored at Admin, above every other MCP/tool step's Member floor, the same
-  // way `'data-room-export'` is — a consequential write reachable from a non-interactive credential
-  // needs a higher bar than a read the caller could already perform by asking the question.
+  // prompt injection. Floored at Admin, above `mcp-read`'s Member floor — a consequential write
+  // reachable from a non-interactive credential needs a higher bar than a read the caller could
+  // already perform by asking the question.
   'mcp-mutate': UserRole.Admin,
 };
 

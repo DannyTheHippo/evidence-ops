@@ -750,7 +750,7 @@ describe('McpServerService', () => {
     it('should refuse a Member for a step requiring Admin', async () => {
       const { toolExecutor } = await buildHarness();
       const stricterStep: ToolExecutionStep = {
-        stepId: 'data-room-export',
+        stepId: 'mcp-mutate',
         allowedTools: [SEARCH_EVIDENCE_TOOL_NAME],
       };
 
@@ -765,7 +765,7 @@ describe('McpServerService', () => {
         kind: 'refused',
         reason: 'authz-denied',
         detail:
-          "role 'member' does not meet the minimum role 'admin' required for step 'data-room-export'",
+          "role 'member' does not meet the minimum role 'admin' required for step 'mcp-mutate'",
       });
     });
   });

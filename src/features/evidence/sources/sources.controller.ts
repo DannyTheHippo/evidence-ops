@@ -9,12 +9,16 @@ import {
   Post,
   Query,
   UnauthorizedException,
+  UseGuards,
   Version,
 } from '@nestjs/common';
 import { ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
+import { RolesGuard } from '../../common/auth/guards/roles.guard';
+import { RequireRole } from '../../../shared/decorators/require-role.decorator';
 import { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
+import { UserRole } from '../../../shared/enums/user-role.enum';
 import { AuthenticatedRequest } from '../../../shared/types/authenticated-request.type';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { WorkflowRunResponseDto } from '../workflow-runs/dtos/response/workflow-run.response.dto';
@@ -30,11 +34,17 @@ import { SourcesService } from './sources.service';
 export class SourcesController {
   constructor(private readonly sourcesService: SourcesService) {}
 
+  // Admin-only: this configures which external location feeds the tenant's evidence corpus for
+  // every member, not a per-user contribution — unlike document upload, which only adds content a
+  // Member could add anyway.
   @Post()
   @Version('1')
   @HttpCode(HttpStatus.CREATED)
+  @UseGuards(RolesGuard)
+  @RequireRole(UserRole.Admin)
   @ApiResponse(sourcesApiExamples.created)
   @ApiResponse(sourcesApiExamples.nameConflict)
+  @ApiResponse(sourcesApiExamples.forbidden)
   async create(
     @Body() dto: CreateSourceRequestDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
@@ -93,11 +103,16 @@ export class SourcesController {
     );
   }
 
+  // Admin-only, same reasoning as `create` above: disabling a source silently halts corpus
+  // freshness for the whole tenant, with no trace anywhere a Member would see it.
   @Patch(':id')
   @Version('1')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(RolesGuard)
+  @RequireRole(UserRole.Admin)
   @ApiResponse(sourcesApiExamples.found)
   @ApiResponse(sourcesApiExamples.notFound)
+  @ApiResponse(sourcesApiExamples.forbidden)
   async setEnabled(
     @Param('id') id: string,
     @Body() dto: UpdateSourceEnabledRequestDto,
@@ -113,6 +128,10 @@ export class SourcesController {
     );
   }
 
+  // Deliberately left open to any role: unlike `create`/`setEnabled`, this operates a source an
+  // admin already configured and enabled rather than changing that configuration, and the workflow
+  // run it starts is deduplicated against an already-running sync — no more consequential than a
+  // Member asking a question, which is also ungated.
   @Post(':id/sync')
   @Version('1')
   @HttpCode(HttpStatus.ACCEPTED)

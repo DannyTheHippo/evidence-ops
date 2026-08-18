@@ -22,48 +22,8 @@ describe('StepPolicyAuthzHook', () => {
   describe('authorize', () => {
     const hook = new StepPolicyAuthzHook();
 
-    it('should allow a known step when the caller role meets the minimum', () => {
-      const step: ToolExecutionStep = { stepId: 'qa-answer', allowedTools: ['echo'] };
-
-      const decision = hook.authorize({
-        step,
-        toolName: 'echo',
-        context: buildContext(UserRole.Member),
-      });
-
-      expect(decision).toEqual({ allowed: true });
-    });
-
-    it('should allow a known step when the caller role exceeds the minimum', () => {
-      const step: ToolExecutionStep = { stepId: 'qa-answer', allowedTools: ['echo'] };
-
-      const decision = hook.authorize({
-        step,
-        toolName: 'echo',
-        context: buildContext(UserRole.Admin),
-      });
-
-      expect(decision).toEqual({ allowed: true });
-    });
-
-    it('should refuse a known step when the caller role is below the minimum', () => {
-      const step: ToolExecutionStep = {
-        stepId: 'data-room-export',
-        allowedTools: ['export_data_room'],
-      };
-
-      const decision = hook.authorize({
-        step,
-        toolName: 'export_data_room',
-        context: buildContext(UserRole.Member),
-      });
-
-      expect(decision).toEqual({
-        allowed: false,
-        reason:
-          "role 'member' does not meet the minimum role 'admin' required for step 'data-room-export'",
-      });
-    });
+    // "Meets/exceeds the minimum" and "below the minimum" are exercised by the `mcp-read`/
+    // `mcp-mutate` tests below, against the real production steps.
 
     it('should refuse a step absent from the policy map', () => {
       const step: ToolExecutionStep = { stepId: 'unmapped-step', allowedTools: ['echo'] };
@@ -85,7 +45,7 @@ describe('StepPolicyAuthzHook', () => {
     // `as UserRole`) — this proves the comparison refuses rather than treats an unranked role as
     // vacuously below every minimum.
     it('should refuse a known step when the caller role is not a recognized UserRole', () => {
-      const step: ToolExecutionStep = { stepId: 'qa-answer', allowedTools: ['echo'] };
+      const step: ToolExecutionStep = { stepId: 'mcp-read', allowedTools: ['echo'] };
 
       const decision = hook.authorize({
         step,
@@ -99,7 +59,7 @@ describe('StepPolicyAuthzHook', () => {
       });
     });
 
-    it('should allow the mcp-read step for a member — the same minimum qa-answer grants', () => {
+    it('should allow the mcp-read step for a member', () => {
       const decision = hook.authorize({
         step: MCP_READ_STEP,
         toolName: SEARCH_EVIDENCE_TOOL_NAME,
@@ -187,7 +147,7 @@ describe('StepPolicyAuthzHook', () => {
 
     it('should refuse and audit a known step when the caller role is insufficient', async () => {
       const step: ToolExecutionStep = {
-        stepId: 'data-room-export',
+        stepId: 'mcp-mutate',
         allowedTools: ['export_data_room'],
       };
 
@@ -202,7 +162,7 @@ describe('StepPolicyAuthzHook', () => {
         kind: 'refused',
         reason: 'authz-denied',
         detail:
-          "role 'member' does not meet the minimum role 'admin' required for step 'data-room-export'",
+          "role 'member' does not meet the minimum role 'admin' required for step 'mcp-mutate'",
       });
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.stringContaining("does not meet the minimum role 'admin'"),
@@ -211,7 +171,7 @@ describe('StepPolicyAuthzHook', () => {
 
     it('should execute a known step when the caller role meets the minimum', async () => {
       const step: ToolExecutionStep = {
-        stepId: 'data-room-export',
+        stepId: 'mcp-mutate',
         allowedTools: ['export_data_room'],
       };
 
@@ -225,9 +185,9 @@ describe('StepPolicyAuthzHook', () => {
       expect(result).toEqual({ kind: 'executed', result: 'should never run' });
     });
 
-    it('should execute search_evidence on the qa-answer step for a member — the minimum that step requires', async () => {
+    it('should execute search_evidence on the mcp-read step for a member — the minimum that step requires', async () => {
       const step: ToolExecutionStep = {
-        stepId: 'qa-answer',
+        stepId: 'mcp-read',
         allowedTools: [SEARCH_EVIDENCE_TOOL_NAME],
       };
       toolExecutor.registerTool({
