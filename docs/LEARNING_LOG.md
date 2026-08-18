@@ -836,3 +836,458 @@ schema authored without the convention the interceptor depends on (here, a `defa
 field) can silently fall outside it, and nothing fails loudly when that happens. The interceptor's
 doc comment has to be read and re-verified against the codebase it describes, not trusted as
 permanently accurate.
+
+---
+
+## 013 — A tool surface for a model is not an API with a different transport
+
+**ADR:** [0016](./adr/0016-mcp-server-surface.md) · **Code:** `src/mcp/`
+
+**The concept.** An HTTP API is designed against a caller that read the documentation, holds its own
+credentials, and means what it sends. A tool surface exposed to an AI client keeps the credentials
+assumption and loses the other two. The immediate caller is a model, and that model's context can
+hold text somebody else wrote — a document it is summarizing, a page it fetched, a prior tool result.
+A request arriving at such a surface is not a statement of what the user wants; it is a statement of
+what the model was talked into asking for. Three rules follow, and an ordinary API review produces
+none of them on its own.
+
+**Dangerous requests should be unrepresentable, not rejected.** A validator that accepts a field and
+then checks it is worth exactly as much as the check, and every check is one refactor away from being
+weakened by someone who did not know why it was there. A schema with no such field cannot be argued
+past, because there is nothing to argue with: the request the attacker needs cannot be expressed in
+the protocol at all.
+
+**Identity is resolved outside the model-controlled payload.** Whatever the surface uses to decide
+*whose* data a call reaches has to come from the credential the server itself verified, never from an
+argument. The moment a tenant, an account, or a user id is an argument, the surface's isolation
+property is only as strong as the model's resistance to being told to fill that argument in
+differently — which is not a property anyone can guarantee.
+
+**Rate limits are charged per logical request, not per transport call.** JSON-RPC, and every batching
+protocol like it, lets one transport call carry an array of independent requests, each of which the
+server will dispatch. A limiter that counts transport calls counts the wrong noun: one POST buys one
+unit of budget and spends an arbitrary number of handler invocations. This is a general trap in any
+protocol where the unit of transport and the unit of work are not the same thing.
+
+**And what the surface withholds is itself the security design.** A surface that can propose an
+action *and* approve it collapses a two-key control into one key, no matter how carefully each
+individual tool is validated. If the reason a decision is safe is that a human authorizes it, then
+the capability to authorize must not be reachable from the same place the proposal came from —
+withholding it is not a missing feature to fill in later, it is the property that makes the rest of
+the surface defensible.
+
+**The trade-off.** A wide surface — one generic query tool, or a mechanical mirror of every existing
+route — is far cheaper to build and strictly more capable, and it is how most integrations start. It
+trades away the property above: capability becomes reachable by omission, the way any route with a
+valid session is reachable by anyone holding one. A narrow, enumerated surface makes every capability
+a deliberate code change with its own role floor, at the cost of a change per capability and a real
+chance of being less useful than the model's user hoped.
+
+**What we chose, and why here.** Three enumerated tools, each a declared definition routed through
+the tool chokepoint entry 005 describes, with the execution context built from the verified token
+alone. Two read tools and one write tool, split across two policy steps with different role floors,
+so a read credential and a proposing credential stay distinguishable in policy. The write tool
+proposes only — it starts the same durable approval wait the interactive path starts, and nothing on
+this surface can decide that approval.
+
+**In our code.** `mcp-server.service.ts` — `authenticate()` verifies a bearer token and returns a
+`ToolExecutionContext`; `buildServer(context)` closes over it, and every handler reads `actorId` and
+`tenantId` from that closure. `request.params.arguments` — the one part of a call the model controls
+— never contributes to who the caller is. Because the chokepoint applies strict argument schemas
+recursively, a call that *adds* a `tenantId` argument is not silently overridden, it is refused
+before the handler runs: there is no such property in the schema for it to land in.
+
+`count-rate-limit-cost.util.ts` — `countRateLimitCost()` returns `1` for an ordinary body and, for an
+array body, the number of elements that are JSON-RPC *requests* (both a `method` and an `id`).
+Notifications and responses batched alongside them dispatch no handler and cost nothing. That count
+is what the fixed-window limiter charges, so a batch of N requests spends N units rather than one.
+
+`mcp-tools.ts` — a read step allowing exactly the two read tools and a mutating step allowing exactly
+the one proposing tool, kept disjoint. No tool anywhere in the module reaches the endpoint that
+records a human's approval decision.
+
+**How we validated it.** `test/mcp/mcp-server.service.spec.ts` asserts that each tool executes
+against the tenant derived from the verified token rather than any argument, and separately that a
+call carrying a `tenantId` argument is refused rather than reaching the handler — the two halves of
+"unrepresentable" as opposed to "ignored". One test enumerates the frozen tool set on each step and
+asserts no approval-deciding tool exists on either, which is the withheld-capability boundary written
+as an executable check rather than a comment. `count-rate-limit-cost.util.spec.ts` drives the batch
+accounting directly, including the case named for what it closes: a batch costs the number of
+requests it carries.
+
+**Interview answer.** The caller of a tool surface is a model whose context can contain text an
+attacker wrote, so I design it as if the arguments are hostile even when the user is not. That means
+three things concretely: dangerous requests are unrepresentable rather than rejected — there is no
+tenant argument to override, so an injected instruction has nothing to fill in; identity comes from
+the credential the server verified, never from the payload; and the rate limiter charges per logical
+request, because a batching protocol lets one transport call dispatch an arbitrary number of
+handlers, which is the trap that makes a per-POST limiter meaningless. The part I would lead with,
+though, is what the surface deliberately does not have. Approval gates are a two-key control — the
+thing proposing an action must not be the thing approving it — so the write tool can start an
+approval and nothing on the surface can decide one. Adding a decide tool would collapse the control,
+however well it was validated.
+
+**Known limit.** The rate-limit counters live in memory on a single process, so the limit means what
+its name says only for a single replica; horizontal scaling would need a shared counter store. And
+the only granularity that exists is a per-step role floor — there is no credential scoped narrower
+than its role, so a token that clears a step's floor can call every tool that step allows.
+
+---
+
+## 014 — Agentic retrieval: the loop gathers, and that boundary is the safety property
+
+**ADR:** [0015](./adr/0015-agentic-retrieval-mode.md) · **Code:**
+`src/features/evidence/qa/agentic-retrieval.service.ts`, `agentic-retrieval-tools.ts`
+
+**The concept.** Single-shot retrieval runs one search per question and hands whatever it finds to
+whatever comes next. It is correct for a question the corpus answers in one search and blind to a
+question whose second search only becomes obvious once the first has run — a figure in one document
+that needs a second document to interpret. Agentic retrieval closes that gap by letting a model
+choose the next search, informed by prior results.
+
+What it buys is reachability: evidence a single query would not have surfaced. What it costs is a
+model turn per iteration, each with its own latency and spend, paid on every question including the
+ones a single search already answered. Both halves are the honest description; a comparison that
+reports only the quality number is not a comparison.
+
+The structural question is where the model's output is allowed to go. The obvious failure is to let
+the model's prose become the evidence — a loop that reads chunk-shaped text out of the model's
+message and treats it as retrieved material has built a circle where the model authors its own
+sources and then cites them. Every downstream verifier is then checking the model against itself.
+
+**Two phases, and the boundary between them is the whole design.** Phase one gathers: a model chooses
+a tool, the *server* executes it, and the real return value of that execution is what accumulates.
+Phase two — synthesis and verification — is unchanged code operating on the same array shape it
+always did. That split has two payoffs. The safety gate cannot be argued around, because it was never
+told which retrieval mode produced its input and has no branch to take. And the comparison is fair,
+because retrieval is genuinely the only variable: two runs of the same question differ in how the
+evidence array was assembled and in nothing downstream of it.
+
+**The trade-off.** Letting the model summarize as it goes — carrying its own notes forward instead of
+raw retrieved objects — is cheaper per turn and reads better in a transcript. It also destroys the
+property above: a note is model-authored text, and once a note is in the accumulator there is no
+longer a distinction between what was retrieved and what was said about it. Accumulating raw objects
+costs context and turns; it is what keeps verification meaningful.
+
+**What we chose, and why here.** A gathering loop with two tools, both executed through the
+deterministic chokepoint, with a hard iteration cap and a cost ceiling that shrinks as the loop
+spends. The mode is a deployment-level setting, defaulting off, populated by the server rather than
+by anything in a request body — so an ordinary question takes the single-shot path unchanged.
+
+**In our code.** `agentic-retrieval.service.ts` — `gatherEvidence()` writes into its `gathered` map
+only from `executeToolCall()`, from a tool's own return value. Nothing in the loop reads the model's
+free-text output looking for chunk data, so a chunk-shaped JSON blob in a model message has no path
+into the evidence set at all. The second tool, `fetch_chunks`, performs no lookup of its own: its
+handler validates ids and returns them, and resolution happens against a map populated only by this
+same loop's earlier search results, so an id that never appeared in this run comes back unknown
+rather than as a lookup against the whole corpus.
+
+Budget is one shrinking ceiling rather than two competing ones: each turn's cap is the smaller of a
+fixed per-turn ceiling and what remains of the total, and that composed number is what the provider's
+own fail-closed spend check enforces. Exhaustion — detected before a call or caught from the
+provider's refusal — ends the loop and degrades to synthesis over whatever was gathered; it never
+surfaces as an error.
+
+**How we validated it.** `test/features/evidence/qa/agentic-retrieval.service.spec.ts` stubs the
+model to return a chunk-shaped JSON string with no tool call at all and asserts the gathered set
+stays empty — fabrication resistance as a direct assertion rather than an inference from the design.
+Separate cases drive each termination reason, including the one that exists because of a real bug:
+when every attempted tool call was refused, the run reports that explicitly instead of reporting the
+empty result it would otherwise be indistinguishable from. `eval/retrieval/gather-evidence-for-strategy.ts`
+normalizes both strategies to the same evidence shape and carries `turns` and `costUsd` alongside it,
+so the comparison reports iteration count and spend next to whatever quality metric it computes.
+
+**Interview answer.** Agentic retrieval means a model chooses what to search next, informed by what
+earlier searches found — and the design question that matters is not the loop, it is what the model
+is allowed to produce. In mine it produces tool calls and nothing else: every piece of evidence that
+reaches synthesis was written into the gathered set by the server executing a tool, never parsed out
+of the model's message text. I test that directly by feeding the model a chunk-shaped JSON string
+with no tool call behind it and asserting nothing was gathered. The loop only gathers; synthesis and
+the grounding check are the same unchanged code they were before, which is what stops the mode from
+quietly weakening the verification step and also what makes an A/B fair — retrieval is the only
+variable. And I would not report a quality number for it without reporting turns and dollars beside
+it, because on a small corpus a single good search may already find everything, and then the honest
+result is "no better, and more expensive."
+
+**Known limit.** Iterative search earns its keep on a large, heterogeneous corpus. On a small one, a
+single well-formed search may already surface everything a second search would reach, in which case
+the loop pays extra turns to arrive at the same evidence. Whether it helps is a measurement, not a
+design claim, and the design does not get to answer it.
+
+---
+
+## 015 — One interface, two vendors: what actually leaks through a neutral tool loop
+
+**ADR:** [0006](./adr/0006-model-access-behind-a-decorated-provider.md) · **Code:**
+`src/providers/model/model-provider.interface.ts`, `openai-model.provider.ts`,
+`to-openai-structured-output.util.ts`
+
+**The concept.** A tool loop is the same four steps at every vendor: offer tool definitions, receive
+a request to call one, execute it, feed the result back as a message the next turn can see. That
+symmetry is real, and it is why a neutral interface is possible at all. What a neutral interface has
+to get right is the small set of places where the vendors genuinely disagree, because each one is a
+decision about which side of the seam absorbs the difference.
+
+Four things have to be true for two protocols to sit behind one port. The **tool definition** must be
+expressed in a form both can be derived from — a schema, not a vendor envelope, since both wrap the
+same JSON Schema differently. The **call** must have a stable identity, since a result has to be
+matched back to the request that produced it. The **result message** must have a neutral role even
+though one vendor gives it a role of its own and another expresses it as a block inside an ordinary
+message. And the **stop condition** must be a closed set, mapped from each vendor's own string, with
+anything unrecognized mapping to nothing rather than to a guess.
+
+**The asymmetries that leak.** Two are worth naming because they are the kind that pass type-checking
+and fail at runtime. First, one vendor returns a tool call's arguments already parsed as an object;
+another returns them as a JSON-encoded *string* that the adapter must parse — which means the adapter
+also owns a failure mode the other one does not have, since a string that does not parse is a
+malformed vendor response and not a caller error. Second, structured-output modes differ on whether a
+non-object schema root is legal: a discriminated union at the root is fine for one vendor's
+constrained decoding and rejected by another's strict mode, which demands an object root. Absorbing
+that means wrapping the union under a single property and unwrapping it again after parsing, so the
+caller never learns the wrapping happened.
+
+**The general lesson.** An abstraction over two vendors is only real if both mappings are written at
+the same time. Write one and infer the second later and the interface has quietly been shaped to the
+first vendor's data model: its field names, its notion of a message role, its assumption about where
+a schema may be a union. The second implementation then arrives as a pile of special cases, and the
+"neutral" port is a thin rename of vendor one. The cheap version of this discipline is writing the
+per-field vendor mapping down beside the field itself as the interface is authored — if a field
+cannot be described in both vendors' terms in one sentence, it is not neutral yet.
+
+**The trade-off.** Using one vendor's SDK types directly is faster, better typed, and free of
+translation bugs — right up until the second vendor, when the cost lands all at once and is paid by
+every call site rather than by the adapter. A neutral port pays a smaller cost continuously: a
+translation layer to maintain, and a real risk of a lowest-common-denominator interface that gives up
+a capability only one vendor has.
+
+**What we chose, and why here.** One `ModelProvider` port whose tool types carry the vendor mapping
+for both protocols in their own doc comments, with each provider a thin adapter beneath it. Both
+mappings exist; neither vendor's field names appear above the seam. The second provider talks to any
+compatible chat-completions endpoint over plain `fetch` rather than a vendor SDK, which also makes a
+self-hosted, keyless endpoint an ordinary deployment rather than an edge case.
+
+**In our code.** `model-provider.interface.ts` — `ModelToolDefinition`, `ModelToolChoice`,
+`ModelToolCall`, `ModelMessage` and `ModelStopReason` each carry both vendors' shapes in the doc
+comment on the type itself, including the two roles that differ: a tool result is a role of its own
+for one vendor and a block inside a user message for the other.
+
+`openai-model.provider.ts` — `extractToolCalls()` parses the arguments string into `input` and
+raises a typed malformed-arguments error when it does not parse, rather than handing a caller an
+unparsed string or letting a `SyntaxError` escape `generate`. `toModelStopReason()` is closed over
+the three reasons the neutral type documents; anything else, including a server that omits the field
+entirely, maps to `undefined` rather than a fabricated value.
+
+`to-openai-structured-output.util.ts` — `toOpenAiStructuredOutputFormat()` detects a union root in
+the emitted JSON Schema, wraps it under a single `result` property to satisfy the strict-mode object
+root, and returns `wrapped` so the provider can unwrap after parsing. The envelope never escapes the
+adapter.
+
+**How we validated it.** `test/providers/model/openai-model.provider.spec.ts` asserts a tool-call
+completion maps into the neutral result with `input` as a parsed object, and separately that an
+arguments string that does not parse raises the typed error. One case sends the *same* neutral tool
+request the other provider's spec sends and asserts the vendor-shaped body it produces, which is the
+parity check the seam exists for. `to-openai-structured-output.util.spec.ts` asserts the union-rooted
+contract gets wrapped and the object-rooted one does not, and the provider spec asserts the caller
+sees the unwrapped value either way.
+
+**Interview answer.** A tool loop is the same four steps everywhere — offer tools, get a call, run
+it, feed the result back — so a neutral port is genuinely possible, and what matters is the handful
+of places the vendors actually disagree. The two that bit me are worth being concrete about: one
+vendor hands back tool arguments as a parsed object and the other as a JSON string, so the adapter
+owns a parse failure the first one never has; and structured-output strict mode rejects a union at
+the schema root, so a discriminated-union contract has to be wrapped under a property and unwrapped
+after parsing, invisibly to the caller. The rule I would carry to any two-vendor abstraction is that
+both mappings have to be written at the same time. If you write one and plan the second, the
+interface silently becomes the first vendor's data model with different field names, and the second
+implementation arrives as special cases. I wrote the per-field mapping for both protocols into the
+interface's own doc comments as I authored it — a field I could not describe in both vendors' terms
+in one sentence was not neutral yet.
+
+**Known limit.** A neutral port only spans the capabilities both sides express. The structured-output
+conversion here handles the schema shapes the contracts actually use; a schema introducing an
+optional field would need a further transform for strict mode that the converter does not yet
+perform, and it would fail as a vendor rejection rather than as a type error.
+
+---
+
+## 016 — A per-request cost cap is not a budget
+
+**ADR:** [0006](./adr/0006-model-access-behind-a-decorated-provider.md) · **Code:**
+`src/providers/model/spend/tenant-spend.service.ts`, `spend-guard-model.provider.ts`
+
+**The concept.** A per-call ceiling — refuse this request if its worst-case estimate exceeds some
+number — bounds one call and says nothing about a day. A thousand calls each comfortably under the
+cap is a thousand times the cap, and every one of them was individually permitted by a guard doing
+exactly what it was asked. Bounding aggregate spend is a different mechanism: it needs shared,
+durable state, because the thing being bounded is a sum across requests, processes, and time.
+
+That state is a ledger, and a ledger that gates an irreversible action has three obligations.
+
+**The check and the decrement are one operation.** Read the balance, decide it fits, then write the
+new balance, and every concurrent caller reads the same pre-decrement balance and every one of them
+fits. The window between the read and the write is the whole vulnerability, and it does not need an
+attacker — ordinary concurrency is enough. The fix is a conditional update: one round trip whose
+filter *is* the budget check and whose increment applies only to a document that satisfied the filter
+in that same operation.
+
+**The settle lands on the window the reserve keyed.** Any windowed budget has a boundary, and a call
+can start before it and finish after it. If the settlement recomputes "which window is it now" from
+the clock, it credits a window the reservation never touched and leaves the reserved one permanently
+short — a slow leak that shrinks tomorrow's available budget every time a call straddles midnight.
+The reservation has to return its key, and the settlement has to take it as an argument.
+
+**A throw releases.** Reserve, call, settle is the happy path; reserve, call, *throw* is the one that
+matters. Without an explicit release on the failure path, every failed call permanently consumes
+budget for work that never happened, and a vendor outage silently converts into a spend ceiling that
+can only be cleared by waiting for the window to roll.
+
+**The ordering insight, which generalises past money.** A spend guard has to sit *inside* a cache,
+not outside it. A cached response costs nothing to serve, so a guard outside the cache bills for
+requests that never reach a vendor — and the more effective the cache is, the more wrong the ledger
+becomes. The general form: a decorator that meters a real-world side effect belongs closer to the
+effect than any decorator that can prevent the effect from happening. Getting that order backwards is
+invisible in tests that stub the inner provider, because the stub costs nothing either way.
+
+**The trade-off.** A ledger is a shared write on the hot path of every model call — an extra round
+trip, and a single point of contention for a busy tenant. An in-process counter is free and instantly
+wrong the moment a second process or replica exists, since each one enforces its own private share of
+a ceiling nobody agreed to divide. Estimating spend from logs after the fact costs nothing at all and
+cannot refuse anything, which makes it reporting rather than a control.
+
+**What we chose, and why here.** A per-tenant daily window in the database, reserved on the
+worst-case cost before the call and settled to the actual cost after, wrapped around the model
+provider as a decorator so no feature code participates. It fails closed: a request that cannot be
+attributed to a tenant is refused rather than let through unmetered, because the thing being gated —
+money leaving an account — is irreversible once the call runs. The single deliberate fail-open path
+is an explicitly disabled ceiling, which is how a tenant with no cap is expressed.
+
+**In our code.** `tenant-spend.service.ts` — `reserve()` first upserts the window document with zero
+balances (so a day's first call needs no separate create branch), then performs the check and the
+increment as one `findOneAndUpdate` whose filter carries an `$expr` asserting that the existing
+spend, existing reservations and this amount still fit under the ceiling. That second call must not
+upsert: an upsert on a filter containing the budget expression would mint a fresh zero-balance
+document whenever no document matched, satisfying the check trivially and bypassing the ceiling it
+exists to enforce. A `null` result means the filter matched nothing — the reservation did not fit —
+and throws. `reserve()` returns the window it keyed; `settle()` and `release()` both take that value
+rather than recomputing one.
+
+`spend-guard-model.provider.ts` — reserves the request's own cap, calls the delegate inside a `try`,
+settles with the actual cost on success and releases on any throw before rethrowing. The composition
+order is stated where the chain is built: tracing outside, then caching, then the spend guard, then
+the real provider — the guard inside the cache, so a replayed response consumes no budget.
+
+**How we validated it.** `test/providers/model/spend/tenant-spend.service.spec.ts` asserts the
+conditional increment shape directly, that a filter matching nothing raises the limit error rather
+than permitting the call, and — the case that names the failure it prevents — that a settlement lands
+on the window the reservation returned even when the clock has crossed the boundary since.
+`spend-guard-model.provider.spec.ts` covers the release-and-rethrow path, the refusal of a request
+with no tenant attribution, and that a refused reservation never calls the delegate at all.
+
+**Interview answer.** A per-call cap bounds one call; it says nothing about the total, and a thousand
+individually-permitted calls is a thousand caps' worth of spend. So aggregate governance is a ledger,
+and a ledger gating something irreversible has to guarantee three things. The check and the decrement
+are one atomic operation — a read followed by a write leaves a window where every concurrent caller
+sees the same pre-decrement balance and all of them fit. The settlement lands on the window the
+reservation keyed, passed back explicitly, because recomputing it from the clock credits the wrong
+day whenever a call straddles the boundary and leaves the reserved window permanently short. And a
+throw releases, or every failed call permanently burns budget for work that never happened. The
+detail I would actually lead with is an ordering one: the spend guard has to sit inside the cache,
+not outside it, because a replayed response costs nothing and a guard outside the cache bills for it
+— and that is invisible in any test that stubs the provider underneath.
+
+**Known limit.** The reservation is the worst-case estimate, not the actual cost, so a tenant's
+effective ceiling is conservative while calls are in flight: concurrent requests can be refused
+against reservations that will settle for far less than they reserved. That is the correct direction
+to be wrong for a fail-closed spend control, but it is a real over-refusal, not a rounding detail.
+
+---
+
+## 017 — Survivorship: which disagreeing value wins is a policy question, not a model question
+
+**ADR:** [0017](./adr/0017-survivorship-policy.md) · **Code:**
+`src/features/evidence/conflicts/resolve-conflict-policy.ts`
+
+**The concept.** Once a system can notice that two sources disagree about the same thing, the
+obvious next question is which one is right — and it is tempting to treat that as an inference
+problem, because a model will happily produce an answer. It is not one. "The system of record
+outranks an exported spreadsheet, which outranks a narrative summary" is a claim about an
+organisation's data governance, not about the text of either document. No amount of reading the two
+documents recovers it, because it is not in them.
+
+Treating it as policy has a consequence worth stating plainly: the rules belong in configuration, not
+in code. Authority ordering is a ranking over source classes; staleness is a minimum gap two
+observations must differ by before the newer one counts as meaningfully fresher. Both differ per
+metric and per organisation, and both are the kind of thing a reviewer must be able to inspect and
+change without reading a function.
+
+**Silence and contradiction both mean no proposal.** A policy engine has to decline in two distinct
+situations, and the second is the one people miss. If the policy says nothing about this case — no
+ordering configured, a source class the ordering does not cover, a tie with nothing left to break it
+— there is no answer to give. But if the policy is *self-contradictory* — an ordering that assigns
+the same class two different ranks — the naive implementation resolves it without complaint: build a
+map from class to first-seen index, and the duplicate is silently discarded, producing a confident
+answer derived from an ordering that has no coherent claim about that class at all. A configuration
+that cannot mean one thing must produce no proposal, not the first thing it happens to mean.
+
+**An explanation that asserts more than the data supports is worse than no explanation.** The
+proposal is read by a human deciding which figure to trust, and a stated rationale is exactly what
+makes a suggestion persuasive. So an explanation that names a rule which did not really fire, or
+implies a freshness comparison against a timestamp nobody recorded, does more damage than an honest
+absence: it converts missing information into apparent evidence at the precise moment a person is
+deciding whether to look further. The discipline is that a returned explanation may only reference
+facts the inputs actually carried.
+
+**And the human still decides.** The value of a deterministic proposal is not the automation — it is
+the audit trail. A rule proposed, a named reason, and a person disposing is reviewable after the fact
+in a way that neither a model's judgement nor a silent overwrite is.
+
+**The trade-off.** Auto-resolution — write the winner back as the accepted value — reaches a resolved
+state immediately and is far better demo material. It also makes a deterministic rule
+indistinguishable, from the outside, from the failure mode a human approval gate exists to prevent: a
+value changed by something that is not the person accountable for it. Proposing and stopping is
+slower and leaves work on a human's plate; it is the only shape that keeps the trust model intact.
+
+**What we chose, and why here.** A pure function that takes the conflicting facts and a per-metric
+policy and returns either a proposed winner with the rule that produced it and a checkable
+explanation, or an explicit refusal. It writes nothing. Its one caller recomputes it fresh on every
+read rather than persisting it, so a proposal can never go stale against a since-changed ordering,
+and records which rule fired only alongside an outcome a human already supplied.
+
+**In our code.** `resolve-conflict-policy.ts` — the return type is a discriminated union, so a
+refusal has no winner field to leave accidentally populated; the absence is structural rather than a
+runtime convention. It validates the whole ordering for duplicate entries before it looks at a single
+fact. An unclassified source is refused unconditionally, even when the ordering explicitly lists that
+class: "nobody said what kind of source this is" is the absence of authority information, and ranking
+it anywhere — including last — asserts something the data never recorded. A missing observation
+timestamp stops a recency tie-break entirely rather than substituting any default, because a
+fabricated observation date would let a freshness rule fire on evidence that never carried one. The
+staleness window is a strict threshold, so two observations closer together than the window are not a
+recency signal at all, however different their timestamps are.
+
+**How we validated it.** `test/features/evidence/conflicts/resolve-conflict-policy.spec.ts` proves
+every refusal branch independently, and one of them is a negative control rather than a coverage
+line: it constructs an ordering that names the same class twice and asserts the function declines —
+the exact input the obvious first-seen-index implementation resolves confidently. Another asserts
+that an unclassified source is refused even when the ordering lists it. A third pins the explanation
+against the data: when a metric configures no staleness window, the returned text says recency cannot
+break ties here, rather than implying a comparison that never ran.
+
+**Interview answer.** Which of two disagreeing values wins is a governance claim, not something
+recoverable from the documents — the system of record outranking an export is a fact about an
+organisation, so it belongs in configuration as an authority ordering plus a staleness window, and
+the engine is a pure deterministic function over them. Two things I would call out. The engine has to
+return no proposal when the policy is silent *and* when it is self-contradictory, and the second is
+the interesting one: a duplicate entry in an ordering resolves cleanly under the obvious
+implementation and yields a confident answer built on an ordering with no coherent claim, so I test
+that case as a negative control rather than trusting the fail-closed behaviour is real. And the
+explanation is held to the same bar as the proposal — a rationale asserting something the data does
+not support is worse than none, because it turns missing information into apparent evidence exactly
+when someone is deciding whether to dig further. The human still decides; the value is the audit
+trail of a named rule proposing and a person disposing, which is reviewable in a way that neither a
+model's judgement nor a silent overwrite ever is.
+
+**Known limit.** The engine's correctness is a claim about the function, not about any given metric's
+configuration. An incoherent policy does not crash — it makes every conflict for that metric resolve
+to no proposal, which is safe and completely silent unless something surfaces the reason. And an
+authority tie among three or more facts breaks on the gap to the next-most-recent, so adding a new,
+closely-timed fact can change the proposal without the actual freshest fact changing.

@@ -9,7 +9,7 @@ Senior TypeScript full-stack coding agent. NestJS + Mongoose API, React SPA.
 ## Stack
 
 - **API** (repo root): NestJS 11 on Express, Mongoose 9, `@nestjs/swagger`, `@nestjs/jwt` + bcryptjs, `@nestjs/throttler`, helmet, zod (env parsing, plus the deliberate exception in `src/providers/**`/`answer.contract.ts` for model I/O schemas — see those files), class-validator (requests), class-transformer (responses), migrate-mongo (TypeScript migrations via `tsx`), AsyncLocalStorage request context.
-- **SPA** (`web/`): React 18.3, react-router-dom 6, Vite 6, plain CSS. No state library, no data-fetching library.
+- **SPA** (`web/`): React 19.2, react-router-dom 7.18, Vite 8, plain CSS. No state library, no data-fetching library.
 - **Data**: MongoDB via `mongodb/mongodb-atlas-local` — chosen because retrieval depends on `$search`, `$vectorSearch`, `$rankFusion`.
 - **Testing**: jest 30 + ts-jest + supertest + mongodb-memory-server (API unit/e2e); a separate `jest.integration.config.ts` lane runs live-Mongo specs against `mongodb/mongodb-atlas-local` (Docker required, not run by CI); vitest 4 + Testing Library (SPA).
 - **Runtime**: Node 26 (`engines >=26 <27`, `.nvmrc`, `node:26-slim`, CI node 26).
@@ -17,10 +17,17 @@ Senior TypeScript full-stack coding agent. NestJS + Mongoose API, React SPA.
 
 **Temporal is wired** (ADR-0003), a second process alongside the API: `src/worker/main.ts` boots
 `WorkerModule` (a DI slice mirroring `AppModule` minus HTTP-only concerns) and starts a
-`@temporalio/worker` `Worker` polling `config.temporal.taskQueue`. `src/workflows/` holds two
-workflows — `answer-question.workflow.ts` and `ingest-document-version.workflow.ts` — each pure
-orchestration that proxies to activities in `src/worker/activities.ts` for every side effect (Mongo,
-model calls, the grounding check). `src/workflows/**` sits behind a determinism fence (ADR-0003,
+`@temporalio/worker` `Worker` polling `config.temporal.taskQueue`. `src/workflows/` holds four
+workflows — `answer-question`, `ingest-document-version`, `resolve-conflict`, `sync-source` — each
+pure orchestration that proxies to activities in `src/worker/activities.ts` for every side effect
+(Mongo, model calls, the grounding check). `resolve-conflict` is the one that parks on a durable
+human approval signal with a timeout branch, which is why the approval survives a worker restart.
+
+**The MCP surface is a third process** (ADR-0016): `src/mcp/main.ts` boots `McpModule` on the same
+`WorkerModule` slice pattern and serves stateless Streamable HTTP, authenticated per call by a
+personal access token rather than the SPA's session cookie. It advertises `search_evidence`,
+`get_answer` and `request_resolution`; approval-deciding tools are deliberately absent, because the
+surface that proposes a resolution must not also convey approval. `src/workflows/**` sits behind a determinism fence (ADR-0003,
 `eslint.config.mjs`, enforced again by Temporal's own workflow-bundling step in `Worker.create`):
 it may only import from `src/workflows/**` itself and pure type-only files, never services, Mongoose,
 or `src/providers/**` directly. `ProvidersModule` binds `WORKFLOW_ENGINE` to the real
@@ -44,7 +51,7 @@ src/
 └── main.ts
 test/                  mirrors src/; e2e/ and utils/ (shared mock factories)
 migrations/            migrate-mongo, TypeScript, numeric prefix
-web/src/               main.tsx, App.tsx, api/client.ts, lib/, pages/, styles.css, test/
+web/src/               main.tsx, App.tsx, api/client.ts, components/, lib/, pages/, styles.css, test/
 ```
 
 Tests are **not** colocated with API sources — `test/` mirrors `src/`. SPA tests **are** colocated.
@@ -83,8 +90,8 @@ kebab-case with a type suffix.
   - **FORBIDDEN** to resolve an `ERESOLVE` peer conflict with `--force` or `--legacy-peer-deps`. A peer range is a claim about what the package was tested against; overriding it installs a combination nobody has verified, and for lint/type tooling the failure is silent wrong answers rather than a crash. Hold the conflicting package back, record why, and re-check when upstream widens the range.
   - Never run an install while tests are executing — the suites read `node_modules` live.
 - Run the smallest relevant validation first, then broaden.
-- **Comments are JSDoc, and only JSDoc.** This section overrides the user-level comment-discipline rule wherever the two differ (per § Precedence).
-  - **`//` is FORBIDDEN anywhere in `src/`, `test/`, `web/src/`, `migrations/`, `scripts/`, and `eval/`** — line comments, trailing comments, and commented-out code alike. Every comment is a `/** … */` block attached to the thing it describes.
+- **Comment accuracy is the rule; comment syntax is not.** This section overrides the user-level comment-discipline rule wherever the two differ (per § Precedence).
+  - **`//` is legal.** Use it for a short remark on a single statement or branch. Use `/** … */` for anything attached to an exported symbol — module, class, function, schema field, interface member — because those are the comments tooling surfaces on hover and in generated docs. Neither form is a licence to narrate: an unnecessary comment is still noise regardless of syntax. Commented-out code stays forbidden — git holds it.
   - A comment describes **its target**: what this function/class/field/branch is and how it behaves. It must be accurate against the code as it stands right now — a comment that has drifted from its target is a defect, not cosmetic debt, and is fixed in the same change that made it drift.
   - **FORBIDDEN to quote decisions or dates.** No "decided 2026-08-12", no "per the review", no "changed from X to Y", no "ADR-0008 rejected …", no measurement provenance ("measured on express 5.2.1"), no narration of what a previous implementation did. Code comments describe the present state of the code, never its history or the argument that produced it.
   - Decision records, dated findings, measurement provenance, and rejected alternatives belong in `docs/adr/`, the threat model, or the plan file — the places built to hold them, where they can be superseded cleanly. A rationale worth keeping is worth writing where it will be maintained; a rationale inlined as a comment rots silently the moment the code moves.
@@ -114,7 +121,7 @@ Detail: `rules/jest-tests.md` (API), `rules/react.md` § SPA Testing (web).
 - **Request context.** `CorrelationMiddleware` + `AsyncLocalStorageMiddleware` are applied globally with an explicit exclusion list; `JwtAuthGuard` stamps the user id into the ALS store, and `auditablePlugin` reads it. A Mongoose Query is lazy — one built inside a request but awaited outside the ALS scope stamps no audit fields, silently.
 - **Config refuses at construction.** zod validates `process.env` synchronously during `AppModule` decorator evaluation and aborts boot listing every offending variable. `MONGO_DB_URI` and `JWT_SECRET` are required under `production`/`staging`, dev-defaulted below.
 - **zod is for env and model contracts; HTTP DTOs are not.** Requests use class-validator, responses use class-transformer. zod additionally owns `src/config/environment/`, `src/providers/**`, and the model-facing contracts (`answer.contract.ts`, `fact-extraction.contract.ts`) — those schemas must convert to JSON Schema for Anthropic's `output_format`, which class-validator cannot do. Note the provider layer imports `zod/v4` explicitly.
-- **SPA API base is relative** — `const API = '/api/v1'`, proxied by Vite in dev and nginx in prod. No `VITE_*` vars, no `import.meta.env`, no hardcoded origins. Auth state is `localStorage`, read per render; there is no `AuthContext`.
+- **SPA API base is relative** — `const API = '/api/v1'`, proxied by Vite in dev and nginx in prod. No `VITE_*` vars, no `import.meta.env`, no hardcoded origins. The session is an HttpOnly cookie the browser sends itself — the SPA holds no credential and there is no `AuthContext`; `ensureSession()` probes `GET /auth/me` once and caches the answer in module scope, and `useSession()` is the reactive shell over it. Both fail closed: a rejected probe resolves to anonymous, never to a stale "probably still signed in".
 - **Response contracts are duplicated by hand** across the two roots (`web/src/api/client.ts` interfaces mirror the API response DTOs). Change both in the same commit.
 - **Security posture in place:** helmet (CSP off so Swagger UI loads), CORS with an explicit origin, throttler as a global fail-closed guard, bcrypt cost 12 with a dummy-hash compare on unknown-email login for timing parity.
 
@@ -132,7 +139,9 @@ Individual: `npm run format:check`, `npm run lint:check`, `npm run tsc`, `npm ru
 
 `npm run test:integration` runs the live-Mongo specs (`*.integration-spec.ts`) against a real
 `mongodb/mongodb-atlas-local` container — needs Docker (`docker compose up -d mongo`), 300s test
-timeout. Neither `checks`/`checks:ci` nor any CI workflow runs it; it is a manual/local-only lane.
+timeout. Neither `checks` nor `checks:ci` runs it, so a green local gate says nothing about it —
+but `.github/workflows/integration.yml` does, on push and pull request, standing up `mongo` and
+running migrations first.
 
 **Never claim done while any of these is red**, including pre-existing failures — surface them, fix them, or halt and escalate.
 

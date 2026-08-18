@@ -6,7 +6,9 @@ paths:
 
 Applies to the SPA under `web/`. The NestJS API under `src/` follows `nestjs.md`.
 
-Before adding a component, read `web/src/pages/LoginPage.tsx` and `web/src/App.tsx` and match them exactly. The SPA is deliberately small — five source files — so "match the sibling" is a short read, and inventing structure ahead of need is the main failure mode here.
+Stack: React 19.2, react-router-dom 7.18, vite 8, vitest 4.
+
+Before adding a component, read `web/src/pages/LoginPage.tsx` and `web/src/App.tsx` and match them exactly. `web/src/pages/` holds eleven pages, every one but `HomePage.tsx` carrying a colocated `*.test.tsx`, so "match the sibling" is always a short read; inventing structure ahead of need is the main failure mode here.
 
 # React SPA Patterns
 
@@ -15,7 +17,7 @@ Before adding a component, read `web/src/pages/LoginPage.tsx` and `web/src/App.t
 Stating these so they are not reintroduced by reflex:
 
 - **No state library and no data-fetching library.** No Redux, Zustand, React Query, or SWR. Component state is `useState`; server calls go through the hand-written client in `web/src/api/client.ts`.
-- **No `AuthContext`.** Auth state is read from `localStorage` on every render via `getToken()` (`web/src/lib/auth.ts`). `RequireAuth` in `App.tsx` is the whole authorization story.
+- **No `AuthContext` and no client-held credential.** The session is an HttpOnly cookie the browser sends on its own; the SPA stores no token. `ensureSession()` (`web/src/lib/auth.ts`) probes `GET /auth/me` once and caches the answer in a module-scope variable; `useSession()` (`web/src/lib/use-session.ts`) is the reactive shell over it. Both fail **closed** — a rejected probe resolves to `anon`, never to a stale "probably still logged in". `RequireAuth` and `RequireAdmin` in `App.tsx` read that cache and are the whole client-side authorization story; each server route carries its own guard, which is the actual boundary.
 - **No `import.meta.env` and no `VITE_*` variables.** The API base is the relative constant `const API = '/api/v1'`. Vite proxies `/api` in dev (`web/vite.config.ts`); nginx proxies it in prod (`web/nginx.conf`). **FORBIDDEN** to hardcode `http://localhost:3000` in SPA code — it breaks the production build silently.
 - **No component library, no CSS-in-JS, no Tailwind.** See `styles.md`.
 
@@ -25,19 +27,19 @@ Introducing any of the above is an architecture decision: raise it, do not slip 
 
 - Function components with hooks only. **FORBIDDEN** to introduce class components.
 - Pages live in `web/src/pages/` as `PascalCase.tsx` with a default export and a colocated `PascalCase.test.tsx`.
-- There is no `components/` or `hooks/` directory yet. Create one when a second consumer actually exists — not preemptively.
+- `web/src/components/` holds components lifted out of a page (`CitationPanel.tsx`, rendered by `AskPage`), each with its own colocated test. `web/src/lib/` holds the non-component helpers: `auth.ts`, `use-session.ts`, `document-index.ts`, `locator.ts`. There is no `hooks/` directory — `use-session.ts` lives in `lib/`. Lift a page-local component only when a real second consumer exists, not preemptively.
 - Colocate state with the component that owns it; lift only as far as a real common consumer requires.
 
 ## Data access
 
 - All API calls go through `web/src/api/client.ts`. **MUST** add a typed exported function there rather than calling `fetch` from a component.
-- The client already centralizes: bearer-token injection, the 401-redirect-to-login rule, 204 handling, and `ApiError` with a `status`. Do not duplicate that logic per call site.
+- The client already centralizes: `credentials: 'same-origin'` so the browser attaches the session cookie, the 401-redirect-to-login rule (`window.location.assign('/login')`, skipped for `/auth/*` so a failed login renders its own error), the FormData content-type exception, 204 handling, and `ApiError` with a `status`. Do not duplicate that logic per call site.
 - Response interfaces in `client.ts` mirror the API's response DTOs. When an API DTO changes, update the interface in the same change — nothing type-checks across the two roots.
 
 ## Router
 
-- `react-router-dom` v6, declarative `<BrowserRouter>` / `<Routes>` / `<Route>`. **Not** the v7 data-router API — `createBrowserRouter`, loaders, and actions are not in use.
-- New authenticated routes wrap their element in `<RequireAuth>`.
+- `react-router-dom` v7, declarative `<BrowserRouter>` / `<Routes>` / `<Route>`. **Not** the data-router API — `createBrowserRouter`, loaders, and actions are not in use.
+- New authenticated routes wrap their element in `<RequireAuth>`; admin-only routes wrap in `<RequireAdmin>`, which redirects a non-admin to `/`.
 
 ## Hooks
 
@@ -47,10 +49,11 @@ Introducing any of the above is an architecture decision: raise it, do not slip 
 
 # SPA Testing (vitest + Testing Library)
 
-- Runner: **vitest**, configured inline in `web/vite.config.ts` (`test` key) — there is no `vitest.config.ts`. `environment: 'jsdom'`, setup at `web/src/test/setup.ts`.
+- Runner: **vitest 4**, configured inline in `web/vite.config.ts` (`test` key) — there is no `vitest.config.ts`. `environment: 'jsdom'`, setup at `web/src/test/setup.ts`.
 - Test files are `*.test.tsx`, colocated with the component. Run with `npm --prefix web run test`.
+- The `test` script runs vitest under `NODE_OPTIONS=--no-experimental-webstorage`. Node 26 exposes its own `localStorage` global, which shadows jsdom's inside the test environment and throws unless Node was given a backing store. `web/src/lib/auth.ts` touches `localStorage` at module scope, so without the flag every test that imports the API client throws on import, before any assertion runs. Any new SPA test lane needs the same flag.
 - **MUST** import `describe`/`it`/`expect` explicitly from `vitest` — globals are not enabled.
-- `@testing-library/jest-dom` is registered via its `/vitest` entrypoint in the setup file; `toBeInTheDocument()` and friends are available without a per-file import.
+- `@testing-library/jest-dom` is registered via its `/vitest` entrypoint in the setup file; `toBeInTheDocument()` and friends are available without a per-file import. That same file registers an explicit `afterEach(cleanup)`, because Testing Library's auto-cleanup only installs itself when vitest globals are on.
 - **MUST** query by role, label, or text — never by class name or test id when an accessible query exists.
 - A component using router hooks **MUST** be rendered inside `<MemoryRouter>`.
 - There is no coverage threshold on the SPA. Absence of a gate is not permission to skip the test — a new page ships with a rendering test at minimum.
