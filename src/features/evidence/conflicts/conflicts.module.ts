@@ -21,6 +21,7 @@ import {
   ApprovalSchema,
 } from '../../../database/schemas/workflow/approval/approval.schema';
 import { ProvidersModule } from '../../../providers/providers.module';
+import { FactsModule } from '../facts/facts.module';
 import { WorkflowRunsModule } from '../workflow-runs/workflow-runs.module';
 import { ConflictsController } from './conflicts.controller';
 import { ConflictsService } from './conflicts.service';
@@ -28,6 +29,8 @@ import { ConflictsService } from './conflicts.service';
 // `ProvidersModule` import is for `WORKFLOW_ENGINE`, `WorkflowRunsModule` for
 // `WorkflowRunsService` — both `ConflictsService.requestResolution` needs (see its own doc
 // comment and `WorkflowRunsModule`'s own comment naming this as the expected consumer).
+// `FactsModule` is for its exported `MetricPoliciesService` — `ConflictsService` reads a tenant's
+// resolved survivorship policy through it rather than registering `MetricPolicy` here itself.
 // `Document`/`DocumentVersion` are for `ConflictsService`'s survivorship-proposal lookup —
 // resolving each disagreeing fact's `sourceClass` for `resolveConflictPolicy`. `Approval` is for
 // `requestResolution`'s own pending-duplicate guard — a read-only check against the same
@@ -42,6 +45,7 @@ import { ConflictsService } from './conflicts.service';
       { name: Approval.name, schema: ApprovalSchema },
     ]),
     ProvidersModule,
+    FactsModule,
     WorkflowRunsModule,
   ],
   controllers: [ConflictsController],

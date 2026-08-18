@@ -36,10 +36,16 @@ import {
   ExtractedFactSchema,
   type ExtractedFactDocument,
 } from '../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import {
+  MetricPolicy,
+  MetricPolicySchema,
+  type MetricPolicyDocument,
+} from '../../src/database/schemas/evidence/metric-policy/metric-policy.schema';
 import type { ApprovalDocument } from '../../src/database/schemas/workflow/approval/approval.schema';
 import { ConflictsService } from '../../src/features/evidence/conflicts/conflicts.service';
 import { CanonicalEntityService } from '../../src/features/evidence/facts/canonical-entity.service';
 import { FactsService } from '../../src/features/evidence/facts/facts.service';
+import { MetricPoliciesService } from '../../src/features/evidence/facts/metric-policies.service';
 import { PASS_COUNT } from '../../src/features/evidence/facts/prose-fact-extractor';
 import { IngestionService } from '../../src/features/evidence/ingestion/ingestion.service';
 import { ParserRegistry } from '../../src/features/evidence/ingestion/parser.registry';
@@ -95,6 +101,7 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
   let extractedFactModel: Model<ExtractedFactDocument>;
   let conflictModel: Model<ConflictDocument>;
   let canonicalEntityModel: Model<CanonicalEntityDocument>;
+  let metricPolicyModel: Model<MetricPolicyDocument>;
 
   beforeAll(async () => {
     connection = await mongoose.createConnection(MONGO_DB_URI).asPromise();
@@ -127,6 +134,10 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
       CanonicalEntity.name,
       CanonicalEntitySchema,
     ) as unknown as Model<CanonicalEntityDocument>;
+    metricPolicyModel = connection.model(
+      MetricPolicy.name,
+      MetricPolicySchema,
+    ) as unknown as Model<MetricPolicyDocument>;
   });
 
   afterAll(async () => {
@@ -138,6 +149,7 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
         extractedFactModel.deleteMany({ tenantId: TENANT_ID }),
         conflictModel.deleteMany({ tenantId: TENANT_ID }),
         canonicalEntityModel.deleteMany({ tenantId: TENANT_ID }),
+        metricPolicyModel.deleteMany({ tenantId: TENANT_ID }),
       ]);
       await connection.close();
     }
@@ -183,6 +195,10 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
     const workflowEngine = new FakeWorkflowEngine();
     const workflowRunsService = { create: jest.fn() } as unknown as WorkflowRunsService;
     const approvalModel = { exists: jest.fn() } as unknown as Model<ApprovalDocument>;
+    // No tenant rows are seeded in `metric_policies` either, so this resolves to `METRIC_ONTOLOGY`'s
+    // own defaults — the same byte-identical-to-today behaviour `MetricPoliciesService
+    // .resolveForTenant`'s own doc comment guarantees.
+    const metricPoliciesService = new MetricPoliciesService(metricPolicyModel, logger);
     const conflictsService = new ConflictsService(
       extractedFactModel,
       conflictModel,
@@ -191,6 +207,7 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
       approvalModel,
       workflowEngine,
       workflowRunsService,
+      metricPoliciesService,
       auditService,
       logger,
     );

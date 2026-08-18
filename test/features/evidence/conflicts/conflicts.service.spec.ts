@@ -14,6 +14,8 @@ import {
   ConflictResolutionAlreadyPendingException,
   InvalidConflictResolutionException,
 } from '../../../../src/features/evidence/conflicts/exceptions/conflicts.exception';
+import { METRIC_ONTOLOGY } from '../../../../src/features/evidence/facts/metric-ontology';
+import { MetricPoliciesService } from '../../../../src/features/evidence/facts/metric-policies.service';
 import { WorkflowRunsService } from '../../../../src/features/evidence/workflow-runs/workflow-runs.service';
 import { approvalTimeoutCounter } from '../../../../src/providers/telemetry/domain-metrics';
 import { WORKFLOW_ENGINE } from '../../../../src/providers/workflow-engine/workflow-engine.interface';
@@ -32,8 +34,22 @@ describe('ConflictsService', () => {
   const mockApprovalModel = getMockModel();
   const mockWorkflowEngine = { start: jest.fn(), status: jest.fn(), signal: jest.fn() };
   const mockWorkflowRunsService = { create: jest.fn(), findById: jest.fn() };
+  const mockMetricPoliciesService = { resolveForTenant: jest.fn() };
   const mockAuditService = { record: jest.fn() };
   const mockLogger = getMockLogger();
+
+  // The byte-identical-to-today policy every existing test below assumes: no tenant has authored
+  // an override, so this is exactly the fold `MetricPoliciesService.resolveForTenant` produces
+  // over `METRIC_ONTOLOGY` alone.
+  const defaultPolicies = new Map(
+    METRIC_ONTOLOGY.map((metric) => [
+      metric.id,
+      {
+        authorityOrder: metric.authorityOrder,
+        stalenessWindowMs: metric.stalenessWindowMs ?? Number.POSITIVE_INFINITY,
+      },
+    ]),
+  );
 
   const buildFact = (
     factKey: { entity: string; metric: string; period: string },
@@ -67,12 +83,16 @@ describe('ConflictsService', () => {
         { provide: getModelToken(Approval.name), useValue: mockApprovalModel },
         { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
         { provide: WorkflowRunsService, useValue: mockWorkflowRunsService },
+        { provide: MetricPoliciesService, useValue: mockMetricPoliciesService },
         { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: mockLogger },
       ],
     }).compile();
 
     service = module.get<ConflictsService>(ConflictsService);
+    // Re-set every `beforeEach`, not once at module scope — `afterEach`'s `resetAllMocks()` wipes
+    // implementations, not just call history.
+    mockMetricPoliciesService.resolveForTenant.mockResolvedValue(defaultPolicies);
   });
 
   afterEach(() => {
@@ -442,6 +462,8 @@ describe('ConflictsService', () => {
         { documentId: 1 },
       );
       expect(mockDocumentModel.find).not.toHaveBeenCalled();
+      expect(mockMetricPoliciesService.resolveForTenant).toHaveBeenCalledTimes(1);
+      expect(mockMetricPoliciesService.resolveForTenant).toHaveBeenCalledWith('tenant-a');
       expect(mockAuditService.record).toHaveBeenCalledWith({
         action: 'conflicts.listed',
         actorId,
@@ -481,6 +503,49 @@ describe('ConflictsService', () => {
         ],
         count: 1,
       });
+    });
+
+    it('should resolve the tenant survivorship-policy map once for a page of multiple conflicts, not once per conflict', async () => {
+      const actorId = new Types.ObjectId().toString();
+      const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+      const conflictOne = {
+        _id: new Types.ObjectId(),
+        factKey,
+        factIds: [new Types.ObjectId(), new Types.ObjectId()],
+        magnitude: 0.0085,
+        status: 'open',
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      };
+      const conflictTwo = {
+        _id: new Types.ObjectId(),
+        factKey,
+        factIds: [new Types.ObjectId(), new Types.ObjectId()],
+        magnitude: 0.009,
+        status: 'open',
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      };
+      const buildResolvedFact = (id: Types.ObjectId, amount: number) => ({
+        _id: id,
+        value: { amount, unit: 'percent' },
+        chunkId: `chunk-${id.toString()}`,
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'A1' },
+      });
+      const facts = [
+        ...conflictOne.factIds.map((id, index) => buildResolvedFact(id, 5.25 + index)),
+        ...conflictTwo.factIds.map((id, index) => buildResolvedFact(id, 6.1 + index)),
+      ];
+      mockConflictModel.find.mockResolvedValueOnce([conflictOne, conflictTwo]);
+      mockConflictModel.countDocuments.mockResolvedValueOnce(2);
+      mockExtractedFactModel.find.mockResolvedValueOnce(facts);
+      mockDocumentVersionModel.find.mockResolvedValueOnce([]);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      const result = await service.list({ skip: 0, limit: 20 }, actorId, 'tenant-a');
+
+      expect(mockMetricPoliciesService.resolveForTenant).toHaveBeenCalledTimes(1);
+      expect(mockMetricPoliciesService.resolveForTenant).toHaveBeenCalledWith('tenant-a');
+      expect(result.docs).toHaveLength(2);
     });
 
     it("should propose the higher-authority fact, keyed by each document version's sourceClass, for a metric with an authorityOrder", async () => {
@@ -647,7 +712,7 @@ describe('ConflictsService', () => {
       expect(result.docs[0].explanation).toContain('No authorityOrder');
     });
 
-    it('should scope the query to an explicit tenantId and skip the fact and document queries entirely for an empty page', async () => {
+    it('should scope the query to an explicit tenantId and skip the fact, document, and policy queries entirely for an empty page', async () => {
       const actorId = new Types.ObjectId().toString();
       mockConflictModel.find.mockResolvedValueOnce([]);
       mockConflictModel.countDocuments.mockResolvedValueOnce(0);
@@ -663,6 +728,7 @@ describe('ConflictsService', () => {
       expect(mockExtractedFactModel.find).not.toHaveBeenCalled();
       expect(mockDocumentVersionModel.find).not.toHaveBeenCalled();
       expect(mockDocumentModel.find).not.toHaveBeenCalled();
+      expect(mockMetricPoliciesService.resolveForTenant).not.toHaveBeenCalled();
       expect(result).toEqual({ docs: [], count: 0 });
     });
 
@@ -934,6 +1000,8 @@ describe('ConflictsService', () => {
         'subject.entityType': 'Conflict',
         'subject.entityId': new Types.ObjectId(conflictId),
       });
+      expect(mockMetricPoliciesService.resolveForTenant).toHaveBeenCalledTimes(1);
+      expect(mockMetricPoliciesService.resolveForTenant).toHaveBeenCalledWith('tenant-a');
       expect(mockWorkflowEngine.start).toHaveBeenCalledWith('resolveConflict', {
         conflictId,
         winningFactId,
@@ -994,8 +1062,9 @@ describe('ConflictsService', () => {
       expect(mockWorkflowEngine.start).not.toHaveBeenCalled();
       expect(mockWorkflowRunsService.create).not.toHaveBeenCalled();
       // The guard trips before the proposal is computed — no second `ExtractedFact.find` call
-      // beyond `loadConflictForResolution`'s own.
+      // beyond `loadConflictForResolution`'s own, and no policy read paid for either.
       expect(mockExtractedFactModel.find).toHaveBeenCalledTimes(1);
+      expect(mockMetricPoliciesService.resolveForTenant).not.toHaveBeenCalled();
     });
 
     it('should scope the workflow start and the run to an explicit tenantId when provided', async () => {

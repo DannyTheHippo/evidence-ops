@@ -36,7 +36,8 @@ import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
 import type { ResolveConflictWorkflowInput } from '../../../workflows/types';
-import { findMetricById, METRIC_ONTOLOGY } from '../facts/metric-ontology';
+import { METRIC_ONTOLOGY, type MetricId } from '../facts/metric-ontology';
+import { MetricPoliciesService } from '../facts/metric-policies.service';
 import {
   WorkflowRunsService,
   type WorkflowRunResult,
@@ -54,6 +55,7 @@ import {
   resolveConflictPolicy,
   type ConflictingFactForResolution,
   type ResolveConflictProposal,
+  type SurvivorshipPolicy,
 } from './resolve-conflict-policy';
 
 export interface ConflictScanResult {
@@ -182,6 +184,8 @@ export class ConflictsService {
 
     private readonly workflowRunsService: WorkflowRunsService,
 
+    private readonly metricPoliciesService: MetricPoliciesService,
+
     private readonly auditService: AuditService,
     private readonly logger: AppLogger,
   ) {
@@ -211,6 +215,10 @@ export class ConflictsService {
 
     let factById = new Map<string, ExtractedFactDocument>();
     let sourceClassByFactId = new Map<string, DocumentSourceClass>();
+    // Resolved once for the whole page, not once per conflict: `MetricPoliciesService
+    // .resolveForTenant` is a query, and a page of N conflicts sharing (as most do) only a
+    // handful of distinct metrics must not turn into N policy reads.
+    let policies = new Map<MetricId, SurvivorshipPolicy>();
     if (conflicts.length > 0) {
       const everyFactId = [
         ...new Set(conflicts.flatMap((conflict) => conflict.factIds.map((id) => id.toString()))),
@@ -218,6 +226,7 @@ export class ConflictsService {
       const facts = await this.extractedFactModel.find({ _id: { $in: everyFactId }, tenantId });
       factById = new Map(facts.map((fact) => [fact._id.toString(), fact]));
       sourceClassByFactId = await this.loadSourceClassByFactId(facts, tenantId);
+      policies = await this.metricPoliciesService.resolveForTenant(tenantId);
     }
 
     await this.auditService.record({
@@ -229,7 +238,7 @@ export class ConflictsService {
 
     return {
       docs: conflicts.map((conflict) =>
-        this.toConflictDto(conflict, factById, sourceClassByFactId),
+        this.toConflictDto(conflict, factById, sourceClassByFactId, policies),
       ),
       count,
     };
@@ -513,7 +522,9 @@ export class ConflictsService {
    * `computeProposalForConflict` runs here, once, before the workflow's 24-hour approval wait
    * begins — the resulting `ruleFired`/`proposedWinnerFactId` travel through
    * `ResolveConflictWorkflowInput` to `recordResolution` unchanged (see that method's own doc
-   * comment for why it never recomputes them itself).
+   * comment for why it never recomputes them itself). `MetricPoliciesService.resolveForTenant` is
+   * called after the pending-duplicate guard, not before — a request that fails validation or
+   * finds a pending approval never pays for a policy read it won't use.
    */
   async requestResolution(input: RequestConflictResolutionInput): Promise<WorkflowRunResult> {
     const tenantId = input.tenantId;
@@ -536,12 +547,14 @@ export class ConflictsService {
       );
     }
 
+    const policies = await this.metricPoliciesService.resolveForTenant(tenantId);
     const proposal = await this.computeProposalForConflict(
       {
         factIds: candidate.values.map((value) => new Types.ObjectId(value.factId)),
         factKey: candidate.factKey,
       },
       tenantId,
+      policies,
     );
 
     const handle = await this.workflowEngine.start(RESOLVE_CONFLICT_WORKFLOW_TYPE, {
@@ -702,22 +715,28 @@ export class ConflictsService {
   }
 
   /**
-   * Pure given its inputs: looks up `metricId` in `METRIC_ONTOLOGY` and calls
-   * `resolveConflictPolicy`. `stalenessWindowMs` defaults to `Infinity` when the metric leaves it
-   * unconfigured — matching `MetricDefinition.stalenessWindowMs`'s own doc comment ("a metric whose
-   * value ... does not drift"): with no window, no `observedAt` gap between authority-tied facts
-   * can ever exceed it, so recency never breaks a tie the metric's own ontology entry says recency
-   * should not be deciding.
+   * Pure given its inputs: looks up `metricId` in the tenant's resolved survivorship-policy map
+   * (`policies`, built once per request by `MetricPoliciesService.resolveForTenant` — see `list`
+   * and `requestResolution`, its only two callers) and calls `resolveConflictPolicy`.
+   * `detectConflicts` only ever persists a `Conflict` for a metric present in `METRIC_ONTOLOGY`,
+   * and `resolveForTenant` folds over every entry in that same ontology, so `policies.get` always
+   * hits in practice — the `?? { authorityOrder: undefined, stalenessWindowMs: Infinity }`
+   * fallback exists for a `metricId` the map has no opinion on, and produces exactly the
+   * `ruleFired: 'none'` a genuinely unconfigured metric already gets, rather than throw for a case
+   * that isn't a data-integrity fault. `metricId` is cast to `MetricId` for the lookup only —
+   * `Conflict.factKey.metric` is stored as a plain string on the schema, not narrowed to the
+   * ontology's id union.
    */
   private computeConflictProposal(
     candidates: readonly ConflictingFactForResolution[],
     metricId: string,
+    policies: ReadonlyMap<MetricId, SurvivorshipPolicy>,
   ): ResolveConflictProposal {
-    const metric = findMetricById(METRIC_ONTOLOGY, metricId);
-    return resolveConflictPolicy(candidates, {
-      authorityOrder: metric?.authorityOrder,
-      stalenessWindowMs: metric?.stalenessWindowMs ?? Number.POSITIVE_INFINITY,
-    });
+    const policy = policies.get(metricId as MetricId) ?? {
+      authorityOrder: undefined,
+      stalenessWindowMs: Number.POSITIVE_INFINITY,
+    };
+    return resolveConflictPolicy(candidates, policy);
   }
 
   /**
@@ -729,11 +748,14 @@ export class ConflictsService {
    * `requestResolution` does) doesn't need a second full conflict read to supply this. A fact that
    * no longer resolves just narrows the candidate set `resolveConflictPolicy` sees, which already
    * degrades to `ruleFired: 'none'` on its own — this never throws, unlike `toConflictDto`'s
-   * read-path integrity check.
+   * read-path integrity check. `policies` is the caller's already-resolved map, not re-resolved
+   * here — `requestResolution` handles a single conflict, but the map still belongs to the request,
+   * not to this one conflict.
    */
   private async computeProposalForConflict(
     conflict: { readonly factIds: readonly Types.ObjectId[]; readonly factKey: FactKey },
     tenantId: string,
+    policies: ReadonlyMap<MetricId, SurvivorshipPolicy>,
   ): Promise<ResolveConflictProposal> {
     const facts = await this.extractedFactModel.find({
       _id: { $in: conflict.factIds },
@@ -748,13 +770,14 @@ export class ConflictsService {
       sourceClass: sourceClassByFactId.get(fact._id.toString()) as DocumentSourceClass,
       observedAt: fact.observedAt,
     }));
-    return this.computeConflictProposal(candidates, conflict.factKey.metric);
+    return this.computeConflictProposal(candidates, conflict.factKey.metric, policies);
   }
 
   private toConflictDto(
     conflict: ConflictDocument,
     factById: Map<string, ExtractedFactDocument>,
     sourceClassByFactId: Map<string, DocumentSourceClass>,
+    policies: ReadonlyMap<MetricId, SurvivorshipPolicy>,
   ): ConflictResponseDto {
     const values: ConflictValueShape[] = [];
     const candidates: ConflictingFactForResolution[] = [];
@@ -792,10 +815,10 @@ export class ConflictsService {
       );
     }
 
-    // Computed fresh on every read, never persisted: the ontology's `authorityOrder` and a
+    // Computed fresh on every read, never persisted: the tenant's resolved `authorityOrder` and a
     // document's `sourceClass` both change over time, so a stored proposal would silently go stale
     // and a reviewer could act on a rule that no longer applies.
-    const proposal = this.computeConflictProposal(candidates, conflict.factKey.metric);
+    const proposal = this.computeConflictProposal(candidates, conflict.factKey.metric, policies);
 
     return {
       id: conflict._id.toString(),
