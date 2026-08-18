@@ -182,3 +182,61 @@ export const SEEDED_NOI_CONFLICT = {
     'sheet. The two disagree by roughly 6.2%, well outside the 1% tolerance for this metric, ' +
     'and neither is a typo.',
 } as const;
+
+// Kestrel Point Logistics Center is deliberately not one of the ten COMP_PROPERTIES rows — its
+// building area must not co-occur with any comps.xlsx figure for the same entity, or an
+// unclassified comps.xlsx candidate would poison the authority resolution below (see
+// resolve-conflict-policy.ts's own failure-direction comment on an unclassified sourceClass).
+export const AREA_CONFLICT_PROPERTY = 'Kestrel Point Logistics Center';
+
+// The written form used only by kestrel-point-flyer-export.csv, standing in for the kind of
+// abbreviation a marketing flyer or a hand-entered CRM record would use in place of the full
+// property name.
+export const AREA_CONFLICT_PROPERTY_ALIAS = 'Kestrel Point Logistics Ctr';
+
+/**
+ * A third seeded conflict: Kestrel Point Logistics Center's building area disagrees across four
+ * documents of three different `DocumentSourceClass`es (all four spreads exceed
+ * `building_area_sf`'s 1% relative tolerance). `metric-ontology.ts` ranks
+ * `authorityOrder: ['pm-export', 'spreadsheet', 'crm-export']` for this metric, so
+ * `pmValue` — the only `pm-export` candidate — is the definite winner; `resolve-conflict-policy.ts`
+ * proposes it with `ruleFired: 'authority'`. `kestrel-point-flyer-export.csv`'s value
+ * (`AREA_CONFLICT_ALIAS_VALUE`) is the fourth document — reported under
+ * `AREA_CONFLICT_PROPERTY_ALIAS` and folded into this same group by canonical-entity resolution.
+ * Exact locations are recorded in manifest.json by the generator.
+ */
+export const SEEDED_AREA_CONFLICT = {
+  id: 'building-area-conflict-kestrel-point',
+  property: AREA_CONFLICT_PROPERTY,
+  pmValue: { raw: 128_400, display: '128,400' },
+  spreadsheetValue: { raw: 121_900, display: '121,900' },
+  crmValue: { raw: 133_750, display: '133,750' },
+  note:
+    'kestrel-point-pm-export.xlsx reflects the rent roll administered by the property manager; ' +
+    'kestrel-point-comp-extract.pdf reflects a printed comparable-set spreadsheet compiled one ' +
+    'step removed from that rent roll; kestrel-point-crm-export.csv and kestrel-point-flyer-' +
+    'export.csv both reflect offering-materials figures carried in the deal CRM, entered under ' +
+    'different spellings of the property name. All four disagree by more than the 1% tolerance ' +
+    'for this metric, and the configured authority order (metric-ontology.ts) makes the ' +
+    "property manager's figure the proposed winner.",
+} as const;
+
+/**
+ * kestrel-point-flyer-export.csv reports the same property's building area under
+ * `AREA_CONFLICT_PROPERTY_ALIAS` rather than `AREA_CONFLICT_PROPERTY`. `FactsService.extractFacts`
+ * canonicalizes this alias against the `CANONICAL_ENTITY_SEED` registry row below before `groupKey`
+ * computes `groupKeyNormalized`, so `detectConflicts` (`conflicts/detect-conflicts.ts`) groups this
+ * fact together with `SEEDED_AREA_CONFLICT`'s other three documents — a fourth disagreement in the
+ * same conflict, not a separate one.
+ */
+export const AREA_CONFLICT_ALIAS_VALUE = { raw: 118_300, display: '118,300' } as const;
+
+/**
+ * The registry row `kestrel-point-flyer-export.csv`'s alias needs to resolve to
+ * `AREA_CONFLICT_PROPERTY` — seeded into `canonical_entities` by `eval/ingest-fixtures.ts`, the
+ * same tenant-scoped script that turns every other fixture file into live documents and facts.
+ */
+export const CANONICAL_ENTITY_SEED = {
+  canonicalName: AREA_CONFLICT_PROPERTY,
+  aliases: [AREA_CONFLICT_PROPERTY_ALIAS],
+} as const;

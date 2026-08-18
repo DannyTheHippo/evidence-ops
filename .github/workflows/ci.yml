@@ -91,3 +91,54 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 26
+
+      - name: Cache Node.js modules
+        uses: actions/cache@v5
+        with:
+          path: |
+            node_modules
+            ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install Dependencies
+        run: npm ci
+
+      # Gate: production dependencies only. Fails CLOSED on high/critical — a vulnerability
+      # that ships in the runtime image must stop the build.
+      - name: "Audit (BLOCKING): production dependencies"
+        run: npm audit --omit=dev --audit-level=high
+
+      # Report only, including devDependencies. Fails OPEN — dev-only advisories are real
+      # information but never ship to production, so they must not block a merge.
+      - name: "Audit (informational): full dependency tree"
+        continue-on-error: true
+        run: npm audit
+
+      - name: Install web Dependencies
+        working-directory: web
+        run: npm ci
+
+      # Gate: production dependencies only. Fails CLOSED on high/critical, same as the root audit.
+      - name: "Audit web (BLOCKING): production dependencies"
+        working-directory: web
+        run: npm audit --omit=dev --audit-level=high
+
+      # Report only, including devDependencies. Fails OPEN, same as the root audit.
+      - name: "Audit web (informational): full dependency tree"
+        working-directory: web
+        continue-on-error: true
+        run: npm audit

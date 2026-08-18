@@ -25,11 +25,10 @@ jobs:
 
     env:
       NODE_ENV: test
-      # The three `*.integration-spec.ts` suites default to port 27018 (this developer's local
-      # override to dodge a port collision with other Mongo projects) — CI has no such collision,
-      # and `docker-compose.yml`'s `mongo` service publishes the standard 27017. Overriding here
-      # is mandatory, not cosmetic: without it every spec silently connects nowhere in CI.
-      MONGO_DB_URI: mongodb://localhost:27017/evidence-ops?directConnection=true
+      # No `MONGO_DB_URI` override: `docker-compose.yml`'s `mongo` service publishes 27018 and
+      # `environment.config.ts`'s dev default targets 27018, so the two already agree. An override
+      # here would be a third place for that port to drift, and the failure it causes is silent —
+      # specs connect nowhere while every service reports healthy.
 
     steps:
       - name: Checkout repository
@@ -77,5 +76,79 @@ jobs:
       - name: Run integration tests
         run: npm run test:integration
 
-      # No artifact upload here: `test:integration` runs without `--coverage` and writes nothing to
+      # No artifact upload for the integration job: `test:integration` runs without `--coverage` and writes nothing to
       # `coverage/` — inventing output to satisfy an upload step would be backwards.
+
+  # Replay-only, and therefore free: every model and embedding call in this run is served from the
+  # committed fixtures under `eval/cache/`, so no API key is needed and none is configured. That is
+  # also the job's sharpest property — if a prompt changes, its fixture is missed, replay fails
+  # closed, and this job goes red. It catches a silent prompt change that no unit test would notice.
+  #
+  # `npm run eval` exits nonzero on two further hard gates, so this job also fails on a wrong
+  # answer, not only on drift: an own-voice canary leak under any strategy, and any case whose
+  # expected outcome did not happen. Replayed responses are fixture-served and therefore
+  # reproducible, so a failing case here is a regression, not a flaky sample.
+  #
+  # Its own runner rather than a step on the integration job: both need Mongo, but a shared job
+  # would make an eval failure indistinguishable from an integration failure in the Actions summary,
+  # and the two answer different questions.
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      NODE_ENV: test
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 26
+
+      - name: Cache node modules
+        uses: actions/cache@v5
+        with:
+          path: ./node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install backend dependencies
+        run: npm ci
+
+      - name: Start Mongo
+        run: docker compose up -d --wait mongo
+
+      # The same retry the integration job carries, and for the same measured reason: the compose
+      # healthcheck proves mongod is a writable primary, not that mongot has finished starting, and
+      # `0003-search-indexes.ts` calls `createSearchIndexes` with no retry of its own. A fresh-volume
+      # rehearsal of this exact sequence failed on the first attempt for precisely that reason.
+      - name: Run migrations
+        run: |
+          for attempt in 1 2 3; do
+            if npm run migrate:up; then
+              exit 0
+            fi
+            echo "migrate:up attempt $attempt failed, retrying in 10s..."
+            sleep 10
+          done
+          exit 1
+
+      # `--ingest` is mandatory, not an optimization: replay fails closed against an empty corpus,
+      # and a fresh runner has one. Ingestion is itself replayed from the committed embedding
+      # fixtures, so it costs nothing.
+      - name: Run the eval (replay)
+        run: npm run eval -- --ingest
+
+      # Unlike the integration job, this one does produce output worth keeping: the run writes a
+      # metrics report whose numbers are the point of the job.
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: eval/results/
+          if-no-files-found: error

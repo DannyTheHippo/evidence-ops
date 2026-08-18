@@ -1,0 +1,67 @@
+# Mounted read-only into the `prometheus` service (docker-compose.yml) alongside prometheus.yml,
+# which loads this file via `rule_files`. Every expression targets an instrument actually exported
+# by src/providers/telemetry/domain-metrics.ts, or Prometheus's own `up` series. The OTel Prometheus
+# exporter (node_modules/@opentelemetry/exporter-prometheus's PrometheusSerializer) replaces `.` with
+# `_` and appends `_total` to every monotonic counter, so `evidence_ops.grounding.claims_dropped`
+# becomes `evidence_ops_grounding_claims_dropped_total` below, and so on for the other three counters.
+groups:
+  - name: evidence-ops-alerts
+    rules:
+      # Proves the whole scrape pipeline end to end: this is the one alert triggerable by stopping a
+      # container rather than by driving the application into a failure state.
+      - alert: WorkerDown
+        expr: up{job="evidence-ops-worker"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus has not scraped evidence-ops-worker for over a minute."
+          description: "No durable workflow (ingestion or question-answering) can make progress while this holds — every started workflow queues behind a task queue nothing is polling. First step: `docker compose ps worker`, then `docker compose logs worker` for a crash reason before restarting."
+
+      - alert: McpDown
+        expr: up{job="evidence-ops-mcp"} == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus has not scraped evidence-ops-mcp for over a minute."
+          description: "Every MCP client integration is dark while this holds — the SPA and REST surfaces are unaffected, which is why this is warning rather than critical: nobody sitting in the product notices, and the failure is only visible to the integrations that matter most for adoption. Like WorkerDown this rides Prometheus's own `up` series, so it fires whether the process crashed or merely stopped answering scrapes. First step: `docker compose ps mcp`, then `docker compose logs mcp`."
+
+      - alert: WorkflowFailures
+        expr: rate(evidence_ops_workflow_run_failed_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "A durable workflow run has been recorded as failed."
+          description: "At pilot volume there is no defensible noise floor for this counter — any sustained failure rate is a real incident, not background noise to filter out. First step: check the Temporal UI (localhost:8233) for the failed run's history and stack trace, then `docker compose logs worker` for the activity that raised."
+
+      # Compares a short window against its own trailing baseline instead of an absolute count,
+      # because pilot-scale question volume is itself low and unpredictable — a fixed threshold would
+      # either fire on a quiet day's single rejection or miss a real spike on a busy one.
+      - alert: GroundingRejectSpike
+        expr: sum(rate(evidence_ops_grounding_claims_dropped_total[15m])) > 3 * sum(rate(evidence_ops_grounding_claims_dropped_total[2h]))
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The grounding gate is dropping claims well above its own recent baseline."
+          description: "This is the failure most invisible to users — an answer still comes back, just with more of it cut for lacking a citation. First step: break down recent drops by the `rule` attribute (grounding-report.type.ts's four-value GroundingViolationKind) to see whether one violation kind dominates, then check whether a source or model change landed recently."
+
+      - alert: EmptyRetrievals
+        expr: increase(evidence_ops_retrieval_empty_total[15m]) > 3
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Retrieval is returning zero chunks more often than isolated no-evidence questions explain."
+          description: "More than 3 empty retrievals in 15 minutes across the whole deployment points at a broken index, a corpus that stopped ingesting, or tenant scoping excluding everything — not at a handful of genuinely unanswerable questions. First step: confirm the $search/$vectorSearch indexes report READY (migration 0003-search-indexes.ts), then check whether the most recent ingestion runs actually completed."
+
+      - alert: ApprovalTimeouts
+        expr: increase(evidence_ops_approval_timeout_total[1h]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "An approval gate timed out with no human decision."
+          description: "This is an operational fact about a person, not a technical error — a pending conflict resolution went unattended past its wait. First step: check who the approval was routed to and whether they are unavailable, then decide whether to re-route it or extend the wait for this tenant."

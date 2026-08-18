@@ -2,7 +2,11 @@ import { config } from 'dotenv';
 config();
 
 export const mongodb = {
-  url: process.env.MONGO_DB_URI || 'mongodb://localhost:27017/evidence-ops?directConnection=true',
+  // 27018 matches both `environment.config.ts`'s dev-default `MONGO_DB_URI` and the host port
+  // `docker-compose.yml` publishes. All three have to agree: this file bypasses the zod schema
+  // entirely, so a port that differs here migrates a database nobody is reading, and reports
+  // success doing it.
+  url: process.env.MONGO_DB_URI || 'mongodb://localhost:27018/evidence-ops?directConnection=true',
 
   options: {},
 };

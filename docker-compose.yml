@@ -1,3 +1,67 @@
+# Non-secret configuration for the application processes, declared once and merged into each.
+#
+# The split is deliberate: `.env` carries credentials, the spend ceilings that bound them, and the
+# provider switch that decides which credential is in use. Every other knob is declared here, so the
+# configuration a deployment actually runs under can be read in one file instead of reconstructed
+# from a schema default, an example file, and an env file nobody can safely print. Anything omitted
+# here keeps `environment.config.ts`'s zod default — that schema, not this file, is the source of
+# truth for defaults, and restating a value here claims this deployment wants something different.
+#
+# `${VAR:-default}` throughout, so an operator overrides from the shell without editing this file.
+#
+# Two precedence rules decide where a variable can live, and they point in opposite directions:
+#   - An inline `environment:` value always beats `env_file`. So the spend ceilings are deliberately
+#     absent from this block — declaring one here would silently override the ceiling an operator
+#     set in `.env`, which is the one override that must never happen quietly.
+#   - Compose reads `.env` for `${VAR}` interpolation. So a variable named here with a default still
+#     honors `.env`, which is how `MODEL_PROVIDER` reaches the container from the file that also
+#     holds the key it selects.
+x-app-environment: &app-environment
+  # The containerised stack is the deployment path; the host dev loop (`start:dev`/`worker:dev`)
+  # is where a non-production environment belongs. Under production, `environment.config.ts`'s
+  # `superRefine` refuses to boot without `JWT_SECRET` — a half-configured process that starts and
+  # then fails one request at a time is harder to diagnose than one that names what is missing.
+  NODE_ENV: ${NODE_ENV:-production}
+  # In-network addresses only — never in `.env`, which stays host-loop-relative (localhost:*) so
+  # the same secrets file works for `start:dev`/`worker:dev`/`temporal:dev` too. Hyphen,
+  # `evidence-ops`: the underscore spelling produces a stray orphan database.
+  MONGO_DB_URI: mongodb://mongo:27017/evidence-ops?directConnection=true
+  # Pinned off, never overridable: `true` starts an in-process `mongodb-memory-server` and the
+  # container would quietly serve a throwaway database instead of the one beside it.
+  MONGO_MEMORY_SERVER: "false"
+  TEMPORAL_ADDRESS: temporal:7233
+  TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
+  TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-evidence-ops}
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  # Both default to localhost, which is wrong for anything served from a real origin: `CORS_ORIGIN`
+  # is functional — it is the single origin `enableCors` permits, so a mismatch means the browser
+  # rejects every cross-origin call with nothing wrong in the logs.
+  CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:8090}
+  URL: ${URL:-http://localhost:8090}
+  JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+  THROTTLE_TTL_MS: ${THROTTLE_TTL_MS:-60000}
+  THROTTLE_LIMIT: ${THROTTLE_LIMIT:-100}
+  MODEL_PROVIDER: ${MODEL_PROVIDER:-anthropic}
+  # Every model named here must have an entry in its provider's pricing table: cost is asserted
+  # before each request, so an unpriced model fails the first call rather than degrading.
+  ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
+  ANTHROPIC_TIMEOUT_MS: ${ANTHROPIC_TIMEOUT_MS:-60000}
+  OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5}
+  # Any OpenAI-compatible endpoint — Azure, vLLM, Ollama — points here. Keyless is legal: the
+  # provider omits the auth header entirely rather than sending an empty bearer.
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+  OPENAI_TIMEOUT_MS: ${OPENAI_TIMEOUT_MS:-60000}
+  RETRIEVAL_FUSION: ${RETRIEVAL_FUSION:-server}
+  RETRIEVAL_LIMIT: ${RETRIEVAL_LIMIT:-12}
+  RETRIEVAL_STRATEGY: ${RETRIEVAL_STRATEGY:-single-shot}
+  # Off by default: on, spans carry prompt and completion text, which puts evidence content in the
+  # tracing backend and widens the trust boundary to whoever can read traces.
+  OTEL_CAPTURE_MODEL_CONTENT: ${OTEL_CAPTURE_MODEL_CONTENT:-false}
+  # The api scrapes on this port and the worker on the next one, derived in `instrumentation.ts`
+  # from this single value rather than a second variable that could drift from it.
+  METRICS_PORT: ${METRICS_PORT:-9464}
+
 services:
   mongo:
     image: mongodb/mongodb-atlas-local:8.3.4
@@ -18,10 +82,12 @@ services:
     # for a toy corpus, not the ceiling for a real one.
     mem_limit: 1536m
     ports:
-      # Host port is overridable because 27017 is the default for every Mongo project on a
-      # machine — a second one simply fails to start with "port is already allocated". Set
-      # MONGO_HOST_PORT (and match it in MONGO_DB_URI) to run this alongside another stack.
-      - "${MONGO_HOST_PORT:-27017}:27017"
+      # 27018, not 27017, and it matters that this matches `environment.config.ts`'s dev-default
+      # `MONGO_DB_URI` exactly: host-run processes (`start:dev`, `worker:dev`, `migrate:up`, the
+      # eval) fall back to that default, so a mismatch here means they connect nowhere while the
+      # container looks perfectly healthy. 27017 is the default for every other Mongo project on a
+      # machine, which is why neither side uses it. Overridable, but override both together.
+      - "${MONGO_HOST_PORT:-27018}:27017"
     volumes:
       - evidence_ops_data:/data/db
       - evidence_ops_config:/data/configdb
@@ -85,6 +151,48 @@ services:
     # Gated separately from `temporal`/`temporal-postgres`/`temporal-ui`: retrieval/eval work needs
     # neither, so `--profile observability` lets someone bring up tracing alone. Also in `full` so a
     # fresh-clone demo gets everything with one flag.
+    profiles:
+      - observability
+      - full
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: evidence-ops-prometheus
+    restart: always
+    # mem_limit: 256m. Not measured here — this repo's sandbox has no Docker/socket access to bring
+    # the stack up — but Prometheus's own baseline (Go runtime + WAL) already sits above the tight
+    # limits this file gives purely static services (`temporal-ui`'s 64m), and headroom is kept for
+    # the five `alert-rules.yml` expressions plus whatever series count a growing corpus and longer
+    # uptime add.
+    mem_limit: 256m
+    volumes:
+      # Read-only: this is committed configuration, not writable state. No named volume for
+      # `/prometheus` (the TSDB data dir) — ephemeral by design, the same call `qdrant` below makes
+      # for the same reason: this is alerting infrastructure for a pilot, not a metrics archive, and
+      # losing history on a recreate costs nothing an operator needs back.
+      - ./observability/prometheus:/etc/prometheus:ro
+    ports:
+      # UI and API, so the person bringing the stack up can check target health at
+      # http://localhost:9090/targets without shelling into the container. Fixed rather than
+      # overridable like `mongo`/`api`/`web`/`qdrant`'s *_HOST_PORT — 9090 is Prometheus's own
+      # default and collision risk is the same low bar `jaeger`'s fixed ports above accept.
+      - "9090:9090"
+    networks:
+      - evidence_ops_net
+    healthcheck:
+      # Prometheus's own busybox base ships wget, not curl — but busybox wget's flag set is a strict
+      # subset of GNU wget's (no `--no-verbose`/`--tries`), so `-q --spider` is the only form that
+      # works regardless of which one the image actually has. Unverified beyond `docker compose
+      # config`, the same caveat `temporal`'s healthcheck above carries — this sandbox cannot pull or
+      # run the image.
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    # Gated the same way `jaeger` above is: retrieval/eval work needs neither tracing nor metrics, so
+    # `--profile observability` brings up both without the rest of `full`. Must NOT be profile-less —
+    # `docker compose up -d mongo` for a test run must not also start a monitoring stack.
     profiles:
       - observability
       - full
@@ -211,18 +319,15 @@ services:
       context: .
       target: runtime
     env_file:
-      # `required: false` — README step 1 (`cp .env.example .env`) creates this before a `full`
-      # bring-up, but a missing file must not hard-fail `up`; it only means the secrets below
-      # (ANTHROPIC_API_KEY, VOYAGE_API_KEY, JWT_SECRET) stay unset, which boots fine below prod-like
-      # NODE_ENV (see environment.config.ts) — ingestion/answering just won't work without them.
+      # Secrets only — `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `OPENAI_API_KEY`, `JWT_SECRET`.
+      # `required: false` so a missing file does not hard-fail `up`; under the production
+      # `NODE_ENV` above, an absent `JWT_SECRET` is caught by config validation at boot instead,
+      # which names the variable. An absent model or embedding key is not caught there — it parses
+      # as optional and fails at the first provider call.
       - path: .env
         required: false
     environment:
-      # In-network addresses only — never in `.env`, which stays host-loop-relative
-      # (localhost:*) so the same file works for `start:dev`/`worker:dev`/`temporal:dev` too.
-      MONGO_DB_URI: mongodb://mongo:27017/evidence-ops?directConnection=true
-      TEMPORAL_ADDRESS: temporal:7233
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      <<: *app-environment
       # The worker gets this from its own `worker:dev` script; the api's ENTRYPOINT runs node
       # directly and bypasses npm, so without it here both processes report the same default
       # service name and a cross-process trace becomes unreadable.
@@ -292,16 +397,36 @@ services:
     entrypoint:
       ["node", "--import", "./dist/instrumentation.js", "dist/worker/main.js"]
     env_file:
+      # Secrets only; see the api service above.
       - path: .env
         required: false
     environment:
-      MONGO_DB_URI: mongodb://mongo:27017/evidence-ops?directConnection=true
-      TEMPORAL_ADDRESS: temporal:7233
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      <<: *app-environment
       # Set here rather than inherited from `worker:dev`'s inline assignment, which this command
       # bypasses. Without it the worker and api report the same service name and the cross-process
       # trace — the whole point of the Temporal OTel interceptors — becomes unreadable.
       OTEL_SERVICE_NAME: evidence-ops-worker
+      # Worker-only: every model and embedding call runs in this process, so the knobs that shape
+      # ingestion and answering are tuned here rather than on the api.
+      VOYAGE_MODEL: ${VOYAGE_MODEL:-voyage-4}
+      VOYAGE_DIMENSIONS: ${VOYAGE_DIMENSIONS:-1024}
+      # Voyage's free tier rate-limits hard; the provider paces itself to this number rather than
+      # discovering the limit through 429s.
+      VOYAGE_REQUESTS_PER_MINUTE: ${VOYAGE_REQUESTS_PER_MINUTE:-3}
+      VOYAGE_MAX_RETRIES: ${VOYAGE_MAX_RETRIES:-5}
+      VOYAGE_MAX_RETRY_WAIT_MS: ${VOYAGE_MAX_RETRY_WAIT_MS:-300000}
+      VOYAGE_REQUEST_TIMEOUT_MS: ${VOYAGE_REQUEST_TIMEOUT_MS:-30000}
+      # `AGENTIC_MAX_COST_USD` is deliberately not here — it is a spend ceiling and lives in `.env`
+      # beside the keys it bounds. An inline value would override whatever an operator set there.
+      AGENTIC_MAX_ITERATIONS: ${AGENTIC_MAX_ITERATIONS:-8}
+      EXTRACTION_CHUNK_CONCURRENCY: ${EXTRACTION_CHUNK_CONCURRENCY:-2}
+      # Container-relative, and nothing mounts a host directory onto it: the local-folder connector
+      # reads this path inside the container, so a pilot ingesting from the host needs a bind mount
+      # added here as well as a matching path.
+      SOURCES_INBOX_DIR: ${SOURCES_INBOX_DIR:-./inbox}
+      SOURCE_SYNC_INTERVAL_MS: ${SOURCE_SYNC_INTERVAL_MS:-300000}
+    # MCP_PORT / MCP_RATE_LIMIT_PER_MINUTE are set on the `mcp` service below, not here — the two
+    # application processes never read them.
     # mem_limit: 768m. Observed 304.4 MiB (2026-08-11) running compiled output — Temporal still
     # bundles workflow code with webpack inside `Worker.create` at startup, which spikes well above
     # that steady-state number on every restart (see the OOM-at-512m comment above, from when the
@@ -315,6 +440,55 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    networks:
+      - evidence_ops_net
+    profiles:
+      - full
+
+  # The MCP surface: a third application process exposing verified evidence Q&A to any MCP client.
+  # Separate from `api` because it speaks JSON-RPC over its own listener and authenticates with
+  # personal access tokens rather than the session cookie — a different protocol and a different
+  # credential, so a different process rather than another route on the API.
+  mcp:
+    build:
+      context: .
+      target: runtime
+    # `entrypoint`, not `command`, for the same reason as `worker`: the image's ENTRYPOINT is
+    # exec-form, so a `command` is appended to it as argv instead of replacing it, and the
+    # container would run the API with this path trailing behind it, ignored.
+    entrypoint:
+      ["node", "--import", "./dist/instrumentation.js", "dist/mcp/main.js"]
+    env_file:
+      # Secrets only; see the api service above.
+      - path: .env
+        required: false
+    environment:
+      <<: *app-environment
+      OTEL_SERVICE_NAME: evidence-ops-mcp
+      # Container side fixed, host side overridable — the same split as `api`'s PORT, so an
+      # override cannot desynchronise the published mapping from what the process binds.
+      MCP_PORT: "3002"
+      # Charged per JSON-RPC request found in the body, not per HTTP POST: the SDK dispatches
+      # batch arrays, so a per-POST limit would let a single request drive hundreds of tool calls
+      # against one decrement.
+      MCP_RATE_LIMIT_PER_MINUTE: ${MCP_RATE_LIMIT_PER_MINUTE:-60}
+    # mem_limit matched to `api` rather than `worker`: this process serves requests and starts
+    # workflows, it does not run the Temporal worker's startup bundling step.
+    mem_limit: 256m
+    depends_on:
+      mongo:
+        condition: service_healthy
+      # `request_resolution` starts a workflow, so this surface needs Temporal even though it runs
+      # no worker itself. The read tools do not.
+      temporal:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      # Published: an MCP client is by definition outside this network. Nothing here bounds who can
+      # reach it — the surface authenticates every call with a PAT, and restricting network reach
+      # is the operator's concern.
+      - "${MCP_HOST_PORT:-3002}:3002"
     networks:
       - evidence_ops_net
     profiles:

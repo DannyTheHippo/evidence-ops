@@ -1,0 +1,31 @@
+# Mounted read-only into the `prometheus` service (docker-compose.yml) at
+# /etc/prometheus/prometheus.yml. Targets use container DNS names on `evidence_ops_net`, the same
+# pattern `MONGO_DB_URI`/`TEMPORAL_ADDRESS`/`OTEL_EXPORTER_OTLP_ENDPOINT` use in docker-compose.yml.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alert-rules.yml
+
+scrape_configs:
+  # `instrumentation.ts` binds each process's PrometheusExporter to METRICS_PORT plus that process's
+  # offset, on every interface. METRICS_PORT defaults to 9464 in both places that set it —
+  # environment.config.ts's zod schema and docker-compose.yml's x-app-environment anchor — and no
+  # service overrides it, so the in-network ports are the three below. The offset is keyed by
+  # OTEL_SERVICE_NAME, which docker-compose.yml sets per service; the api's offset is 0.
+  - job_name: evidence-ops-api
+    static_configs:
+      - targets: ["api:9464"]
+
+  # OTEL_SERVICE_NAME evidence-ops-worker, offset 1.
+  - job_name: evidence-ops-worker
+    static_configs:
+      - targets: ["worker:9465"]
+
+  # OTEL_SERVICE_NAME evidence-ops-mcp, offset 2. This process publishes a port outside
+  # `evidence_ops_net` and authenticates callers with long-lived personal access tokens, so its `up`
+  # series is the one covering the surface an outside client can actually reach.
+  - job_name: evidence-ops-mcp
+    static_configs:
+      - targets: ["mcp:9466"]

@@ -26,6 +26,11 @@ import {
 @Module({ imports: [AppConfigModule, SharedModule, ProvidersModule] })
 class SmokeModule {}
 
+// This script runs outside any real tenant's request scope, but `SpendGuardModelProvider` still
+// requires a `tenantId` to attribute spend to (fails closed on a missing one). A fixed, clearly
+// non-production id keeps a smoke run's spend attributable and out of any real tenant's ceiling.
+const SMOKE_TENANT_ID = 'smoke-providers';
+
 const CapRate = z.object({
   propertyName: z.string(),
   capRatePercent: z.number(),
@@ -63,6 +68,7 @@ async function main(): Promise<void> {
       outputSchema: CapRate,
       maxTokens: 256,
       maxCostUsd: 0.05,
+      tenantId: SMOKE_TENANT_ID,
     });
 
     console.log('\n— anthropic —');

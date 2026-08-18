@@ -16,9 +16,18 @@ FROM build AS tasks
 WORKDIR /app
 COPY ./migrate-mongo-config.js ./
 
+FROM node:26-slim AS prod-deps
+
+WORKDIR /app
+COPY package*.json ./
+# `prepare` runs `husky`, a devDependency with no binary to find once dev deps are omitted, and a
+# runtime image has no git hooks to install. Dropping that one script keeps every other package's
+# install scripts running, which a blanket `--ignore-scripts` would suppress.
+RUN npm pkg delete scripts.prepare && npm ci --omit=dev
+
 FROM node:26-slim AS runtime
 WORKDIR /app
-COPY --from=build /app/node_modules ./node_modules
+COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY ./migrate-mongo-config.js ./
 COPY ./migrations ./migrations

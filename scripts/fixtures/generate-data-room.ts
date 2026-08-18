@@ -2,6 +2,10 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { buildCompsSheet } from './lib/build-comps-sheet';
+import { buildKestrelPointCompExtract } from './lib/build-kestrel-point-comp-extract';
+import { buildKestrelPointCrmExport } from './lib/build-kestrel-point-crm-export';
+import { buildKestrelPointFlyerExport } from './lib/build-kestrel-point-flyer-export';
+import { buildKestrelPointPmExport } from './lib/build-kestrel-point-pm-export';
 import { buildLeaseSummary } from './lib/build-lease-summary';
 import { buildManifest } from './lib/build-manifest';
 import { buildMarketOverview } from './lib/build-market-overview';
@@ -16,12 +20,26 @@ import { buildValuationMemo } from './lib/build-valuation-memo';
 export async function generateDataRoom(targetDir: string): Promise<void> {
   await mkdir(targetDir, { recursive: true });
 
-  const [comps, noiSummaryCsv, valuationMemo, marketOverview, leaseSummary] = await Promise.all([
+  const [
+    comps,
+    noiSummaryCsv,
+    valuationMemo,
+    marketOverview,
+    leaseSummary,
+    kestrelPointPmExport,
+    kestrelPointCompExtract,
+    kestrelPointCrmExport,
+    kestrelPointFlyerExport,
+  ] = await Promise.all([
     buildCompsSheet(),
     buildNoiSummaryCsv(),
     buildValuationMemo(),
     buildMarketOverview(),
     buildLeaseSummary(),
+    buildKestrelPointPmExport(),
+    buildKestrelPointCompExtract(),
+    buildKestrelPointCrmExport(),
+    buildKestrelPointFlyerExport(),
   ]);
 
   const manifest = buildManifest({
@@ -30,6 +48,10 @@ export async function generateDataRoom(targetDir: string): Promise<void> {
     valuationMemo,
     marketOverview,
     leaseSummary,
+    kestrelPointPmExport,
+    kestrelPointCompExtract,
+    kestrelPointCrmExport,
+    kestrelPointFlyerExport,
   });
 
   await Promise.all([
@@ -38,6 +60,16 @@ export async function generateDataRoom(targetDir: string): Promise<void> {
     writeFile(path.join(targetDir, 'valuation-memo.pdf'), valuationMemo.buffer),
     writeFile(path.join(targetDir, 'market-overview.pdf'), marketOverview.buffer),
     writeFile(path.join(targetDir, 'lease-summary.docx'), leaseSummary.buffer),
+    writeFile(path.join(targetDir, 'kestrel-point-pm-export.xlsx'), kestrelPointPmExport.buffer),
+    writeFile(
+      path.join(targetDir, 'kestrel-point-comp-extract.pdf'),
+      kestrelPointCompExtract.buffer,
+    ),
+    writeFile(path.join(targetDir, 'kestrel-point-crm-export.csv'), kestrelPointCrmExport.buffer),
+    writeFile(
+      path.join(targetDir, 'kestrel-point-flyer-export.csv'),
+      kestrelPointFlyerExport.buffer,
+    ),
     // Trailing newline to match prettier/editorconfig conventions for committed JSON files.
     writeFile(path.join(targetDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`),
   ]);

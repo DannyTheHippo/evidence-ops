@@ -1,7 +1,14 @@
-import { CANARY_MARKERS, SEEDED_CONFLICT, SEEDED_NOI_CONFLICT } from './constants';
+import {
+  AREA_CONFLICT_ALIAS_VALUE,
+  CANARY_MARKERS,
+  SEEDED_AREA_CONFLICT,
+  SEEDED_CONFLICT,
+  SEEDED_NOI_CONFLICT,
+} from './constants';
 import { sha256Hex } from './hash';
 import type { DocxParagraphManifest } from './build-lease-summary';
 import type { SheetManifest } from './build-comps-sheet';
+import type { PdfBuildResult } from './pdf-helpers';
 
 export interface XlsxConflictLocation {
   file: string;
@@ -35,12 +42,21 @@ export interface DataRoomManifest {
     'valuation-memo.pdf': { sha256: string; pageCount: number };
     'market-overview.pdf': { sha256: string; pageCount: number };
     'lease-summary.docx': { sha256: string; paragraphs: DocxParagraphManifest[] };
+    'kestrel-point-pm-export.xlsx': { sha256: string; sheets: SheetManifest[] };
+    'kestrel-point-comp-extract.pdf': { sha256: string; pageCount: number };
+    'kestrel-point-crm-export.csv': { sha256: string; sheets: SheetManifest[] };
+    'kestrel-point-flyer-export.csv': { sha256: string; sheets: SheetManifest[] };
   };
   /**
    * One record per seeded cross-source conflict. An array rather than a single field because the
    * corpus now seeds more than one: `SEEDED_CONFLICT` (cap rate, spreadsheet vs. prose) at index
-   * 0, `SEEDED_NOI_CONFLICT` (net operating income, spreadsheet vs. delimited text) at index 1 —
-   * both order and count are fixed by this function, never data-dependent.
+   * 0, `SEEDED_NOI_CONFLICT` (net operating income, spreadsheet vs. delimited text) at index 1,
+   * `SEEDED_AREA_CONFLICT` (building area, four source documents) at index 2 — order and count are
+   * fixed by this function, never data-dependent. `kestrel-point-flyer-export.csv` (the alias-
+   * variant document) is that record's fourth location, not a separate record:
+   * `FactsService.extractFacts` canonicalizes its alias against the `CANONICAL_ENTITY_SEED`
+   * registry row before grouping (see `constants.ts`'s `AREA_CONFLICT_ALIAS_VALUE` doc comment),
+   * so `detectConflicts` groups all four documents together.
    */
   conflicts: ConflictRecord[];
   canaries: Array<{
@@ -58,6 +74,10 @@ export interface ManifestInputs {
   valuationMemo: { buffer: Buffer; pageCount: number };
   marketOverview: { buffer: Buffer; pageCount: number };
   leaseSummary: { buffer: Buffer; paragraphs: DocxParagraphManifest[] };
+  kestrelPointPmExport: { buffer: Buffer; sheet: SheetManifest };
+  kestrelPointCompExtract: PdfBuildResult;
+  kestrelPointCrmExport: { buffer: Buffer; sheet: SheetManifest };
+  kestrelPointFlyerExport: { buffer: Buffer; sheet: SheetManifest };
 }
 
 // Fixed rather than `new Date().toISOString()` — the manifest is committed alongside the
@@ -87,6 +107,22 @@ export function buildManifest(inputs: ManifestInputs): DataRoomManifest {
       'lease-summary.docx': {
         sha256: sha256Hex(inputs.leaseSummary.buffer),
         paragraphs: inputs.leaseSummary.paragraphs,
+      },
+      'kestrel-point-pm-export.xlsx': {
+        sha256: sha256Hex(inputs.kestrelPointPmExport.buffer),
+        sheets: [inputs.kestrelPointPmExport.sheet],
+      },
+      'kestrel-point-comp-extract.pdf': {
+        sha256: sha256Hex(inputs.kestrelPointCompExtract.buffer),
+        pageCount: inputs.kestrelPointCompExtract.pageCount,
+      },
+      'kestrel-point-crm-export.csv': {
+        sha256: sha256Hex(inputs.kestrelPointCrmExport.buffer),
+        sheets: [inputs.kestrelPointCrmExport.sheet],
+      },
+      'kestrel-point-flyer-export.csv': {
+        sha256: sha256Hex(inputs.kestrelPointFlyerExport.buffer),
+        sheets: [inputs.kestrelPointFlyerExport.sheet],
       },
     },
     conflicts: [
@@ -133,6 +169,42 @@ export function buildManifest(inputs: ManifestInputs): DataRoomManifest {
           },
         ],
         note: SEEDED_NOI_CONFLICT.note,
+      },
+      {
+        id: SEEDED_AREA_CONFLICT.id,
+        property: SEEDED_AREA_CONFLICT.property,
+        locations: [
+          {
+            file: 'kestrel-point-pm-export.xlsx',
+            sheet: 'Rent Roll',
+            cell: 'B2',
+            value: SEEDED_AREA_CONFLICT.pmValue.raw,
+            display: SEEDED_AREA_CONFLICT.pmValue.display,
+          },
+          {
+            file: 'kestrel-point-comp-extract.pdf',
+            page: 1,
+            display: SEEDED_AREA_CONFLICT.spreadsheetValue.display,
+            context:
+              'Comparable Set Extract: "Kestrel Point Logistics Center is carried in the ' +
+              'comparable set at a building area of 121,900 square feet."',
+          },
+          {
+            file: 'kestrel-point-crm-export.csv',
+            sheet: 'CSV',
+            cell: 'B2',
+            value: SEEDED_AREA_CONFLICT.crmValue.raw,
+            display: SEEDED_AREA_CONFLICT.crmValue.display,
+          },
+          {
+            file: 'kestrel-point-flyer-export.csv',
+            sheet: 'CSV',
+            cell: 'B2',
+            value: AREA_CONFLICT_ALIAS_VALUE.raw,
+            display: AREA_CONFLICT_ALIAS_VALUE.display,
+          },
+        ],
+        note: SEEDED_AREA_CONFLICT.note,
       },
     ],
     canaries: [
