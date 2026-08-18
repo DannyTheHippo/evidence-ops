@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RequireAdmin } from '../App';
@@ -95,7 +95,7 @@ describe('InvitationsPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Invitations unavailable');
   });
 
-  it('shows the plaintext token exactly once at mint, unmistakably marked as unrepeatable', async () => {
+  it('shows a fragment-carried invite link exactly once at mint, unmistakably marked as unrepeatable', async () => {
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
       if (url === '/api/v1/invitations' && init?.method === 'POST') {
         return Promise.resolve(jsonResponse(mintedInvitation, 201));
@@ -115,7 +115,10 @@ describe('InvitationsPage', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Send invitation' }));
 
-    expect(await screen.findByText(mintedInvitation.token)).toBeInTheDocument();
+    // The token rides the fragment, not the query string — a fragment is never sent to the server,
+    // so it cannot end up in an access log.
+    const expectedLink = `${window.location.origin}/invite#token=${mintedInvitation.token}`;
+    expect(await screen.findByText(expectedLink)).toBeInTheDocument();
 
     // The list row for the newly minted invitation never repeats the token — the one-time panel
     // is the only place it appears.
@@ -130,8 +133,37 @@ describe('InvitationsPage', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
-    expect(screen.queryByText(mintedInvitation.token)).not.toBeInTheDocument();
+    expect(screen.queryByText(expectedLink)).not.toBeInTheDocument();
     expect(screen.getByText('new-hire@example.com')).toBeInTheDocument();
+  });
+
+  it('copies the fragment-carried invite link, not a bare token, to the clipboard', async () => {
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url === '/api/v1/invitations' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse(mintedInvitation, 201));
+      }
+      return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+
+    render(<InvitationsPage />);
+    await screen.findByText('No invitations yet');
+
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'new-hire@example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send invitation' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy' }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        `${window.location.origin}/invite#token=${mintedInvitation.token}`,
+      );
+    });
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
   });
 
   it('shows the mint error and leaves any previous token panel cleared', async () => {

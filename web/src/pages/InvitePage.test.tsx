@@ -10,7 +10,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function renderPage(path = '/invite?token=eo_inv_fixture-token') {
+function renderPage(path = '/invite#token=eo_inv_fixture-token') {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <InvitePage />
@@ -43,6 +43,18 @@ describe('InvitePage', () => {
 
     expect(screen.getByLabelText('Password')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Accept invitation' })).toBeInTheDocument();
+  });
+
+  // A token in the query string reaches the server on every request and is written to the access
+  // log — this asserts the page reads only the fragment, so a link built the old way (or a query
+  // string an attacker appends) never yields a working form.
+  it('treats a token carried in the query string as missing, since only the fragment is trusted', () => {
+    renderPage('/invite?token=eo_inv_fixture-token');
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'This invitation link is missing its token.',
+    );
+    expect(screen.queryByLabelText('Password')).not.toBeInTheDocument();
   });
 
   it('redeems the token with only a password, then logs in with the returned email', async () => {

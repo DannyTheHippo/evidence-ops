@@ -81,12 +81,20 @@ export default function InvitationsPage() {
     }
   }
 
+  // The fragment, not the query string, carries the token: a fragment is never sent in the request
+  // that loads `/invite`, so it cannot end up in nginx's access log or any proxy's. This is the
+  // only link an admin is given to copy, so building it here is what keeps a `?token=` link from
+  // ever existing in the first place.
+  function inviteLink(invitation: MintedInvitation): string {
+    return `${window.location.origin}/invite#token=${invitation.token}`;
+  }
+
   async function handleCopy() {
     if (!minted) return;
     // jsdom (and some browser contexts) has no Clipboard API — a missing `navigator.clipboard`
     // must not throw, it just means the copy affordance silently does nothing.
     if (!navigator.clipboard) return;
-    await navigator.clipboard.writeText(minted.token);
+    await navigator.clipboard.writeText(inviteLink(minted));
     setCopied(true);
   }
 
@@ -108,10 +116,10 @@ export default function InvitationsPage() {
             <h2 className="card-title">{minted.email}</h2>
           </div>
           <p className="notice notice--warn">
-            This is the only time this token is shown — copy it now and send it to {minted.email}.
+            This is the only time this link is shown — copy it now and send it to {minted.email}.
             Evidence Ops sends no invitation email.
           </p>
-          <p className="mono">{minted.token}</p>
+          <p className="mono">{inviteLink(minted)}</p>
           <div className="form-actions">
             <Button variant="secondary" size="sm" onClick={() => void handleCopy()}>
               {copied ? 'Copied' : 'Copy'}

@@ -278,15 +278,16 @@ describe('InvitationsService', () => {
   });
 
   describe('accept', () => {
-    it('should stamp acceptedAt and record an audit event attributed to the joining user', async () => {
-      mockInvitationModel.updateOne.mockResolvedValueOnce({ acknowledged: true });
+    it('should atomically reserve a pending invitation, scoped to its tenant, and record an audit event attributed to the joining user', async () => {
+      mockInvitationModel.findOneAndUpdate.mockResolvedValueOnce(buildMockInvitation());
       const userId = new Types.ObjectId().toString();
 
-      await service.accept(invitationId.toString(), userId, 'tenant-a');
+      const result = await service.accept(invitationId.toString(), userId, 'tenant-a');
 
-      expect(mockInvitationModel.updateOne).toHaveBeenCalledWith(
-        { _id: invitationId.toString() },
-        { acceptedAt: expect.any(Date) as Date },
+      expect(result).toBe(true);
+      expect(mockInvitationModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: invitationId.toString(), tenantId: 'tenant-a', acceptedAt: { $exists: false } },
+        { $set: { acceptedAt: expect.any(Date) as Date } },
       );
       expect(mockAuditService.record).toHaveBeenCalledWith({
         action: 'invitations.accepted',
@@ -294,6 +295,29 @@ describe('InvitationsService', () => {
         subject: { entityType: 'Invitation', entityId: invitationId.toString() },
         tenantId: 'tenant-a',
       });
+    });
+
+    it('should refuse and skip the audit event when the invitation is already accepted, foreign-tenant, or unrecognized', async () => {
+      mockInvitationModel.findOneAndUpdate.mockResolvedValueOnce(null);
+      const userId = new Types.ObjectId().toString();
+
+      const result = await service.accept(invitationId.toString(), userId, 'tenant-a');
+
+      expect(result).toBe(false);
+      expect(mockAuditService.record).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('release', () => {
+    it('should unset acceptedAt, scoped to the invitation’s tenant, reopening a reservation accept made', async () => {
+      mockInvitationModel.updateOne.mockResolvedValueOnce({ acknowledged: true });
+
+      await service.release(invitationId.toString(), 'tenant-a');
+
+      expect(mockInvitationModel.updateOne).toHaveBeenCalledWith(
+        { _id: invitationId.toString(), tenantId: 'tenant-a' },
+        { $unset: { acceptedAt: '' } },
+      );
     });
   });
 });

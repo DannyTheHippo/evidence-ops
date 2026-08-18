@@ -12,7 +12,6 @@ export interface Me {
 }
 
 export interface AuthToken {
-  accessToken: string;
   user: Me;
 }
 

@@ -177,6 +177,40 @@ describe('Auth (e2e)', () => {
       expect(persisted?.tenantId).toBe(independent.tenantId);
       expect(persisted?.role).toBe(UserRole.Admin);
     });
+
+    // Regression for the token being redeemable twice: two simultaneous `POST /auth/register`
+    // calls both pass `verify` before either has consumed the token, so without an atomic
+    // reservation both reach `userModel.create` and the loser used to surface the driver's raw
+    // E11000 as an unhandled 500 instead of a feature exception.
+    it('refuses the losing side of a concurrent double-redemption with a 4xx, never a 500', async () => {
+      const admin = await registerTestUser(app, {
+        email: 'invite-race-admin@example.com',
+        password,
+      });
+
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/invitations')
+        .set('Cookie', admin.cookie)
+        .send({ email: 'invite-race-target@example.com', role: UserRole.Member });
+      const { token } = minted.body as { token: string };
+
+      const [first, second] = await Promise.all([
+        request(getTestServer(app))
+          .post('/api/v1/auth/register')
+          .send({ password, invitationToken: token }),
+        request(getTestServer(app))
+          .post('/api/v1/auth/register')
+          .send({ password, invitationToken: token }),
+      ]);
+
+      const statuses = [first.status, second.status].sort((a, b) => a - b);
+      expect(statuses).toEqual([201, 400]);
+
+      const persistedCount = await userModel.countDocuments({
+        email: 'invite-race-target@example.com',
+      });
+      expect(persistedCount).toBe(1);
+    });
   });
 
   // Proves the global APP_GUARD JwtAuthGuard denies by default: only handlers explicitly

@@ -1,6 +1,6 @@
 import type { FormEvent } from 'react';
 import { useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { ApiError, login, registerWithInvitation } from '../api/client';
 import Button from '../components/ui/Button';
 import Field from '../components/ui/Field';
@@ -8,10 +8,13 @@ import Field from '../components/ui/Field';
 // The invitation, not this form, dictates the account's email, tenant and role — only a password
 // is collected here. `token` comes from the link an admin shared out of band; there is no email
 // step because there is nothing here to send it.
+//
+// The token lives in the URL fragment, not the query string: a fragment is never sent to the
+// server, so nginx's access log (and any proxy in front of it) never sees this bearer credential.
 export default function InvitePage() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const token = searchParams.get('token') ?? '';
+  const location = useLocation();
+  const token = new URLSearchParams(location.hash.replace(/^#/, '')).get('token') ?? '';
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

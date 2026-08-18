@@ -32,7 +32,7 @@ describe('AuthService', () => {
   const mockTenantModel = getMockModel();
   const mockConfig = getMockConfig();
   const mockAuditService = { record: jest.fn() };
-  const mockInvitationsService = { verify: jest.fn(), accept: jest.fn() };
+  const mockInvitationsService = { verify: jest.fn(), accept: jest.fn(), release: jest.fn() };
 
   const buildMockUser = (overrides: Record<string, unknown> = {}) => ({
     _id: { toString: () => mockUserId },
@@ -218,13 +218,13 @@ describe('AuthService', () => {
         role: UserRole.Member,
       };
 
-      it('should join the invitation’s tenant with its role, ignoring any submitted email, and mark it accepted', async () => {
+      it('should join the invitation’s tenant with its role, ignoring any submitted email, and reserve it before creating the user', async () => {
         mockInvitationsService.verify.mockResolvedValueOnce(invitationIdentity);
         mockUserModel.findOne.mockResolvedValueOnce(null);
+        mockInvitationsService.accept.mockResolvedValueOnce(true);
         mockUserModel.create.mockImplementationOnce((doc: Record<string, unknown>) =>
           Promise.resolve(buildMockUser(doc)),
         );
-        mockInvitationsService.accept.mockResolvedValueOnce(undefined);
 
         const result = await service.register({
           password: 'password123',
@@ -233,15 +233,24 @@ describe('AuthService', () => {
 
         expect(mockInvitationsService.verify).toHaveBeenCalledWith('eo_inv_token');
         expect(mockUserModel.findOne).toHaveBeenCalledWith({ email: invitationIdentity.email });
-        const [createCall] = mockUserModel.create.mock.calls[0] as [Record<string, unknown>];
+        const [acceptedId, acceptedUserId, acceptedTenantId] = mockInvitationsService.accept.mock
+          .calls[0] as [string, string, string];
+        expect(acceptedId).toBe(invitationIdentity.id);
+        expect(acceptedTenantId).toBe(invitationIdentity.tenantId);
+        expect(acceptedUserId).toMatch(/^[0-9a-f]{24}$/);
+
+        const [createCall] = mockUserModel.create.mock.calls[0] as [
+          { _id: { toString: () => string } } & Record<string, unknown>,
+        ];
+        expect(createCall._id.toString()).toBe(acceptedUserId);
         expect(createCall.email).toBe(invitationIdentity.email);
         expect(createCall.tenantId).toBe(invitationIdentity.tenantId);
         expect(createCall.role).toBe(invitationIdentity.role);
         expect(mockTenantModel.create).not.toHaveBeenCalled();
-        expect(mockInvitationsService.accept).toHaveBeenCalledWith(
-          invitationIdentity.id,
-          mockUserId,
-          invitationIdentity.tenantId,
+        // `accept` is called (and wins) before `create`, closing the double-redemption race —
+        // asserted here by ordering the calls each mock recorded.
+        expect(mockInvitationsService.accept.mock.invocationCallOrder[0]).toBeLessThan(
+          mockUserModel.create.mock.invocationCallOrder[0],
         );
         expect(result.role).toBe(invitationIdentity.role);
       });
@@ -276,6 +285,40 @@ describe('AuthService', () => {
         );
         expect(mockUserModel.create).not.toHaveBeenCalled();
         expect(mockInvitationsService.accept).not.toHaveBeenCalled();
+      });
+
+      it('should throw InvalidInvitationException with 400 Bad Request, never reaching create, when a concurrent redemption already won the reservation', async () => {
+        mockInvitationsService.verify.mockResolvedValueOnce(invitationIdentity);
+        mockUserModel.findOne.mockResolvedValueOnce(null);
+        mockInvitationsService.accept.mockResolvedValueOnce(false);
+
+        const error = await service
+          .register({ password: 'password123', invitationToken: 'eo_inv_token' })
+          .catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(InvalidInvitationException);
+        expect((error as InvalidInvitationException).getStatus()).toBe(HttpStatus.BAD_REQUEST);
+        expect(mockUserModel.create).not.toHaveBeenCalled();
+        expect(mockInvitationsService.release).not.toHaveBeenCalled();
+      });
+
+      it('should release the reservation and rethrow when user creation fails for an unrelated reason', async () => {
+        mockInvitationsService.verify.mockResolvedValueOnce(invitationIdentity);
+        mockUserModel.findOne.mockResolvedValueOnce(null);
+        mockInvitationsService.accept.mockResolvedValueOnce(true);
+        const userCreationError = new Error('user creation failed');
+        mockUserModel.create.mockRejectedValueOnce(userCreationError);
+        mockInvitationsService.release.mockResolvedValueOnce(undefined);
+
+        const error = await service
+          .register({ password: 'password123', invitationToken: 'eo_inv_token' })
+          .catch((e: unknown) => e);
+
+        expect(error).toBe(userCreationError);
+        expect(mockInvitationsService.release).toHaveBeenCalledWith(
+          invitationIdentity.id,
+          invitationIdentity.tenantId,
+        );
       });
     });
   });

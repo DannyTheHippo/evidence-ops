@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/
 import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
 import bcrypt from 'bcryptjs';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { randomUUID } from 'node:crypto';
 import {
   Tenant,
@@ -95,8 +95,11 @@ export class AuthService {
    * return `null` — so any of those refuses with `InvalidInvitationException` rather than falling
    * back to provisioning a fresh tenant. An invitation whose email already has an account is
    * refused too, and that account is never touched — not moved, merged, or re-tenanted, since email
-   * is globally unique here. The invitation is marked accepted only once the user has actually been
-   * created, so a failure in between leaves the token still redeemable.
+   * is globally unique here. `accept` reserves the invitation atomically, scoped to its tenant,
+   * before the user is created: a concurrent redemption of the same token loses that reservation
+   * and is refused here rather than racing through to the unique email index and surfacing as a
+   * 500. If reservation succeeds but user creation then fails for an unrelated reason, the
+   * reservation is released so the token stays redeemable.
    */
   private async registerWithInvitation(token: string, rawPassword: string): Promise<MeResponseDto> {
     const identity = await this.invitationsService.verify(token);
@@ -111,15 +114,31 @@ export class AuthService {
       );
     }
 
-    const password = await bcrypt.hash(rawPassword, PASSWORD_HASH_COST);
-    const user = await this.userModel.create({
-      email: identity.email,
-      password,
-      tenantId: identity.tenantId,
-      role: identity.role,
-    });
+    const userId = new Types.ObjectId();
+    const reserved = await this.invitationsService.accept(
+      identity.id,
+      userId.toString(),
+      identity.tenantId,
+    );
+    if (!reserved) {
+      throw new InvalidInvitationException('Invitation is invalid, expired, or already used');
+    }
 
-    await this.invitationsService.accept(identity.id, user._id.toString(), identity.tenantId);
+    const password = await bcrypt.hash(rawPassword, PASSWORD_HASH_COST);
+
+    let user: UserDocument;
+    try {
+      user = await this.userModel.create({
+        _id: userId,
+        email: identity.email,
+        password,
+        tenantId: identity.tenantId,
+        role: identity.role,
+      });
+    } catch (error) {
+      await this.invitationsService.release(identity.id, identity.tenantId);
+      throw error;
+    }
 
     this.logger.debug(
       `User registered with the _id '${user._id.toString()}' via invitation, joining tenant '${identity.tenantId}' as '${identity.role}'`,

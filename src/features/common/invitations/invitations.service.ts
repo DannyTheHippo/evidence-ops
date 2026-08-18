@@ -148,9 +148,10 @@ export class InvitationsService {
   /**
    * Fails CLOSED at every step: a malformed token, an unrecognized hash, an expired or an
    * already-redeemed invitation all return `null` rather than an identity — never throws.
-   * Read-only: this checks whether a token is currently valid, it does not consume it —
-   * `AuthService.register` marks the invitation accepted only once it has actually created the
-   * joining user, so a registration failure never burns a token that was never granted.
+   * Read-only: this checks whether a token is currently valid, it does not consume it. Consumption
+   * happens in `accept`, which `AuthService.registerWithInvitation` calls once it has reserved a
+   * user id but before it creates the user, so two concurrent redemptions of the same token cannot
+   * both proceed to `create`.
    */
   async verify(presentedToken: string): Promise<VerifiedInvitation | null> {
     if (presentedToken.length !== TOKEN_LENGTH || !presentedToken.startsWith(TOKEN_PREFIX)) {
@@ -179,13 +180,21 @@ export class InvitationsService {
   }
 
   /**
-   * Marks an invitation redeemed. `AuthService.register` calls this only after the joining user
-   * has actually been created — never before — so a failure between `verify()` and account
-   * creation leaves the token still redeemable rather than burning it on a user that never came
-   * into existence.
+   * Atomically reserves an invitation for the given user, scoped to its own tenant. The filter
+   * only matches a pending invitation — `acceptedAt` unset — so a second concurrent redemption of
+   * the same token finds nothing to update and gets `false` back, refused before it ever attempts
+   * to create a user, rather than racing both attempts through to the unique email index and
+   * surfacing as an unhandled 500. Returns `false` for a stale, foreign-tenant, or already-redeemed
+   * invitation id.
    */
-  async accept(invitationId: string, userId: string, tenantId: string): Promise<void> {
-    await this.invitationModel.updateOne({ _id: invitationId }, { acceptedAt: new Date() });
+  async accept(invitationId: string, userId: string, tenantId: string): Promise<boolean> {
+    const reserved = await this.invitationModel.findOneAndUpdate(
+      { _id: invitationId, tenantId, acceptedAt: { $exists: false } },
+      { $set: { acceptedAt: new Date() } },
+    );
+    if (!reserved) {
+      return false;
+    }
 
     await this.auditService.record({
       action: 'invitations.accepted',
@@ -195,6 +204,19 @@ export class InvitationsService {
     });
 
     this.logger.debug(`Invitation '${invitationId}' accepted by user '${userId}'`);
+    return true;
+  }
+
+  /**
+   * Reverses a reservation made by `accept`, for when the user creation it was guarding fails for a
+   * reason unrelated to the race — the token stays redeemable rather than being burned on a request
+   * that never actually admitted anyone.
+   */
+  async release(invitationId: string, tenantId: string): Promise<void> {
+    await this.invitationModel.updateOne(
+      { _id: invitationId, tenantId },
+      { $unset: { acceptedAt: '' } },
+    );
   }
 
   /** `timingSafeEqual` throws on unequal-length buffers rather than returning `false` — sha256 hex

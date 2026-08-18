@@ -312,7 +312,7 @@ describe('App / shell', () => {
     vi.spyOn(auth, 'ensureSession').mockResolvedValue(null);
 
     render(
-      <MemoryRouter initialEntries={['/invite?token=eo_inv_fixture']}>
+      <MemoryRouter initialEntries={['/invite#token=eo_inv_fixture']}>
         <App />
       </MemoryRouter>,
     );
