@@ -556,6 +556,11 @@ export interface Source {
   lastSyncError?: string;
   fileCount: number;
   createdAt: string;
+  // Optional here rather than mirroring the API's always-present field exactly: R4 owns adding
+  // this (and its siblings — owner, reachability, tracked) to every fixture across
+  // SourcesPage/HomePage's tests in one mechanical pass. This page only reads it for the class
+  // drift dialog's copy.
+  sourceClass?: DocumentSourceClass;
 }
 
 export type SourceFileStateStatus = 'ok' | 'failed';
@@ -602,6 +607,28 @@ export function setSourceEnabled(id: string, enabled: boolean): Promise<Source> 
 
 export function requestSourceSync(id: string): Promise<WorkflowRun> {
   return request<WorkflowRun>(`/sources/${id}/sync`, { method: 'POST' });
+}
+
+export type DocumentSourceClass =
+  'crm-export' | 'pm-export' | 'spreadsheet' | 'memo' | 'report' | 'unclassified';
+
+export interface SourceClassDrift {
+  previousClass?: DocumentSourceClass;
+  count: number;
+}
+
+export interface ApplySourceClassDrift {
+  modifiedCount: number;
+  previousClass?: DocumentSourceClass;
+  sourceClass: DocumentSourceClass;
+}
+
+export function getSourceClassDrift(id: string): Promise<SourceClassDrift> {
+  return request<SourceClassDrift>(`/sources/${id}/class-drift`);
+}
+
+export function applySourceClassDrift(id: string): Promise<ApplySourceClassDrift> {
+  return request<ApplySourceClassDrift>(`/sources/${id}/class-drift/apply`, { method: 'POST' });
 }
 
 // ── API keys ─────────────────────────────────────────────────────────────

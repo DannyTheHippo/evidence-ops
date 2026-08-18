@@ -25,6 +25,8 @@ import { sourcesApiExamples } from './api-examples/sources.api-examples';
 import { CreateSourceRequestDto } from './dtos/request/create-source.request.dto';
 import { ListSourcesRequestDto } from './dtos/request/list-sources.request.dto';
 import { UpdateSourceRequestDto } from './dtos/request/update-source.request.dto';
+import { ApplySourceClassDriftResponseDto } from './dtos/response/apply-source-class-drift.response.dto';
+import { SourceClassDriftResponseDto } from './dtos/response/source-class-drift.response.dto';
 import { SourceResponseDto } from './dtos/response/source.response.dto';
 import { SourceWithFileStatesResponseDto } from './dtos/response/source-with-file-states.response.dto';
 import { SourcesService } from './sources.service';
@@ -165,6 +167,51 @@ export class SourcesController {
     return toResponseDto(
       WorkflowRunResponseDto,
       await this.sourcesService.requestSync(id, user.userId, user.tenantId),
+    );
+  }
+
+  // Open to every role, same reasoning as `getById`: the drift itself is informational, not an
+  // action — only `applyClassDrift` below changes anything.
+  @Get(':id/class-drift')
+  @Version('1')
+  @HttpCode(HttpStatus.OK)
+  @ApiResponse(sourcesApiExamples.classDrift)
+  @ApiResponse(sourcesApiExamples.notFound)
+  async getClassDrift(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedRequest['user'],
+  ): Promise<SourceClassDriftResponseDto> {
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    return toResponseDto(
+      SourceClassDriftResponseDto,
+      await this.sourcesService.getClassDriftReport(id, user.userId, user.tenantId),
+    );
+  }
+
+  // Admin-only, same reasoning as `update`: this rewrites already-ingested evidence metadata
+  // tenant-wide, not a per-user contribution.
+  @Post(':id/class-drift/apply')
+  @Version('1')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(RolesGuard)
+  @RequireRole(UserRole.Admin)
+  @ApiResponse(sourcesApiExamples.classDriftApplied)
+  @ApiResponse(sourcesApiExamples.notFound)
+  @ApiResponse(sourcesApiExamples.forbidden)
+  async applyClassDrift(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedRequest['user'],
+  ): Promise<ApplySourceClassDriftResponseDto> {
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    return toResponseDto(
+      ApplySourceClassDriftResponseDto,
+      await this.sourcesService.applyClassDrift(id, user.userId, user.tenantId),
     );
   }
 }

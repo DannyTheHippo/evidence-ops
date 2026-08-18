@@ -25,6 +25,8 @@ export interface RecordAuditEventInput {
    * each holds and what deliberately never reaches them. */
   readonly toolName?: string;
   readonly refusalReason?: string;
+  /** See `AuditEvent.modifiedCount`'s own doc comment. */
+  readonly modifiedCount?: number;
 }
 
 /**
@@ -64,6 +66,7 @@ export class AuditService {
       origin: input.origin ?? store?.origin ?? 'api',
       toolName: input.toolName,
       refusalReason: input.refusalReason,
+      modifiedCount: input.modifiedCount,
       tenantId: input.tenantId,
     });
 

@@ -297,6 +297,42 @@ export class DocumentsService {
   }
 
   /**
+   * How many documents ingested from `sourceId` still carry `previousClass` rather than the
+   * source's current `sourceClass` — the drift `SourcesService.getClassDriftReport` surfaces and
+   * `applySourceClassToDrifted` remedies. Scoped by exact equality on `previousClass`, never `$ne
+   * sourceClass`: a document already carrying some third class was never touched by the change
+   * that produced this drift and must not be counted as drifted by it.
+   */
+  async countBySourceAndClass(
+    sourceId: Types.ObjectId,
+    sourceClass: DocumentSourceClass,
+    tenantId: string,
+  ): Promise<number> {
+    return this.documentModel.countDocuments({ tenantId, sourceId, sourceClass });
+  }
+
+  /**
+   * Rewrites `sourceClass` to `toClass` on every document ingested from `sourceId` that still
+   * carries `fromClass` — recomputed fresh at call time rather than against an id list captured
+   * earlier, so a sync landing between a drift report and this call is reconciled too, and a
+   * caller must read the returned count rather than assume it matches whatever it reported
+   * earlier. Scoped by exact equality on `fromClass`, the same reasoning as
+   * `countBySourceAndClass`.
+   */
+  async applySourceClassToDrifted(
+    sourceId: Types.ObjectId,
+    fromClass: DocumentSourceClass,
+    toClass: DocumentSourceClass,
+    tenantId: string,
+  ): Promise<number> {
+    const result = await this.documentModel.updateMany(
+      { tenantId, sourceId, sourceClass: fromClass },
+      { $set: { sourceClass: toClass } },
+    );
+    return result.modifiedCount;
+  }
+
+  /**
    * Polling-on-the-server, deliberately not a MongoDB change stream — see
    * `QaService.streamAnswer`'s identical rejected-alternative note.
    *

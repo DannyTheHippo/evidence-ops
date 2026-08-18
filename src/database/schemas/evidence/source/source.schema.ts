@@ -169,6 +169,19 @@ export class Source extends AuditableDocument {
     default: 'unclassified',
   })
   sourceClass: DocumentSourceClass;
+
+  /**
+   * `sourceClass` as of the moment before the last change that actually altered it —
+   * `SourcesService.update` stamps this only when the new value differs from the old one, so an
+   * update that leaves `sourceClass` untouched (or re-sets it to the same value) never touches
+   * this field either. Absent means `sourceClass` has never changed since creation, which is also
+   * what a document-class-drift report reads as "nothing to reconcile": documents ingested under
+   * this source have never had a superseded class to drift from. No index and no backfill — this
+   * field only ever describes drift that occurs after it exists, never drift a pre-existing source
+   * already carries silently.
+   */
+  @Prop({ type: String, enum: DOCUMENT_SOURCE_CLASSES })
+  previousSourceClass?: DocumentSourceClass;
 }
 
 export const SourceSchema = SchemaFactory.createForClass(Source);

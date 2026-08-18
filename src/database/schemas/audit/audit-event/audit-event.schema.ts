@@ -63,6 +63,12 @@ export class AuditEvent extends AuditableDocument {
   @Prop({ type: String })
   refusalReason?: string;
 
+  /** How many rows a bulk write action actually touched, set only on rows recording that class of
+   * action (`sources.class_drift_applied` is the first). Absent on every row that audits a
+   * single-entity action, where `subject` alone already says what changed. */
+  @Prop({ type: Number })
+  modifiedCount?: number;
+
   @Prop({ type: String, required: true })
   tenantId: string;
 }

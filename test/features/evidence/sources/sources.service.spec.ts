@@ -58,7 +58,11 @@ describe('SourcesService', () => {
     signal: jest.fn(),
   } satisfies Record<keyof WorkflowEngine, jest.Mock>;
   const mockWorkflowRunsService = { create: jest.fn(), findRunByWorkflowId: jest.fn() };
-  const mockDocumentsService = { upload: jest.fn() };
+  const mockDocumentsService = {
+    upload: jest.fn(),
+    countBySourceAndClass: jest.fn(),
+    applySourceClassToDrifted: jest.fn(),
+  };
   const mockAuditService = { record: jest.fn() };
   const mockLogger = getMockLogger();
 
@@ -394,14 +398,26 @@ describe('SourcesService', () => {
     });
 
     it('should throw SourceNotFoundException when no source matches the tenant', async () => {
+      mockSourceModel.findOne.mockResolvedValueOnce(null);
+
+      await expect(
+        service.update(sourceId.toString(), { enabled: false }, actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(SourceNotFoundException);
+      expect(mockSourceModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('should throw SourceNotFoundException when the source is deleted between the read and the update', async () => {
+      mockSourceModel.findOne.mockResolvedValueOnce(buildMockSource());
       mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(null);
 
       await expect(
         service.update(sourceId.toString(), { enabled: false }, actorId, 'tenant-a'),
       ).rejects.toBeInstanceOf(SourceNotFoundException);
+      expect(mockAuditService.record).not.toHaveBeenCalled();
     });
 
-    it('should $set only the enabled field when it is the only one provided', async () => {
+    it('should $set only the enabled field when it is the only one provided, and touch neither sourceClass nor previousSourceClass', async () => {
+      mockSourceModel.findOne.mockResolvedValueOnce(buildMockSource());
       mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(buildMockSource({ enabled: false }));
 
       const result = await service.update(
@@ -425,7 +441,8 @@ describe('SourcesService', () => {
       expect(result.enabled).toBe(false);
     });
 
-    it('should $set every inventory field, including a falsy tracked, when all are provided', async () => {
+    it('should $set every inventory field, including a falsy tracked, when all are provided, and stamp previousSourceClass on the actual sourceClass change', async () => {
+      mockSourceModel.findOne.mockResolvedValueOnce(buildMockSource());
       mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(
         buildMockSource({
           connectivity: 'export-only',
@@ -433,6 +450,7 @@ describe('SourcesService', () => {
           owner: 'Jane Doe, IT',
           tracked: false,
           sourceClass: 'crm-export',
+          previousSourceClass: 'unclassified',
         }),
       );
 
@@ -458,12 +476,146 @@ describe('SourcesService', () => {
             owner: 'Jane Doe, IT',
             tracked: false,
             sourceClass: 'crm-export',
+            previousSourceClass: 'unclassified',
           },
         },
         { new: true },
       );
       expect(result.connectivity).toBe('export-only');
       expect(result.tracked).toBe(false);
+    });
+
+    it('should not stamp previousSourceClass when sourceClass is re-set to its current value', async () => {
+      mockSourceModel.findOne.mockResolvedValueOnce(buildMockSource({ sourceClass: 'memo' }));
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(
+        buildMockSource({ sourceClass: 'memo' }),
+      );
+
+      await service.update(sourceId.toString(), { sourceClass: 'memo' }, actorId, 'tenant-a');
+
+      expect(mockSourceModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: sourceId.toString(), tenantId: 'tenant-a' },
+        { $set: { sourceClass: 'memo' } },
+        { new: true },
+      );
+    });
+
+    it('should not touch sourceClass or previousSourceClass when changing only owner', async () => {
+      mockSourceModel.findOne.mockResolvedValueOnce(buildMockSource({ sourceClass: 'memo' }));
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(
+        buildMockSource({ sourceClass: 'memo', owner: 'Jane Doe, IT' }),
+      );
+
+      await service.update(sourceId.toString(), { owner: 'Jane Doe, IT' }, actorId, 'tenant-a');
+
+      expect(mockSourceModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: sourceId.toString(), tenantId: 'tenant-a' },
+        { $set: { owner: 'Jane Doe, IT' } },
+        { new: true },
+      );
+    });
+  });
+
+  describe('getClassDriftReport', () => {
+    it('should throw SourceNotFoundException for an unknown source', async () => {
+      mockSourceModel.findOne.mockResolvedValueOnce(null);
+
+      await expect(
+        service.getClassDriftReport(sourceId.toString(), actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(SourceNotFoundException);
+    });
+
+    it('should report count: 0 and no previousClass when sourceClass has never changed', async () => {
+      mockSourceModel.findOne.mockResolvedValueOnce(
+        buildMockSource({ previousSourceClass: undefined }),
+      );
+
+      const result = await service.getClassDriftReport(sourceId.toString(), actorId, 'tenant-a');
+
+      expect(result).toEqual({ previousClass: undefined, count: 0 });
+      expect(mockDocumentsService.countBySourceAndClass).not.toHaveBeenCalled();
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'sources.class_drift_viewed',
+        actorId,
+        subject: { entityType: 'Source', entityId: sourceId.toString() },
+        tenantId: 'tenant-a',
+      });
+    });
+
+    it('should count documents still carrying previousSourceClass', async () => {
+      mockSourceModel.findOne.mockResolvedValueOnce(
+        buildMockSource({ sourceClass: 'crm-export', previousSourceClass: 'memo' }),
+      );
+      mockDocumentsService.countBySourceAndClass.mockResolvedValueOnce(12);
+
+      const result = await service.getClassDriftReport(sourceId.toString(), actorId, 'tenant-a');
+
+      expect(mockDocumentsService.countBySourceAndClass).toHaveBeenCalledWith(
+        sourceId,
+        'memo',
+        'tenant-a',
+      );
+      expect(result).toEqual({ previousClass: 'memo', count: 12 });
+    });
+  });
+
+  describe('applyClassDrift', () => {
+    it('should throw SourceNotFoundException for an unknown source', async () => {
+      mockSourceModel.findOne.mockResolvedValueOnce(null);
+
+      await expect(
+        service.applyClassDrift(sourceId.toString(), actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(SourceNotFoundException);
+    });
+
+    it('should no-op with modifiedCount: 0 when sourceClass has never changed', async () => {
+      mockSourceModel.findOne.mockResolvedValueOnce(
+        buildMockSource({ previousSourceClass: undefined }),
+      );
+
+      const result = await service.applyClassDrift(sourceId.toString(), actorId, 'tenant-a');
+
+      expect(mockDocumentsService.applySourceClassToDrifted).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        modifiedCount: 0,
+        previousClass: undefined,
+        sourceClass: 'unclassified',
+      });
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'sources.class_drift_applied',
+        actorId,
+        subject: { entityType: 'Source', entityId: sourceId.toString() },
+        tenantId: 'tenant-a',
+        modifiedCount: 0,
+      });
+    });
+
+    it('should apply the current sourceClass to documents scoped by previousSourceClass and record the modified count', async () => {
+      mockSourceModel.findOne.mockResolvedValueOnce(
+        buildMockSource({ sourceClass: 'crm-export', previousSourceClass: 'memo' }),
+      );
+      mockDocumentsService.applySourceClassToDrifted.mockResolvedValueOnce(12);
+
+      const result = await service.applyClassDrift(sourceId.toString(), actorId, 'tenant-a');
+
+      expect(mockDocumentsService.applySourceClassToDrifted).toHaveBeenCalledWith(
+        sourceId,
+        'memo',
+        'crm-export',
+        'tenant-a',
+      );
+      expect(result).toEqual({
+        modifiedCount: 12,
+        previousClass: 'memo',
+        sourceClass: 'crm-export',
+      });
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'sources.class_drift_applied',
+        actorId,
+        subject: { entityType: 'Source', entityId: sourceId.toString() },
+        tenantId: 'tenant-a',
+        modifiedCount: 12,
+      });
     });
   });
 

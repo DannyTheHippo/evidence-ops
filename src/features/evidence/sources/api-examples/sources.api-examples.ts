@@ -130,4 +130,30 @@ export const sourcesApiExamples: Record<string, ApiResponseOptions> = {
       },
     },
   },
+  classDrift: {
+    status: HttpStatus.OK,
+    description: 'How many documents from this source still carry a superseded sourceClass.',
+    examples: {
+      drifted: {
+        summary: 'Documents still carry the previous class',
+        value: { previousClass: 'memo', count: 12 },
+      },
+      none: {
+        summary: 'sourceClass has never changed for this source',
+        value: { count: 0 },
+      },
+    },
+  },
+  classDriftApplied: {
+    status: HttpStatus.OK,
+    description:
+      "The result of applying this source's current sourceClass to every document that still " +
+      'carried the previous one.',
+    examples: {
+      example: {
+        summary: 'Applied to 12 documents',
+        value: { modifiedCount: 12, previousClass: 'memo', sourceClass: 'crm-export' },
+      },
+    },
+  },
 };

@@ -3,6 +3,11 @@ import { getModelToken } from '@nestjs/mongoose';
 import type { Model } from 'mongoose';
 import request from 'supertest';
 import { Types } from 'mongoose';
+import {
+  Document,
+  DocumentDocument,
+  type DocumentSourceClass,
+} from '../../src/database/schemas/evidence/document/document.schema';
 import { Source, SourceDocument } from '../../src/database/schemas/evidence/source/source.schema';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
 import { registerTestUser } from '../utils/register-test-user';
@@ -104,6 +109,7 @@ describe('Sources (e2e)', () => {
   let memberCookie: string;
   let tenantId: string;
   let sourceModel: Model<SourceDocument>;
+  let documentModel: Model<DocumentDocument>;
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -122,6 +128,7 @@ describe('Sources (e2e)', () => {
     memberCookie = member.cookie;
 
     sourceModel = app.get<Model<SourceDocument>>(getModelToken(Source.name));
+    documentModel = app.get<Model<DocumentDocument>>(getModelToken(Document.name));
   });
 
   afterAll(async () => {
@@ -588,6 +595,148 @@ describe('Sources (e2e)', () => {
         .set('Cookie', memberCookie);
 
       expect(response.status).toBe(202);
+    });
+  });
+
+  describe('GET /sources/:id/class-drift and POST /sources/:id/class-drift/apply', () => {
+    /** Direct model write, following `seedDocumentWithVersion` in `documents.e2e-spec.ts` — a
+     *  drift fixture only needs a document row with a source and a class, not a real ingested
+     *  version. */
+    const seedDriftDocument = (sourceId: Types.ObjectId, sourceClass: DocumentSourceClass) =>
+      documentModel.create({
+        title: `Drift Fixture ${Date.now()}-${Math.random()}`,
+        sourceKind: 'txt',
+        mimeType: 'text/plain',
+        tenantId,
+        sourceId,
+        sourceClass,
+      });
+
+    it('rejects an unauthenticated request on both routes', async () => {
+      const created = await sourceModel.create({
+        name: `Drift Auth Source ${Date.now()}`,
+        kind: 'local-folder',
+        path: 'deal-room',
+        tenantId,
+      });
+
+      const getResponse = await request(getTestServer(app)).get(
+        `/api/v1/sources/${created._id.toString()}/class-drift`,
+      );
+      const applyResponse = await request(getTestServer(app)).post(
+        `/api/v1/sources/${created._id.toString()}/class-drift/apply`,
+      );
+
+      expect(getResponse.status).toBe(401);
+      expect(applyResponse.status).toBe(401);
+    });
+
+    it('reports count: 0 and no previousClass when sourceClass has never changed', async () => {
+      const created = await sourceModel.create({
+        name: `Never Changed Source ${Date.now()}`,
+        kind: 'local-folder',
+        path: 'deal-room',
+        tenantId,
+      });
+
+      const response = await request(getTestServer(app))
+        .get(`/api/v1/sources/${created._id.toString()}/class-drift`)
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ count: 0 });
+    });
+
+    it('reports and applies drift scoped by the previous class, leaving a third class untouched', async () => {
+      const created = await sourceModel.create({
+        name: `Drift Source ${Date.now()}`,
+        kind: 'local-folder',
+        path: 'deal-room',
+        tenantId,
+        sourceClass: 'memo',
+      });
+
+      const drifted = await Promise.all([
+        seedDriftDocument(created._id, 'memo'),
+        seedDriftDocument(created._id, 'memo'),
+      ]);
+      const untouched = await seedDriftDocument(created._id, 'report');
+
+      // Changing sourceClass is what stamps previousSourceClass — the documents above were
+      // ingested before this change and never get rewritten by it on their own.
+      await request(getTestServer(app))
+        .patch(`/api/v1/sources/${created._id.toString()}`)
+        .set('Cookie', cookie)
+        .send({ sourceClass: 'crm-export' });
+
+      const reportResponse = await request(getTestServer(app))
+        .get(`/api/v1/sources/${created._id.toString()}/class-drift`)
+        .set('Cookie', cookie);
+
+      expect(reportResponse.status).toBe(200);
+      expect(reportResponse.body).toEqual({ previousClass: 'memo', count: 2 });
+
+      const applyResponse = await request(getTestServer(app))
+        .post(`/api/v1/sources/${created._id.toString()}/class-drift/apply`)
+        .set('Cookie', cookie);
+
+      expect(applyResponse.status).toBe(200);
+      expect(applyResponse.body).toEqual({
+        modifiedCount: 2,
+        previousClass: 'memo',
+        sourceClass: 'crm-export',
+      });
+
+      for (const document of drifted) {
+        const stored = await documentModel.findById(document._id);
+        expect(stored?.sourceClass).toBe('crm-export');
+      }
+      const untouchedStored = await documentModel.findById(untouched._id);
+      expect(untouchedStored?.sourceClass).toBe('report');
+
+      // The drift is fully reconciled now — a second report reads count: 0.
+      const secondReportResponse = await request(getTestServer(app))
+        .get(`/api/v1/sources/${created._id.toString()}/class-drift`)
+        .set('Cookie', cookie);
+      expect(secondReportResponse.body).toEqual({ previousClass: 'memo', count: 0 });
+    });
+
+    // Regression for the drift remedy: applying it rewrites already-ingested evidence metadata
+    // tenant-wide, the same register as `create`/PATCH above, so it is admin-only.
+    it('returns 403 for a Member applying drift', async () => {
+      const created = await sourceModel.create({
+        name: `Member Apply Source ${Date.now()}`,
+        kind: 'local-folder',
+        path: 'deal-room',
+        tenantId,
+      });
+
+      const response = await request(getTestServer(app))
+        .post(`/api/v1/sources/${created._id.toString()}/class-drift/apply`)
+        .set('Cookie', memberCookie);
+
+      expect(response.status).toBe(403);
+    });
+
+    // The caller's token carries a real, freshly provisioned tenant id, so this only proves
+    // isolation because that id genuinely differs from 'other-tenant'.
+    it('returns 404 for a source belonging to a different tenant, on both routes', async () => {
+      const otherTenantSource = await sourceModel.create({
+        name: `Other Tenant Drift Source ${Date.now()}`,
+        kind: 'local-folder',
+        path: 'deal-room',
+        tenantId: 'other-tenant',
+      });
+
+      const getResponse = await request(getTestServer(app))
+        .get(`/api/v1/sources/${otherTenantSource._id.toString()}/class-drift`)
+        .set('Cookie', cookie);
+      const applyResponse = await request(getTestServer(app))
+        .post(`/api/v1/sources/${otherTenantSource._id.toString()}/class-drift/apply`)
+        .set('Cookie', cookie);
+
+      expect(getResponse.status).toBe(404);
+      expect(applyResponse.status).toBe(404);
     });
   });
 });

@@ -12,6 +12,8 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 const GET_URL = '/api/v1/sources/source-1';
+const DRIFT_URL = '/api/v1/sources/source-1/class-drift';
+const APPLY_DRIFT_URL = '/api/v1/sources/source-1/class-drift/apply';
 
 const sourceWithFileStates = {
   id: 'source-1',
@@ -23,6 +25,7 @@ const sourceWithFileStates = {
   lastSyncStatus: 'failed',
   lastSyncError: 'connector refused an oversized file',
   fileCount: 2,
+  sourceClass: 'crm-export',
   createdAt: new Date().toISOString(),
   fileStates: [
     {
@@ -145,6 +148,7 @@ describe('SourceDetailPage', () => {
         return Promise.resolve(jsonResponse({ ...sourceWithFileStates, enabled: false }));
       }
       if (url === GET_URL) return Promise.resolve(jsonResponse(sourceWithFileStates));
+      if (url === DRIFT_URL) return Promise.resolve(jsonResponse({ count: 0 }));
       return Promise.reject(new Error(`Unhandled fetch: ${url}`));
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -170,6 +174,7 @@ describe('SourceDetailPage', () => {
         return Promise.resolve(jsonResponse({ message: 'Failed to update source' }, 500));
       }
       if (url === GET_URL) return Promise.resolve(jsonResponse(sourceWithFileStates));
+      if (url === DRIFT_URL) return Promise.resolve(jsonResponse({ count: 0 }));
       return Promise.reject(new Error(`Unhandled fetch: ${url}`));
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -191,6 +196,7 @@ describe('SourceDetailPage', () => {
     };
     const fetchMock = vi.fn((url: string) => {
       if (url === GET_URL) return Promise.resolve(jsonResponse(sourceWithFileStates));
+      if (url === DRIFT_URL) return Promise.resolve(jsonResponse({ count: 0 }));
       if (url === '/api/v1/sources/source-1/sync') return Promise.resolve(jsonResponse(run, 201));
       return Promise.reject(new Error(`Unhandled fetch: ${url}`));
     });
@@ -210,6 +216,7 @@ describe('SourceDetailPage', () => {
   it('shows an error when the sync request fails, without blocking further attempts', async () => {
     const fetchMock = vi.fn((url: string) => {
       if (url === GET_URL) return Promise.resolve(jsonResponse(sourceWithFileStates));
+      if (url === DRIFT_URL) return Promise.resolve(jsonResponse({ count: 0 }));
       if (url === '/api/v1/sources/source-1/sync') {
         return Promise.resolve(jsonResponse({ message: 'Sync already in progress' }, 409));
       }
@@ -223,5 +230,126 @@ describe('SourceDetailPage', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Sync already in progress');
     expect(screen.getByRole('button', { name: 'Sync now' })).not.toBeDisabled();
+  });
+
+  it('shows no class drift card when sourceClass has never changed', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === GET_URL) return Promise.resolve(jsonResponse(sourceWithFileStates));
+      if (url === DRIFT_URL) return Promise.resolve(jsonResponse({ count: 0 }));
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderAt('source-1');
+
+    await screen.findByText('Deal Room Inbox');
+    expect(screen.queryByText('Class drift')).not.toBeInTheDocument();
+  });
+
+  it('shows the drift card with the count read from one server value, opens and cancels the dialog', async () => {
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url === GET_URL) return Promise.resolve(jsonResponse(sourceWithFileStates));
+      if (url === DRIFT_URL) {
+        return Promise.resolve(jsonResponse({ previousClass: 'memo', count: 2 }));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}, method: ${init?.method}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderAt('source-1');
+
+    const opener = await screen.findByRole('button', {
+      name: 'Apply current class to 2 documents',
+    });
+    expect(
+      screen.getByText('2 documents still carry the previous class (memo).'),
+    ).toBeInTheDocument();
+
+    fireEvent.click(opener);
+
+    const dialog = screen.getByRole('dialog', { name: 'Apply current class to 2 documents?' });
+    expect(screen.getByRole('button', { name: 'Apply to 2 documents' })).toBeInTheDocument();
+    expect(dialog).toHaveTextContent('This applies crm-export to every document');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+  });
+
+  it('applies the drift, toasts the servers modifiedCount, and re-fetches so the card disappears', async () => {
+    let driftCall = 0;
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url === GET_URL) return Promise.resolve(jsonResponse(sourceWithFileStates));
+      if (url === DRIFT_URL) {
+        driftCall += 1;
+        return Promise.resolve(
+          jsonResponse(driftCall === 1 ? { previousClass: 'memo', count: 2 } : { count: 0 }),
+        );
+      }
+      if (url === APPLY_DRIFT_URL && init?.method === 'POST') {
+        // The server's modifiedCount (3) deliberately differs from the pre-flight count (2) —
+        // a sync landing in between is exactly the case the toast must reflect honestly.
+        return Promise.resolve(
+          jsonResponse({ modifiedCount: 3, previousClass: 'memo', sourceClass: 'crm-export' }),
+        );
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderAt('source-1');
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Apply current class to 2 documents' }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Apply to 2 documents' }));
+
+    expect(await screen.findByText('Deal Room Inbox')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(getToasts()).toContainEqual(
+      expect.objectContaining({
+        kind: 'success',
+        message: 'Applied crm-export to 3 documents.',
+      }),
+    );
+    expect(await screen.findByText('Deal Room Inbox')).toBeInTheDocument();
+    // The re-fetch after apply reports count: 0, so the card disappears with the number rather
+    // than being patched locally to some derived value.
+    expect(screen.queryByText('Class drift')).not.toBeInTheDocument();
+    expect(driftCall).toBe(2);
+  });
+
+  it('shows an apply error inside the still-open dialog, then clears it the next time the dialog opens', async () => {
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url === GET_URL) return Promise.resolve(jsonResponse(sourceWithFileStates));
+      if (url === DRIFT_URL) {
+        return Promise.resolve(jsonResponse({ previousClass: 'memo', count: 2 }));
+      }
+      if (url === APPLY_DRIFT_URL && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ message: 'Failed to apply class drift' }, 500));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderAt('source-1');
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Apply current class to 2 documents' }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Apply to 2 documents' }));
+
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Apply current class to 2 documents?',
+    });
+    expect(dialog).toHaveTextContent('Failed to apply class drift');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply current class to 2 documents' }));
+    const reopened = screen.getByRole('dialog', { name: 'Apply current class to 2 documents?' });
+    expect(reopened).not.toHaveTextContent('Failed to apply class drift');
   });
 });

@@ -539,6 +539,42 @@ describe('DocumentsService', () => {
     });
   });
 
+  describe('countBySourceAndClass', () => {
+    it('should count documents scoped by tenant, source and exact class', async () => {
+      const sourceId = new Types.ObjectId();
+      mockDocumentModel.countDocuments.mockResolvedValueOnce(3);
+
+      const result = await service.countBySourceAndClass(sourceId, 'memo', 'tenant-a');
+
+      expect(mockDocumentModel.countDocuments).toHaveBeenCalledWith({
+        tenantId: 'tenant-a',
+        sourceId,
+        sourceClass: 'memo',
+      });
+      expect(result).toBe(3);
+    });
+  });
+
+  describe('applySourceClassToDrifted', () => {
+    it('should $set sourceClass on documents scoped by tenant, source and the exact previous class, leaving a third class untouched', async () => {
+      const sourceId = new Types.ObjectId();
+      mockDocumentModel.updateMany.mockResolvedValueOnce({ modifiedCount: 2 });
+
+      const result = await service.applySourceClassToDrifted(
+        sourceId,
+        'memo',
+        'crm-export',
+        'tenant-a',
+      );
+
+      expect(mockDocumentModel.updateMany).toHaveBeenCalledWith(
+        { tenantId: 'tenant-a', sourceId, sourceClass: 'memo' },
+        { $set: { sourceClass: 'crm-export' } },
+      );
+      expect(result).toBe(2);
+    });
+  });
+
   describe('getById', () => {
     it('should throw DocumentNotFoundException for a malformed id', async () => {
       await expect(service.getById('not-an-object-id', 'tenant-a')).rejects.toBeInstanceOf(

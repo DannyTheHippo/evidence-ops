@@ -95,6 +95,21 @@ export interface SourceWithFileStatesResult extends SourceResult {
   readonly fileStates: SourceFileStateResult[];
 }
 
+/** `previousClass` absent means `sourceClass` has never changed for this source, so `count` is
+ *  always `0` in that state — see `Source.previousSourceClass`'s own doc comment. */
+export interface SourceClassDriftResult {
+  readonly previousClass?: DocumentSourceClass;
+  readonly count: number;
+}
+
+/** `previousClass` echoes what this apply reconciled against — absent when there was nothing to
+ *  reconcile, in which case `modifiedCount` is always `0`. */
+export interface ApplySourceClassDriftResult {
+  readonly modifiedCount: number;
+  readonly previousClass?: DocumentSourceClass;
+  readonly sourceClass: DocumentSourceClass;
+}
+
 /** Return of `runSync` — see `SyncSourceActivityResult`'s doc comment (`workflows/types.ts`), which
  *  this shape mirrors field-for-field; kept as a separate type rather than imported so this service
  *  never depends on the determinism-fenced `workflows/**` directory for a runtime type. */
@@ -231,17 +246,24 @@ export class SourcesService {
     actorId: string,
     tenantId: string,
   ): Promise<SourceResult> {
-    if (!Types.ObjectId.isValid(id)) {
-      throw new SourceNotFoundException(`Source '${id}' not found`);
-    }
+    const existing = await this.findOwnedSource(id, tenantId);
 
-    const $set: Partial<Record<keyof UpdateSourceInput, unknown>> = {};
+    const $set: Partial<Record<keyof UpdateSourceInput, unknown>> & {
+      previousSourceClass?: DocumentSourceClass;
+    } = {};
     if (input.enabled !== undefined) $set.enabled = input.enabled;
     if (input.connectivity !== undefined) $set.connectivity = input.connectivity;
     if (input.reachability !== undefined) $set.reachability = input.reachability;
     if (input.owner !== undefined) $set.owner = input.owner;
     if (input.tracked !== undefined) $set.tracked = input.tracked;
-    if (input.sourceClass !== undefined) $set.sourceClass = input.sourceClass;
+    // Stamps `previousSourceClass` only on a genuine change, never on a re-set to the same value —
+    // see that field's own doc comment for why a no-op set must leave it untouched.
+    if (input.sourceClass !== undefined) {
+      $set.sourceClass = input.sourceClass;
+      if (input.sourceClass !== existing.sourceClass) {
+        $set.previousSourceClass = existing.sourceClass;
+      }
+    }
 
     const source = await this.sourceModel.findOneAndUpdate(
       { _id: id, tenantId },
@@ -260,6 +282,77 @@ export class SourcesService {
     });
 
     return this.toResult(source);
+  }
+
+  /**
+   * Reports how many documents ingested from this source still carry `previousSourceClass`
+   * instead of the source's current `sourceClass` — the correction never rewrites already-ingested
+   * documents on its own (`update`'s own doc comment), so this is what makes that drift visible
+   * rather than silent. Audited the same as `getById`: a read of one source's detail.
+   */
+  async getClassDriftReport(
+    id: string,
+    actorId: string,
+    tenantId: string,
+  ): Promise<SourceClassDriftResult> {
+    const source = await this.findOwnedSource(id, tenantId);
+
+    await this.auditService.record({
+      action: 'sources.class_drift_viewed',
+      actorId,
+      subject: { entityType: 'Source', entityId: id },
+      tenantId,
+    });
+
+    if (!source.previousSourceClass) {
+      return { previousClass: undefined, count: 0 };
+    }
+
+    const count = await this.documentsService.countBySourceAndClass(
+      source._id,
+      source.previousSourceClass,
+      tenantId,
+    );
+
+    return { previousClass: source.previousSourceClass, count };
+  }
+
+  /**
+   * Applies this source's current `sourceClass` to exactly the documents `getClassDriftReport`
+   * counts — recomputed fresh against `previousSourceClass` at this moment, not against whatever
+   * count a caller read earlier, so a sync landing in between is reconciled too rather than
+   * silently under- or over-applied. A no-op (`modifiedCount: 0`) when this source has never had
+   * `sourceClass` changed, rather than an error — nothing to reconcile is not a caller mistake.
+   */
+  async applyClassDrift(
+    id: string,
+    actorId: string,
+    tenantId: string,
+  ): Promise<ApplySourceClassDriftResult> {
+    const source = await this.findOwnedSource(id, tenantId);
+
+    const modifiedCount = source.previousSourceClass
+      ? await this.documentsService.applySourceClassToDrifted(
+          source._id,
+          source.previousSourceClass,
+          source.sourceClass,
+          tenantId,
+        )
+      : 0;
+
+    await this.auditService.record({
+      action: 'sources.class_drift_applied',
+      actorId,
+      subject: { entityType: 'Source', entityId: id },
+      tenantId,
+      modifiedCount,
+    });
+
+    return {
+      modifiedCount,
+      previousClass: source.previousSourceClass,
+      sourceClass: source.sourceClass,
+    };
   }
 
   /**

@@ -1,16 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   ApiError,
+  applySourceClassDrift,
   getSourceById,
+  getSourceClassDrift,
   getWorkflowRunById,
   requestSourceSync,
   setSourceEnabled,
+  type SourceClassDrift,
   type SourceWithFileStates,
   type WorkflowRun,
 } from '../api/client';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
+import Dialog from '../components/ui/Dialog';
 import EmptyState from '../components/ui/EmptyState';
 import Skeleton from '../components/ui/Skeleton';
 import Table, { TableHeaderCell } from '../components/ui/Table';
@@ -37,6 +41,11 @@ export default function SourceDetailPage({
   const [starting, setStarting] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [run, setRun] = useState<WorkflowRun | null>(null);
+  const [drift, setDrift] = useState<SourceClassDrift | null>(null);
+  const [driftError, setDriftError] = useState<string | null>(null);
+  const [applyDialogOpen, setApplyDialogOpen] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -54,6 +63,48 @@ export default function SourceDetailPage({
         setError(err instanceof Error ? err.message : 'Failed to load source');
       });
   }, [id]);
+
+  // Reused by the initial load below and by a successful apply, so the card and its count always
+  // reflect what the server reports right now rather than a value patched in locally. Returns the
+  // `.then()`/`.catch()` chain rather than `await`ing internally — a synchronous `setState` call
+  // inside an effect body (which `await`ing here before the first suspension would produce) is
+  // itself the thing the effect lint rule below rejects.
+  const loadDrift = useCallback((sourceId: string) => {
+    return getSourceClassDrift(sourceId)
+      .then((result) => {
+        setDrift(result);
+        setDriftError(null);
+      })
+      .catch((err: unknown) => {
+        setDriftError(err instanceof Error ? err.message : 'Failed to load class drift');
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!id) return;
+    void loadDrift(id);
+  }, [id, loadDrift]);
+
+  async function handleApplyDrift() {
+    if (!source) return;
+    setApplying(true);
+    setApplyError(null);
+    try {
+      const result = await applySourceClassDrift(source.id);
+      setApplyDialogOpen(false);
+      notify(
+        'success',
+        `Applied ${result.sourceClass} to ${result.modifiedCount} document${
+          result.modifiedCount === 1 ? '' : 's'
+        }.`,
+      );
+      await loadDrift(source.id);
+    } catch (err: unknown) {
+      setApplyError(err instanceof Error ? err.message : 'Failed to apply class drift');
+    } finally {
+      setApplying(false);
+    }
+  }
 
   async function handleToggle() {
     if (!source) return;
@@ -206,6 +257,70 @@ export default function SourceDetailPage({
               </p>
             )}
           </section>
+
+          {driftError && (
+            <p className="error" role="alert">
+              {driftError}
+            </p>
+          )}
+
+          {drift && drift.count > 0 && (
+            <section className="card">
+              <div className="card-head">
+                <h2 className="card-title">Class drift</h2>
+              </div>
+              <p className="notice notice--warn">
+                {drift.count} document{drift.count === 1 ? '' : 's'} still carr
+                {drift.count === 1 ? 'ies' : 'y'} the previous class ({drift.previousClass}).
+              </p>
+              <div className="form-actions">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setApplyError(null);
+                    setApplyDialogOpen(true);
+                  }}
+                >
+                  Apply current class to {drift.count} document{drift.count === 1 ? '' : 's'}
+                </Button>
+              </div>
+              <Dialog
+                open={applyDialogOpen}
+                onClose={() => setApplyDialogOpen(false)}
+                title={`Apply current class to ${drift.count} document${
+                  drift.count === 1 ? '' : 's'
+                }?`}
+              >
+                <p>
+                  {drift.count} document{drift.count === 1 ? '' : 's'} still carr
+                  {drift.count === 1 ? 'ies' : 'y'} the previous class ({drift.previousClass}). This
+                  applies {source.sourceClass} to every document still carrying{' '}
+                  {drift.previousClass} at the moment you confirm — the number actually changed can
+                  differ from {drift.count} if a sync completes before then.
+                </p>
+                <div className="form-actions">
+                  <Button variant="ghost" onClick={() => setApplyDialogOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="danger"
+                    disabled={applying}
+                    onClick={() => void handleApplyDrift()}
+                  >
+                    {applying
+                      ? 'Applying…'
+                      : `Apply to ${drift.count} document${drift.count === 1 ? '' : 's'}`}
+                  </Button>
+                </div>
+                {applyError && (
+                  <p className="error" role="alert">
+                    {applyError}
+                  </p>
+                )}
+              </Dialog>
+            </section>
+          )}
 
           <section className="panel">
             {source.fileStates.length === 0 ? (
