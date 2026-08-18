@@ -44,4 +44,52 @@ describe('answerContainsExpectedStrings', () => {
 
     expect(result).toBe(true);
   });
+
+  it("should not match '5%' inside '25%' — a short numeric expectation must not match a different number", () => {
+    const result = answerContainsExpectedStrings('The vacancy rate held at 25% for the quarter.', [
+      '5%',
+    ]);
+
+    expect(result).toBe(false);
+  });
+
+  it("should not match '4.1%' inside '14.1%'", () => {
+    const result = answerContainsExpectedStrings('Vacancy rose to 14.1% year over year.', ['4.1%']);
+
+    expect(result).toBe(false);
+  });
+
+  it('should match a numeric expectation cleanly bounded by non-digit characters', () => {
+    const result = answerContainsExpectedStrings(
+      'Industrial vacancy in the Meridian Corridor was 4.1% as of the market overview.',
+      ['4.1%'],
+    );
+
+    expect(result).toBe(true);
+  });
+
+  it('should not match a numeric expectation flush against a following digit', () => {
+    const result = answerContainsExpectedStrings('Building area totals 92,0001 square feet.', [
+      '92,000',
+    ]);
+
+    expect(result).toBe(false);
+  });
+
+  it('should not match a numeric expectation flush against a preceding digit', () => {
+    const result = answerContainsExpectedStrings('Building area totals 192,000 square feet.', [
+      '92,000',
+    ]);
+
+    expect(result).toBe(false);
+  });
+
+  it('should still match non-numeric expectations as plain substrings, unaffected by the numeric boundary rule', () => {
+    const result = answerContainsExpectedStrings(
+      'Anchor tenant Vantage Fulfillment Co. leases the majority of the building.',
+      ['Vantage Fulfillment Co.'],
+    );
+
+    expect(result).toBe(true);
+  });
 });

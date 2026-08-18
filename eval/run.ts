@@ -15,7 +15,7 @@ import { answerContainsExpectedStrings } from './metrics/answer-content-check';
 import { classifyCanaryLeak } from './metrics/classify-canary-leak';
 import { computeMetrics, type CaseOutcomeKind, type CaseResult } from './metrics/compute-metrics';
 import { conflictValuesOverlapExpectedLocators } from './metrics/conflict-scope-check';
-import { chunkOverlapsAnyLocator } from './metrics/locator-overlap';
+import { chunkOverlapsAnyLocator, type OverlapCandidateChunk } from './metrics/locator-overlap';
 import { populateQdrantCollection, searchQdrantVector } from './qdrant/qdrant-benchmark-store';
 import { makeQdrantAwareSearch, type QdrantSearch } from './qdrant/qdrant-aware-search';
 import type { RawEvidenceChunkRow } from './qdrant/chunk-to-point.util';
@@ -262,6 +262,30 @@ async function main(): Promise<void> {
       }
     }
 
+    // Corpus-wide chunk resolver for the conflict-scope check (see its call site further below):
+    // built once here, from every chunk under the eval tenant, not per case or per strategy —
+    // `groundingCheck`'s `conflicting_evidence` outcome can name a `sourceChunkId` this question's
+    // own retrieval never surfaced (`findConflictedFactGroupsForChunks` returns every side of a
+    // matched conflict group, not only the sides that touched a retrieved chunk), and resolving
+    // against only `retrievedChunks` would make the check measure retrieval breadth as much as
+    // conflict scoping — a metric retrieval recall (`retrievedOverlaps`/`recallHitRank`) already
+    // covers on its own. `chunkByChunkId` inside the per-case loop stays scoped to that question's
+    // `retrievedChunks` for retrieval/citation overlap scoring, unchanged.
+    const allEvalChunks = await evidenceChunkModel
+      .find({ tenantId: EVAL_TENANT_ID })
+      .select({ text: 1, locator: 1, documentVersionId: 1 })
+      .lean();
+    const corpusChunkById = new Map<string, OverlapCandidateChunk>(
+      allEvalChunks.map((chunk) => [
+        chunk._id,
+        {
+          filename: filenameByDocVersionId.get(chunk.documentVersionId.toString()) ?? '',
+          text: chunk.text,
+          locator: chunk.locator,
+        },
+      ]),
+    );
+
     const conflictsService = app.get(ConflictsService);
     const scanResult = await conflictsService.scanForConflicts(EVAL_TENANT_ID);
     console.log(`eval: conflict scan created ${scanResult.conflictsCreated} conflict(s)`);
@@ -409,21 +433,20 @@ async function main(): Promise<void> {
               )
             : null;
 
+        // Resolves against `corpusChunkById` (every chunk under the eval tenant), not
+        // `chunkByChunkId` (this question's `retrievedChunks`) — this scores whether every side of
+        // the attached conflict lives where the case's `expectedLocators` says that conflict lives,
+        // independent of whether this turn's retrieval happened to surface all of them. It
+        // deliberately does NOT measure retrieval breadth — `retrievedOverlaps`/`recallHitRank`
+        // already cover that on their own — so a `sourceChunkId` failing to resolve here means it
+        // does not exist anywhere in the corpus, a genuine conflict-scoping failure, not a missed
+        // retrieval hit.
         const conflictScopeCheck: boolean | null =
           evalCase.category === 'conflicting' &&
           groundingResult.outcome.kind === 'conflicting_evidence'
             ? await conflictValuesOverlapExpectedLocators(
                 groundingResult.outcome.values.map((value) => value.sourceChunkId),
-                (chunkId) => {
-                  const chunk = chunkByChunkId.get(chunkId);
-                  return chunk
-                    ? {
-                        filename: filenameByDocVersionId.get(chunk.docVersionId) ?? '',
-                        text: chunk.text,
-                        locator: chunk.locator,
-                      }
-                    : undefined;
-                },
+                (chunkId) => corpusChunkById.get(chunkId),
                 evalCase.expectedLocators,
               )
             : null;
