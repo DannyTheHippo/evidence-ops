@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Source, WorkflowRun } from '../api/client';
 import SourcesPage from './SourcesPage';
 
+const LIST_URL = '/api/v1/sources?skip=0&limit=20';
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -87,9 +89,19 @@ describe('SourcesPage', () => {
     vi.useRealTimers();
   });
 
+  it('shows a status region while the source list is loading', () => {
+    stubFetch({
+      [LIST_URL]: () => jsonResponse({ docs: [], count: 0 }),
+    });
+
+    renderPage();
+
+    expect(screen.getByRole('status')).toBeInTheDocument();
+  });
+
   it('reads as "nothing here yet" on an empty source list', async () => {
     stubFetch({
-      '/api/v1/sources': () => jsonResponse({ docs: [], count: 0 }),
+      [LIST_URL]: () => jsonResponse({ docs: [], count: 0 }),
     });
 
     renderPage();
@@ -102,7 +114,7 @@ describe('SourcesPage', () => {
 
   it('shows an error when the source list fails to load', async () => {
     stubFetch({
-      '/api/v1/sources': () => jsonResponse({ message: 'Failed to load sources' }, 500),
+      [LIST_URL]: () => jsonResponse({ message: 'Failed to load sources' }, 500),
     });
 
     renderPage();
@@ -119,12 +131,15 @@ describe('SourcesPage', () => {
       fileCount: 7,
     });
     stubFetch({
-      '/api/v1/sources': () => jsonResponse({ docs: [source], count: 1 }),
+      [LIST_URL]: () => jsonResponse({ docs: [source], count: 1 }),
     });
 
     renderPage();
 
     expect(await screen.findByText('Deal Room Inbox')).toBeInTheDocument();
+    expect(
+      screen.getByRole('table', { name: 'Sources syncing documents into this data room' }),
+    ).toBeInTheDocument();
     expect(screen.getByText('deal-room')).toBeInTheDocument();
     expect(screen.getByText('disabled')).toBeInTheDocument();
     expect(
@@ -135,6 +150,33 @@ describe('SourcesPage', () => {
     expect(screen.getByText('7')).toBeInTheDocument();
   });
 
+  it('shows the total source count alongside Previous/Next, disabled at the ends', async () => {
+    const first = makeSource({ id: 'source-1', name: 'Deal Room Inbox' });
+    const second = makeSource({ id: 'source-2', name: 'Diligence Drive' });
+    const fetchMock = vi.fn((url: string) => {
+      if (url === LIST_URL) return Promise.resolve(jsonResponse({ docs: [first], count: 25 }));
+      if (url === '/api/v1/sources?skip=20&limit=20') {
+        return Promise.resolve(jsonResponse({ docs: [second], count: 25 }));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    expect(await screen.findByText('25 total')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next' })).not.toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+
+    expect(await screen.findByText('Diligence Drive')).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => url === '/api/v1/sources?skip=20&limit=20')).toBe(
+      true,
+    );
+    expect(screen.getByRole('button', { name: 'Previous' })).not.toBeDisabled();
+  });
+
   it('creates a source and adds it to the list', async () => {
     const created = makeSource({ id: 'source-2', name: 'New Source', path: 'new-folder' });
     // The list GET and the create POST share a URL, so this one branches on method.
@@ -142,7 +184,7 @@ describe('SourcesPage', () => {
       if (url === '/api/v1/sources' && init?.method === 'POST') {
         return Promise.resolve(jsonResponse(created, 201));
       }
-      if (url === '/api/v1/sources') return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+      if (url === LIST_URL) return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
       return Promise.reject(new Error(`Unhandled fetch: ${url}`));
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -173,7 +215,7 @@ describe('SourcesPage', () => {
   it('toggles a source from enabled to disabled', async () => {
     const source = makeSource({ enabled: true });
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-      if (url === '/api/v1/sources') {
+      if (url === LIST_URL) {
         return Promise.resolve(jsonResponse({ docs: [source], count: 1 }));
       }
       if (url === '/api/v1/sources/source-1' && init?.method === 'PATCH') {
@@ -200,7 +242,7 @@ describe('SourcesPage', () => {
     const source = makeSource();
     const run = makeRun({ status: 'completed' });
     stubFetch({
-      '/api/v1/sources': () => jsonResponse({ docs: [source], count: 1 }),
+      [LIST_URL]: () => jsonResponse({ docs: [source], count: 1 }),
       '/api/v1/sources/source-1/sync': () => jsonResponse(run, 201),
     });
 
@@ -221,7 +263,7 @@ describe('SourcesPage', () => {
     const completedRun = makeRun({ status: 'completed' });
 
     const fetchMock = vi.fn((url: string) => {
-      if (url === '/api/v1/sources') {
+      if (url === LIST_URL) {
         return Promise.resolve(jsonResponse({ docs: [source], count: 1 }));
       }
       if (url === '/api/v1/sources/source-1/sync') {
@@ -259,7 +301,7 @@ describe('SourcesPage', () => {
     // Each poll deserialises into a fresh object, so an effect keyed on the run object rather than
     // its id and status would tear the interval down and rebuild it on every tick.
     const fetchMock = stubFetch({
-      '/api/v1/sources': () => jsonResponse({ docs: [source], count: 1 }),
+      [LIST_URL]: () => jsonResponse({ docs: [source], count: 1 }),
       '/api/v1/sources/source-1/sync': () => jsonResponse(runningRun, 201),
       '/api/v1/workflow-runs/run-1': () => jsonResponse(runningRun),
     });
@@ -292,7 +334,7 @@ describe('SourcesPage', () => {
 
     let pollCall = 0;
     const fetchMock = vi.fn((url: string) => {
-      if (url === '/api/v1/sources') {
+      if (url === LIST_URL) {
         return Promise.resolve(jsonResponse({ docs: [source], count: 1 }));
       }
       if (url === '/api/v1/sources/source-1/sync') {
@@ -326,7 +368,7 @@ describe('SourcesPage', () => {
   it('shows an error when the sync request fails, without blocking further attempts', async () => {
     const source = makeSource();
     stubFetch({
-      '/api/v1/sources': () => jsonResponse({ docs: [source], count: 1 }),
+      [LIST_URL]: () => jsonResponse({ docs: [source], count: 1 }),
       '/api/v1/sources/source-1/sync': () =>
         jsonResponse({ message: 'Sync already in progress' }, 409),
     });
@@ -342,7 +384,7 @@ describe('SourcesPage', () => {
   it('shows an error when toggling a source fails', async () => {
     const source = makeSource();
     stubFetch({
-      '/api/v1/sources': () => jsonResponse({ docs: [source], count: 1 }),
+      [LIST_URL]: () => jsonResponse({ docs: [source], count: 1 }),
       '/api/v1/sources/source-1': () => jsonResponse({ message: 'Failed to update source' }, 500),
     });
 

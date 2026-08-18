@@ -4,6 +4,28 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="Evidence Ops answers questions from your document estate and shows the exact source passage behind every citation, verified against the original file."
+    />
+    <script>
+      // This key must stay in sync with THEME_STORAGE_KEY in
+      // web/src/components/shell/ThemeToggle.tsx. This inline script must stay synchronous and
+      // cannot import that module, so the two are kept in sync by hand.
+      try {
+        var storedTheme = localStorage.getItem('evidence-ops-theme');
+        if (storedTheme === 'light' || storedTheme === 'dark') {
+          document.documentElement.dataset.theme = storedTheme;
+        }
+      } catch (e) {
+        // storage unavailable — the page falls back to the OS-level color-scheme media query
+      }
+    </script>
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230a6e8c'/%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='%23ffffff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"
+    />
     <title>Evidence Ops</title>
   </head>
   <body>

@@ -8,7 +8,7 @@ Applies to the SPA under `web/`. The NestJS API under `src/` follows `nestjs.md`
 
 Stack: React 19.2, react-router-dom 7.18, vite 8, vitest 4.
 
-Before adding a component, read `web/src/pages/LoginPage.tsx` and `web/src/App.tsx` and match them exactly. `web/src/pages/` holds eleven pages, every one but `HomePage.tsx` carrying a colocated `*.test.tsx`, so "match the sibling" is always a short read; inventing structure ahead of need is the main failure mode here.
+Before adding a component, read `web/src/pages/LoginPage.tsx` and `web/src/App.tsx` and match them exactly. `web/src/pages/` holds fifteen pages, each carrying a colocated `*.test.tsx`, so "match the sibling" is always a short read; inventing structure ahead of need is the main failure mode here.
 
 # React SPA Patterns
 
@@ -26,8 +26,8 @@ Introducing any of the above is an architecture decision: raise it, do not slip 
 ## Components
 
 - Function components with hooks only. **FORBIDDEN** to introduce class components.
-- Pages live in `web/src/pages/` as `PascalCase.tsx` with a default export and a colocated `PascalCase.test.tsx`.
-- `web/src/components/` holds components lifted out of a page (`CitationPanel.tsx`, rendered by `AskPage`), each with its own colocated test. `web/src/lib/` holds the non-component helpers: `auth.ts`, `use-session.ts`, `document-index.ts`, `locator.ts`. There is no `hooks/` directory — `use-session.ts` lives in `lib/`. Lift a page-local component only when a real second consumer exists, not preemptively.
+- Pages live in `web/src/pages/` as `PascalCase.tsx` with a default export and a colocated `PascalCase.test.tsx`. A page with genuinely separable responsibilities may split into a `pages/{name}/` directory instead: the route file re-exports the default, and each extracted piece carries its own colocated test.
+- `web/src/components/` splits three ways: `components/ui/` holds the shared primitives (`Button`, `IconButton`, `Badge`, `Skeleton`, `EmptyState`, `Field`, `Select`, `Table`, `Dialog`, `Toaster`, `toast.ts`); `components/shell/` holds the app shell composed by `App.tsx` (`Sidebar`, `Topbar`, `ConnectionStatus`, `ThemeToggle`); the `components/` root holds components lifted out of one specific page (`CitationPanel.tsx`, rendered by `AskPage`). Every one carries its own colocated test. `web/src/lib/` holds the non-component helpers: `auth.ts`, `use-session.ts`, `use-event-stream.ts`, `document-index.ts`, `locator.ts`. There is no `hooks/` directory — `use-session.ts` lives in `lib/`. Lift a page-local component only when a real second consumer exists, not preemptively.
 - Colocate state with the component that owns it; lift only as far as a real common consumer requires.
 
 ## Data access
@@ -52,6 +52,7 @@ Introducing any of the above is an architecture decision: raise it, do not slip 
 - Runner: **vitest 4**, configured inline in `web/vite.config.ts` (`test` key) — there is no `vitest.config.ts`. `environment: 'jsdom'`, setup at `web/src/test/setup.ts`.
 - Test files are `*.test.tsx`, colocated with the component. Run with `npm --prefix web run test`.
 - The `test` script runs vitest under `NODE_OPTIONS=--no-experimental-webstorage`. Node 26 exposes its own `localStorage` global, which shadows jsdom's inside the test environment and throws unless Node was given a backing store. `web/src/lib/auth.ts` touches `localStorage` at module scope, so without the flag every test that imports the API client throws on import, before any assertion runs. Any new SPA test lane needs the same flag.
+- A test exercising `useEventStream` or an `EventSource`-backed page **MUST** install `web/src/test/fake-event-source.ts`'s `FakeEventSource` via `vi.stubGlobal('EventSource', FakeEventSource)` — jsdom has no native `EventSource`, so an unstubbed test only exercises the hook's undefined-`EventSource` fallback path.
 - **MUST** import `describe`/`it`/`expect` explicitly from `vitest` — globals are not enabled.
 - `@testing-library/jest-dom` is registered via its `/vitest` entrypoint in the setup file; `toBeInTheDocument()` and friends are available without a per-file import. That same file registers an explicit `afterEach(cleanup)`, because Testing Library's auto-cleanup only installs itself when vitest globals are on.
 - **MUST** query by role, label, or text — never by class name or test id when an accessible query exists.

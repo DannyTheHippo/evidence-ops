@@ -1,0 +1,175 @@
+/* ── Shell layout ────────────────────────────────────────────────────────── */
+
+.shell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.shell-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────────────────────── */
+
+.sidebar {
+  flex: none;
+  width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-5) var(--space-4);
+  background: var(--surface);
+  border-right: 1px solid var(--hairline);
+  overflow-y: auto;
+}
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--text-md);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.brand-mark {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--signal);
+}
+.sidebar-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.sidebar-heading {
+  margin: 0 0 var(--space-1);
+  padding: 0 var(--space-2);
+  font-family: inherit;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.sidebar-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--ink-dim);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.sidebar-link:hover {
+  color: var(--ink);
+  background: var(--surface-2);
+  text-decoration: none;
+}
+.sidebar-link.is-active {
+  color: var(--signal);
+  background: var(--signal-soft);
+}
+.sidebar-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Drawer nav mirrors the persistent sidebar's spacing but has no width constraint to fight —
+   the dialog itself sets the width. */
+.sidebar-drawer-nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+/* ── Top bar ─────────────────────────────────────────────────────────────── */
+
+.topbar {
+  flex: none;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  height: 56px;
+  padding: 0 var(--space-6);
+  background: var(--surface);
+  border-bottom: 1px solid var(--hairline);
+}
+.breadcrumb {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.topbar-spacer {
+  margin-left: auto;
+}
+.connection-status {
+  display: flex;
+  align-items: center;
+}
+/* Only meaningful once the sidebar collapses into the drawer below 768px; hidden above that. */
+.menu-toggle {
+  display: none;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 1023px) {
+  .sidebar {
+    width: 64px;
+    align-items: center;
+    padding: var(--space-5) var(--space-2);
+  }
+  .sidebar-brand {
+    justify-content: center;
+    padding: 0;
+  }
+  /* aria-label on the brand and each NavLink carries the accessible name once these are hidden. */
+  .sidebar-brand-label,
+  .sidebar-label {
+    display: none;
+  }
+  /* Group headings are a visual grouping aid only, dropped at rail width along with the space
+     to show them; no aria-label substitute needed since they label no interactive control. */
+  .sidebar-heading {
+    display: none;
+  }
+  .sidebar-link {
+    justify-content: center;
+  }
+}
+
+@media (max-width: 767px) {
+  .sidebar {
+    display: none;
+  }
+  .menu-toggle {
+    display: inline-flex;
+  }
+}
+
+@media (max-width: 560px) {
+  .topbar {
+    gap: var(--space-3);
+    padding: 0 var(--space-4);
+  }
+}

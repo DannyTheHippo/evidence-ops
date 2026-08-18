@@ -1,0 +1,118 @@
+/* ── Provenance rail ─────────────────────────────────────────────────────── */
+/* The citation card. Its border-left carries the rail's line treatment. */
+
+.citation {
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--signal-line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+}
+
+/* ── ProvenanceRail ──────────────────────────────────────────────────────── */
+/* The threaded list of verified facts down the left edge of the answer view. Each node's
+   border-left is the thread line; the marker dot on ::before sits on top of it. State is
+   carried by more than colour: the line is dashed only for a degraded node, and the marker is
+   filled only for a verified one, so a neutral node reads as an outline on a solid line, a
+   verified node as a filled dot on a solid line, and a degraded node as an outline on a dashed
+   line. */
+
+.rail {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.rail-node {
+  position: relative;
+  padding-left: var(--space-5);
+  border-left: var(--rail-width) solid var(--rail-line-idle);
+}
+.rail-node::before {
+  content: '';
+  position: absolute;
+  top: var(--space-1);
+  left: calc(var(--rail-node-size) / -2 - var(--rail-width) / 2);
+  width: var(--rail-node-size);
+  height: var(--rail-node-size);
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--rail-line-idle);
+}
+
+.rail-node--verified {
+  border-left-color: var(--rail-line-verified);
+}
+.rail-node--verified::before {
+  background: var(--rail-line-verified);
+  border-color: var(--rail-line-verified);
+}
+
+.rail-node--degraded {
+  border-left-style: dashed;
+  border-left-color: var(--rail-line-degraded);
+}
+.rail-node--degraded::before {
+  border-style: dashed;
+  border-color: var(--rail-line-degraded);
+}
+
+.rail-node-statement {
+  margin: 0 0 var(--space-2);
+  font-weight: 600;
+}
+
+.rail-citations {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* --surface, not --surface-2 — the trace chip below is the --surface-2 surface, and it needs
+   to read as a distinct chip rather than blend into its own card. */
+.rail-citation {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+}
+.rail-citation-quote {
+  margin: 0 0 var(--space-1);
+}
+.rail-citation-locator {
+  margin: 0 0 var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.trace-chip {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-id);
+  letter-spacing: var(--tracking-mono-id);
+  background: var(--surface-2);
+  color: var(--ink-dim);
+  border-radius: var(--radius-xs);
+  padding: 0 var(--space-1);
+}
+a.trace-chip:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 560px) {
+  .rail-node {
+    padding-left: var(--space-3);
+    border-left-width: 3px;
+    border-left-style: solid;
+  }
+  .rail-node::before {
+    display: none;
+  }
+}

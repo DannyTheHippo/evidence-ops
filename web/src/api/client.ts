@@ -172,6 +172,12 @@ export function documentVersionContentUrl(versionId: string): string {
   return `${API}/documents/versions/${versionId}/content`;
 }
 
+// A plain URL builder, not a `request<T>()` call — a browser-native EventSource consumes this
+// href directly, so there is no JSON body for `request<T>()` to parse.
+export function documentEventsUrl(): string {
+  return `${API}/documents/events`;
+}
+
 // What a citation actually points at — the stored evidence_chunks, not a re-parse of the source
 // document. Chunk granularity may span pages, ~12% overlap means adjacent chunks repeat some
 // text, and elements quarantined at ingestion are absent entirely: not a faithful page render.
@@ -247,6 +253,17 @@ export type AnswerOutcome =
   | { kind: 'insufficient_evidence'; reason: string; reasonCode?: InsufficientEvidenceReasonCode }
   | { kind: 'conflicting_evidence'; factKey: ConflictingFactKey; values: ConflictingValue[] };
 
+export interface DroppedClaim {
+  statement: string;
+  reason: string;
+}
+
+export interface VerificationReport {
+  verifiedClaimCount: number;
+  totalClaimCount: number;
+  droppedClaims: DroppedClaim[];
+}
+
 export interface Answer {
   id: string;
   questionText: string;
@@ -261,6 +278,9 @@ export interface Answer {
   // QA synthesis spend only — not embedding or extraction spend. Present only once runStatus is
   // 'completed', same gate as outcome above.
   usage?: { promptTokens: number; completionTokens: number; costUsd: number };
+  // The grounding check's claim-verification outcome. Present only once runStatus is 'completed',
+  // same gate as outcome above.
+  verificationReport?: VerificationReport;
 }
 
 export interface StartQuestionResult {
@@ -277,6 +297,45 @@ export function startQuestion(questionText: string): Promise<StartQuestionResult
 
 export function getAnswerById(id: string): Promise<Answer> {
   return request<Answer>(`/answers/${id}`);
+}
+
+// Three independent optional filters, so this one builds its query with
+// URLSearchParams rather than the ad-hoc template literals above.
+export function listAnswers(params?: {
+  skip?: number;
+  limit?: number;
+  runStatus?: AnswerRunStatus;
+}): Promise<WithCount<Answer>> {
+  const query = new URLSearchParams();
+  if (params?.skip !== undefined) query.set('skip', String(params.skip));
+  if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  if (params?.runStatus) query.set('runStatus', params.runStatus);
+  const qs = query.toString();
+  return request<WithCount<Answer>>(`/answers${qs ? `?${qs}` : ''}`);
+}
+
+// A plain URL builder, not a `request<T>()` call — a browser-native EventSource consumes this
+// href directly, so there is no JSON body for `request<T>()` to parse.
+export function answerEventsUrl(id: string): string {
+  return `${API}/answers/${id}/events`;
+}
+
+// ── Retrieval ────────────────────────────────────────────────────────────
+
+// What `search_evidence` returns — the retrieved chunk itself, not a relevance score, because
+// the API does not return one.
+export interface RetrievedChunkView {
+  chunkId: string;
+  docVersionId: string;
+  sha256: string;
+  text: string;
+  locator: Locator;
+}
+
+export function searchEvidence(query: string): Promise<WithCount<RetrievedChunkView>> {
+  return request<WithCount<RetrievedChunkView>>(
+    `/retrieval/search?query=${encodeURIComponent(query)}`,
+  );
 }
 
 // ── Conflicts ────────────────────────────────────────────────────────────
@@ -307,10 +366,15 @@ export interface Conflict {
   explanation: string;
 }
 
-export function listConflicts(params?: { limit?: number }): Promise<WithCount<Conflict>> {
-  return request<WithCount<Conflict>>(
-    params?.limit !== undefined ? `/conflicts?limit=${params.limit}` : '/conflicts',
-  );
+export function listConflicts(params?: {
+  limit?: number;
+  status?: ConflictStatus;
+}): Promise<WithCount<Conflict>> {
+  const query = new URLSearchParams();
+  if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  if (params?.status) query.set('status', params.status);
+  const qs = query.toString();
+  return request<WithCount<Conflict>>(`/conflicts${qs ? `?${qs}` : ''}`);
 }
 
 export function requestConflictResolution(
@@ -349,8 +413,11 @@ export interface Approval {
   createdAt: string;
 }
 
-export function listApprovals(): Promise<WithCount<Approval>> {
-  return request<WithCount<Approval>>('/approvals');
+export function listApprovals(params?: { state?: ApprovalState }): Promise<WithCount<Approval>> {
+  const query = new URLSearchParams();
+  if (params?.state) query.set('state', params.state);
+  const qs = query.toString();
+  return request<WithCount<Approval>>(`/approvals${qs ? `?${qs}` : ''}`);
 }
 
 export function decideApproval(
@@ -381,10 +448,23 @@ export function getWorkflowRunById(id: string): Promise<WorkflowRun> {
   return request<WorkflowRun>(`/workflow-runs/${id}`);
 }
 
-export function listWorkflowRuns(params: { workflowId: string }): Promise<WithCount<WorkflowRun>> {
-  return request<WithCount<WorkflowRun>>(
-    `/workflow-runs?workflowId=${encodeURIComponent(params.workflowId)}`,
-  );
+export function listWorkflowRuns(params?: {
+  workflowId?: string;
+  skip?: number;
+  limit?: number;
+}): Promise<WithCount<WorkflowRun>> {
+  const query = new URLSearchParams();
+  if (params?.workflowId) query.set('workflowId', params.workflowId);
+  if (params?.skip !== undefined) query.set('skip', String(params.skip));
+  if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  const qs = query.toString();
+  return request<WithCount<WorkflowRun>>(`/workflow-runs${qs ? `?${qs}` : ''}`);
+}
+
+// A plain URL builder, not a `request<T>()` call — a browser-native EventSource consumes this
+// href directly, so there is no JSON body for `request<T>()` to parse.
+export function workflowRunEventsUrl(id: string): string {
+  return `${API}/workflow-runs/${id}/events`;
 }
 
 // ── Audit events ─────────────────────────────────────────────────────────

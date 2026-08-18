@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import {
   listApiKeys,
   mintApiKey,
@@ -6,6 +6,14 @@ import {
   type ApiKey,
   type MintedApiKey,
 } from '../api/client';
+import Badge from '../components/ui/Badge';
+import Button from '../components/ui/Button';
+import Dialog from '../components/ui/Dialog';
+import EmptyState from '../components/ui/EmptyState';
+import Field from '../components/ui/Field';
+import Skeleton from '../components/ui/Skeleton';
+import Table, { TableHeaderCell } from '../components/ui/Table';
+import { notify } from '../components/ui/toast';
 
 /**
  * Drops the one-time plaintext `token` from a minted key, returning only the metadata the list
@@ -17,33 +25,28 @@ export function toListedKey({ token: _token, ...listed }: MintedApiKey): ApiKey 
   return listed;
 }
 
-function keyStatus(key: ApiKey): { className: string; label: string } {
-  if (key.revokedAt) return { className: 'badge badge--reject', label: 'revoked' };
+function keyStatus(key: ApiKey): { tone: 'verified' | 'caution' | 'neutral'; label: string } {
+  if (key.revokedAt) return { tone: 'neutral', label: 'revoked' };
   if (key.expiresAt && new Date(key.expiresAt) <= new Date()) {
-    return { className: 'badge badge--neutral', label: 'expired' };
+    return { tone: 'caution', label: 'expired' };
   }
-  return { className: 'badge badge--strong', label: 'active' };
+  return { tone: 'verified', label: 'active' };
 }
 
 function KeyRow({ apiKey, onRevoked }: { apiKey: ApiKey; onRevoked: (id: string) => void }) {
-  const [confirming, setConfirming] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [revoking, setRevoking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const confirmRef = useRef<HTMLButtonElement | null>(null);
   const status = keyStatus(apiKey);
   const revoked = Boolean(apiKey.revokedAt);
-
-  // Arming the confirm unmounts the button that was focused, which would otherwise drop focus to
-  // <body> and strand a keyboard user mid-revoke.
-  useEffect(() => {
-    if (confirming) confirmRef.current?.focus();
-  }, [confirming]);
 
   async function handleRevoke() {
     setRevoking(true);
     setError(null);
     try {
       await revokeApiKey(apiKey.id);
+      notify('success', `Revoked "${apiKey.name}".`);
+      setConfirmOpen(false);
       onRevoked(apiKey.id);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to revoke key');
@@ -56,46 +59,41 @@ function KeyRow({ apiKey, onRevoked }: { apiKey: ApiKey; onRevoked: (id: string)
       <td>{apiKey.name}</td>
       <td className="cell-sub mono">{apiKey.tokenPrefix}…</td>
       <td>
-        <span className={status.className}>{status.label}</span>
+        <Badge tone={status.tone}>{status.label}</Badge>
       </td>
       <td className="cell-sub">
         {apiKey.expiresAt ? new Date(apiKey.expiresAt).toLocaleString() : 'Never expires'}
       </td>
       <td className="cell-actions">
-        {!revoked &&
-          (confirming ? (
-            <div className="form-actions" role="alert">
-              <button
-                type="button"
-                ref={confirmRef}
-                className="btn btn--primary btn--sm"
-                disabled={revoking}
-                onClick={() => void handleRevoke()}
-              >
-                {revoking ? 'Revoking…' : 'Confirm revoke'}
-              </button>
-              <button
-                type="button"
-                className="btn btn--ghost btn--sm"
-                disabled={revoking}
-                onClick={() => setConfirming(false)}
-              >
-                Cancel
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              className="btn btn--secondary btn--sm"
-              onClick={() => setConfirming(true)}
-            >
+        {!revoked && (
+          <>
+            <Button variant="secondary" size="sm" onClick={() => setConfirmOpen(true)}>
               Revoke
-            </button>
-          ))}
-        {error && (
-          <p className="error" role="alert">
-            {error}
-          </p>
+            </Button>
+            <Dialog
+              open={confirmOpen}
+              onClose={() => setConfirmOpen(false)}
+              title={`Revoke "${apiKey.name}"?`}
+            >
+              <p>
+                Revoking is immediate and cannot be undone. Any MCP client using this key loses
+                access right away.
+              </p>
+              <div className="form-actions">
+                <Button variant="ghost" onClick={() => setConfirmOpen(false)}>
+                  Cancel
+                </Button>
+                <Button variant="danger" disabled={revoking} onClick={() => void handleRevoke()}>
+                  {revoking ? 'Revoking…' : 'Revoke key'}
+                </Button>
+              </div>
+              {error && (
+                <p className="error" role="alert">
+                  {error}
+                </p>
+              )}
+            </Dialog>
+          </>
         )}
       </td>
     </tr>
@@ -137,6 +135,7 @@ export default function ApiKeysPage() {
       setKeys((current) => [toListedKey(key), ...(current ?? [])]);
       setName('');
       setExpiresAt('');
+      notify('success', `Minted "${key.name}".`);
     } catch (err: unknown) {
       setMintError(err instanceof Error ? err.message : 'Failed to mint API key');
     } finally {
@@ -183,23 +182,19 @@ export default function ApiKeysPage() {
           </p>
           <p className="mono">{minted.token}</p>
           <div className="form-actions">
-            <button
-              type="button"
-              className="btn btn--secondary btn--sm"
-              onClick={() => void handleCopy()}
-            >
+            <Button variant="secondary" size="sm" onClick={() => void handleCopy()}>
               {copied ? 'Copied' : 'Copy'}
-            </button>
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm"
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => {
                 setMinted(null);
                 setCopied(false);
               }}
             >
               Dismiss
-            </button>
+            </Button>
           </div>
         </section>
       )}
@@ -209,29 +204,32 @@ export default function ApiKeysPage() {
           <h2 className="card-title">Mint a key</h2>
         </div>
         <form onSubmit={(e) => void handleMint(e)} className="form">
-          <label>
-            Name
-            <input
-              type="text"
-              required
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="CI integration"
-            />
-          </label>
-          <label>
-            Expires (optional)
-            <input
-              type="datetime-local"
-              value={expiresAt}
-              onChange={(e) => setExpiresAt(e.target.value)}
-            />
-            <span className="form-hint">Leave blank for a key that never expires.</span>
-          </label>
+          <Field label="Name">
+            {(inputProps) => (
+              <input
+                type="text"
+                required
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="CI integration"
+                {...inputProps}
+              />
+            )}
+          </Field>
+          <Field label="Expires (optional)" hint="Leave blank for a key that never expires.">
+            {(inputProps) => (
+              <input
+                type="datetime-local"
+                value={expiresAt}
+                onChange={(e) => setExpiresAt(e.target.value)}
+                {...inputProps}
+              />
+            )}
+          </Field>
           <div className="form-actions">
-            <button type="submit" className="btn btn--primary" disabled={minting}>
+            <Button type="submit" variant="primary" disabled={minting}>
               {minting ? 'Minting…' : 'Mint key'}
-            </button>
+            </Button>
           </div>
         </form>
         {mintError && (
@@ -247,20 +245,25 @@ export default function ApiKeysPage() {
         </p>
       )}
 
-      {!keys && !error && <p>Loading…</p>}
+      {!keys && !error && <Skeleton label="Loading API keys…" />}
 
-      {keys && keys.length === 0 && <p className="notice notice--info">No API keys yet.</p>}
+      {keys && keys.length === 0 && (
+        <EmptyState
+          title="No API keys yet"
+          description="An API key authenticates the MCP surface as you. Mint one above to connect an MCP client."
+        />
+      )}
 
       {keys && keys.length > 0 && (
         <section className="panel">
-          <table className="grid">
+          <Table caption="API keys that authenticate an MCP client as you.">
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Prefix</th>
-                <th>Status</th>
-                <th>Expires</th>
-                <th>Actions</th>
+                <TableHeaderCell>Name</TableHeaderCell>
+                <TableHeaderCell>Prefix</TableHeaderCell>
+                <TableHeaderCell>Status</TableHeaderCell>
+                <TableHeaderCell>Expires</TableHeaderCell>
+                <TableHeaderCell>Actions</TableHeaderCell>
               </tr>
             </thead>
             <tbody>
@@ -268,7 +271,7 @@ export default function ApiKeysPage() {
                 <KeyRow key={key.id} apiKey={key} onRevoked={handleRevoked} />
               ))}
             </tbody>
-          </table>
+          </Table>
         </section>
       )}
     </div>

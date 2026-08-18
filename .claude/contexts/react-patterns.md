@@ -15,7 +15,9 @@ web/src/
 ├── lib/use-session.ts    reactive hook over that cache
 ├── lib/document-index.ts, lib/locator.ts   pure helpers
 ├── pages/*.tsx           one file per route, colocated *.test.tsx
-├── styles.css            single stylesheet, custom properties
+├── styles/               six fixed files, imported in this order from main.tsx:
+│                         tokens.css, base.css, primitives.css, shell.css, rail.css, views.css
+│                         (hex/rgba literals legal only in tokens.css)
 └── test/setup.ts         vitest setup (jest-dom via /vitest, explicit afterEach(cleanup))
 ```
 

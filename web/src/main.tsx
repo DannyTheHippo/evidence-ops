@@ -2,7 +2,12 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
-import './styles.css';
+import './styles/tokens.css';
+import './styles/base.css';
+import './styles/primitives.css';
+import './styles/shell.css';
+import './styles/rail.css';
+import './styles/views.css';
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('Root element not found');

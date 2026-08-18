@@ -1,0 +1,293 @@
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+
+.container {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  width: 100%;
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 0 var(--space-6);
+}
+
+.view {
+  padding: var(--space-8) 0;
+}
+.view--fill {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: var(--space-8) 0;
+}
+.view--flow {
+  padding: var(--space-8) 0;
+}
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+/* ── Claims, citations & conflicts ──────────────────────────────────────── */
+
+.answer-outcome {
+  margin-top: var(--space-4);
+}
+.claims {
+  list-style: none;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+.claim {
+  border-top: 1px solid var(--hairline);
+  padding-top: var(--space-4);
+}
+.claim-statement {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-md);
+  font-weight: 500;
+  line-height: var(--leading-normal);
+}
+.citations {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.citation-quote {
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  border: none;
+  font-size: var(--text-sm);
+  color: var(--ink-dim);
+  line-height: var(--leading-normal);
+}
+.citation-locator {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.conflict-block {
+  margin-top: var(--space-3);
+}
+.value-compare {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.value-compare-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  min-width: 150px;
+}
+.value-compare-item--recommended {
+  border-color: var(--signal-line);
+  background: var(--signal-soft);
+}
+
+/* ── Approvals ───────────────────────────────────────────────────────────── */
+
+.approval-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Timeline ────────────────────────────────────────────────────────────── */
+
+.timeline {
+  list-style: none;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+/* An un-reached step recedes through ink weight and a bare left edge, not
+   opacity: opacity would composite the label and its .cell-sub together with the
+   background and drop both far below AA. --ink-dim keeps the label readable
+   while the reached states step up to full --ink.
+
+   The left edge draws on ProvenanceRail's line-state tokens, so an unreached or
+   reached step reads as the same visual language as the citation rail's idle and
+   verified nodes. is-active keeps --signal, a state the rail has no equivalent for. */
+.timeline-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-2);
+  color: var(--ink-dim);
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--rail-line-idle);
+  border-radius: var(--radius-sm);
+}
+.timeline-step.is-done {
+  color: var(--ink);
+  border-left-color: var(--rail-line-verified);
+}
+.timeline-step.is-active {
+  color: var(--ink);
+  border-color: var(--signal-line);
+  border-left-color: var(--signal);
+  background: var(--signal-soft);
+}
+.timeline-step-label {
+  font-weight: 600;
+  font-size: var(--text-sm);
+}
+
+/* ── Live indicator ──────────────────────────────────────────────────────── */
+
+.live-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--status-caution-ink);
+  box-shadow: 0 0 0 0 var(--status-caution-line);
+  animation: pulse 1.6s ease-out infinite;
+}
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--status-caution-line);
+  }
+  70% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+/* ── Table content states ────────────────────────────────────────────────── */
+
+.grid tbody td.grid-empty {
+  text-align: center;
+  padding: var(--space-6);
+  color: var(--muted);
+}
+.cell-sub {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 560px) {
+  .container {
+    padding: 0 var(--space-4);
+  }
+  .view--fill,
+  .view--flow {
+    padding: var(--space-4) 0;
+  }
+}
+
+/* ── Truncated cell text ─────────────────────────────────────────────────── */
+
+/* Auto table layout ignores max-width on a td directly, so the ellipsis lives on an inline-block
+   span inside the cell instead. `title` on that span keeps the full text reachable. */
+.cell-truncate {
+  display: inline-block;
+  max-width: 42ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/* ── Dashboard ───────────────────────────────────────────────────────────── */
+
+.dashboard-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+.dashboard-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: var(--space-5) var(--space-6);
+  color: inherit;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+.dashboard-tile:hover {
+  border-color: var(--signal-line);
+  background: var(--signal-soft);
+  text-decoration: none;
+}
+.dashboard-tile-label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+.dashboard-tile-value {
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard-answers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.dashboard-answer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--hairline);
+}
+.dashboard-answer:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.dashboard-answer-question {
+  overflow-wrap: anywhere;
+}
+
+.dashboard-account {
+  margin-top: var(--space-2);
+}
+
+/* ── Ask density + verification headline ────────────────────────────────── */
+.view--roomy .card {
+  padding: var(--space-6) var(--space-8);
+}
+.verification-headline {
+  margin: var(--space-5) 0 var(--space-2);
+  font-size: var(--text-2xl);
+  font-weight: 600;
+}

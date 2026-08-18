@@ -61,11 +61,15 @@ describe('AuditEventsPage', () => {
     render(<AuditEventsPage />);
 
     expect(screen.getByText('Loading…')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading…');
 
     expect(await screen.findByText('document.deleted')).toBeInTheDocument();
     expect(screen.getByText('admin@example.com')).toBeInTheDocument();
     expect(screen.getByText('Document doc-1')).toBeInTheDocument();
     expect(screen.getByText(new Date(event.timestamp).toLocaleString())).toBeInTheDocument();
+    expect(
+      screen.getByRole('table', { name: 'Audit events matching the current filters' }),
+    ).toBeInTheDocument();
   });
 
   it('reads as empty when no events match', async () => {

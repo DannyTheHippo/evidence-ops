@@ -1,42 +1,56 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import {
+  answerEventsUrl,
   getAnswerById,
   listConflicts,
   startQuestion,
   type Answer,
-  type Locator,
 } from '../api/client';
-import CitationPanel from '../components/CitationPanel';
+import AnswerView, { type ConflictChunkResolution } from '../components/AnswerView';
+import Badge from '../components/ui/Badge';
+import Button from '../components/ui/Button';
+import Field from '../components/ui/Field';
+import { notify } from '../components/ui/toast';
 import { buildDocumentVersionIndex, type ResolvedVersion } from '../lib/document-index';
-import { formatLocator } from '../lib/locator';
+import { useEventStream } from '../lib/use-event-stream';
 
 const DEFAULT_POLL_INTERVAL_MS = 1500;
-
-interface ConflictChunkResolution {
-  documentVersionId: string;
-  locator: Locator;
-}
 
 interface AskPageProps {
   // Overridable so tests can poll on a short interval instead of stubbing timers.
   pollIntervalMs?: number;
 }
 
-function statusBadge(answer: Answer): { className: string; label: string } {
+type BadgeTone = 'verified' | 'caution' | 'rejected' | 'info' | 'neutral';
+
+// A run still in flight or failed shows its run status, never a premature outcome — matches
+// AnswersPage's own tone assignment for the same three non-completed states.
+const RUN_STATUS_TONE: Record<Exclude<Answer['runStatus'], 'completed'>, BadgeTone> = {
+  queued: 'neutral',
+  running: 'info',
+  failed: 'rejected',
+};
+
+function outcomeBadge(answer: Answer): { tone: BadgeTone; label: string } {
   if (answer.runStatus !== 'completed') {
-    if (answer.runStatus === 'failed') return { className: 'badge badge--failed', label: 'failed' };
-    return { className: 'badge badge--neutral', label: answer.runStatus };
+    return { tone: RUN_STATUS_TONE[answer.runStatus], label: answer.runStatus };
   }
   switch (answer.outcome?.kind) {
     case 'answered':
-      return { className: 'badge badge--strong', label: 'answered' };
+      return { tone: 'verified', label: 'answered' };
     case 'insufficient_evidence':
-      return { className: 'badge badge--info', label: 'insufficient evidence' };
+      return { tone: 'info', label: 'insufficient evidence' };
     case 'conflicting_evidence':
-      return { className: 'badge badge--possible', label: 'conflicting evidence' };
+      return { tone: 'caution', label: 'conflicting evidence' };
     default:
-      return { className: 'badge badge--neutral', label: answer.runStatus };
+      return { tone: 'neutral', label: answer.runStatus };
   }
+}
+
+// A run is terminal only on a named `answer` event carrying a finished runStatus — `heartbeat`
+// never closes the stream, no matter what it carries.
+function isTerminalAnswerEvent(eventName: string, data: Answer): boolean {
+  return eventName === 'answer' && (data.runStatus === 'completed' || data.runStatus === 'failed');
 }
 
 export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: AskPageProps) {
@@ -68,21 +82,40 @@ export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: A
         createdAt: new Date().toISOString(),
       });
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to ask question');
+      const message = err instanceof Error ? err.message : 'Failed to ask question';
+      setError(message);
+      notify('error', message);
     } finally {
       setSubmitting(false);
     }
   }
 
-  // Polls while the run is in flight; stops the moment runStatus leaves queued/running, matching
-  // the API's separate runStatus/outcome axes (outcome is only meaningful once completed).
-  // Depends on the status value, not the `answer` object, so one interval spans every tick that
-  // reports the same status and the poll cadence stays fixed rather than drifting by the response
-  // latency of each tick. `cancelled` drops a response that lands after this effect is torn down —
-  // after unmount, or after a newer tick moved the answer on — instead of overwriting fresher state.
+  const isTerminalRunStatus = answer?.runStatus === 'completed' || answer?.runStatus === 'failed';
+
+  // SSE is the primary transport: a named `answer` event replaces the poll response, and a
+  // terminal one closes the connection itself so a clean server-side finish is never mistaken for
+  // a dropped connection and reopened (see use-event-stream.ts's own doc comment — a reopen would
+  // re-trigger the server's qa.answer.viewed audit write). `heartbeat` only keeps the stream
+  // 'live'; there is nothing in it this page renders.
+  const streamState = useEventStream<Answer>({
+    url: answerId ? answerEventsUrl(answerId) : null,
+    events: ['answer', 'heartbeat'],
+    onEvent: (eventName, data) => {
+      if (eventName === 'answer') setAnswer(data);
+    },
+    onFallback: () => {},
+    isTerminal: isTerminalAnswerEvent,
+  });
+
+  // Falls back to polling once the stream itself gives up — a server-authored error frame,
+  // MAX_RECONNECT_ATTEMPTS transport failures, or no EventSource at all — gated on
+  // `streamState === 'fallback'` rather than driving every answer unconditionally. Stops the
+  // moment runStatus reaches a terminal value, same as the SSE path. `cancelled` drops a response
+  // that lands after this effect is torn down instead of overwriting fresher state.
   useEffect(() => {
     if (!answerId) return;
-    if (answer?.runStatus === 'completed' || answer?.runStatus === 'failed') return;
+    if (streamState !== 'fallback') return;
+    if (isTerminalRunStatus) return;
     let cancelled = false;
 
     const timer = setInterval(() => {
@@ -100,7 +133,7 @@ export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: A
       cancelled = true;
       clearInterval(timer);
     };
-  }, [answerId, answer?.runStatus, pollIntervalMs]);
+  }, [answerId, streamState, isTerminalRunStatus, pollIntervalMs]);
 
   // Resolves citation/conflict-value document titles once there is something to resolve — a
   // conflicting_evidence outcome carries no citations, so that outcome alone must still trigger
@@ -155,10 +188,10 @@ export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: A
     };
   }, [answer?.runStatus, answer?.outcome, answer?.conflictIds]);
 
-  const isPolling = answer?.runStatus === 'queued' || answer?.runStatus === 'running';
+  const isInFlight = answer?.runStatus === 'queued' || answer?.runStatus === 'running';
 
   return (
-    <div className="view view--flow">
+    <div className="view view--flow view--roomy">
       <div className="page-head">
         <div>
           <span className="eyebrow">Question & answer</span>
@@ -169,20 +202,22 @@ export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: A
 
       <section className="card">
         <form onSubmit={(e) => void handleSubmit(e)} className="form">
-          <label>
-            Question
-            <input
-              type="text"
-              required
-              value={questionText}
-              onChange={(e) => setQuestionText(e.target.value)}
-              placeholder="What is the cap rate for Northgate Business Park in Q1 2025?"
-            />
-          </label>
+          <Field label="Question">
+            {(inputProps) => (
+              <input
+                type="text"
+                required
+                value={questionText}
+                onChange={(e) => setQuestionText(e.target.value)}
+                placeholder="What is the cap rate for Northgate Business Park in Q1 2025?"
+                {...inputProps}
+              />
+            )}
+          </Field>
           <div className="form-actions">
-            <button type="submit" className="btn btn--primary" disabled={submitting}>
+            <Button type="submit" variant="primary" disabled={submitting}>
               {submitting ? 'Asking…' : 'Ask'}
-            </button>
+            </Button>
           </div>
         </form>
       </section>
@@ -198,17 +233,17 @@ export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: A
           <div className="card-head">
             <h2 className="card-title">{answer.questionText}</h2>
             {(() => {
-              const badge = statusBadge(answer);
+              const badge = outcomeBadge(answer);
               return (
-                <span className={badge.className}>
-                  {isPolling && <span className="badge-dot" />}
+                <Badge tone={badge.tone}>
+                  {isInFlight && <span className="badge-dot" />}
                   {badge.label}
-                </span>
+                </Badge>
               );
             })()}
           </div>
 
-          {isPolling && (
+          {isInFlight && (
             <p className="notice notice--info">
               <span className="live-dot" /> Answering…
             </p>
@@ -220,65 +255,11 @@ export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: A
             </p>
           )}
 
-          {answer.runStatus === 'completed' && answer.outcome && (
-            <div className="answer-outcome">
-              {typeof answer.claimCoverage === 'number' && (
-                <p className="card-meta">
-                  Claim coverage: {Math.round(answer.claimCoverage * 100)}%
-                </p>
-              )}
-
-              {answer.outcome.kind === 'answered' && (
-                <ul className="claims">
-                  {answer.outcome.claims.map((claim, claimIndex) => (
-                    <li key={claimIndex} className="claim">
-                      <p className="claim-statement">{claim.statement}</p>
-                      <ul className="citations">
-                        {claim.citations.map((citation, citationIndex) => (
-                          <CitationPanel
-                            key={citationIndex}
-                            citation={citation}
-                            resolved={documentIndex.get(citation.docVersionId)}
-                          />
-                        ))}
-                      </ul>
-                    </li>
-                  ))}
-                </ul>
-              )}
-
-              {answer.outcome.kind === 'insufficient_evidence' && (
-                <p className="notice notice--info">{answer.outcome.reason}</p>
-              )}
-
-              {answer.outcome.kind === 'conflicting_evidence' && (
-                <div className="conflict-block">
-                  <p className="card-meta">
-                    {answer.outcome.factKey.entity} — {answer.outcome.factKey.metric} (
-                    {answer.outcome.factKey.period})
-                  </p>
-                  <ul className="value-compare">
-                    {answer.outcome.values.map((value, valueIndex) => {
-                      const chunkResolution = conflictChunkIndex.get(value.sourceChunkId);
-                      const resolvedVersion =
-                        chunkResolution && documentIndex.get(chunkResolution.documentVersionId);
-                      const sourceLabel = resolvedVersion
-                        ? `${resolvedVersion.documentTitle} — ${formatLocator(chunkResolution.locator)}`
-                        : value.sourceChunkId;
-                      return (
-                        <li key={valueIndex} className="value-compare-item">
-                          <span className="mono">
-                            {value.value} {value.unit}
-                          </span>
-                          <span className="cell-sub">{sourceLabel}</span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
+          <AnswerView
+            answer={answer}
+            documentIndex={documentIndex}
+            conflictChunkIndex={conflictChunkIndex}
+          />
         </section>
       )}
     </div>

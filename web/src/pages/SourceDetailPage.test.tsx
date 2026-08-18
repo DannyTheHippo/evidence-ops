@@ -63,6 +63,7 @@ describe('SourceDetailPage', () => {
     renderAt('source-1');
 
     expect(screen.getByText('Loading…')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading…');
 
     resolveSource!(jsonResponse(sourceWithFileStates));
 
@@ -82,6 +83,9 @@ describe('SourceDetailPage', () => {
     expect(screen.getByText('failed')).toBeInTheDocument();
     expect(
       screen.getByText("Could not resolve a document type for 'contracts/broken-scan.pdf'"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('table', { name: 'Per-file sync status for this source' }),
     ).toBeInTheDocument();
   });
 

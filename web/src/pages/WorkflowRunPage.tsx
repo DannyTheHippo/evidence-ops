@@ -1,6 +1,17 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { getWorkflowRunById, listApprovals, type Approval, type WorkflowRun } from '../api/client';
+import {
+  getWorkflowRunById,
+  listApprovals,
+  workflowRunEventsUrl,
+  type Approval,
+  type WithCount,
+  type WorkflowRun,
+  type WorkflowRunStatus,
+} from '../api/client';
+import Badge from '../components/ui/Badge';
+import Skeleton from '../components/ui/Skeleton';
+import { useEventStream } from '../lib/use-event-stream';
 
 const DEFAULT_POLL_INTERVAL_MS = 1500;
 
@@ -9,11 +20,16 @@ interface WorkflowRunPageProps {
   pollIntervalMs?: number;
 }
 
-function statusBadgeClass(status: WorkflowRun['status']): string {
-  if (status === 'completed') return 'badge badge--strong';
-  if (status === 'failed') return 'badge badge--failed';
-  return 'badge badge--neutral';
-}
+const STATUS_TONE: Record<WorkflowRunStatus, 'verified' | 'info' | 'neutral' | 'rejected'> = {
+  completed: 'verified',
+  running: 'info',
+  queued: 'neutral',
+  failed: 'rejected',
+};
+
+// The stream's `run` and `approvals` events carry different payload shapes; `heartbeat` carries
+// none this page reads. `onEvent`/`isTerminal` narrow on `eventName` before touching `data`.
+type WorkflowStreamPayload = WorkflowRun | WithCount<Approval>;
 
 function stepClassName(active: boolean, done: boolean): string {
   return ['timeline-step', active && 'is-active', !active && done && 'is-done']
@@ -26,12 +42,34 @@ export default function WorkflowRunPage({
 }: WorkflowRunPageProps) {
   const { id } = useParams<{ id: string }>();
   const [run, setRun] = useState<WorkflowRun | null>(null);
-  const [pendingApproval, setPendingApproval] = useState<Approval | null>(null);
-  // Sticky once set: the approval that paused this run disappears from GET /approvals the
+  const [approvalDocs, setApprovalDocs] = useState<Approval[]>([]);
+  // Sticky once set: the approval that paused this run disappears from the approvals list the
   // moment it's decided, but the timeline still needs to say the run *was* paused, not just
   // that no approval is pending right now.
   const [everPaused, setEverPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
+
+  const pendingApproval = useMemo(
+    () =>
+      run
+        ? (approvalDocs.find((approval) => approval.workflowId === run.workflowId) ?? null)
+        : null,
+    [run, approvalDocs],
+  );
+
+  // Adjusts state directly during render rather than in an effect — the sanctioned pattern for
+  // "flip a flag the first time a derived value becomes truthy" (react.dev/learn/you-might-not-need-an-effect).
+  if (pendingApproval && !everPaused) {
+    setEverPaused(true);
+  }
 
   // `isCurrent` returns false once the caller's effect has been torn down, so a response that
   // lands late — after unmount, or after a newer tick moved the run on — is dropped instead of
@@ -43,9 +81,7 @@ export default function WorkflowRunPage({
         .then(([runResult, { docs }]) => {
           if (!isCurrent()) return;
           setRun(runResult);
-          const matched = docs.find((approval) => approval.workflowId === runResult.workflowId);
-          setPendingApproval(matched ?? null);
-          if (matched) setEverPaused(true);
+          setApprovalDocs(docs);
           setError(null);
         })
         .catch((err: unknown) => {
@@ -56,20 +92,43 @@ export default function WorkflowRunPage({
     [id],
   );
 
-  useEffect(() => {
-    let cancelled = false;
-    refresh(() => !cancelled);
-    return () => {
-      cancelled = true;
-    };
+  // Refetches the run and its approvals. Fires once, immediately, whenever `useEventStream` gives
+  // up on the connection — including at mount in an environment with no `EventSource` at all.
+  const handleFallback = useCallback(() => {
+    refresh(() => mountedRef.current);
   }, [refresh]);
+
+  const handleStreamEvent = useCallback((eventName: string, data: WorkflowStreamPayload) => {
+    if (eventName === 'run') {
+      setRun(data as WorkflowRun);
+      setError(null);
+    } else if (eventName === 'approvals') {
+      setApprovalDocs((data as WithCount<Approval>).docs);
+    }
+  }, []);
+
+  const isStreamEventTerminal = useCallback((eventName: string, data: WorkflowStreamPayload) => {
+    if (eventName !== 'run') return false;
+    const status = (data as WorkflowRun).status;
+    return status === 'completed' || status === 'failed';
+  }, []);
+
+  const streamState = useEventStream<WorkflowStreamPayload>({
+    url: id ? workflowRunEventsUrl(id) : null,
+    events: ['run', 'approvals', 'heartbeat'],
+    onEvent: handleStreamEvent,
+    onFallback: handleFallback,
+    isTerminal: isStreamEventTerminal,
+  });
 
   const runStatus = run?.status;
 
-  // Polls while the run is in flight. Depends on the status value, not the `run` object, so one
-  // interval spans every tick that reports the same status and the poll cadence stays fixed
-  // rather than drifting by the response latency of each tick.
+  // Continues the fallback's polling only while the stream stays down and the run is still in
+  // flight. Depends on the status value, not the `run` object, so one interval spans every tick
+  // that reports the same status and the poll cadence stays fixed rather than drifting by the
+  // response latency of each tick.
   useEffect(() => {
+    if (streamState !== 'fallback') return;
     if (!runStatus || runStatus === 'completed' || runStatus === 'failed') return;
     let cancelled = false;
     const timer = setInterval(() => refresh(() => !cancelled), pollIntervalMs);
@@ -77,7 +136,7 @@ export default function WorkflowRunPage({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [runStatus, refresh, pollIntervalMs]);
+  }, [streamState, runStatus, refresh, pollIntervalMs]);
 
   const isTerminal = runStatus === 'completed' || runStatus === 'failed';
   const isPaused = !!pendingApproval;
@@ -105,17 +164,18 @@ export default function WorkflowRunPage({
         </p>
       )}
 
-      {!run && !error && id && <p>Loading…</p>}
+      {!run && !error && id && <Skeleton label="Loading…" />}
 
       {run && (
         <section className="card">
           <div className="card-head">
             <h2 className="card-title mono">{run.workflowId}</h2>
-            <span className={statusBadgeClass(run.status)}>
-              {!isTerminal && <span className="badge-dot" />}
-              {run.status}
-            </span>
+            <Badge tone={STATUS_TONE[run.status]}>{run.status}</Badge>
           </div>
+
+          {run.status === 'failed' && run.errorMessage && (
+            <p className="cell-sub">{run.errorMessage}</p>
+          )}
 
           <ol className="timeline">
             <li className={stepClassName(!isPaused && !isTerminal, true)}>

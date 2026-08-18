@@ -1,7 +1,34 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { listAuditEvents, type AuditEventView } from '../api/client';
+import Button from '../components/ui/Button';
+import EmptyState from '../components/ui/EmptyState';
+import Field from '../components/ui/Field';
+import Select from '../components/ui/Select';
+import Skeleton from '../components/ui/Skeleton';
+import Table, { TableHeaderCell } from '../components/ui/Table';
 
 const PAGE_SIZE = 25;
+
+// `subject.entityType` carries no schema-level enum — every audit-emitting service call site
+// (api-keys, approvals, audit-events, conflicts, documents, qa, retrieval, sources,
+// workflow-runs, auth, the resolve-conflict/ingest-document-version workflows, mcp-server) writes
+// one of these string literals, so this is the bounded set the filter can actually match.
+const ENTITY_TYPES = [
+  'Answer',
+  'ApiKey',
+  'Approval',
+  'Conflict',
+  'Document',
+  'DocumentVersion',
+  'Source',
+  'User',
+  'WorkflowRun',
+];
+
+const ENTITY_TYPE_OPTIONS = [
+  { value: '', label: 'All entity types' },
+  ...ENTITY_TYPES.map((entityType) => ({ value: entityType, label: entityType })),
+];
 
 export default function AuditEventsPage() {
   const [events, setEvents] = useState<AuditEventView[] | null>(null);
@@ -67,37 +94,38 @@ export default function AuditEventsPage() {
           <h2 className="card-title">Filters</h2>
         </div>
         <form onSubmit={handleFilter} className="form">
-          <label>
-            Action
-            <input
-              type="text"
-              value={action}
-              onChange={(e) => setAction(e.target.value)}
-              placeholder="document.deleted"
-            />
-          </label>
-          <label>
-            Entity type
-            <input
-              type="text"
-              value={entityType}
-              onChange={(e) => setEntityType(e.target.value)}
-              placeholder="Document"
-            />
-          </label>
-          <label>
-            Entity id
-            <input
-              type="text"
-              value={entityId}
-              onChange={(e) => setEntityId(e.target.value)}
-              placeholder="65f1c2e4a1b2c3d4e5f6a7b8"
-            />
-          </label>
+          <Field label="Action">
+            {(inputProps) => (
+              <input
+                type="text"
+                value={action}
+                onChange={(e) => setAction(e.target.value)}
+                placeholder="document.deleted"
+                {...inputProps}
+              />
+            )}
+          </Field>
+          <Select
+            label="Entity type"
+            options={ENTITY_TYPE_OPTIONS}
+            value={entityType}
+            onChange={setEntityType}
+          />
+          <Field label="Entity id">
+            {(inputProps) => (
+              <input
+                type="text"
+                value={entityId}
+                onChange={(e) => setEntityId(e.target.value)}
+                placeholder="65f1c2e4a1b2c3d4e5f6a7b8"
+                {...inputProps}
+              />
+            )}
+          </Field>
           <div className="form-actions">
-            <button type="submit" className="btn btn--primary">
+            <Button type="submit" variant="primary">
               Apply filters
-            </button>
+            </Button>
           </div>
         </form>
       </section>
@@ -108,21 +136,24 @@ export default function AuditEventsPage() {
         </p>
       )}
 
-      {!events && !error && <p>Loading…</p>}
+      {!events && !error && <Skeleton label="Loading…" />}
 
       {events && events.length === 0 && (
-        <p className="notice notice--info">No audit events match these filters.</p>
+        <EmptyState
+          title="No audit events match these filters."
+          description="Clear or adjust the action, entity type, and entity id filters above."
+        />
       )}
 
       {events && events.length > 0 && (
         <section className="panel">
-          <table className="grid">
+          <Table caption="Audit events matching the current filters">
             <thead>
               <tr>
-                <th>Actor</th>
-                <th>Action</th>
-                <th>Subject</th>
-                <th>Timestamp</th>
+                <TableHeaderCell>Actor</TableHeaderCell>
+                <TableHeaderCell>Action</TableHeaderCell>
+                <TableHeaderCell>Subject</TableHeaderCell>
+                <TableHeaderCell>Timestamp</TableHeaderCell>
               </tr>
             </thead>
             <tbody>
@@ -137,28 +168,30 @@ export default function AuditEventsPage() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </Table>
         </section>
       )}
 
       {events && (
         <div className="form-actions">
-          <button
+          <Button
             type="button"
-            className="btn btn--secondary btn--sm"
+            variant="secondary"
+            size="sm"
             disabled={!hasPrev}
             onClick={() => setSkip((s) => Math.max(0, s - PAGE_SIZE))}
           >
             Previous
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="btn btn--secondary btn--sm"
+            variant="secondary"
+            size="sm"
             disabled={!hasNext}
             onClick={() => setSkip((s) => s + PAGE_SIZE)}
           >
             Next
-          </button>
+          </Button>
           <span className="cell-sub">{count} total</span>
         </div>
       )}

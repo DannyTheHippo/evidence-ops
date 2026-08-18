@@ -7,9 +7,23 @@ import {
   listWorkflowRuns,
   type Approval,
   type ApprovalDecision,
+  type ApprovalState,
   type Conflict,
 } from '../api/client';
+import Badge from '../components/ui/Badge';
+import Button from '../components/ui/Button';
+import Dialog from '../components/ui/Dialog';
+import EmptyState from '../components/ui/EmptyState';
+import Field from '../components/ui/Field';
+import Skeleton from '../components/ui/Skeleton';
+import { notify } from '../components/ui/toast';
 import { useSession } from '../lib/use-session';
+
+const stateTone: Record<ApprovalState, 'caution' | 'verified' | 'rejected'> = {
+  pending: 'caution',
+  approved: 'verified',
+  rejected: 'rejected',
+};
 
 /** The value `conflict.proposedWinnerFactId` points at, formatted for display — undefined when
  *  the id names no value in `conflict.values` (data drift) or the policy proposed none. */
@@ -35,15 +49,32 @@ function ApprovalRow({
   const [reason, setReason] = useState('');
   const [deciding, setDeciding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The dialog's own open/decision-direction state — set only from the admin-gated row buttons
+  // below, so a non-admin never has a path to open it.
+  const [pendingDecision, setPendingDecision] = useState<ApprovalDecision | null>(null);
   const [viewingRun, setViewingRun] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const winnerLabel = conflict ? conflictWinnerLabel(conflict) : undefined;
+
+  function closeDialog() {
+    setPendingDecision(null);
+    setReason('');
+    setError(null);
+  }
 
   async function decide(decision: ApprovalDecision) {
     setDeciding(true);
     setError(null);
     try {
       await decideApproval(approval.id, decision, reason.trim() || undefined);
+      notify(
+        'success',
+        decision === 'approved'
+          ? 'Approval recorded — the workflow resumes.'
+          : 'Rejection recorded — the workflow resumes.',
+      );
+      setPendingDecision(null);
+      setReason('');
       onDecided(approval.id);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to record decision');
@@ -76,10 +107,7 @@ function ApprovalRow({
     <li className="card">
       <div className="card-head">
         <h2 className="card-title">{approval.summary}</h2>
-        <span className="badge badge--possible">
-          <span className="badge-dot" />
-          pending
-        </span>
+        <Badge tone={stateTone[approval.state]}>{approval.state}</Badge>
       </div>
 
       {approval.requestedBy && <p className="cell-sub">Requested by {approval.requestedBy}</p>}
@@ -95,10 +123,7 @@ function ApprovalRow({
           </p>
         ) : (
           <>
-            <span className="badge badge--info">
-              <span className="badge-dot" />
-              Recommended · {conflict.ruleFired}
-            </span>
+            <Badge tone="info">Recommended · {conflict.ruleFired}</Badge>
             <p className="cell-sub">
               {winnerLabel ? `${winnerLabel} — ` : ''}
               {conflict.explanation}
@@ -106,75 +131,86 @@ function ApprovalRow({
           </>
         ))}
 
-      <div className="form">
+      <div className="form-actions">
         {canDecide && (
-          <label>
-            Reason (optional)
-            <input
-              type="text"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              placeholder="Evidence checks out."
-              disabled={deciding}
-            />
-          </label>
+          <>
+            <Button variant="primary" onClick={() => setPendingDecision('approved')}>
+              Approve
+            </Button>
+            <Button variant="secondary" onClick={() => setPendingDecision('rejected')}>
+              Reject
+            </Button>
+          </>
         )}
-        <div className="form-actions">
-          {canDecide && (
-            <>
-              <button
-                type="button"
-                className="btn btn--primary"
-                disabled={deciding}
-                onClick={() => void decide('approved')}
-              >
-                Approve
-              </button>
-              <button
-                type="button"
-                className="btn btn--secondary"
-                disabled={deciding}
-                onClick={() => void decide('rejected')}
-              >
-                Reject
-              </button>
-            </>
-          )}
-          {/* The server's RolesGuard is the actual gate — this notice only explains an absence the
-              API would enforce anyway, rather than showing a control that fails on click. It waits
-              for the session probe to land, so an admin is never told they are not one. */}
-          {sessionResolved && !canDecide && (
-            <p className="cell-sub">Deciding approvals requires an admin.</p>
-          )}
-          {approval.workflowId && (
-            <button
-              type="button"
-              className="btn btn--ghost"
-              disabled={viewingRun}
-              onClick={() => void viewRun()}
-            >
-              {viewingRun ? 'Loading…' : 'View run'}
-            </button>
-          )}
-        </div>
+        {/* The server's RolesGuard is the actual gate — this notice only explains an absence the
+            API would enforce anyway, rather than showing a control that fails on click. It waits
+            for the session probe to land, so an admin is never told they are not one. */}
+        {sessionResolved && !canDecide && (
+          <p className="cell-sub">Deciding approvals requires an admin.</p>
+        )}
+        {approval.workflowId && (
+          <Button variant="ghost" disabled={viewingRun} onClick={() => void viewRun()}>
+            {viewingRun ? 'Loading…' : 'View run'}
+          </Button>
+        )}
       </div>
 
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
       {runError && (
         <p className="error" role="alert">
           {runError}
         </p>
       )}
+
+      <Dialog
+        open={pendingDecision !== null}
+        onClose={closeDialog}
+        title={pendingDecision === 'rejected' ? 'Reject this approval' : 'Approve this approval'}
+      >
+        <div className="form">
+          <p>{approval.summary}</p>
+          <p className="cell-sub">
+            {approval.workflowId
+              ? 'This decision resumes the parked workflow run.'
+              : 'This decision will be recorded.'}
+          </p>
+          <Field label="Reason (optional)">
+            {(inputProps) => (
+              <input
+                type="text"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="Evidence checks out."
+                disabled={deciding}
+                {...inputProps}
+              />
+            )}
+          </Field>
+          {error && (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="form-actions">
+            <Button
+              variant={pendingDecision === 'rejected' ? 'danger' : 'primary'}
+              disabled={deciding}
+              onClick={() => pendingDecision && void decide(pendingDecision)}
+            >
+              {pendingDecision === 'rejected' ? 'Reject' : 'Approve'}
+            </Button>
+            <Button variant="ghost" disabled={deciding} onClick={closeDialog}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </Dialog>
     </li>
   );
 }
 
 export default function ApprovalsPage() {
   const [approvals, setApprovals] = useState<Approval[] | null>(null);
+  const [count, setCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [conflictsById, setConflictsById] = useState<Map<string, Conflict>>(new Map());
   const session = useSession();
@@ -185,7 +221,10 @@ export default function ApprovalsPage() {
 
   useEffect(() => {
     listApprovals()
-      .then(({ docs }) => setApprovals(docs))
+      .then(({ docs, count: total }) => {
+        setApprovals(docs);
+        setCount(total);
+      })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'Failed to load approvals');
       });
@@ -210,10 +249,12 @@ export default function ApprovalsPage() {
     };
   }, [approvals]);
 
-  // A decided approval leaves the pending inbox — GET /approvals only ever returns pending
-  // rows, so removing it locally on success matches what a re-fetch would show anyway.
+  // A decided approval leaves the pending inbox — this page's own GET /approvals call is
+  // unfiltered and the server defaults an unfiltered request to pending rows, so removing it
+  // locally on success matches what a re-fetch would show anyway.
   function handleDecided(id: string) {
     setApprovals((current) => current?.filter((approval) => approval.id !== id) ?? current);
+    setCount((current) => Math.max(0, current - 1));
   }
 
   return (
@@ -232,10 +273,19 @@ export default function ApprovalsPage() {
         </p>
       )}
 
-      {!approvals && !error && <p>Loading…</p>}
+      {!approvals && !error && <Skeleton label="Loading…" />}
 
       {approvals && approvals.length === 0 && (
-        <p className="notice notice--info">No pending approvals.</p>
+        <EmptyState
+          title="Nothing waiting on you"
+          description="Every approval has been decided. New requests appear here as workflows park on them."
+        />
+      )}
+
+      {approvals && approvals.length > 0 && approvals.length < count && (
+        <p className="cell-sub">
+          Showing {approvals.length} of {count}.
+        </p>
       )}
 
       <ul className="approval-list">

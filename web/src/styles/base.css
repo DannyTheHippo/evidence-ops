@@ -1,0 +1,152 @@
+/* Reset, page shell, and base typography shared by every view. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+/* Fixed-height app shell: #root's direct flex children are the skip link, .shell, and the
+   toaster. .shell fills the remaining height and holds the sidebar plus .shell-main, which in
+   turn stacks .topbar (flex:none) above the scrolling .container — two levels below #root. */
+#root {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+a {
+  color: var(--signal);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+  border-radius: var(--radius-sm);
+}
+
+::selection {
+  background: var(--signal-soft);
+}
+
+/* Skip link: clipped to a 0×0 rect off-screen rather than display:none, so it stays in the
+   tab order and reachable. #main-content carries tabIndex={-1}, so it is only ever reached via
+   this link or a route-change focus call, never by tabbing directly to it. */
+.skip-link {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 1000;
+  padding: var(--space-2) var(--space-4);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.skip-link:focus-visible {
+  clip-path: none;
+  overflow: visible;
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+/* Focus lands here programmatically (skip link, route change) far more often than by real
+   keyboard traversal, since tabIndex={-1} keeps it out of the normal tab order. Plain :focus
+   (the programmatic case) draws no ring; :focus-visible (genuine keyboard focus) still does. */
+#main-content:focus {
+  outline: none;
+}
+#main-content:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+  border-radius: var(--radius-sm);
+}
+
+/* ── Typography ──────────────────────────────────────────────────────────── */
+
+h1,
+h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: var(--leading-tight);
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+.page-title {
+  font-size: var(--text-xl);
+  letter-spacing: -0.015em;
+}
+.page-sub {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  margin: var(--space-2) 0 0;
+}
+.eyebrow {
+  display: inline-block;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: var(--space-1);
+}
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Theme toggle ────────────────────────────────────────────────────────── */
+
+.theme-toggle {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+.theme-toggle .btn.is-active {
+  background: var(--signal-soft);
+  color: var(--signal);
+  border-color: var(--signal-line);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Forced-colors modes drop box-shadow entirely, which would leave the shadow
+   focus ring invisible. Restore a real outline in the system palette; the
+   keywords are required here, since the user's colours replace the tokens. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid CanvasText;
+    outline-offset: 2px;
+  }
+}

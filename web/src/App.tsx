@@ -1,7 +1,14 @@
 import type { ReactNode } from 'react';
-import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { useState } from 'react';
+import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { logout } from './api/client';
+import Sidebar, { NAV_LABELS } from './components/shell/Sidebar';
+import Topbar from './components/shell/Topbar';
+import EmptyState from './components/ui/EmptyState';
+import Toaster from './components/ui/Toaster';
 import { useSession } from './lib/use-session';
+import AnswerDetailPage from './pages/AnswerDetailPage';
+import AnswersPage from './pages/AnswersPage';
 import ApiKeysPage from './pages/ApiKeysPage';
 import ApprovalsPage from './pages/ApprovalsPage';
 import AskPage from './pages/AskPage';
@@ -10,12 +17,38 @@ import ConflictsPage from './pages/ConflictsPage';
 import DataRoomPage from './pages/DataRoomPage';
 import HomePage from './pages/HomePage';
 import LoginPage from './pages/LoginPage';
+import RunsPage from './pages/RunsPage';
+import SearchPage from './pages/SearchPage';
 import SourceDetailPage from './pages/SourceDetailPage';
 import SourcesPage from './pages/SourcesPage';
 import WorkflowRunPage from './pages/WorkflowRunPage';
 
-function navLinkClassName({ isActive }: { isActive: boolean }): string {
-  return isActive ? 'topnav-link is-active' : 'topnav-link';
+/** The nearest nav destination that owns `pathname` — an exact match first, then the longest nav
+ * `to` that prefixes it, so a detail route like `/sources/:id` breadcrumbs to "Sources" rather
+ * than falling back to the brand. */
+function breadcrumbFor(pathname: string): string {
+  const exact = NAV_LABELS.find((item) => item.to === pathname);
+  if (exact) return exact.label;
+
+  const prefixMatch = NAV_LABELS.filter(
+    (item) => item.to !== '/' && pathname.startsWith(`${item.to}/`),
+  ).sort((a, b) => b.to.length - a.to.length)[0];
+
+  return prefixMatch?.label ?? 'Evidence Ops';
+}
+
+function NotFoundView() {
+  return (
+    <EmptyState
+      title="Page not found"
+      description="The page you're looking for doesn't exist. Head back to somewhere that does."
+      action={
+        <Link to="/" className="btn btn--primary">
+          Go to Home
+        </Link>
+      }
+    />
+  );
 }
 
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -51,6 +84,7 @@ export default function App() {
   // Same "don't show a control that fails" principle as RequireAdmin itself — a member never
   // sees a link to a page RequireAdmin would immediately bounce them off of.
   const isAdmin = session.status === 'authed' && session.me.role === 'admin';
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   async function handleLogout() {
     // Client-side logout must not depend on the server's answer: logout() already clears the
@@ -73,141 +107,169 @@ export default function App() {
   // (empty dep array) and would not notice a login that happens after that first render.
   const showChrome = location.pathname !== '/login';
 
+  const routes = (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/"
+        element={
+          <RequireAuth>
+            <HomePage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/ask"
+        element={
+          <RequireAuth>
+            <AskPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/answers"
+        element={
+          <RequireAuth>
+            <AnswersPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/answers/:id"
+        element={
+          <RequireAuth>
+            <AnswerDetailPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/search"
+        element={
+          <RequireAuth>
+            <SearchPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/documents"
+        element={
+          <RequireAuth>
+            <DataRoomPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/documents/:id"
+        element={
+          <RequireAuth>
+            <DataRoomPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/sources"
+        element={
+          <RequireAuth>
+            <SourcesPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/sources/:id"
+        element={
+          <RequireAuth>
+            <SourceDetailPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/conflicts"
+        element={
+          <RequireAuth>
+            <ConflictsPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/approvals"
+        element={
+          <RequireAuth>
+            <ApprovalsPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/workflow-runs"
+        element={
+          <RequireAuth>
+            <RunsPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/workflow-runs/:id"
+        element={
+          <RequireAuth>
+            <WorkflowRunPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/api-keys"
+        element={
+          <RequireAuth>
+            <ApiKeysPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/audit-events"
+        element={
+          <RequireAdmin>
+            <AuditEventsPage />
+          </RequireAdmin>
+        }
+      />
+      <Route
+        path="*"
+        element={
+          <RequireAuth>
+            <NotFoundView />
+          </RequireAuth>
+        }
+      />
+    </Routes>
+  );
+
   return (
     <>
-      {showChrome && (
-        <header className="topbar">
-          <span className="brand">
-            <span className="brand-mark" aria-hidden />
-            Evidence Ops
-          </span>
-          <nav className="topnav">
-            <NavLink to="/" end className={navLinkClassName}>
-              Home
-            </NavLink>
-            <NavLink to="/documents" className={navLinkClassName}>
-              Data Room
-            </NavLink>
-            <NavLink to="/sources" className={navLinkClassName}>
-              Sources
-            </NavLink>
-            <NavLink to="/ask" className={navLinkClassName}>
-              Ask
-            </NavLink>
-            <NavLink to="/conflicts" className={navLinkClassName}>
-              Conflicts
-            </NavLink>
-            <NavLink to="/approvals" className={navLinkClassName}>
-              Approvals
-            </NavLink>
-            <NavLink to="/api-keys" className={navLinkClassName}>
-              API Keys
-            </NavLink>
-            {isAdmin && (
-              <NavLink to="/audit-events" className={navLinkClassName}>
-                Audit Log
-              </NavLink>
-            )}
-          </nav>
-          <span className="topbar-spacer" />
-          <button className="btn btn--ghost btn--sm" onClick={() => void handleLogout()}>
-            Logout
-          </button>
-        </header>
+      <a className="skip-link" href="#main-content">
+        Skip to content
+      </a>
+      {showChrome ? (
+        <div className="shell">
+          <Sidebar
+            isAdmin={isAdmin}
+            drawerOpen={drawerOpen}
+            onCloseDrawer={() => setDrawerOpen(false)}
+          />
+          <div className="shell-main">
+            <Topbar
+              breadcrumbLabel={breadcrumbFor(location.pathname)}
+              onOpenMenu={() => setDrawerOpen(true)}
+              onLogout={() => void handleLogout()}
+            />
+            <main id="main-content" tabIndex={-1} className="container">
+              {routes}
+            </main>
+          </div>
+        </div>
+      ) : (
+        <main id="main-content" tabIndex={-1} className="container">
+          {routes}
+        </main>
       )}
-      <main className="container">
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route
-            path="/"
-            element={
-              <RequireAuth>
-                <HomePage />
-              </RequireAuth>
-            }
-          />
-          <Route
-            path="/documents"
-            element={
-              <RequireAuth>
-                <DataRoomPage />
-              </RequireAuth>
-            }
-          />
-          <Route
-            path="/documents/:id"
-            element={
-              <RequireAuth>
-                <DataRoomPage />
-              </RequireAuth>
-            }
-          />
-          <Route
-            path="/sources"
-            element={
-              <RequireAuth>
-                <SourcesPage />
-              </RequireAuth>
-            }
-          />
-          <Route
-            path="/sources/:id"
-            element={
-              <RequireAuth>
-                <SourceDetailPage />
-              </RequireAuth>
-            }
-          />
-          <Route
-            path="/ask"
-            element={
-              <RequireAuth>
-                <AskPage />
-              </RequireAuth>
-            }
-          />
-          <Route
-            path="/conflicts"
-            element={
-              <RequireAuth>
-                <ConflictsPage />
-              </RequireAuth>
-            }
-          />
-          <Route
-            path="/approvals"
-            element={
-              <RequireAuth>
-                <ApprovalsPage />
-              </RequireAuth>
-            }
-          />
-          <Route
-            path="/api-keys"
-            element={
-              <RequireAuth>
-                <ApiKeysPage />
-              </RequireAuth>
-            }
-          />
-          <Route
-            path="/audit-events"
-            element={
-              <RequireAdmin>
-                <AuditEventsPage />
-              </RequireAdmin>
-            }
-          />
-          <Route
-            path="/workflow-runs/:id"
-            element={
-              <RequireAuth>
-                <WorkflowRunPage />
-              </RequireAuth>
-            }
-          />
-        </Routes>
-      </main>
+      <Toaster />
     </>
   );
 }

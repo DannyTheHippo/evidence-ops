@@ -140,6 +140,9 @@ describe('ConflictsPage', () => {
     expect(screen.getByText('open')).toBeInTheDocument();
     expect(screen.getByText('6.1 percent')).toBeInTheDocument();
     expect(await screen.findByText('Rent Roll Q1 — p.2')).toBeInTheDocument();
+    expect(
+      screen.getByRole('table', { name: /conflicting facts extracted from the evidence corpus/i }),
+    ).toBeInTheDocument();
   });
 
   it('shows the recommended value with the rule that fired and why, next to that value', async () => {
@@ -217,6 +220,37 @@ describe('ConflictsPage', () => {
     });
   });
 
+  it('shows how many conflicts are visible against the total when the list is truncated', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (url === '/api/v1/conflicts') {
+          return Promise.resolve(jsonResponse({ docs: [openConflict], count: 47 }));
+        }
+        if (url === '/api/v1/documents') {
+          return Promise.resolve(jsonResponse({ docs: [documentFixture], count: 1 }));
+        }
+        if (url === '/api/v1/documents/doc-1') {
+          return Promise.resolve(jsonResponse({ ...documentFixture, versions: [documentVersion] }));
+        }
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText('Showing 1 of 47.')).toBeInTheDocument();
+  });
+
+  it('shows no truncation notice when the full conflict list fits on the page', async () => {
+    vi.stubGlobal('fetch', fetchStub());
+
+    renderPage();
+
+    await screen.findByText('Northgate Business Park');
+    expect(screen.queryByText(/^Showing /)).not.toBeInTheDocument();
+  });
+
   it('shows a per-row error when the resolution request fails', async () => {
     vi.stubGlobal(
       'fetch',
@@ -227,6 +261,6 @@ describe('ConflictsPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Request resolution' }));
 
-    expect(await screen.findByText('Fact already resolved')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Fact already resolved');
   });
 });

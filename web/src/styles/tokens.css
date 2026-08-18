@@ -1,0 +1,186 @@
+/* Evidence Ops — document review console. Calm, restrained, evidence-first.
+   Light is the default palette; the theme selectors below redefine variables
+   only, never add rules. */
+
+:root {
+  /* Surfaces — cool slate */
+  --bg: #eef1f6;
+  --surface: #ffffff;
+  --surface-2: #f4f6fa;
+  --surface-3: #e8ecf2;
+  --hairline: #dbe1ea;
+  --hairline-strong: #c1c9d6;
+
+  /* Text — --muted is for plain surfaces only. Text sitting on a translucent status
+     or signal tint uses --ink-dim: --muted over a tint composites to 4.47–4.61:1,
+     which is at the AA boundary for 11–13px body text. */
+  --ink: #10141c;
+  --ink-dim: #3c4657;
+  --muted: #5a6478;
+
+  /* Signal — one instrument color for primary actions, active nav, focus ring */
+  --signal: #0a6e8c;
+  --signal-press: #085770;
+  --signal-ink: #ffffff;
+  --signal-soft: rgba(10, 110, 140, 0.09);
+  --signal-line: rgba(10, 110, 140, 0.4);
+
+  /* Status — each tone carries a background, an ink and a line so meaning survives
+     without colour, paired with the existing shape marker on the element. */
+  --status-verified-bg: rgba(11, 122, 82, 0.1);
+  --status-verified-ink: #0b7a52;
+  --status-verified-line: rgba(11, 122, 82, 0.35);
+  --status-caution-bg: rgba(143, 92, 0, 0.1);
+  --status-caution-ink: #8f5c00;
+  --status-caution-line: rgba(143, 92, 0, 0.35);
+  --status-reject-bg: rgba(176, 34, 63, 0.1);
+  --status-reject-ink: #b0223f;
+  --status-reject-line: rgba(176, 34, 63, 0.35);
+  --status-info-bg: rgba(47, 95, 168, 0.1);
+  --status-info-ink: #2f5fa8;
+  --status-info-line: rgba(47, 95, 168, 0.35);
+  --status-neutral-bg: var(--surface-3);
+  --status-neutral-ink: var(--ink-dim);
+  --status-neutral-line: var(--hairline-strong);
+
+  /* Type — system stacks. Mono gets its own display size and tracking. */
+  --font-display: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono:
+    ui-monospace, 'SFMono-Regular', 'Cascadia Code', Consolas, 'Liberation Mono', monospace;
+  --text-2xs: 0.6875rem;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-md: 0.9375rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 1.875rem;
+  --text-mono-id: 0.8125rem;
+  --tracking-mono-id: 0.01em;
+  --leading-tight: 1.25;
+  --leading-normal: 1.55;
+
+  /* Spacing — 4px base */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+
+  /* Shape */
+  --radius: 8px;
+  --radius-sm: 5px;
+  --radius-xs: 4px;
+  --radius-pill: 999px;
+  --shadow: 0 1px 2px rgba(20, 22, 30, 0.04), 0 6px 16px rgba(20, 22, 30, 0.06);
+  --shadow-pop: 0 2px 6px rgba(16, 20, 28, 0.08), 0 12px 32px rgba(16, 20, 28, 0.16);
+  --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--signal);
+
+  /* Provenance rail */
+  --rail-width: 2px;
+  --rail-node-size: 8px;
+  --rail-line-idle: var(--hairline-strong);
+  --rail-line-verified: var(--status-verified-ink);
+  --rail-line-degraded: var(--status-caution-ink);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    /* Surfaces */
+    --bg: #0e131b;
+    --surface: #161c26;
+    --surface-2: #1c2330;
+    --surface-3: #232b3a;
+    --hairline: #2a3242;
+    --hairline-strong: #3a4358;
+
+    /* Text */
+    --ink: #e8ecf3;
+    --ink-dim: #b7c0d1;
+    --muted: #8b96ab;
+
+    /* Signal */
+    --signal: #55c2df;
+    --signal-press: #3fa6c2;
+    --signal-ink: #071013;
+    --signal-soft: rgba(85, 194, 223, 0.14);
+    --signal-line: rgba(85, 194, 223, 0.4);
+
+    /* Status */
+    --status-verified-bg: rgba(78, 207, 156, 0.14);
+    --status-verified-ink: #4ecf9c;
+    --status-verified-line: rgba(78, 207, 156, 0.4);
+    --status-caution-bg: rgba(224, 172, 61, 0.14);
+    --status-caution-ink: #e0ac3d;
+    --status-caution-line: rgba(224, 172, 61, 0.4);
+    --status-reject-bg: rgba(242, 135, 154, 0.14);
+    --status-reject-ink: #f2879a;
+    --status-reject-line: rgba(242, 135, 154, 0.4);
+    --status-info-bg: rgba(127, 168, 234, 0.14);
+    --status-info-ink: #7fa8ea;
+    --status-info-line: rgba(127, 168, 234, 0.4);
+    --status-neutral-bg: var(--surface-3);
+    --status-neutral-ink: var(--ink-dim);
+    --status-neutral-line: var(--hairline-strong);
+
+    --shadow: 0 1px 0 rgba(255, 255, 255, 0.02), 0 8px 24px rgba(0, 0, 0, 0.35);
+    --shadow-pop: 0 2px 6px rgba(0, 0, 0, 0.3), 0 16px 40px rgba(0, 0, 0, 0.5);
+    --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--signal);
+    color-scheme: dark;
+  }
+}
+
+/* Plain CSS has no "same as" mechanism, so this block is kept in sync with the
+   media-query block above by hand. */
+:root[data-theme='dark'] {
+  /* Surfaces */
+  --bg: #0e131b;
+  --surface: #161c26;
+  --surface-2: #1c2330;
+  --surface-3: #232b3a;
+  --hairline: #2a3242;
+  --hairline-strong: #3a4358;
+
+  /* Text */
+  --ink: #e8ecf3;
+  --ink-dim: #b7c0d1;
+  --muted: #8b96ab;
+
+  /* Signal */
+  --signal: #55c2df;
+  --signal-press: #3fa6c2;
+  --signal-ink: #071013;
+  --signal-soft: rgba(85, 194, 223, 0.14);
+  --signal-line: rgba(85, 194, 223, 0.4);
+
+  /* Status */
+  --status-verified-bg: rgba(78, 207, 156, 0.14);
+  --status-verified-ink: #4ecf9c;
+  --status-verified-line: rgba(78, 207, 156, 0.4);
+  --status-caution-bg: rgba(224, 172, 61, 0.14);
+  --status-caution-ink: #e0ac3d;
+  --status-caution-line: rgba(224, 172, 61, 0.4);
+  --status-reject-bg: rgba(242, 135, 154, 0.14);
+  --status-reject-ink: #f2879a;
+  --status-reject-line: rgba(242, 135, 154, 0.4);
+  --status-info-bg: rgba(127, 168, 234, 0.14);
+  --status-info-ink: #7fa8ea;
+  --status-info-line: rgba(127, 168, 234, 0.4);
+  --status-neutral-bg: var(--surface-3);
+  --status-neutral-ink: var(--ink-dim);
+  --status-neutral-line: var(--hairline-strong);
+
+  --shadow: 0 1px 0 rgba(255, 255, 255, 0.02), 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 2px 6px rgba(0, 0, 0, 0.3), 0 16px 40px rgba(0, 0, 0, 0.5);
+  --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--signal);
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}

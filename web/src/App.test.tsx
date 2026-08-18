@@ -257,3 +257,103 @@ describe('RequireAdmin', () => {
     expect(screen.queryByText('login probe')).not.toBeInTheDocument();
   });
 });
+
+describe('App / shell', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('renders the skip link as the first link, pointing at the focusable main region', async () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue({
+      id: 'user-1',
+      email: 'user@example.com',
+      role: 'member',
+      createdAt: new Date().toISOString(),
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ docs: [], count: 0 })));
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+    await screen.findByRole('heading', { name: 'Home' });
+
+    const [firstLink] = screen.getAllByRole('link');
+    expect(firstLink).toHaveTextContent('Skip to content');
+    expect(firstLink).toHaveAttribute('href', '#main-content');
+
+    const main = screen.getByRole('main');
+    expect(main).toHaveAttribute('id', 'main-content');
+    expect(main).toHaveAttribute('tabindex', '-1');
+  });
+
+  it('hides the sidebar and topbar chrome on /login', () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue(null);
+
+    render(
+      <MemoryRouter initialEntries={['/login']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole('navigation', { name: 'Primary' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Logout' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Evidence Ops' })).toBeInTheDocument();
+  });
+
+  it('renders a 404 view with a way back home for an unmatched authenticated route', async () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue({
+      id: 'user-1',
+      email: 'user@example.com',
+      role: 'member',
+      createdAt: new Date().toISOString(),
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/nothing-here']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Page not found')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Go to Home' })).toHaveAttribute('href', '/');
+  });
+
+  // Regression: AnswersPage links each row to /answers/:id, but no such route existed — every
+  // link landed on the 404 view instead of the answer it named.
+  it('renders the answer detail page, not the 404 view, at /answers/:id', async () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue({
+      id: 'user-1',
+      email: 'user@example.com',
+      role: 'member',
+      createdAt: new Date().toISOString(),
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          id: 'answer-1',
+          questionText: 'What is the cap rate?',
+          runStatus: 'completed',
+          outcome: { kind: 'insufficient_evidence', reason: 'No document mentions the cap rate.' },
+          citations: [],
+          conflictIds: [],
+          createdAt: new Date().toISOString(),
+        }),
+      ),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/answers/answer-1']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByRole('heading', { name: 'What is the cap rate?' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Page not found')).not.toBeInTheDocument();
+  });
+});

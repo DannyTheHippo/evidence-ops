@@ -1,6 +1,7 @@
 import { act, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { FakeEventSource } from '../test/fake-event-source';
 import WorkflowRunPage from './WorkflowRunPage';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -39,6 +40,12 @@ const runningRun = {
 };
 
 const completedRun = { ...runningRun, status: 'completed' };
+
+const failedRun = {
+  ...runningRun,
+  status: 'failed',
+  errorMessage: 'Retrieval service returned a 503.',
+};
 
 const pendingApproval = {
   id: 'approval-1',
@@ -169,5 +176,31 @@ describe('WorkflowRunPage', () => {
 
     expect(screen.getByText('Resumed — completed')).toBeInTheDocument();
     expect(screen.queryByText('running')).not.toBeInTheDocument();
+  });
+
+  it('drives its state entirely off the SSE stream and closes the connection on a terminal run event', () => {
+    FakeEventSource.reset();
+    vi.stubGlobal('EventSource', FakeEventSource);
+
+    renderAt('run-1');
+
+    expect(screen.getByText('Loading…')).toBeInTheDocument();
+
+    const [source] = FakeEventSource.instances;
+    act(() => {
+      source.emit('run', runningRun);
+      source.emit('approvals', { docs: [pendingApproval], count: 1 });
+    });
+
+    expect(screen.getByText('Paused — awaiting approval')).toBeInTheDocument();
+    expect(source.closed).toBe(false);
+
+    act(() => {
+      source.emit('run', failedRun);
+    });
+
+    expect(screen.getByText('Resumed — failed')).toBeInTheDocument();
+    expect(screen.getAllByText('Retrieval service returned a 503.')).toHaveLength(2);
+    expect(source.closed).toBe(true);
   });
 });

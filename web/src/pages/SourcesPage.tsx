@@ -9,13 +9,29 @@ import {
   type Source,
   type WorkflowRun,
 } from '../api/client';
+import Badge from '../components/ui/Badge';
+import Button from '../components/ui/Button';
+import EmptyState from '../components/ui/EmptyState';
+import Field from '../components/ui/Field';
+import Skeleton from '../components/ui/Skeleton';
+import Table, { TableHeaderCell } from '../components/ui/Table';
+import { notify } from '../components/ui/toast';
 
 const DEFAULT_POLL_INTERVAL_MS = 1500;
+const PAGE_SIZE = 20;
 
-function enabledBadge(enabled: boolean): { className: string; label: string } {
-  return enabled
-    ? { className: 'badge badge--strong', label: 'enabled' }
-    : { className: 'badge badge--neutral', label: 'disabled' };
+// An in-flight sync outranks everything else the row could report — it supersedes whatever status
+// the last completed sync left behind. Disabled is neutral regardless of a carried error, since the
+// row is not currently acting on its schedule either way. A carried lastSyncError only reads as
+// rejected once the source is both enabled and idle; anything left over synced cleanly.
+function sourceStatusTone(
+  source: Source,
+  isPolling: boolean,
+): { tone: 'verified' | 'caution' | 'rejected' | 'info' | 'neutral'; label: string } {
+  if (isPolling) return { tone: 'info', label: 'syncing' };
+  if (!source.enabled) return { tone: 'neutral', label: 'disabled' };
+  if (source.lastSyncError) return { tone: 'rejected', label: 'failed' };
+  return { tone: 'verified', label: 'enabled' };
 }
 
 function isTerminalRun(status: WorkflowRun['status']): boolean {
@@ -54,9 +70,13 @@ function SourceRow({
     setStarting(true);
     setSyncError(null);
     try {
-      setRun(await requestSourceSync(source.id));
+      const started = await requestSourceSync(source.id);
+      setRun(started);
+      notify('success', `Sync started for ${source.name}.`);
     } catch (err: unknown) {
-      setSyncError(err instanceof Error ? err.message : 'Failed to start sync');
+      const message = err instanceof Error ? err.message : 'Failed to start sync';
+      setSyncError(message);
+      notify('error', message);
     } finally {
       setStarting(false);
     }
@@ -92,8 +112,8 @@ function SourceRow({
     };
   }, [runId, runStatus, pollIntervalMs]);
 
-  const badge = enabledBadge(source.enabled);
   const isPolling = !!run && !isTerminalRun(run.status);
+  const status = sourceStatusTone(source, isPolling);
 
   return (
     <tr>
@@ -102,7 +122,7 @@ function SourceRow({
       </td>
       <td className="cell-sub mono">{source.path}</td>
       <td>
-        <span className={badge.className}>{badge.label}</span>
+        <Badge tone={status.tone}>{status.label}</Badge>
       </td>
       <td className="cell-sub">
         {source.lastSyncAt ? new Date(source.lastSyncAt).toLocaleString() : 'Never synced'}
@@ -112,22 +132,17 @@ function SourceRow({
       <td className="num">{source.fileCount}</td>
       <td>
         <div className="form-actions">
-          <button
-            type="button"
-            className="btn btn--secondary btn--sm"
+          <Button
+            variant="secondary"
+            size="sm"
             disabled={toggling}
             onClick={() => void handleToggle()}
           >
             {toggling ? 'Updating…' : source.enabled ? 'Disable' : 'Enable'}
-          </button>
-          <button
-            type="button"
-            className="btn btn--primary btn--sm"
-            disabled={starting}
-            onClick={() => void handleSync()}
-          >
+          </Button>
+          <Button variant="primary" size="sm" disabled={starting} onClick={() => void handleSync()}>
             {starting ? 'Starting…' : 'Sync now'}
-          </button>
+          </Button>
           {run && (
             <Link to={`/workflow-runs/${run.id}`}>
               {isPolling && <span className="badge-dot" />}
@@ -159,7 +174,9 @@ export default function SourcesPage({
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
 }: SourcesPageProps) {
   const [sources, setSources] = useState<Source[] | null>(null);
+  const [count, setCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [skip, setSkip] = useState(0);
   const [name, setName] = useState('');
   const [path, setPath] = useState('');
   const [intervalMs, setIntervalMs] = useState('');
@@ -167,12 +184,16 @@ export default function SourcesPage({
   const [createError, setCreateError] = useState<string | null>(null);
 
   useEffect(() => {
-    listSources()
-      .then(({ docs }) => setSources(docs))
+    listSources({ skip, limit: PAGE_SIZE })
+      .then(({ docs, count: total }) => {
+        setSources(docs);
+        setCount(total);
+        setError(null);
+      })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'Failed to load sources');
       });
-  }, []);
+  }, [skip]);
 
   async function handleCreate(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -185,7 +206,12 @@ export default function SourcesPage({
         path,
         intervalMs: intervalMs.trim() ? Number(intervalMs) : undefined,
       });
-      setSources((current) => [created, ...(current ?? [])]);
+      // A create always lands on the first page — pushing it onto a later page's array would
+      // show it out of order with what a re-fetch of that page would return.
+      if (skip === 0) {
+        setSources((current) => [created, ...(current ?? [])].slice(0, PAGE_SIZE));
+      }
+      setCount((current) => current + 1);
       setName('');
       setPath('');
       setIntervalMs('');
@@ -199,6 +225,9 @@ export default function SourcesPage({
   function handleToggled(updated: Source) {
     setSources((current) => current?.map((s) => (s.id === updated.id ? updated : s)) ?? current);
   }
+
+  const hasPrev = skip > 0;
+  const hasNext = skip + PAGE_SIZE < count;
 
   return (
     <div className="view view--flow">
@@ -215,40 +244,46 @@ export default function SourcesPage({
           <h2 className="card-title">Add a source</h2>
         </div>
         <form onSubmit={(e) => void handleCreate(e)} className="form">
-          <label>
-            Name
-            <input
-              type="text"
-              required
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Deal Room Inbox"
-            />
-          </label>
-          <label>
-            Folder path
-            <input
-              type="text"
-              required
-              value={path}
-              onChange={(e) => setPath(e.target.value)}
-              placeholder="deal-room"
-            />
-          </label>
-          <label>
-            Sync interval (ms, optional)
-            <input
-              type="number"
-              min={1}
-              value={intervalMs}
-              onChange={(e) => setIntervalMs(e.target.value)}
-              placeholder="60000"
-            />
-          </label>
+          <Field label="Name">
+            {(inputProps) => (
+              <input
+                type="text"
+                required
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Deal Room Inbox"
+                {...inputProps}
+              />
+            )}
+          </Field>
+          <Field label="Folder path">
+            {(inputProps) => (
+              <input
+                type="text"
+                required
+                value={path}
+                onChange={(e) => setPath(e.target.value)}
+                placeholder="deal-room"
+                {...inputProps}
+              />
+            )}
+          </Field>
+          <Field label="Sync interval (ms, optional)">
+            {(inputProps) => (
+              <input
+                type="number"
+                min={1}
+                value={intervalMs}
+                onChange={(e) => setIntervalMs(e.target.value)}
+                placeholder="60000"
+                {...inputProps}
+              />
+            )}
+          </Field>
           <div className="form-actions">
-            <button type="submit" className="btn btn--primary" disabled={creating}>
+            <Button type="submit" disabled={creating}>
               {creating ? 'Adding…' : 'Add source'}
-            </button>
+            </Button>
           </div>
         </form>
         {createError && (
@@ -264,23 +299,26 @@ export default function SourcesPage({
         </p>
       )}
 
-      {!sources && !error && <p>Loading…</p>}
+      {!sources && !error && <Skeleton label="Loading sources…" />}
 
-      {sources && sources.length === 0 && (
-        <p className="notice notice--info">No sources yet — add one to start syncing documents.</p>
+      {sources && sources.length === 0 && count === 0 && (
+        <EmptyState
+          title="No sources yet — add one to start syncing documents."
+          description="A source is a watched folder that keeps this data room current. Use the form above to add one."
+        />
       )}
 
       {sources && sources.length > 0 && (
         <section className="panel">
-          <table className="grid">
+          <Table caption="Sources syncing documents into this data room">
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Path</th>
-                <th>Status</th>
-                <th>Last sync</th>
-                <th>Files</th>
-                <th>Actions</th>
+                <TableHeaderCell>Name</TableHeaderCell>
+                <TableHeaderCell>Path</TableHeaderCell>
+                <TableHeaderCell>Status</TableHeaderCell>
+                <TableHeaderCell>Last sync</TableHeaderCell>
+                <TableHeaderCell>Files</TableHeaderCell>
+                <TableHeaderCell>Actions</TableHeaderCell>
               </tr>
             </thead>
             <tbody>
@@ -293,8 +331,32 @@ export default function SourcesPage({
                 />
               ))}
             </tbody>
-          </table>
+          </Table>
         </section>
+      )}
+
+      {sources && (
+        <div className="form-actions">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={!hasPrev}
+            onClick={() => setSkip((s) => Math.max(0, s - PAGE_SIZE))}
+          >
+            Previous
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={!hasNext}
+            onClick={() => setSkip((s) => s + PAGE_SIZE)}
+          >
+            Next
+          </Button>
+          <span className="cell-sub">{count} total</span>
+        </div>
       )}
     </div>
   );

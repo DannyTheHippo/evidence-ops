@@ -1,15 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import {
-  ApiError,
-  getSourceById,
-  type SourceFileState,
-  type SourceWithFileStates,
-} from '../api/client';
-
-function fileStatusBadgeClass(status: SourceFileState['status']): string {
-  return status === 'failed' ? 'badge badge--failed' : 'badge badge--strong';
-}
+import { ApiError, getSourceById, type SourceWithFileStates } from '../api/client';
+import Badge from '../components/ui/Badge';
+import EmptyState from '../components/ui/EmptyState';
+import Skeleton from '../components/ui/Skeleton';
+import Table, { TableHeaderCell } from '../components/ui/Table';
 
 export default function SourceDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -61,16 +56,16 @@ export default function SourceDetailPage() {
 
       {notFound && <p className="notice notice--info">Source not found.</p>}
 
-      {!source && !error && !notFound && id && <p>Loading…</p>}
+      {!source && !error && !notFound && id && <Skeleton label="Loading…" />}
 
       {source && (
         <>
           <section className="card">
             <div className="card-head">
               <h2 className="card-title mono">{source.path}</h2>
-              <span className={source.enabled ? 'badge badge--strong' : 'badge badge--neutral'}>
+              <Badge tone={source.enabled ? 'verified' : 'neutral'}>
                 {source.enabled ? 'enabled' : 'disabled'}
-              </span>
+              </Badge>
             </div>
             <p className="cell-sub">
               {source.lastSyncAt
@@ -82,15 +77,18 @@ export default function SourceDetailPage() {
 
           <section className="panel">
             {source.fileStates.length === 0 ? (
-              <p className="notice notice--info">No files synced yet.</p>
+              <EmptyState
+                title="No files synced yet."
+                description="File status appears here after the source's next sync."
+              />
             ) : (
-              <table className="grid">
+              <Table caption="Per-file sync status for this source">
                 <thead>
                   <tr>
-                    <th>File</th>
-                    <th>Status</th>
-                    <th>Last error</th>
-                    <th>Last modified</th>
+                    <TableHeaderCell>File</TableHeaderCell>
+                    <TableHeaderCell>Status</TableHeaderCell>
+                    <TableHeaderCell>Last error</TableHeaderCell>
+                    <TableHeaderCell>Last modified</TableHeaderCell>
                   </tr>
                 </thead>
                 <tbody>
@@ -98,16 +96,16 @@ export default function SourceDetailPage() {
                     <tr key={fileState.path}>
                       <td className="mono">{fileState.path}</td>
                       <td>
-                        <span className={fileStatusBadgeClass(fileState.status)}>
+                        <Badge tone={fileState.lastError ? 'rejected' : 'verified'}>
                           {fileState.status}
-                        </span>
+                        </Badge>
                       </td>
                       <td className="cell-sub">{fileState.lastError ?? '—'}</td>
                       <td className="cell-sub">{new Date(fileState.mtimeMs).toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </Table>
             )}
           </section>
         </>

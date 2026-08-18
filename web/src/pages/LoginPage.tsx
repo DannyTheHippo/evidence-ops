@@ -2,6 +2,8 @@ import type { FormEvent } from 'react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { login, register } from '../api/client';
+import Button from '../components/ui/Button';
+import Field from '../components/ui/Field';
 
 type Mode = 'login' | 'signup';
 
@@ -24,7 +26,13 @@ export default function LoginPage() {
       await login(email, password);
       await navigate('/');
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Authentication failed');
+      setError(
+        err instanceof Error
+          ? err.message
+          : mode === 'login'
+            ? 'Failed to sign in. Check your email and password and try again.'
+            : 'Failed to create your account. Try again.',
+      );
     } finally {
       setLoading(false);
     }
@@ -37,48 +45,58 @@ export default function LoginPage() {
           <span className="eyebrow">{mode === 'login' ? 'Welcome back' : 'Create account'}</span>
           <h1 className="page-title">Evidence Ops</h1>
           <p className="page-sub">
-            {mode === 'login' ? 'Sign in to your account.' : 'Sign up to get started.'}
+            {mode === 'login' ? 'Sign in to your account.' : 'Create an account to get started.'}
           </p>
         </div>
       </div>
 
       <section className="card card--narrow">
         <form onSubmit={(e) => void handleSubmit(e)} className="form">
-          <label>
-            Email
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              autoComplete="email"
-            />
-          </label>
-          <label>
-            Password
-            <input
-              type="password"
-              required
-              minLength={8}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-            />
-          </label>
+          <Field label="Email">
+            {(inputProps) => (
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoComplete="email"
+                {...inputProps}
+              />
+            )}
+          </Field>
+          <Field label="Password">
+            {(inputProps) => (
+              <input
+                type="password"
+                required
+                minLength={8}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                {...inputProps}
+              />
+            )}
+          </Field>
           <div className="form-actions">
-            <button type="submit" className="btn btn--primary" disabled={loading}>
-              {loading ? 'Please wait…' : mode === 'login' ? 'Sign in' : 'Sign up'}
-            </button>
-            <button
+            <Button type="submit" variant="primary" disabled={loading}>
+              {loading
+                ? mode === 'login'
+                  ? 'Signing in…'
+                  : 'Creating account…'
+                : mode === 'login'
+                  ? 'Sign in'
+                  : 'Create account'}
+            </Button>
+            <Button
               type="button"
-              className="btn btn--ghost"
+              variant="ghost"
               onClick={() => {
                 setMode((m) => (m === 'login' ? 'signup' : 'login'));
                 setError(null);
               }}
             >
-              {mode === 'login' ? 'Need an account? Sign up' : 'Have an account? Sign in'}
-            </button>
+              {mode === 'login' ? 'Need an account? Create one' : 'Have an account? Sign in'}
+            </Button>
           </div>
         </form>
       </section>

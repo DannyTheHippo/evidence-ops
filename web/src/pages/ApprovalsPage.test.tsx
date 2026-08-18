@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clearSession } from '../lib/auth';
@@ -206,8 +206,38 @@ describe('ApprovalsPage', () => {
     expect(screen.queryByText(/^Recommended ·/)).not.toBeInTheDocument();
   });
 
-  it('an admin sees and can use the decide controls', async () => {
+  it('an admin sees the decide controls, and clicking Approve opens a dialog naming the approval', async () => {
     const fetchMock = vi.fn((url: string) => {
+      const routes: Record<string, () => Response> = {
+        '/api/v1/auth/me': () => jsonResponse(admin),
+        '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 1 }),
+      };
+      const handler = routes[url];
+      if (!handler) return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      return Promise.resolve(handler());
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    await screen.findByRole('button', { name: 'Approve' });
+    expect(screen.queryByText('Deciding approvals requires an admin.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Approve this approval' });
+    expect(within(dialog).getByText(pendingApproval.summary)).toBeInTheDocument();
+    // The recommendation (when present) is only ever a suggestion — loading and rendering an
+    // approval, recommendation included, never itself calls the decision endpoint. Opening the
+    // dialog is not deciding either.
+    expect(
+      fetchMock.mock.calls.some(([url]) => url === '/api/v1/approvals/approval-1/decision'),
+    ).toBe(false);
+  });
+
+  it('confirming inside the dialog sends the decision with the reason and removes the approval from the inbox', async () => {
+    const fetchMock = vi.fn((url: string, _init?: RequestInit) => {
       const routes: Record<string, () => Response> = {
         '/api/v1/auth/me': () => jsonResponse(admin),
         '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 1 }),
@@ -222,25 +252,30 @@ describe('ApprovalsPage', () => {
 
     renderPage();
 
-    await screen.findByRole('button', { name: 'Approve' });
-    expect(screen.queryByText('Deciding approvals requires an admin.')).not.toBeInTheDocument();
-    // The recommendation (when present) is only ever a suggestion — loading and rendering an
-    // approval, recommendation included, never itself calls the decision endpoint.
-    expect(
-      fetchMock.mock.calls.some(([url]) => url === '/api/v1/approvals/approval-1/decision'),
-    ).toBe(false);
-    fireEvent.change(screen.getByLabelText('Reason (optional)'), {
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+    const dialog = screen.getByRole('dialog', { name: 'Approve this approval' });
+
+    fireEvent.change(within(dialog).getByLabelText('Reason (optional)'), {
       target: { value: 'Evidence checks out.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
 
     await waitFor(() => {
-      expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
-    expect(screen.getByText('No pending approvals.')).toBeInTheDocument();
+    expect(screen.getByText('Nothing waiting on you')).toBeInTheDocument();
+
+    const decideCall = fetchMock.mock.calls.find(
+      ([url]) => url === '/api/v1/approvals/approval-1/decision',
+    );
+    expect(decideCall).toBeDefined();
+    expect(JSON.parse((decideCall?.[1] as RequestInit).body as string)).toEqual({
+      decision: 'approved',
+      reason: 'Evidence checks out.',
+    });
   });
 
-  it('rejects a pending approval and removes it from the inbox', async () => {
+  it('rejects a pending approval via the dialog and removes it from the inbox', async () => {
     const fetchMock = vi.fn((url: string, _init?: RequestInit) => {
       if (url === '/api/v1/auth/me') return Promise.resolve(jsonResponse(admin));
       if (url === '/api/v1/approvals') {
@@ -255,13 +290,14 @@ describe('ApprovalsPage', () => {
 
     renderPage();
 
-    await screen.findByRole('button', { name: 'Reject' });
-    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Reject' }));
+    const dialog = screen.getByRole('dialog', { name: 'Reject this approval' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reject' }));
 
     await waitFor(() => {
-      expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
-    expect(screen.getByText('No pending approvals.')).toBeInTheDocument();
+    expect(screen.getByText('Nothing waiting on you')).toBeInTheDocument();
 
     const decideCall = fetchMock.mock.calls.find(
       ([url]) => url === '/api/v1/approvals/approval-1/decision',
@@ -270,6 +306,31 @@ describe('ApprovalsPage', () => {
     expect(JSON.parse((decideCall?.[1] as RequestInit).body as string)).toEqual({
       decision: 'rejected',
     });
+  });
+
+  it('cancelling the dialog closes it without deciding, leaving the approval pending', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      const routes: Record<string, () => Response> = {
+        '/api/v1/auth/me': () => jsonResponse(admin),
+        '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 1 }),
+      };
+      const handler = routes[url];
+      if (!handler) return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      return Promise.resolve(handler());
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reject' }));
+    const dialog = screen.getByRole('dialog', { name: 'Reject this approval' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([url]) => url === '/api/v1/approvals/approval-1/decision'),
+    ).toBe(false);
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeInTheDocument();
   });
 
   it('a member sees why deciding is unavailable, and cannot reach the decide controls', async () => {
@@ -317,6 +378,31 @@ describe('ApprovalsPage', () => {
 
     expect(await screen.findByRole('button', { name: 'Approve' })).toBeInTheDocument();
     expect(screen.queryByText('Deciding approvals requires an admin.')).not.toBeInTheDocument();
+  });
+
+  it('shows how many approvals are visible against the total when the inbox is truncated', async () => {
+    stubFetch({
+      '/api/v1/auth/me': () => jsonResponse(admin),
+      '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 32 }),
+      '/api/v1/conflicts': () => jsonResponse({ docs: [authorityConflict], count: 1 }),
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('Showing 1 of 32.')).toBeInTheDocument();
+  });
+
+  it('shows no truncation notice when the full inbox fits on the page', async () => {
+    stubFetch({
+      '/api/v1/auth/me': () => jsonResponse(admin),
+      '/api/v1/approvals': () => jsonResponse({ docs: [pendingApproval], count: 1 }),
+      '/api/v1/conflicts': () => jsonResponse({ docs: [authorityConflict], count: 1 }),
+    });
+
+    renderPage();
+
+    await screen.findByText(pendingApproval.summary);
+    expect(screen.queryByText(/^Showing /)).not.toBeInTheDocument();
   });
 
   it('navigates to the workflow run when "View run" finds one', async () => {

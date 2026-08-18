@@ -1,0 +1,146 @@
+import type { ReactElement } from 'react';
+import { NavLink } from 'react-router-dom';
+import {
+  IconActivity,
+  IconAlertTriangle,
+  IconCheck,
+  IconClipboard,
+  IconDatabase,
+  IconFileText,
+  IconFolder,
+  IconHome,
+  IconKey,
+  IconMessageCircle,
+  IconSearch,
+} from '../icons';
+import Dialog from '../ui/Dialog';
+
+interface NavItem {
+  to: string;
+  label: string;
+  icon: ReactElement;
+  end?: boolean;
+}
+
+interface NavGroup {
+  heading?: string;
+  items: NavItem[];
+}
+
+/** Flat `to` → `label` pairs for every nav destination, independent of the icon/grouping shape
+ * above — the topbar breadcrumb looks a route up here rather than re-deriving it from
+ * `buildNavGroups`, which also carries an `isAdmin`-gated shape and rendered icon elements it has
+ * no use for. */
+// eslint-disable-next-line react-refresh/only-export-components -- non-component export: App.tsx's breadcrumb lookup and this file's own nav-group builder both read it
+export const NAV_LABELS: { to: string; label: string }[] = [
+  { to: '/', label: 'Home' },
+  { to: '/ask', label: 'Ask' },
+  { to: '/answers', label: 'Answers' },
+  { to: '/search', label: 'Search' },
+  { to: '/documents', label: 'Data Room' },
+  { to: '/sources', label: 'Sources' },
+  { to: '/conflicts', label: 'Conflicts' },
+  { to: '/approvals', label: 'Approvals' },
+  { to: '/workflow-runs', label: 'Runs' },
+  { to: '/api-keys', label: 'API Keys' },
+  { to: '/audit-events', label: 'Audit Log' },
+];
+
+function buildNavGroups(isAdmin: boolean): NavGroup[] {
+  return [
+    { items: [{ to: '/', label: 'Home', icon: <IconHome />, end: true }] },
+    {
+      heading: 'Ask',
+      items: [
+        { to: '/ask', label: 'Ask', icon: <IconMessageCircle /> },
+        { to: '/answers', label: 'Answers', icon: <IconFileText /> },
+      ],
+    },
+    {
+      heading: 'Evidence',
+      items: [
+        { to: '/search', label: 'Search', icon: <IconSearch /> },
+        { to: '/documents', label: 'Data Room', icon: <IconFolder /> },
+        { to: '/sources', label: 'Sources', icon: <IconDatabase /> },
+      ],
+    },
+    {
+      heading: 'Review',
+      items: [
+        { to: '/conflicts', label: 'Conflicts', icon: <IconAlertTriangle /> },
+        { to: '/approvals', label: 'Approvals', icon: <IconCheck /> },
+        { to: '/workflow-runs', label: 'Runs', icon: <IconActivity /> },
+      ],
+    },
+    {
+      heading: 'Admin',
+      items: [
+        { to: '/api-keys', label: 'API Keys', icon: <IconKey /> },
+        ...(isAdmin ? [{ to: '/audit-events', label: 'Audit Log', icon: <IconClipboard /> }] : []),
+      ],
+    },
+  ];
+}
+
+function sidebarLinkClassName({ isActive }: { isActive: boolean }): string {
+  return isActive ? 'sidebar-link is-active' : 'sidebar-link';
+}
+
+/** Renders the group headings and nav links shared by the persistent sidebar and the drawer.
+ * `onNavigate` is only supplied by the drawer, which needs each link click to close it. */
+function NavGroups({ groups, onNavigate }: { groups: NavGroup[]; onNavigate?: () => void }) {
+  return (
+    <>
+      {groups.map((group, index) => (
+        <div className="sidebar-group" key={group.heading ?? `group-${index}`}>
+          {group.heading && <h2 className="sidebar-heading">{group.heading}</h2>}
+          <ul className="sidebar-list">
+            {group.items.map((item) => (
+              <li key={item.to}>
+                <NavLink
+                  to={item.to}
+                  end={item.end}
+                  aria-label={item.label}
+                  className={sidebarLinkClassName}
+                  onClick={onNavigate}
+                >
+                  {item.icon}
+                  <span className="sidebar-label">{item.label}</span>
+                </NavLink>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </>
+  );
+}
+
+interface SidebarProps {
+  isAdmin: boolean;
+  drawerOpen: boolean;
+  onCloseDrawer: () => void;
+}
+
+/** The primary navigation landmark, plus the same nav content re-rendered inside a `Dialog` for
+ * the sub-768px drawer — one nav-group source, two presentations, so the two never drift apart. */
+export default function Sidebar({ isAdmin, drawerOpen, onCloseDrawer }: SidebarProps) {
+  const groups = buildNavGroups(isAdmin);
+
+  return (
+    <>
+      <nav className="sidebar" aria-label="Primary">
+        <span className="sidebar-brand" aria-label="Evidence Ops">
+          <span className="brand-mark" aria-hidden="true" />
+          <span className="sidebar-brand-label">Evidence Ops</span>
+        </span>
+        <NavGroups groups={groups} />
+      </nav>
+      <Dialog open={drawerOpen} onClose={onCloseDrawer} title="Navigation">
+        <div className="sidebar-drawer-nav">
+          <NavGroups groups={groups} onNavigate={onCloseDrawer} />
+        </div>
+      </Dialog>
+    </>
+  );
+}

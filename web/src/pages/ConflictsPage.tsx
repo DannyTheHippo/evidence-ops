@@ -1,18 +1,25 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { listConflicts, requestConflictResolution, type Conflict } from '../api/client';
+import Badge from '../components/ui/Badge';
+import Button from '../components/ui/Button';
+import EmptyState from '../components/ui/EmptyState';
+import Skeleton from '../components/ui/Skeleton';
+import Table, { TableHeaderCell } from '../components/ui/Table';
+import { notify } from '../components/ui/toast';
 import { buildDocumentVersionIndex, type ResolvedVersion } from '../lib/document-index';
 import { formatLocator } from '../lib/locator';
 
-function statusBadgeClass(status: Conflict['status']): string {
-  if (status === 'open') return 'badge badge--possible';
-  if (status === 'resolved') return 'badge badge--strong';
-  return 'badge badge--neutral';
+function statusTone(status: Conflict['status']): 'caution' | 'verified' | 'neutral' {
+  if (status === 'open') return 'caution';
+  if (status === 'resolved') return 'verified';
+  return 'neutral';
 }
 
 export default function ConflictsPage() {
   const navigate = useNavigate();
   const [conflicts, setConflicts] = useState<Conflict[] | null>(null);
+  const [count, setCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [documentIndex, setDocumentIndex] = useState<Map<string, ResolvedVersion>>(new Map());
   const [resolvingFactId, setResolvingFactId] = useState<string | null>(null);
@@ -20,7 +27,10 @@ export default function ConflictsPage() {
 
   useEffect(() => {
     listConflicts()
-      .then(({ docs }) => setConflicts(docs))
+      .then(({ docs, count: total }) => {
+        setConflicts(docs);
+        setCount(total);
+      })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'Failed to load conflicts');
       });
@@ -52,6 +62,7 @@ export default function ConflictsPage() {
     });
     try {
       const run = await requestConflictResolution(conflictId, factId);
+      notify('success', 'Resolution requested — a workflow run started and now needs approval.');
       await navigate(`/workflow-runs/${run.id}`);
     } catch (err: unknown) {
       setRowErrors((current) => ({
@@ -79,99 +90,105 @@ export default function ConflictsPage() {
         </p>
       )}
 
-      {!conflicts && !error && <p>Loading…</p>}
+      {!conflicts && !error && <Skeleton label="Loading…" />}
 
-      <section className="panel">
-        <table className="grid">
-          <thead>
-            <tr>
-              <th>Entity</th>
-              <th>Metric</th>
-              <th>Period</th>
-              <th>Magnitude</th>
-              <th>Status</th>
-              <th>Values</th>
-            </tr>
-          </thead>
-          <tbody>
-            {conflicts && conflicts.length === 0 && (
+      {conflicts && conflicts.length === 0 && (
+        <EmptyState
+          title="No conflicts"
+          description="The evidence corpus currently agrees with itself — every extracted fact has a single value."
+        />
+      )}
+
+      {conflicts && conflicts.length > 0 && (
+        <section className="panel">
+          <Table caption="Conflicting facts extracted from the evidence corpus, with the survivorship policy's recommended value where it has one.">
+            <thead>
               <tr>
-                <td className="grid-empty" colSpan={6}>
-                  No conflicts detected.
-                </td>
+                <TableHeaderCell>Entity</TableHeaderCell>
+                <TableHeaderCell>Metric</TableHeaderCell>
+                <TableHeaderCell>Period</TableHeaderCell>
+                <TableHeaderCell>Magnitude</TableHeaderCell>
+                <TableHeaderCell>Status</TableHeaderCell>
+                <TableHeaderCell>Values</TableHeaderCell>
               </tr>
-            )}
-            {conflicts?.map((conflict) => (
-              <tr key={conflict.id}>
-                <td>{conflict.factKey.entity}</td>
-                <td className="cell-sub">{conflict.factKey.metric}</td>
-                <td className="cell-sub">{conflict.factKey.period}</td>
-                <td className="num">{conflict.magnitude}</td>
-                <td>
-                  <span className={statusBadgeClass(conflict.status)}>{conflict.status}</span>
-                </td>
-                <td>
-                  {conflict.ruleFired === 'none' && (
-                    <p className="cell-sub">
-                      Policy has no recommendation for this conflict — {conflict.explanation}
-                    </p>
-                  )}
-                  <ul className="value-compare">
-                    {conflict.values.map((value) => {
-                      const resolved = documentIndex.get(value.documentVersionId);
-                      const title = resolved?.documentTitle ?? 'Unknown document';
-                      const isRecommended = value.factId === conflict.proposedWinnerFactId;
-                      return (
-                        <li
-                          key={value.factId}
-                          className={
-                            isRecommended
-                              ? 'value-compare-item value-compare-item--recommended'
-                              : 'value-compare-item'
-                          }
-                        >
-                          <span className="mono">
-                            {value.value} {value.unit}
-                          </span>
-                          <span className="cell-sub">
-                            {title} — {formatLocator(value.locator)}
-                          </span>
-                          {isRecommended && (
-                            <>
-                              <span className="badge badge--info">
-                                <span className="badge-dot" />
-                                Recommended · {conflict.ruleFired}
-                              </span>
-                              <p className="cell-sub">{conflict.explanation}</p>
-                            </>
-                          )}
-                          {conflict.status === 'open' && (
-                            <button
-                              type="button"
-                              className="btn btn--secondary btn--sm"
-                              disabled={resolvingFactId === value.factId}
-                              onClick={() => void handleResolve(conflict.id, value.factId)}
-                            >
-                              {resolvingFactId === value.factId
-                                ? 'Requesting…'
-                                : 'Request resolution'}
-                            </button>
-                          )}
-                          {rowErrors[value.factId] && (
-                            <p className="error" role="alert">
-                              {rowErrors[value.factId]}
-                            </p>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+            </thead>
+            <tbody>
+              {conflicts.map((conflict) => (
+                <tr key={conflict.id}>
+                  <td>{conflict.factKey.entity}</td>
+                  <td className="cell-sub">{conflict.factKey.metric}</td>
+                  <td className="cell-sub">{conflict.factKey.period}</td>
+                  <td className="num">{conflict.magnitude}</td>
+                  <td>
+                    <Badge tone={statusTone(conflict.status)}>{conflict.status}</Badge>
+                  </td>
+                  <td>
+                    {conflict.ruleFired === 'none' && (
+                      <p className="cell-sub">
+                        Policy has no recommendation for this conflict — {conflict.explanation}
+                      </p>
+                    )}
+                    <ul className="value-compare">
+                      {conflict.values.map((value) => {
+                        const resolved = documentIndex.get(value.documentVersionId);
+                        const title = resolved?.documentTitle ?? 'Unknown document';
+                        const isRecommended = value.factId === conflict.proposedWinnerFactId;
+                        return (
+                          <li
+                            key={value.factId}
+                            className={
+                              isRecommended
+                                ? 'value-compare-item value-compare-item--recommended'
+                                : 'value-compare-item'
+                            }
+                          >
+                            <span className="mono">
+                              {value.value} {value.unit}
+                            </span>
+                            <span className="cell-sub">
+                              {title} — {formatLocator(value.locator)}
+                            </span>
+                            <span className="trace-chip mono">{value.sourceChunkId}</span>
+                            {isRecommended && (
+                              <>
+                                <Badge tone="info">Recommended · {conflict.ruleFired}</Badge>
+                                <p className="cell-sub">{conflict.explanation}</p>
+                              </>
+                            )}
+                            {conflict.status === 'open' && (
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                disabled={resolvingFactId === value.factId}
+                                onClick={() => void handleResolve(conflict.id, value.factId)}
+                              >
+                                {resolvingFactId === value.factId
+                                  ? 'Requesting…'
+                                  : 'Request resolution'}
+                              </Button>
+                            )}
+                            {rowErrors[value.factId] && (
+                              <p className="error" role="alert">
+                                {rowErrors[value.factId]}
+                              </p>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </section>
+      )}
+
+      {conflicts && conflicts.length > 0 && conflicts.length < count && (
+        <p className="cell-sub">
+          Showing {conflicts.length} of {count}.
+        </p>
+      )}
     </div>
   );
 }

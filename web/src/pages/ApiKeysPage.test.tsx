@@ -59,7 +59,12 @@ describe('ApiKeysPage', () => {
 
     render(<ApiKeysPage />);
 
-    expect(await screen.findByText('No API keys yet.')).toBeInTheDocument();
+    expect(await screen.findByText('No API keys yet')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'An API key authenticates the MCP surface as you. Mint one above to connect an MCP client.',
+      ),
+    ).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
@@ -85,7 +90,7 @@ describe('ApiKeysPage', () => {
 
     render(<ApiKeysPage />);
 
-    await screen.findByText('No API keys yet.');
+    await screen.findByText('No API keys yet');
 
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Local dev' } });
     fireEvent.click(screen.getByRole('button', { name: 'Mint key' }));
@@ -145,7 +150,7 @@ describe('ApiKeysPage', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     render(<ApiKeysPage />);
-    await screen.findByText('No API keys yet.');
+    await screen.findByText('No API keys yet');
 
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Local dev' } });
     fireEvent.click(screen.getByRole('button', { name: 'Mint key' }));
@@ -170,7 +175,7 @@ describe('ApiKeysPage', () => {
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
 
     render(<ApiKeysPage />);
-    await screen.findByText('No API keys yet.');
+    await screen.findByText('No API keys yet');
 
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Local dev' } });
     fireEvent.click(screen.getByRole('button', { name: 'Mint key' }));
@@ -183,7 +188,21 @@ describe('ApiKeysPage', () => {
     expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
   });
 
-  it('an admin revokes a key after confirming, and the revoked key never offers a "view again"', async () => {
+  it('opening the revoke dialog names the key being revoked', async () => {
+    stubFetch({
+      '/api/v1/api-keys': () => jsonResponse({ docs: [existingKey], count: 1 }),
+    });
+
+    render(<ApiKeysPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Revoke' }));
+
+    expect(
+      screen.getByRole('dialog', { name: `Revoke "${existingKey.name}"?` }),
+    ).toBeInTheDocument();
+  });
+
+  it('confirming a revoke calls the API and closes the dialog', async () => {
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
       if (url === '/api/v1/api-keys')
         return Promise.resolve(jsonResponse({ docs: [existingKey], count: 1 }));
@@ -197,15 +216,13 @@ describe('ApiKeysPage', () => {
     render(<ApiKeysPage />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Revoke' }));
-    expect(screen.getByRole('button', { name: 'Confirm revoke' })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm revoke' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke key' }));
 
     await waitFor(() => {
       expect(screen.getByText('revoked')).toBeInTheDocument();
     });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Revoke' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Confirm revoke' })).not.toBeInTheDocument();
     expect(
       fetchMock.mock.calls.some(
         ([url, callInit]) => url === '/api/v1/api-keys/key-1' && callInit?.method === 'DELETE',
@@ -213,21 +230,7 @@ describe('ApiKeysPage', () => {
     ).toBe(true);
   });
 
-  it('arming a revoke moves focus to the confirm button and announces the prompt', async () => {
-    stubFetch({
-      '/api/v1/api-keys': () => jsonResponse({ docs: [existingKey], count: 1 }),
-    });
-
-    render(<ApiKeysPage />);
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Revoke' }));
-
-    const confirm = screen.getByRole('button', { name: 'Confirm revoke' });
-    expect(confirm).toHaveFocus();
-    expect(screen.getByRole('alert')).toContainElement(confirm);
-  });
-
-  it('cancelling a revoke confirmation leaves the key active and issues no request', async () => {
+  it('cancelling a revoke closes the dialog without revoking', async () => {
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
       if (url === '/api/v1/api-keys')
         return Promise.resolve(jsonResponse({ docs: [existingKey], count: 1 }));
@@ -240,6 +243,7 @@ describe('ApiKeysPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Revoke' }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Revoke' })).toBeInTheDocument();
     expect(screen.getByText('active')).toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([, callInit]) => callInit?.method === 'DELETE')).toBe(false);

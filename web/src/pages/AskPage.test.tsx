@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { FakeEventSource } from '../test/fake-event-source';
 import AskPage from './AskPage';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -253,5 +254,144 @@ describe('AskPage', () => {
 
     expect(screen.getByText('Not enough evidence.')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('renders an answered outcome via the provenance rail, with a fully verified verification panel', async () => {
+    const completedAnswer = {
+      id: 'answer-5',
+      questionText: 'What is the cap rate?',
+      runStatus: 'completed',
+      outcome: {
+        kind: 'answered',
+        claims: [
+          {
+            statement: 'The cap rate is 6.1%.',
+            citations: [
+              {
+                docVersionId: 'docver-1',
+                sha256: 'a'.repeat(64),
+                chunkId: 'chunk-a',
+                locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+                quote: 'Cap rate: 6.1%',
+              },
+            ],
+          },
+        ],
+      },
+      citations: [],
+      conflictIds: [],
+      createdAt: new Date().toISOString(),
+      verificationReport: { verifiedClaimCount: 1, totalClaimCount: 1, droppedClaims: [] },
+    };
+
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValueOnce(jsonResponse({ id: 'answer-5', runStatus: 'queued' }, 201));
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(completedAnswer)));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter>
+        <AskPage pollIntervalMs={5} />
+      </MemoryRouter>,
+    );
+
+    ask('What is the cap rate?');
+
+    await screen.findByText('The cap rate is 6.1%.');
+
+    expect(screen.getByText('Cap rate: 6.1%')).toBeInTheDocument();
+    expect(screen.getByText('p.2')).toBeInTheDocument();
+    expect(screen.getByText('1 of 1 claims verified against the source')).toBeInTheDocument();
+    expect(
+      screen.getByText('Every claim in this answer was checked against the source and verified.'),
+    ).toBeInTheDocument();
+  });
+
+  it('renders the verification panel disclosure for a dropped claim', async () => {
+    const completedAnswer = {
+      id: 'answer-6',
+      questionText: 'What is the occupancy rate?',
+      runStatus: 'completed',
+      outcome: { kind: 'insufficient_evidence', reason: 'No document mentions occupancy.' },
+      citations: [],
+      conflictIds: [],
+      createdAt: new Date().toISOString(),
+      verificationReport: {
+        verifiedClaimCount: 1,
+        totalClaimCount: 2,
+        droppedClaims: [
+          { statement: 'Occupancy is 95%.', reason: 'No retrieved chunk supports this figure.' },
+        ],
+      },
+    };
+
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValueOnce(jsonResponse({ id: 'answer-6', runStatus: 'queued' }, 201));
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(completedAnswer)));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter>
+        <AskPage pollIntervalMs={5} />
+      </MemoryRouter>,
+    );
+
+    ask('What is the occupancy rate?');
+
+    await screen.findByText('1 of 2 claims verified against the source');
+
+    fireEvent.click(screen.getByText('1 claim dropped — not verified against the source'));
+
+    expect(screen.getByText('Occupancy is 95%.')).toBeInTheDocument();
+    expect(screen.getByText('No retrieved chunk supports this figure.')).toBeInTheDocument();
+  });
+
+  it('replaces polling with SSE, applying a named answer event and closing the source on a terminal one', async () => {
+    FakeEventSource.reset();
+    vi.stubGlobal('EventSource', FakeEventSource);
+
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/questions') {
+        return Promise.resolve(jsonResponse({ id: 'answer-7', runStatus: 'queued' }, 201));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter>
+        <AskPage pollIntervalMs={5} />
+      </MemoryRouter>,
+    );
+
+    ask('Q');
+
+    await screen.findByText('queued');
+
+    const [source] = FakeEventSource.instances;
+    expect(source.url).toBe('/api/v1/answers/answer-7/events');
+
+    act(() => {
+      source.emit('heartbeat', {});
+    });
+    expect(source.closed).toBe(false);
+
+    act(() => {
+      source.emit('answer', {
+        id: 'answer-7',
+        questionText: 'Q',
+        runStatus: 'completed',
+        outcome: { kind: 'insufficient_evidence', reason: 'No evidence found.' },
+        citations: [],
+        conflictIds: [],
+        createdAt: new Date().toISOString(),
+      });
+    });
+
+    await screen.findByText('No evidence found.');
+
+    // The terminal event closes the source itself; a poll must never have been issued either.
+    expect(source.closed).toBe(true);
+    expect(fetchMock.mock.calls.some(([url]) => url === '/api/v1/answers/answer-7')).toBe(false);
   });
 });
