@@ -9,6 +9,7 @@ import {
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Skeleton from '../../components/ui/Skeleton';
+import { truncateSha256 } from '../../lib/identifiers';
 
 function ingestionTone(
   status: DocumentVersionIngestionStatus,
@@ -54,7 +55,11 @@ export default function VersionRow({ version }: { version: DocumentVersion }) {
             <p className="cell-sub">{version.ingestionFailureReason}</p>
           )}
         </td>
-        <td className="cell-sub mono">{version.sha256}</td>
+        {/* The full digest is the chain-of-custody value, but 64 hex characters crowd out the
+            rest of the row — head and tail on screen, whole value on hover. */}
+        <td className="cell-sub mono">
+          <span title={version.sha256}>{truncateSha256(version.sha256)}</span>
+        </td>
         <td className="cell-actions">
           <div className="form-actions">
             <Button variant="ghost" size="sm" aria-expanded={expanded} onClick={toggleChunks}>

@@ -1,7 +1,13 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose } from 'class-transformer';
-import type { WorkflowRunStatus } from '../../../../../database/schemas/workflow/workflow-run/workflow-run.schema';
-import { WORKFLOW_RUN_STATUSES } from '../../../../../database/schemas/workflow/workflow-run/workflow-run.schema';
+import type {
+  WorkflowRunStatus,
+  WorkflowRunType,
+} from '../../../../../database/schemas/workflow/workflow-run/workflow-run.schema';
+import {
+  WORKFLOW_RUN_STATUSES,
+  WORKFLOW_RUN_TYPES,
+} from '../../../../../database/schemas/workflow/workflow-run/workflow-run.schema';
 
 export class WorkflowRunResponseDto {
   @Expose()
@@ -14,6 +20,16 @@ export class WorkflowRunResponseDto {
     description: 'Underlying Temporal workflow id.',
   })
   workflowId: string;
+
+  @Expose()
+  @ApiProperty({
+    example: 'resolve-conflict',
+    enum: WORKFLOW_RUN_TYPES,
+    description:
+      'Which workflow this run projects. Absent on rows written before the field existed.',
+    required: false,
+  })
+  workflowType?: WorkflowRunType;
 
   @Expose()
   @ApiProperty({

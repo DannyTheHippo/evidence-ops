@@ -26,6 +26,18 @@ import WorkflowRunPage from './pages/WorkflowRunPage';
 /** The nearest nav destination that owns `pathname` — an exact match first, then the longest nav
  * `to` that prefixes it, so a detail route like `/sources/:id` breadcrumbs to "Sources" rather
  * than falling back to the brand. */
+const SIDEBAR_STORAGE_KEY = 'evidence-ops-sidebar-collapsed';
+
+// Layout preference: fails OPEN. Any storage error (disabled storage, quota, privacy mode) leaves
+// the sidebar expanded rather than blocking render — the nav is reachable either way.
+function readStoredCollapsed(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 function breadcrumbFor(pathname: string): string {
   const exact = NAV_LABELS.find((item) => item.to === pathname);
   if (exact) return exact.label;
@@ -85,6 +97,19 @@ export default function App() {
   // sees a link to a page RequireAdmin would immediately bounce them off of.
   const isAdmin = session.status === 'authed' && session.me.role === 'admin';
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => readStoredCollapsed());
+
+  // Derived outside the setState updater deliberately: StrictMode double-invokes updaters, so a
+  // write placed inside one runs twice per click.
+  function toggleSidebar() {
+    const next = !sidebarCollapsed;
+    setSidebarCollapsed(next);
+    try {
+      localStorage.setItem(SIDEBAR_STORAGE_KEY, String(next));
+    } catch {
+      // storage unavailable — the toggle still applies for this session, just not the next
+    }
+  }
 
   async function handleLogout() {
     // Client-side logout must not depend on the server's answer: logout() already clears the
@@ -252,6 +277,8 @@ export default function App() {
             isAdmin={isAdmin}
             drawerOpen={drawerOpen}
             onCloseDrawer={() => setDrawerOpen(false)}
+            collapsed={sidebarCollapsed}
+            onToggleCollapsed={toggleSidebar}
           />
           <div className="shell-main">
             <Topbar

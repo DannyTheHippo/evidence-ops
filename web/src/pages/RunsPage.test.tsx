@@ -13,6 +13,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 const completedRun = {
   id: 'run-1',
   workflowId: 'wf-1',
+  workflowType: 'sync-source' as const,
   status: 'completed' as const,
   createdAt: '2026-08-01T12:00:00.000Z',
 };
@@ -20,10 +21,19 @@ const completedRun = {
 const failedRun = {
   id: 'run-2',
   workflowId: 'wf-2',
+  workflowType: 'resolve-conflict' as const,
   status: 'failed' as const,
-  currentStep: 'extract_facts',
   errorMessage: 'Model timeout',
   createdAt: '2026-08-02T09:30:00.000Z',
+};
+
+// Written before the API recorded a type; the row must still render under a generic label rather
+// than a blank cell.
+const untypedRun = {
+  id: 'run-3',
+  workflowId: 'wf-3',
+  status: 'queued' as const,
+  createdAt: '2026-08-03T08:00:00.000Z',
 };
 
 // Dispatches by URL, matching AuditEventsPage.test.tsx's stubFetch shape.
@@ -50,10 +60,10 @@ describe('RunsPage', () => {
     vi.unstubAllGlobals();
   });
 
-  it('lists runs with workflow id, status, current step and created date', async () => {
+  it('names each run by workflow type, keeping the opaque id as secondary detail', async () => {
     stubFetch({
       '/api/v1/workflow-runs?skip=0&limit=25': () =>
-        jsonResponse({ docs: [completedRun, failedRun], count: 2 }),
+        jsonResponse({ docs: [completedRun, failedRun, untypedRun], count: 3 }),
     });
 
     renderRunsPage();
@@ -65,17 +75,23 @@ describe('RunsPage', () => {
       await screen.findByRole('table', { name: 'Workflow runs, most recent first' }),
     ).toBeInTheDocument();
 
-    const completedLink = screen.getByRole('link', { name: 'wf-1' });
+    // The link text is the human label, not the uuid — that is the whole point of the column.
+    const completedLink = screen.getByRole('link', { name: 'Source sync' });
     expect(completedLink).toHaveAttribute('href', '/workflow-runs/run-1');
     expect(screen.getByText('completed')).toBeInTheDocument();
-    // Placeholder for the completed run's absent currentStep.
-    expect(screen.getByText('—')).toBeInTheDocument();
 
-    const failedLink = screen.getByRole('link', { name: 'wf-2' });
+    const failedLink = screen.getByRole('link', { name: 'Conflict resolution' });
     expect(failedLink).toHaveAttribute('href', '/workflow-runs/run-2');
     expect(screen.getByText('failed')).toBeInTheDocument();
-    expect(screen.getByText('extract_facts')).toBeInTheDocument();
     expect(screen.getByText('Model timeout')).toBeInTheDocument();
+
+    expect(screen.getByRole('link', { name: 'Workflow run' })).toHaveAttribute(
+      'href',
+      '/workflow-runs/run-3',
+    );
+
+    // The id stays on screen, shortened, with the full value recoverable on hover.
+    expect(screen.getByTitle('wf-1')).toHaveTextContent('wf-1');
   });
 
   it('shows an empty state with a link to Ask when no runs exist', async () => {

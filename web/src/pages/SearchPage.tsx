@@ -6,15 +6,12 @@ import EmptyState from '../components/ui/EmptyState';
 import Field from '../components/ui/Field';
 import Skeleton from '../components/ui/Skeleton';
 import { buildDocumentVersionIndex, type ResolvedVersion } from '../lib/document-index';
+import { truncateSha256 } from '../lib/identifiers';
 import { formatLocator } from '../lib/locator';
 
 const QUERY_MAX_LENGTH = 500;
 const RATE_LIMIT_MESSAGE =
   'Search is limited to 10 queries per minute — each search spends a live embedding call. Wait a moment, then try again.';
-
-function truncateSha256(sha256: string): string {
-  return `${sha256.slice(0, 8)}…${sha256.slice(-4)}`;
-}
 
 interface ResultRowProps {
   chunk: RetrievedChunkView;
@@ -26,7 +23,7 @@ interface ResultRowProps {
 // produced, full values on hover, matching the trace-chip treatment `ProvenanceRail` uses for
 // answer citations.
 function ResultRow({ chunk, resolved }: ResultRowProps) {
-  const label = `${truncateSha256(chunk.sha256)} · ${chunk.chunkId}`;
+  const label = `${truncateSha256(chunk.sha256)} · ${truncateSha256(chunk.chunkId)}`;
   const title = `sha256 ${chunk.sha256} · chunk ${chunk.chunkId}`;
 
   return (

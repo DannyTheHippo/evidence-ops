@@ -403,6 +403,7 @@ describe('SourcesService', () => {
       expect(source.save).toHaveBeenCalled();
       expect(mockWorkflowRunsService.create).toHaveBeenCalledWith({
         workflowId: 'wf-sync-1',
+        workflowType: 'sync-source',
         status: 'running',
         tenantId: 'tenant-a',
       });

@@ -183,7 +183,7 @@ export default function AnswersPage() {
       )}
 
       {answers && (
-        <div className="form-actions">
+        <div className="pager">
           <Button
             type="button"
             variant="secondary"

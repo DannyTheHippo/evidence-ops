@@ -251,6 +251,7 @@ export class SourcesService {
 
       run = await this.workflowRunsService.create({
         workflowId: handle.id,
+        workflowType: 'sync-source',
         status: handle.status,
         tenantId,
       });

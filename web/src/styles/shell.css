@@ -26,7 +26,14 @@
   border-right: 1px solid var(--hairline);
   overflow-y: auto;
 }
+.sidebar-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
 .sidebar-brand {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -92,6 +99,33 @@
   text-overflow: ellipsis;
 }
 
+/* Manual collapse. Mirrors the rail declarations in the `max-width: 1023px` block below — a media
+   query and a class cannot be combined into one selector, so the two blocks are kept in step by
+   hand; change them together. Above 1023px this class is the only thing that produces the rail,
+   below it the media query already has. */
+.sidebar--collapsed {
+  width: 64px;
+  align-items: center;
+  padding: var(--space-5) var(--space-2);
+}
+.sidebar--collapsed .sidebar-brand {
+  justify-content: center;
+  padding: 0;
+}
+.sidebar--collapsed .sidebar-brand-label,
+.sidebar--collapsed .sidebar-label,
+.sidebar--collapsed .sidebar-heading {
+  display: none;
+}
+.sidebar--collapsed .sidebar-link {
+  justify-content: center;
+}
+/* The toggle stacks under the brand mark at rail width — side by side it would overflow 64px. */
+.sidebar--collapsed .sidebar-top {
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
 /* Drawer nav mirrors the persistent sidebar's spacing but has no width constraint to fight —
    the dialog itself sets the width. */
 .sidebar-drawer-nav {
@@ -138,6 +172,10 @@
     width: 64px;
     align-items: center;
     padding: var(--space-5) var(--space-2);
+  }
+  /* The rail is imposed by width here, so a manual collapse control would toggle nothing. */
+  .sidebar-collapse-toggle {
+    display: none;
   }
   .sidebar-brand {
     justify-content: center;

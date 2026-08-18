@@ -8,6 +8,9 @@ export type ThemePreference = 'system' | 'light' | 'dark';
 // before any module (including this one) loads. The two must change together.
 export const THEME_STORAGE_KEY = 'evidence-ops-theme';
 
+// Ordered: each press advances to the next entry and wraps. `label` names the *current* state,
+// which the button announces; the next state is named in the accessible label so a screen-reader
+// user knows what pressing does, not just where they are.
 const OPTIONS: { value: ThemePreference; label: string; Icon: typeof IconMonitor }[] = [
   { value: 'system', label: 'System', Icon: IconMonitor },
   { value: 'light', label: 'Light', Icon: IconSun },
@@ -52,30 +55,31 @@ export function ThemeToggle() {
     applyTheme(theme);
   }, [theme]);
 
-  const handleSelect = (next: ThemePreference) => {
-    setTheme(next);
+  const currentIndex = OPTIONS.findIndex((option) => option.value === theme);
+  const current = OPTIONS[currentIndex];
+  const next = OPTIONS[(currentIndex + 1) % OPTIONS.length];
+  const { Icon } = current;
+
+  const handleCycle = () => {
+    setTheme(next.value);
     try {
-      localStorage.setItem(THEME_STORAGE_KEY, next);
+      localStorage.setItem(THEME_STORAGE_KEY, next.value);
     } catch {
       // storage unavailable — the selection still applies for this session, just not the next
     }
   };
 
   return (
-    <div className="theme-toggle" role="group" aria-label="Theme">
-      {OPTIONS.map(({ value, label, Icon }) => (
-        <Button
-          key={value}
-          variant="ghost"
-          size="sm"
-          aria-pressed={theme === value}
-          className={theme === value ? 'is-active' : undefined}
-          onClick={() => handleSelect(value)}
-        >
-          <Icon />
-          {label}
-        </Button>
-      ))}
-    </div>
+    <Button
+      variant="ghost"
+      size="sm"
+      className="theme-toggle"
+      aria-label={`Theme: ${current.label}. Switch to ${next.label}.`}
+      title={`Theme: ${current.label}`}
+      onClick={handleCycle}
+    >
+      <Icon />
+      <span className="theme-toggle-label">{current.label}</span>
+    </Button>
   );
 }

@@ -35,6 +35,7 @@ interface SourceWithFileStatesBody extends SourceBody {
 interface WorkflowRunBody {
   id: string;
   workflowId: string;
+  workflowType?: string;
   status: string;
   currentStep?: string;
   errorMessage?: string;
@@ -355,7 +356,11 @@ describe('Sources (e2e)', () => {
       expect(body.status).toBeDefined();
       // Asserting the exact key set is the only gate that catches a response-DTO field missing
       // @Expose() — such a field is silently dropped from the payload with no error anywhere.
-      expect(Object.keys(body).sort()).toEqual(['id', 'workflowId', 'status', 'createdAt'].sort());
+      expect(Object.keys(body).sort()).toEqual(
+        ['id', 'workflowId', 'workflowType', 'status', 'createdAt'].sort(),
+      );
+      // The label the Runs list shows in place of the opaque workflow uuid.
+      expect(body.workflowType).toBe('sync-source');
     });
 
     // The caller's token carries a real, freshly provisioned tenant id, so this only proves

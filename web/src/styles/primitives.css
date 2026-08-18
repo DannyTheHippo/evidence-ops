@@ -282,6 +282,20 @@
   gap: var(--space-3);
 }
 
+/* Paging controls under a table. Same row layout as .form-actions, but standing off the table it
+   pages rather than reading as the last row of it. */
+.pager {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+/* Pushes the result count away from the buttons, to the end of the row. */
+.pager > .cell-sub:last-child {
+  margin-left: auto;
+}
+
 /* ── Field / Select ──────────────────────────────────────────────────────── */
 
 .field {
@@ -304,6 +318,17 @@
   border-radius: var(--radius-sm);
   font-family: inherit;
   font-size: var(--text-md);
+}
+/* The native indicator sits hard against the right border and ignores padding in some engines, so
+   the control draws its own: `--select-caret` is placed by `background-position`, and the extra
+   right padding keeps the longest option from running under it. */
+.select {
+  appearance: none;
+  padding-right: var(--space-8);
+  background-image: var(--select-caret);
+  background-repeat: no-repeat;
+  background-position: right var(--space-4) center;
+  background-size: 10px 6px;
 }
 .field input:focus-visible,
 .field textarea:focus-visible,

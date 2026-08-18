@@ -557,6 +557,7 @@ export class ConflictsService {
 
     const run = await this.workflowRunsService.create({
       workflowId: handle.id,
+      workflowType: 'resolve-conflict',
       status: handle.status,
       tenantId,
     });

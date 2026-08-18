@@ -32,6 +32,24 @@ export function IconCheck({ size = 16, className }: IconProps) {
   );
 }
 
+/** Panel-with-rail glyph marking the sidebar collapse control. */
+export function IconPanelLeft({ size = 16, className }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      focusable="false"
+      className={className}
+      {...strokeProps}
+    >
+      <rect x="2" y="3" width="12" height="10" rx="1.5" />
+      <path d="M6.5 3V13" />
+    </svg>
+  );
+}
+
 export function IconAlertTriangle({ size = 16, className }: IconProps) {
   return (
     <svg

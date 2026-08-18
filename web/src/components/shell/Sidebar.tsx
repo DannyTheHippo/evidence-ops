@@ -11,9 +11,11 @@ import {
   IconHome,
   IconKey,
   IconMessageCircle,
+  IconPanelLeft,
   IconSearch,
 } from '../icons';
 import Dialog from '../ui/Dialog';
+import IconButton from '../ui/IconButton';
 
 interface NavItem {
   to: string;
@@ -120,20 +122,42 @@ interface SidebarProps {
   isAdmin: boolean;
   drawerOpen: boolean;
   onCloseDrawer: () => void;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 }
 
 /** The primary navigation landmark, plus the same nav content re-rendered inside a `Dialog` for
- * the sub-768px drawer — one nav-group source, two presentations, so the two never drift apart. */
-export default function Sidebar({ isAdmin, drawerOpen, onCloseDrawer }: SidebarProps) {
+ * the sub-768px drawer — one nav-group source, two presentations, so the two never drift apart.
+ *
+ * `collapsed` narrows the persistent sidebar to an icon rail. It only has an effect at 1024px and
+ * up; below that the breakpoints in shell.css already impose the rail, then the drawer. */
+export default function Sidebar({
+  isAdmin,
+  drawerOpen,
+  onCloseDrawer,
+  collapsed,
+  onToggleCollapsed,
+}: SidebarProps) {
   const groups = buildNavGroups(isAdmin);
 
   return (
     <>
-      <nav className="sidebar" aria-label="Primary">
-        <span className="sidebar-brand" aria-label="Evidence Ops">
-          <span className="brand-mark" aria-hidden="true" />
-          <span className="sidebar-brand-label">Evidence Ops</span>
-        </span>
+      <nav className={collapsed ? 'sidebar sidebar--collapsed' : 'sidebar'} aria-label="Primary">
+        <div className="sidebar-top">
+          <span className="sidebar-brand" aria-label="Evidence Ops">
+            <span className="brand-mark" aria-hidden="true" />
+            <span className="sidebar-brand-label">Evidence Ops</span>
+          </span>
+          <IconButton
+            icon={<IconPanelLeft />}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded={!collapsed}
+            variant="ghost"
+            size="sm"
+            className="sidebar-collapse-toggle"
+            onClick={onToggleCollapsed}
+          />
+        </div>
         <NavGroups groups={groups} />
       </nav>
       <Dialog open={drawerOpen} onClose={onCloseDrawer} title="Navigation">

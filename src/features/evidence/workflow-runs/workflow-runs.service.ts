@@ -20,6 +20,7 @@ import {
   WorkflowRun,
   WorkflowRunDocument,
   type WorkflowRunStatus,
+  type WorkflowRunType,
 } from '../../../database/schemas/workflow/workflow-run/workflow-run.schema';
 import {
   WORKFLOW_ENGINE,
@@ -46,6 +47,7 @@ import { WORKFLOW_RUN_STREAM_INTERVAL_MS } from './workflow-runs.constant';
 
 export interface CreateWorkflowRunInput {
   readonly workflowId: string;
+  readonly workflowType: WorkflowRunType;
   readonly status: WorkflowRunStatus;
   readonly tenantId?: string;
 }
@@ -53,6 +55,7 @@ export interface CreateWorkflowRunInput {
 export interface WorkflowRunResult {
   readonly id: string;
   readonly workflowId: string;
+  readonly workflowType?: WorkflowRunType;
   readonly status: WorkflowRunStatus;
   readonly currentStep?: string;
   readonly errorMessage?: string;
@@ -87,14 +90,15 @@ export class WorkflowRunsService {
   }
 
   /**
-   * Creates the durable projection a caller who just started a workflow (D3's `POST
-   * /conflicts/:id/resolution-requests`, `ConflictsService.requestResolution`) hands back so a
-   * client has an id to poll `GET /workflow-runs/:id` with — this is the first writer this
-   * collection has ever had; nothing else in the codebase creates a `WorkflowRun` row yet.
+   * Creates the durable projection a caller who just started a workflow hands back, so a client
+   * has an id to poll `GET /workflow-runs/:id` with. Two callers write here:
+   * `ConflictsService.requestResolution` and `SourcesService.requestSync` — `answer-question` and
+   * `ingest-document-version` run without a projection, so no run row exists for them.
    */
   async create(input: CreateWorkflowRunInput): Promise<WorkflowRunResult> {
     const run = await this.workflowRunModel.create({
       workflowId: input.workflowId,
+      workflowType: input.workflowType,
       status: input.status,
       tenantId: input.tenantId,
     });
@@ -299,6 +303,7 @@ export class WorkflowRunsService {
     return {
       id: run._id.toString(),
       workflowId: run.workflowId,
+      workflowType: run.workflowType,
       status: statusOverride ?? run.status,
       currentStep: run.currentStep,
       errorMessage: run.errorMessage,

@@ -47,6 +47,7 @@ interface ApprovalBody {
 interface WorkflowRunBody {
   id: string;
   workflowId: string;
+  workflowType?: string;
   status: string;
   currentStep?: string;
   errorMessage?: string;
@@ -188,7 +189,11 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       expect(response.status).toBe(201);
       // Asserting the exact key set is the only gate that catches a response-DTO field missing
       // @Expose() — such a field is silently dropped from the payload with no error anywhere.
-      expect(Object.keys(body).sort()).toEqual(['id', 'workflowId', 'status', 'createdAt'].sort());
+      expect(Object.keys(body).sort()).toEqual(
+        ['id', 'workflowId', 'workflowType', 'status', 'createdAt'].sort(),
+      );
+      // The label the Runs list shows in place of the opaque workflow uuid.
+      expect(body.workflowType).toBe('resolve-conflict');
 
       expect(fakeWorkflowEngine.started).toHaveLength(startedBefore + 1);
       const started = fakeWorkflowEngine.started[fakeWorkflowEngine.started.length - 1];
@@ -484,6 +489,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       fakeWorkflowEngine.setStatus(handle.id, 'completed');
       const run = await workflowRunModel.create({
         workflowId: handle.id,
+        workflowType: 'resolve-conflict',
         status: 'running',
         tenantId,
       });
@@ -495,7 +501,10 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
 
       expect(response.status).toBe(200);
       expect(body.status).toBe('completed');
-      expect(Object.keys(body).sort()).toEqual(['id', 'workflowId', 'status', 'createdAt'].sort());
+      expect(body.workflowType).toBe('resolve-conflict');
+      expect(Object.keys(body).sort()).toEqual(
+        ['id', 'workflowId', 'workflowType', 'status', 'createdAt'].sort(),
+      );
 
       const events = await auditEventModel.find({
         action: 'workflow-runs.viewed',

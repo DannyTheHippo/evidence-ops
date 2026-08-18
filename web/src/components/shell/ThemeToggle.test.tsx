@@ -2,6 +2,10 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { THEME_STORAGE_KEY, ThemeToggle } from './ThemeToggle';
 
+// The control is one button whose accessible name states both the current mode and the one a
+// press moves to, so every query here goes through that combined name.
+const nameFor = (current: string, next: string) => `Theme: ${current}. Switch to ${next}.`;
+
 describe('ThemeToggle', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -13,32 +17,26 @@ describe('ThemeToggle', () => {
     document.documentElement.removeAttribute('data-theme');
   });
 
-  it('renders three options with accessible names', () => {
+  it('renders a single control naming the current mode and the next one', () => {
     render(<ThemeToggle />);
 
-    expect(screen.getByRole('button', { name: 'System' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Light' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Dark' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: nameFor('System', 'Light') })).toBeInTheDocument();
   });
 
-  it('selecting Dark sets data-theme="dark" on the document element and persists to localStorage', () => {
+  it('cycles System → Light → Dark → System, applying and persisting each step', () => {
     render(<ThemeToggle />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Dark' }));
+    fireEvent.click(screen.getByRole('button', { name: nameFor('System', 'Light') }));
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('light');
 
+    fireEvent.click(screen.getByRole('button', { name: nameFor('Light', 'Dark') }));
     expect(document.documentElement.dataset.theme).toBe('dark');
     expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('dark');
-    expect(screen.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true');
-  });
 
-  it('selecting System removes the data-theme attribute', () => {
-    render(<ThemeToggle />);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Dark' }));
-    expect(document.documentElement.dataset.theme).toBe('dark');
-
-    fireEvent.click(screen.getByRole('button', { name: 'System' }));
-
+    // Wrapping back to System must clear the attribute, handing control to prefers-color-scheme.
+    fireEvent.click(screen.getByRole('button', { name: nameFor('Dark', 'System') }));
     expect(document.documentElement.hasAttribute('data-theme')).toBe(false);
     expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('system');
   });
@@ -48,11 +46,11 @@ describe('ThemeToggle', () => {
 
     render(<ThemeToggle />);
 
-    expect(screen.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: nameFor('Light', 'Dark') })).toBeInTheDocument();
     expect(document.documentElement.dataset.theme).toBe('light');
   });
 
-  it('still renders with System selected when localStorage throws', () => {
+  it('still renders starting from System when localStorage throws', () => {
     const originalLocalStorage = window.localStorage;
     Object.defineProperty(window, 'localStorage', {
       configurable: true,
@@ -68,10 +66,11 @@ describe('ThemeToggle', () => {
 
     try {
       render(<ThemeToggle />);
-      expect(screen.getByRole('button', { name: 'System' })).toHaveAttribute(
-        'aria-pressed',
-        'true',
-      );
+      const button = screen.getByRole('button', { name: nameFor('System', 'Light') });
+
+      // A write that throws must not break the click — the mode still applies for this session.
+      fireEvent.click(button);
+      expect(document.documentElement.dataset.theme).toBe('light');
     } finally {
       Object.defineProperty(window, 'localStorage', {
         configurable: true,

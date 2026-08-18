@@ -8,6 +8,7 @@ import Skeleton from '../components/ui/Skeleton';
 import Table, { TableHeaderCell } from '../components/ui/Table';
 import { notify } from '../components/ui/toast';
 import { buildDocumentVersionIndex, type ResolvedVersion } from '../lib/document-index';
+import { truncateSha256 } from '../lib/identifiers';
 import { formatLocator } from '../lib/locator';
 
 function statusTone(status: Conflict['status']): 'caution' | 'verified' | 'neutral' {
@@ -148,7 +149,9 @@ export default function ConflictsPage() {
                             <span className="cell-sub">
                               {title} — {formatLocator(value.locator)}
                             </span>
-                            <span className="trace-chip mono">{value.sourceChunkId}</span>
+                            <span className="trace-chip mono" title={value.sourceChunkId}>
+                              {truncateSha256(value.sourceChunkId)}
+                            </span>
                             {isRecommended && (
                               <>
                                 <Badge tone="info">Recommended · {conflict.ruleFired}</Badge>

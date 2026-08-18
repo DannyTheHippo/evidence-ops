@@ -435,9 +435,14 @@ export function decideApproval(
 
 export type WorkflowRunStatus = 'queued' | 'running' | 'completed' | 'failed';
 
+// Only the workflows that record a run row. `answer-question` and `ingest-document-version` run
+// without one, so they never appear here. Absent on rows written before the field existed.
+export type WorkflowRunType = 'resolve-conflict' | 'sync-source';
+
 export interface WorkflowRun {
   id: string;
   workflowId: string;
+  workflowType?: WorkflowRunType;
   status: WorkflowRunStatus;
   currentStep?: string;
   errorMessage?: string;

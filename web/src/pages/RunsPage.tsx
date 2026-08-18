@@ -6,6 +6,7 @@ import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import Skeleton from '../components/ui/Skeleton';
 import Table, { TableHeaderCell } from '../components/ui/Table';
+import { shortId, workflowTypeLabel } from '../lib/identifiers';
 
 const PAGE_SIZE = 25;
 
@@ -72,17 +73,21 @@ export default function RunsPage() {
           <Table caption="Workflow runs, most recent first">
             <thead>
               <tr>
-                <TableHeaderCell>Workflow id</TableHeaderCell>
+                <TableHeaderCell>Run</TableHeaderCell>
                 <TableHeaderCell>Status</TableHeaderCell>
-                <TableHeaderCell>Current step</TableHeaderCell>
                 <TableHeaderCell>Created</TableHeaderCell>
               </tr>
             </thead>
             <tbody>
               {runs.map((run) => (
                 <tr key={run.id}>
-                  <td className="cell-sub mono">
-                    <Link to={`/workflow-runs/${run.id}`}>{run.workflowId}</Link>
+                  <td>
+                    <Link to={`/workflow-runs/${run.id}`}>
+                      {workflowTypeLabel(run.workflowType)}
+                    </Link>
+                    <p className="cell-sub mono" title={run.workflowId}>
+                      {shortId(run.workflowId)}
+                    </p>
                   </td>
                   <td>
                     <Badge tone={STATUS_TONE[run.status]}>{run.status}</Badge>
@@ -90,7 +95,6 @@ export default function RunsPage() {
                       <p className="cell-sub">{run.errorMessage}</p>
                     )}
                   </td>
-                  <td className="cell-sub">{run.currentStep ?? '—'}</td>
                   <td className="cell-sub">{new Date(run.createdAt).toLocaleString()}</td>
                 </tr>
               ))}
@@ -100,7 +104,7 @@ export default function RunsPage() {
       )}
 
       {runs && (
-        <div className="form-actions">
+        <div className="pager">
           <Button
             type="button"
             variant="secondary"

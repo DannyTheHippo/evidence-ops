@@ -12,6 +12,7 @@ import {
 import Badge from '../components/ui/Badge';
 import Skeleton from '../components/ui/Skeleton';
 import { useEventStream } from '../lib/use-event-stream';
+import { workflowTypeLabel } from '../lib/identifiers';
 
 const DEFAULT_POLL_INTERVAL_MS = 1500;
 
@@ -169,7 +170,10 @@ export default function WorkflowRunPage({
       {run && (
         <section className="card">
           <div className="card-head">
-            <h2 className="card-title mono">{run.workflowId}</h2>
+            <div>
+              <h2 className="card-title">{workflowTypeLabel(run.workflowType)}</h2>
+              <p className="cell-sub mono">{run.workflowId}</p>
+            </div>
             <Badge tone={STATUS_TONE[run.status]}>{run.status}</Badge>
           </div>
 

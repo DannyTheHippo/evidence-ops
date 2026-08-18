@@ -18,6 +18,7 @@ import Field from '../components/ui/Field';
 import Skeleton from '../components/ui/Skeleton';
 import { notify } from '../components/ui/toast';
 import { useSession } from '../lib/use-session';
+import { shortId } from '../lib/identifiers';
 
 const stateTone: Record<ApprovalState, 'caution' | 'verified' | 'rejected'> = {
   pending: 'caution',
@@ -111,8 +112,13 @@ function ApprovalRow({
       </div>
 
       {approval.requestedBy && <p className="cell-sub">Requested by {approval.requestedBy}</p>}
+      {/* The summary above already says what is being approved; the raw entity id is a lookup
+          key, shown truncated with the full value on hover rather than as a wall of hex. */}
       <p className="cell-sub">
-        {approval.subject.entityType} {approval.subject.entityId}
+        {approval.subject.entityType}{' '}
+        <span className="mono" title={approval.subject.entityId}>
+          {shortId(approval.subject.entityId)}
+        </span>
       </p>
       <p className="cell-sub">Requested {new Date(approval.createdAt).toLocaleString()}</p>
 

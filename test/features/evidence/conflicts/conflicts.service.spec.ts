@@ -945,6 +945,7 @@ describe('ConflictsService', () => {
       });
       expect(mockWorkflowRunsService.create).toHaveBeenCalledWith({
         workflowId: 'wf-1',
+        workflowType: 'resolve-conflict',
         status: 'running',
         tenantId: 'tenant-a',
       });

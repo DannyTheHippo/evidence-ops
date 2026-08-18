@@ -336,7 +336,7 @@ export default function SourcesPage({
       )}
 
       {sources && (
-        <div className="form-actions">
+        <div className="pager">
           <Button
             type="button"
             variant="secondary"

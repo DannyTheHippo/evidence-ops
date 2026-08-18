@@ -53,6 +53,7 @@ describe('WorkflowRunsService', () => {
       mockWorkflowRunModel.create.mockResolvedValueOnce({
         _id: id,
         workflowId: 'wf-1',
+        workflowType: 'resolve-conflict',
         status: 'running',
         currentStep: undefined,
         errorMessage: undefined,
@@ -61,23 +62,43 @@ describe('WorkflowRunsService', () => {
 
       const result = await service.create({
         workflowId: 'wf-1',
+        workflowType: 'resolve-conflict',
         status: 'running',
         tenantId: 'acme-corp',
       });
 
       expect(mockWorkflowRunModel.create).toHaveBeenCalledWith({
         workflowId: 'wf-1',
+        workflowType: 'resolve-conflict',
         status: 'running',
         tenantId: 'acme-corp',
       });
       expect(result).toEqual({
         id: id.toString(),
         workflowId: 'wf-1',
+        workflowType: 'resolve-conflict',
         status: 'running',
         currentStep: undefined,
         errorMessage: undefined,
         createdAt,
       });
+    });
+
+    it('should project a row written before workflowType existed with an undefined type', async () => {
+      const id = new Types.ObjectId();
+      const createdAt = new Date('2026-07-01T00:00:00.000Z');
+      mockWorkflowRunModel.findOne.mockResolvedValueOnce({
+        _id: id,
+        workflowId: 'wf-legacy',
+        status: 'completed',
+        createdAt,
+      });
+      mockWorkflowEngine.status.mockRejectedValueOnce(new Error('engine down'));
+
+      const result = await service.peekRun(id.toString(), 'tenant-a');
+
+      expect(result.workflowType).toBeUndefined();
+      expect(result.status).toBe('completed');
     });
   });
 

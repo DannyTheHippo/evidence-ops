@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import type { AnswerOutcome, Citation } from '../api/client';
+import { truncateSha256 } from '../lib/identifiers';
 import { formatLocator } from '../lib/locator';
 import type { ResolvedVersion } from '../lib/document-index';
 
@@ -56,10 +57,6 @@ function buildRailNodes(outcome: AnswerOutcome): RailNode[] {
   }
 }
 
-function truncateSha256(sha256: string): string {
-  return `${sha256.slice(0, 8)}…${sha256.slice(-4)}`;
-}
-
 interface TraceChipProps {
   citation: Citation;
   resolved?: ResolvedVersion;
@@ -68,9 +65,11 @@ interface TraceChipProps {
 // `EvidenceChunk._id` is content-addressed — derived from tenant, the version's sha256, an
 // ordinal and the locator (migrations/0007-content-addressed-evidence-chunk-ids.ts) — so the
 // chunk id here is literally a hash of the verified bytes, not a database surrogate key. The chip
-// states that plainly: a truncated hash plus the id it produced, full values on hover.
+// states that plainly: a truncated hash plus the id it produced, full values on hover. Both halves
+// are truncated — a chunk id is itself 64 hex characters, and printing one in full turns every
+// chip into a wall of hex that reads the same as its neighbours.
 function TraceChip({ citation, resolved }: TraceChipProps) {
-  const label = `${truncateSha256(citation.sha256)} · ${citation.chunkId}`;
+  const label = `${truncateSha256(citation.sha256)} · ${truncateSha256(citation.chunkId)}`;
   const title = `sha256 ${citation.sha256} · chunk ${citation.chunkId}`;
   if (resolved) {
     return (

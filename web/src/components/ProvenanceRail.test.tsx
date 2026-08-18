@@ -9,7 +9,9 @@ function citation(overrides: Partial<Citation> = {}): Citation {
   return {
     docVersionId: 'v1',
     sha256: 'a1b2c3d4e5f6' + '0'.repeat(48) + '789a',
-    chunkId: 'chunk-1',
+    // A real EvidenceChunk._id is content-addressed and 64 hex characters wide, so the fixture is
+    // too — a short stand-in would not exercise the chip's truncation at all.
+    chunkId: 'c6d1cd73' + 'f'.repeat(52) + 'c3db',
     locator: { kind: 'xlsx-cell', extractorVersion: '1', sheetName: 'Comps', cell: 'F2' },
     quote: 'The cap rate is approximately 6.10%.',
     ...overrides,
@@ -93,9 +95,12 @@ describe('ProvenanceRail', () => {
       new Map([[c.docVersionId, { documentId: 'doc-1', documentTitle: 'comps.xlsx' }]]),
     );
 
-    const chip = screen.getByRole('link', { name: /a1b2c3d4.*789a.*chunk-1/ });
+    const chip = screen.getByRole('link', { name: 'a1b2c3d4…789a · c6d1cd73…c3db' });
     expect(chip).toHaveAttribute('href', '/documents/doc-1');
+    // Neither identifier is shown in full, and both stay recoverable from the tooltip.
+    expect(chip.textContent).not.toContain(c.chunkId);
     expect(chip).toHaveAttribute('title', expect.stringContaining(c.sha256));
+    expect(chip).toHaveAttribute('title', expect.stringContaining(c.chunkId));
   });
 
   it('renders the trace chip as plain text when the index does not resolve the version', () => {
@@ -103,6 +108,6 @@ describe('ProvenanceRail', () => {
     renderRail({ kind: 'answered', claims: [{ statement: 'Statement.', citations: [c] }] });
 
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
-    expect(screen.getByText(/a1b2c3d4.*789a.*chunk-1/)).toBeInTheDocument();
+    expect(screen.getByText('a1b2c3d4…789a · c6d1cd73…c3db')).toBeInTheDocument();
   });
 });

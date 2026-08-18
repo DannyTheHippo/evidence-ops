@@ -173,7 +173,7 @@ export default function AuditEventsPage() {
       )}
 
       {events && (
-        <div className="form-actions">
+        <div className="pager">
           <Button
             type="button"
             variant="secondary"
