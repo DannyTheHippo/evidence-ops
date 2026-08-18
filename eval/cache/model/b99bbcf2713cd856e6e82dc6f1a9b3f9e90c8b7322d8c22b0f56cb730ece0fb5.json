@@ -1,0 +1,1 @@
+{"output":"","usage":{"inputTokens":1025,"outputTokens":64,"cacheCreationInputTokens":0,"cacheReadInputTokens":0},"costUsd":0.004035,"stopReason":"tool_use","toolCalls":[{"id":"toolu_01UcKGVSVzDyY56yjnRXj5t4","name":"search_evidence","input":{"query":"Meridian Holdings Plaza cap rate"}}]}

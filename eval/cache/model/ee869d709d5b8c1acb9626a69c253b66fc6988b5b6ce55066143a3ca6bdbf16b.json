@@ -1,0 +1,1 @@
+{"output":"","usage":{"inputTokens":1037,"outputTokens":71,"cacheCreationInputTokens":0,"cacheReadInputTokens":0},"costUsd":0.004176,"stopReason":"tool_use","toolCalls":[{"id":"toolu_01VSo2VKaqwAVJJn1cKVNfti","name":"search_evidence","input":{"query":"Meridian Corridor industrial vacancy rate Q2 2025"}}]}

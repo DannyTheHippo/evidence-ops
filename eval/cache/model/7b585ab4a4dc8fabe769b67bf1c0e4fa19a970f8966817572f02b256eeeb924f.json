@@ -1,0 +1,1 @@
+{"output":"","usage":{"inputTokens":1030,"outputTokens":60,"cacheCreationInputTokens":0,"cacheReadInputTokens":0},"costUsd":0.00399,"stopReason":"tool_use","toolCalls":[{"id":"toolu_011V3wQ8fwVCMDsntmJKL9aR","name":"search_evidence","input":{"query":"Northgate Business Park cap rate"}}]}

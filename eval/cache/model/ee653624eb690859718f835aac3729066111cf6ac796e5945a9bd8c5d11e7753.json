@@ -1,0 +1,1 @@
+{"output":"","usage":{"inputTokens":1034,"outputTokens":63,"cacheCreationInputTokens":0,"cacheReadInputTokens":0},"costUsd":0.004047,"stopReason":"tool_use","toolCalls":[{"id":"toolu_01JHdRGyeSpkA5zXuGruZVct","name":"search_evidence","input":{"query":"Thornfield Industrial Park net operating income"}}]}

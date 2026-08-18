@@ -86,6 +86,31 @@ function assertLocatorExistsInManifest(locator: Locator, manifestData: Manifest)
   }
 }
 
+// One comparable key per seeded-conflict location and per dataset locator, so an answerable case
+// pointing at a location the corpus seeds as conflicting is a string match rather than shape math.
+// Exact cell/page identity is the whole test — a locator one cell or one page away from a seeded
+// conflict is a different fact and stays legal.
+const conflictLocationKeys = new Set(
+  manifest.conflicts.flatMap((conflict) =>
+    conflict.locations.map((location) =>
+      'cell' in location
+        ? `${location.file}!${location.sheet}!${location.cell}`
+        : `${location.file}#${location.page}`,
+    ),
+  ),
+);
+
+const locatorKey = (locator: Locator): string => {
+  switch (locator.kind) {
+    case 'xlsx-cell':
+      return `${locator.file}!${locator.sheet}!${locator.cell}`;
+    case 'pdf-page':
+      return `${locator.file}#${locator.page}`;
+    case 'docx-paragraph':
+      return `${locator.file}¶${locator.paragraphIndex}`;
+  }
+};
+
 describe('eval dataset', () => {
   it('should validate every case against EvalCaseSchema', () => {
     const result = EvalDatasetSchema.safeParse(cases);
@@ -104,6 +129,23 @@ describe('eval dataset', () => {
     expect(categories).toEqual(
       new Set(['answerable', 'unanswerable', 'conflicting', 'adversarial']),
     );
+  });
+
+  // An answerable case whose ground truth is a seeded-conflict location contradicts the conflicting
+  // case built on that same location: the pipeline can only satisfy one of them, so the dataset
+  // fails structurally in every run no matter how the system behaves. Conflicting cases are exempt —
+  // pointing at those locations is exactly what they are for.
+  it('should keep every answerable case off the seeded-conflict locations', () => {
+    const offending = EvalDatasetSchema.parse(cases)
+      .filter((evalCase) => evalCase.category === 'answerable')
+      .flatMap((evalCase) =>
+        evalCase.expectedLocators
+          .map(locatorKey)
+          .filter((key) => conflictLocationKeys.has(key))
+          .map((key) => `${evalCase.id} -> ${key}`),
+      );
+
+    expect(offending).toEqual([]);
   });
 
   it('should resolve every expected locator against fixtures/data-room/manifest.json', () => {

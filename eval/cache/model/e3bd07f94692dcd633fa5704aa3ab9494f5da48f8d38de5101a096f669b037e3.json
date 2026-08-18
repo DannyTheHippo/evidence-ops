@@ -1,0 +1,1 @@
+{"output":"","usage":{"inputTokens":1034,"outputTokens":71,"cacheCreationInputTokens":0,"cacheReadInputTokens":0},"costUsd":0.004167,"stopReason":"tool_use","toolCalls":[{"id":"toolu_011dKCqzkCUSjhGbJzqVez5z","name":"search_evidence","input":{"query":"Cedar Bluff Logistics Center HVAC replacement cost"}}]}

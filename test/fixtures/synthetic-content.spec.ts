@@ -2,10 +2,13 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
+  AREA_CONFLICT_PROPERTY,
+  AREA_CONFLICT_PROPERTY_ALIAS,
   CANARY_MARKERS,
   COMP_PROPERTIES,
   DOCUMENT_AUTHOR,
 } from '../../scripts/fixtures/lib/constants';
+import { COMP_EXTRACT_PAGES } from '../../scripts/fixtures/lib/build-kestrel-point-comp-extract';
 import { LEASE_SUMMARY_SPECS } from '../../scripts/fixtures/lib/build-lease-summary';
 import { MARKET_OVERVIEW_PAGES } from '../../scripts/fixtures/lib/build-market-overview';
 import { VALUATION_MEMO_PAGES } from '../../scripts/fixtures/lib/build-valuation-memo';
@@ -60,7 +63,7 @@ const DENYLIST = [
 // PDFs, whose content streams pdfkit compresses (FlateDecode) by default, which would make a
 // raw byte search silently miss real text without proving anything about its absence.
 function collectAuthoredStrings(): string[] {
-  const strings: string[] = [DOCUMENT_AUTHOR];
+  const strings: string[] = [DOCUMENT_AUTHOR, AREA_CONFLICT_PROPERTY, AREA_CONFLICT_PROPERTY_ALIAS];
 
   for (const property of COMP_PROPERTIES) {
     strings.push(property.name, property.notes);
@@ -70,7 +73,7 @@ function collectAuthoredStrings(): string[] {
     strings.push(canary.description);
   }
 
-  for (const page of [...VALUATION_MEMO_PAGES, ...MARKET_OVERVIEW_PAGES]) {
+  for (const page of [...VALUATION_MEMO_PAGES, ...MARKET_OVERVIEW_PAGES, ...COMP_EXTRACT_PAGES]) {
     strings.push(page.heading, ...page.paragraphs);
   }
 

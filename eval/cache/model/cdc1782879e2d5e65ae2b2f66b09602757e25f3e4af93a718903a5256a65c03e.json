@@ -1,0 +1,1 @@
+{"output":"","usage":{"inputTokens":12072,"outputTokens":434,"cacheCreationInputTokens":0,"cacheReadInputTokens":0},"costUsd":0.042726,"stopReason":"tool_use","toolCalls":[{"id":"toolu_0174i6Cs7U5vizHZ96c1xRE4","name":"search_evidence","input":{"query":"Silverlake"}},{"id":"toolu_019ud7VcmaGpTqFBRLXRSKPn","name":"search_evidence","input":{"query":"Commerce Center trade"}}]}

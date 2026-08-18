@@ -1,0 +1,1 @@
+{"output":"","usage":{"inputTokens":1028,"outputTokens":67,"cacheCreationInputTokens":0,"cacheReadInputTokens":0},"costUsd":0.004089,"stopReason":"tool_use","toolCalls":[{"id":"toolu_01BUDe178mD6pJ7r3W3WF5W9","name":"search_evidence","input":{"query":"Northgate Business Park lease operating expense escalation cap"}}]}

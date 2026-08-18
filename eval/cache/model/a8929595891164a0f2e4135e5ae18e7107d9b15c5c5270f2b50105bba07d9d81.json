@@ -1,0 +1,1 @@
+{"output":"","usage":{"inputTokens":1029,"outputTokens":65,"cacheCreationInputTokens":0,"cacheReadInputTokens":0},"costUsd":0.004062,"stopReason":"tool_use","toolCalls":[{"id":"toolu_01Lka8K6R8VH423cLBLVPZ2x","name":"search_evidence","input":{"query":"Northgate Business Park anchor tenant lease term"}}]}

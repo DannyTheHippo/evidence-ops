@@ -1,0 +1,1 @@
+{"output":"","usage":{"inputTokens":1029,"outputTokens":69,"cacheCreationInputTokens":0,"cacheReadInputTokens":0},"costUsd":0.004122,"stopReason":"tool_use","toolCalls":[{"id":"toolu_01E25ZmwUmDmhmhkBeVkrVed","name":"search_evidence","input":{"query":"Cedar Bluff Logistics Center sale price per square foot"}}]}

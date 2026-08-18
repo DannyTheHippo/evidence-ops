@@ -5,6 +5,15 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Db } from 'mongodb';
 import type { Model } from 'mongoose';
+import { CANONICAL_ENTITY_SEED } from '../scripts/fixtures/lib/constants';
+import {
+  CanonicalEntity,
+  CanonicalEntityDocument,
+} from '../src/database/schemas/evidence/canonical-entity/canonical-entity.schema';
+import {
+  Tenant,
+  TenantDocument,
+} from '../src/database/schemas/administration/tenant/tenant.schema';
 import {
   Conflict,
   ConflictDocument,
@@ -16,6 +25,7 @@ import {
 import {
   Document,
   DocumentDocument,
+  type DocumentSourceClass,
 } from '../src/database/schemas/evidence/document/document.schema';
 import {
   EvidenceChunk,
@@ -44,11 +54,42 @@ import {
 } from '../src/providers/storage/document-store.interface';
 import { DATA_ROOM_DIR } from './resolve-locator';
 
+/**
+ * The eval corpus, and the reason this map exists rather than a directory scan: every entry needs a
+ * MIME type the ingestion path recognises, and a fixture reaching the corpus without one would fail
+ * at ingest rather than be skipped.
+ *
+ * It MUST list every file `fixtures/data-room/manifest.json` records a conflict against. A fixture
+ * present in the manifest but absent here produces a conflict the corpus cannot form: the eval case
+ * fails, and it fails as "insufficient evidence" — indistinguishable from a detection bug — while
+ * the manifest goes on documenting a disagreement that never happens.
+ */
 const FIXTURE_MIME_TYPES: Readonly<Record<string, string>> = {
   'comps.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  // The other half of the seeded cross-format NOI conflict; `comps.xlsx` carries the first.
+  'noi-summary.csv': 'text/csv',
   'lease-summary.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'market-overview.pdf': 'application/pdf',
   'valuation-memo.pdf': 'application/pdf',
+  'kestrel-point-pm-export.xlsx':
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'kestrel-point-comp-extract.pdf': 'application/pdf',
+  'kestrel-point-crm-export.csv': 'text/csv',
+  'kestrel-point-flyer-export.csv': 'text/csv',
+};
+
+/**
+ * `sourceClass` for the `kestrel-point-*` fixtures — every other fixture stays at the schema's
+ * `'unclassified'` default. `resolve-conflict-policy.ts` only proposes an `'authority'` winner
+ * when every candidate fact's document carries a `sourceClass` in the metric's configured
+ * `authorityOrder`, so the building-area conflict (`SEEDED_AREA_CONFLICT`) needs these classes
+ * set to be resolvable at all.
+ */
+const FIXTURE_SOURCE_CLASSES: Readonly<Partial<Record<string, DocumentSourceClass>>> = {
+  'kestrel-point-pm-export.xlsx': 'pm-export',
+  'kestrel-point-comp-extract.pdf': 'spreadsheet',
+  'kestrel-point-crm-export.csv': 'crm-export',
+  'kestrel-point-flyer-export.csv': 'crm-export',
 };
 
 export interface IngestedFixture {
@@ -106,6 +147,10 @@ export async function ingestFixtures(
     getModelToken(ExtractedFact.name),
   );
   const conflictModel = app.get<Model<ConflictDocument>>(getModelToken(Conflict.name));
+  const canonicalEntityModel = app.get<Model<CanonicalEntityDocument>>(
+    getModelToken(CanonicalEntity.name),
+  );
+  const tenantModel = app.get<Model<TenantDocument>>(getModelToken(Tenant.name));
   const documentStore = app.get<DocumentStore>(DOCUMENT_STORE);
   const ingestionService = app.get(IngestionService);
   const factsService = app.get(FactsService);
@@ -116,7 +161,28 @@ export async function ingestFixtures(
     evidenceChunkModel.deleteMany({ tenantId }),
     extractedFactModel.deleteMany({ tenantId }),
     conflictModel.deleteMany({ tenantId }),
+    canonicalEntityModel.deleteMany({ tenantId }),
   ]);
+
+  // The eval corpus is a real tenant, not a bare `tenantId` string on a pile of documents. Without
+  // this row every operator path that validates the tenant registry — `scripts/co-tenant-user.ts`
+  // most visibly — correctly refuses to touch the corpus, because as far as the product is
+  // concerned no such tenant exists. Upserted rather than created so a re-ingest is idempotent.
+  await tenantModel.updateOne(
+    { tenantId },
+    { $setOnInsert: { tenantId, name: 'Eval corpus' } },
+    { upsert: true },
+  );
+
+  // Seeds the registry row `kestrel-point-flyer-export.csv`'s alias needs. `FactsService.extractFacts`
+  // canonicalizes every candidate's entity text against this registry before `groupKey` computes
+  // `groupKeyNormalized`, so this row is what makes the flyer's alias resolve to the same group as
+  // the other three `kestrel-point-*` documents.
+  await canonicalEntityModel.create({
+    tenantId,
+    canonicalName: CANONICAL_ENTITY_SEED.canonicalName,
+    aliases: [...CANONICAL_ENTITY_SEED.aliases],
+  });
 
   const fixtures: IngestedFixture[] = [];
   const filenameByDocVersionId = new Map<string, string>();
@@ -140,6 +206,9 @@ export async function ingestFixtures(
       sourceKind,
       mimeType,
       tenantId,
+      // Absent for every fixture but `kestrel-point-*` — `sourceClass` then falls back to the
+      // schema's `'unclassified'` default, unchanged from before `FIXTURE_SOURCE_CLASSES` existed.
+      sourceClass: FIXTURE_SOURCE_CLASSES[filename],
     });
 
     const stored = await documentStore.put({
@@ -161,7 +230,7 @@ export async function ingestFixtures(
     await document.save();
 
     const documentVersionId = version._id.toString();
-    const ingestionResult = await ingestionService.ingestVersion(documentVersionId);
+    const ingestionResult = await ingestionService.ingestVersion(documentVersionId, tenantId);
 
     if (ingestionResult.chunksCreated > 0) {
       // Any one of this version's chunks works as the vector probe's known document — `.lean()`
@@ -211,7 +280,7 @@ export async function ingestFixtures(
       );
     }
 
-    const factsResult = await factsService.extractFacts(documentVersionId);
+    const factsResult = await factsService.extractFacts(documentVersionId, tenantId);
 
     fixtures.push({
       filename,

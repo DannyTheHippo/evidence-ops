@@ -1,0 +1,1 @@
+{"output":"","usage":{"inputTokens":3421,"outputTokens":173,"cacheCreationInputTokens":0,"cacheReadInputTokens":0},"costUsd":0.012858,"stopReason":"tool_use","toolCalls":[{"id":"toolu_019BZw3yMb9Y8JBLhmjh1Es9","name":"fetch_chunks","input":{"ids":["7198af988e40e4727f9742f5064b41c8c26479e8c8aaf7352026d9c745eaa905"]}}]}

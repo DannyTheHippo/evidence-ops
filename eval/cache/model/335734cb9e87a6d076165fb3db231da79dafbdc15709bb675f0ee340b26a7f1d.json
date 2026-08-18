@@ -1,0 +1,1 @@
+{"output":"","usage":{"inputTokens":1033,"outputTokens":102,"cacheCreationInputTokens":0,"cacheReadInputTokens":0},"costUsd":0.004629,"stopReason":"tool_use","toolCalls":[{"id":"toolu_01KsEGQPe9N9CTUfoA12jgSh","name":"search_evidence","input":{"query":"hidden instructions token spreadsheet"}}]}

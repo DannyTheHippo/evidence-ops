@@ -25,10 +25,18 @@ import { assertAtlasSearchSupported } from '../src/providers/retrieval/atlas-sea
 import { assertRequiredSearchIndexesExist } from '../src/providers/retrieval/required-search-indexes.util';
 import {
   buildMarkdownReport,
+  failingCases,
+  leakingStrategies,
   type EvalRunResult,
   type PerCaseReport,
   type RetrievalModeSummary,
+  type StrategyMetrics,
 } from './report';
+import {
+  EVAL_RETRIEVAL_STRATEGIES,
+  gatherEvidenceForStrategy,
+  type EvalRetrievalStrategy,
+} from './retrieval/gather-evidence-for-strategy';
 import { runRetrievalComparison, type SearchByMode } from './retrieval/retrieval-comparison';
 import { QDRANT_MODES, RETRIEVAL_MODES, searchByMode } from './retrieval/retrieval-modes';
 import manifest from '../fixtures/data-room/manifest.json';
@@ -36,15 +44,27 @@ import {
   EvidenceChunk,
   EvidenceChunkDocument,
 } from '../src/database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
+import { AgenticRetrievalService } from '../src/features/evidence/qa/agentic-retrieval.service';
 import { ConflictsService } from '../src/features/evidence/conflicts/conflicts.service';
+import { UserRole } from '../src/shared/enums/user-role.enum';
 import { createActivities } from '../src/worker/activities';
 
 const EVAL_TENANT_ID = 'eval';
+// Server-derived identity `gatherEvidenceForStrategy`'s agentic branch needs for
+// `ToolExecutionContext` — `StepPolicyAuthzHook`'s minimum role for the `agentic-retrieval` step is
+// `UserRole.Member`, so this is the lowest role that still exercises the same policy check
+// production traffic goes through.
+const EVAL_ACTOR_ID = 'eval-actor';
+const EVAL_ACTOR_ROLE = UserRole.Member;
 const CACHE_DIR = path.join(__dirname, 'cache');
 const MODEL_CACHE_DIR = path.join(CACHE_DIR, 'model');
 const EMBEDDING_CACHE_DIR = path.join(CACHE_DIR, 'embedding');
 const RESULTS_DIR = path.join(__dirname, 'results');
 const DEFAULT_QDRANT_URL = 'http://localhost:6333';
+// Keeps an unflagged `npm run eval` on today's cost profile — the agentic strategy spends real
+// model budget per turn (`AgenticRetrievalService.gatherEvidence`), so a caller only pays for it by
+// asking via `--strategies`.
+const DEFAULT_STRATEGIES: readonly EvalRetrievalStrategy[] = ['single-shot'];
 
 // Duplicated from `retrieval-modes.ts`'s own (unexported) `COLLECTION` constant, not imported —
 // same convention that file's header comment already establishes for the `src`/`eval` boundary,
@@ -59,6 +79,7 @@ interface CliOptions {
   readonly ingest: boolean;
   readonly qdrant: boolean;
   readonly qdrantUrl: string;
+  readonly strategies: readonly EvalRetrievalStrategy[];
 }
 
 function readFlagValue(argv: readonly string[], flag: string, fallback: string): string {
@@ -69,12 +90,44 @@ function readFlagValue(argv: readonly string[], flag: string, fallback: string):
   return argv[index + 1] ?? fallback;
 }
 
+function isEvalRetrievalStrategy(value: string): value is EvalRetrievalStrategy {
+  return (EVAL_RETRIEVAL_STRATEGIES as readonly string[]).includes(value);
+}
+
+/** `--strategies single-shot,agentic` (comma-separated); absent keeps `DEFAULT_STRATEGIES`, which
+ * is what preserves today's cost profile for an unflagged run (see that constant's doc comment).
+ * Fails CLOSED on an unrecognized value rather than silently dropping it — a typo'd strategy name
+ * would otherwise run fewer strategies than the caller asked for without any signal. */
+function parseStrategies(argv: readonly string[]): readonly EvalRetrievalStrategy[] {
+  const index = argv.indexOf('--strategies');
+  if (index === -1) {
+    return DEFAULT_STRATEGIES;
+  }
+  const raw = argv[index + 1] ?? '';
+  const requested = raw
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  const invalid = requested.filter((value) => !isEvalRetrievalStrategy(value));
+  if (invalid.length > 0) {
+    throw new Error(
+      `eval: unknown --strategies value(s): ${invalid.join(', ')} — valid values are ` +
+        `${EVAL_RETRIEVAL_STRATEGIES.join(', ')}`,
+    );
+  }
+  if (requested.length === 0) {
+    throw new Error('eval: --strategies was passed with no value');
+  }
+  return requested.filter(isEvalRetrievalStrategy);
+}
+
 function parseCliOptions(argv: readonly string[]): CliOptions {
   return {
     cacheMode: argv.includes('--record') ? 'record' : 'replay',
     ingest: argv.includes('--ingest'),
     qdrant: argv.includes('--qdrant'),
     qdrantUrl: readFlagValue(argv, '--qdrant-url', DEFAULT_QDRANT_URL),
+    strategies: parseStrategies(argv),
   };
 }
 
@@ -128,7 +181,9 @@ function outcomeMatchesExpectation(
 async function main(): Promise<void> {
   const options = parseCliOptions(process.argv.slice(2));
   const sha = gitSha();
-  console.log(`eval: cache mode = ${options.cacheMode}, git sha = ${sha}`);
+  console.log(
+    `eval: cache mode = ${options.cacheMode}, git sha = ${sha}, strategies = ${options.strategies.join(', ')}`,
+  );
 
   const cases = EvalDatasetSchema.parse(casesJson);
 
@@ -238,125 +293,149 @@ async function main(): Promise<void> {
     }
 
     const activities = createActivities(app);
+    const agenticRetrievalService = app.get(AgenticRetrievalService);
     const perCase: PerCaseReport[] = [];
-    const caseResults: CaseResult[] = [];
+    // One `CaseResult[]` per strategy, not one shared array: `computeMetrics` is called once per
+    // strategy below so each strategy's recall/citation/canary numbers are its own, never averaged
+    // together across strategies that ran fundamentally different retrieval.
+    const caseResultsByStrategy: Record<EvalRetrievalStrategy, CaseResult[]> = {
+      'single-shot': [],
+      agentic: [],
+    };
 
     for (const evalCase of cases) {
-      const retrievedChunks = await activities.retrieveEvidence({
-        questionText: evalCase.question,
-        tenantId: EVAL_TENANT_ID,
-      });
-      const { contract: rawOutcome } = await activities.synthesizeAnswer({
-        questionText: evalCase.question,
-        chunks: retrievedChunks,
-      });
-      const groundingResult = await activities.groundingCheck({
-        outcome: rawOutcome,
-        retrievedChunks,
-        tenantId: EVAL_TENANT_ID,
-      });
+      for (const strategy of options.strategies) {
+        const retrieval = await gatherEvidenceForStrategy(
+          {
+            strategy,
+            questionText: evalCase.question,
+            tenantId: EVAL_TENANT_ID,
+            actorId: EVAL_ACTOR_ID,
+            role: EVAL_ACTOR_ROLE,
+          },
+          {
+            retrieveEvidence: (input) => activities.retrieveEvidence(input),
+            gatherEvidence: (input) => agenticRetrievalService.gatherEvidence(input),
+          },
+        );
+        const retrievedChunks = retrieval.chunks;
+        const { contract: rawOutcome } = await activities.synthesizeAnswer({
+          questionText: evalCase.question,
+          chunks: retrievedChunks,
+          tenantId: EVAL_TENANT_ID,
+        });
+        const groundingResult = await activities.groundingCheck({
+          outcome: rawOutcome,
+          retrievedChunks,
+          tenantId: EVAL_TENANT_ID,
+        });
 
-      const chunkByChunkId = new Map(retrievedChunks.map((chunk) => [chunk.chunkId, chunk]));
-      const hasGroundTruth = evalCase.expectedLocators.length > 0;
+        const chunkByChunkId = new Map(retrievedChunks.map((chunk) => [chunk.chunkId, chunk]));
+        const hasGroundTruth = evalCase.expectedLocators.length > 0;
 
-      const retrievedOverlaps = hasGroundTruth
-        ? await Promise.all(
-            retrievedChunks.map((chunk) =>
-              chunkOverlapsAnyLocator(
-                {
-                  filename: filenameByDocVersionId.get(chunk.docVersionId) ?? '',
-                  text: chunk.text,
-                  locator: chunk.locator,
-                },
-                evalCase.expectedLocators,
+        const retrievedOverlaps = hasGroundTruth
+          ? await Promise.all(
+              retrievedChunks.map((chunk) =>
+                chunkOverlapsAnyLocator(
+                  {
+                    filename: filenameByDocVersionId.get(chunk.docVersionId) ?? '',
+                    text: chunk.text,
+                    locator: chunk.locator,
+                  },
+                  evalCase.expectedLocators,
+                ),
               ),
-            ),
-          )
-        : [];
-
-      const citations =
-        groundingResult.outcome.kind === 'answered'
-          ? groundingResult.claims.flatMap((claim) => claim.citations)
+            )
           : [];
 
-      const citationOverlaps = hasGroundTruth
-        ? await Promise.all(
-            citations.map((citation) => {
-              const chunk = chunkByChunkId.get(citation.chunkId);
-              if (!chunk) {
-                // Invariant guard: the grounding gate only ever survives a citation whose
-                // `chunkId` matched a retrieved chunk (check 1a in `verify-claim.ts`) — a citation
-                // here with no matching chunk means gate and eval have drifted apart, scored as a
-                // miss rather than thrown so one bad case can't abort the whole run.
-                return Promise.resolve(false);
-              }
-              return chunkOverlapsAnyLocator(
-                {
-                  filename: filenameByDocVersionId.get(chunk.docVersionId) ?? '',
-                  text: chunk.text,
-                  locator: chunk.locator,
-                },
-                evalCase.expectedLocators,
-              );
-            }),
-          )
-        : [];
+        const citations =
+          groundingResult.outcome.kind === 'answered'
+            ? groundingResult.claims.flatMap((claim) => claim.citations)
+            : [];
 
-      const actualOutcomeKind: CaseOutcomeKind = groundingResult.outcome.kind;
-      const serializedOutcome = JSON.stringify(groundingResult.outcome);
-      // Split, not a single "leaked anywhere" boolean — see `classify-canary-leak.ts`'s doc
-      // comment for why a marker inside a gate-verified quote (provenance working, ADR-0004's
-      // canary worked example) and a marker in the model's own voice (contamination) are two
-      // different failures, never conflated into one number. `citations` here is already scoped to
-      // gate-verified (`groundingResult.claims`, not the model's raw `outcome.claims`) quotes.
-      const verifiedQuotes = citations.map((citation) => citation.quote);
-      const { ownVoiceLeak, verifiedQuoteLeak } = classifyCanaryLeak(
-        serializedOutcome,
-        verifiedQuotes,
-        CANARY_TOKENS,
-      );
+        const citationOverlaps = hasGroundTruth
+          ? await Promise.all(
+              citations.map((citation) => {
+                const chunk = chunkByChunkId.get(citation.chunkId);
+                if (!chunk) {
+                  // Invariant guard: the grounding gate only ever survives a citation whose
+                  // `chunkId` matched a retrieved chunk (check 1a in `verify-claim.ts`) — a
+                  // citation here with no matching chunk means gate and eval have drifted apart,
+                  // scored as a miss rather than thrown so one bad case can't abort the whole run.
+                  return Promise.resolve(false);
+                }
+                return chunkOverlapsAnyLocator(
+                  {
+                    filename: filenameByDocVersionId.get(chunk.docVersionId) ?? '',
+                    text: chunk.text,
+                    locator: chunk.locator,
+                  },
+                  evalCase.expectedLocators,
+                );
+              }),
+            )
+          : [];
 
-      const recallHitRank = retrievedOverlaps.length > 0 ? retrievedOverlaps.indexOf(true) + 1 : 0;
+        const actualOutcomeKind: CaseOutcomeKind = groundingResult.outcome.kind;
+        const serializedOutcome = JSON.stringify(groundingResult.outcome);
+        // Split, not a single "leaked anywhere" boolean — see `classify-canary-leak.ts`'s doc
+        // comment for why a marker inside a gate-verified quote (provenance working, ADR-0004's
+        // canary worked example) and a marker in the model's own voice (contamination) are two
+        // different failures, never conflated into one number. `citations` here is already scoped
+        // to gate-verified (`groundingResult.claims`, not the model's raw `outcome.claims`) quotes.
+        const verifiedQuotes = citations.map((citation) => citation.quote);
+        const { ownVoiceLeak, verifiedQuoteLeak } = classifyCanaryLeak(
+          serializedOutcome,
+          verifiedQuotes,
+          CANARY_TOKENS,
+        );
 
-      caseResults.push({
-        id: evalCase.id,
-        category: evalCase.category,
-        actualOutcomeKind,
-        retrievedOverlaps,
-        citationOverlaps,
-        claimCoverage: groundingResult.claimCoverage,
-        canaryOwnVoiceLeaked: ownVoiceLeak,
-        canaryVerifiedQuoteLeaked: verifiedQuoteLeak,
-      });
+        const recallHitRank =
+          retrievedOverlaps.length > 0 ? retrievedOverlaps.indexOf(true) + 1 : 0;
 
-      perCase.push({
-        id: evalCase.id,
-        category: evalCase.category,
-        question: evalCase.question,
-        expectedOutcome: evalCase.expectedOutcome,
-        actualOutcomeKind,
-        // Only the hard (own-voice) leak fails a case — a verified-quote leak is accepted,
-        // measured behaviour (see `EvalMetrics.canaryVerifiedQuoteLeakRate`'s doc comment).
-        pass:
-          outcomeMatchesExpectation(
-            evalCase.category,
-            evalCase.expectedOutcome,
-            actualOutcomeKind,
-          ) && !ownVoiceLeak,
-        claimCoverage: groundingResult.claimCoverage,
-        retrievedChunkCount: retrievedChunks.length,
-        recallHitRank: recallHitRank > 0 ? recallHitRank : null,
-        citationCount: citations.length,
-        citationOverlapCount: citationOverlaps.filter(Boolean).length,
-        canaryOwnVoiceLeaked: ownVoiceLeak,
-        canaryVerifiedQuoteLeaked: verifiedQuoteLeak,
-      });
+        caseResultsByStrategy[strategy].push({
+          id: evalCase.id,
+          category: evalCase.category,
+          actualOutcomeKind,
+          retrievedOverlaps,
+          citationOverlaps,
+          claimCoverage: groundingResult.claimCoverage,
+          canaryOwnVoiceLeaked: ownVoiceLeak,
+          canaryVerifiedQuoteLeaked: verifiedQuoteLeak,
+        });
 
-      console.log(
-        `eval: ${evalCase.id} [${evalCase.category}] -> ${actualOutcomeKind}` +
-          `${ownVoiceLeak ? ' CANARY LEAK (own voice)' : ''}` +
-          `${verifiedQuoteLeak ? ' CANARY IN VERIFIED QUOTE' : ''}`,
-      );
+        perCase.push({
+          id: evalCase.id,
+          category: evalCase.category,
+          question: evalCase.question,
+          expectedOutcome: evalCase.expectedOutcome,
+          strategy,
+          actualOutcomeKind,
+          // Only the hard (own-voice) leak fails a case — a verified-quote leak is accepted,
+          // measured behaviour (see `EvalMetrics.canaryVerifiedQuoteLeakRate`'s doc comment).
+          pass:
+            outcomeMatchesExpectation(
+              evalCase.category,
+              evalCase.expectedOutcome,
+              actualOutcomeKind,
+            ) && !ownVoiceLeak,
+          claimCoverage: groundingResult.claimCoverage,
+          retrievedChunkCount: retrievedChunks.length,
+          recallHitRank: recallHitRank > 0 ? recallHitRank : null,
+          citationCount: citations.length,
+          citationOverlapCount: citationOverlaps.filter(Boolean).length,
+          turns: retrieval.turns,
+          costUsd: retrieval.costUsd,
+          canaryOwnVoiceLeaked: ownVoiceLeak,
+          canaryVerifiedQuoteLeaked: verifiedQuoteLeak,
+        });
+
+        console.log(
+          `eval: ${evalCase.id} [${evalCase.category}] (${strategy}) -> ${actualOutcomeKind}` +
+            `${ownVoiceLeak ? ' CANARY LEAK (own voice)' : ''}` +
+            `${verifiedQuoteLeak ? ' CANARY IN VERIFIED QUOTE' : ''}`,
+        );
+      }
     }
 
     const embeddingProvider = app.get<EmbeddingProvider>(EMBEDDING_PROVIDER);
@@ -424,13 +503,17 @@ async function main(): Promise<void> {
       });
     }
 
-    const metrics = computeMetrics(caseResults);
+    const metricsByStrategy: StrategyMetrics[] = options.strategies.map((strategy) => ({
+      strategy,
+      metrics: computeMetrics(caseResultsByStrategy[strategy]),
+    }));
     const result: EvalRunResult = {
       gitSha: sha,
       generatedAt: new Date().toISOString(),
       cacheMode: options.cacheMode,
       corpusFingerprint,
-      metrics,
+      strategies: options.strategies,
+      metricsByStrategy,
       perCase,
       retrievalComparison,
     };
@@ -444,12 +527,35 @@ async function main(): Promise<void> {
     await writeFile(path.join(RESULTS_DIR, `${sha}.md`), buildMarkdownReport(result), 'utf-8');
 
     console.log(`eval: wrote eval/results/${sha}.json and eval/results/${sha}.md`);
-    console.log(
-      `eval: recall@5=${metrics.retrieval.recallAt5.toFixed(2)} recall@10=${metrics.retrieval.recallAt10.toFixed(2)} mrr=${metrics.retrieval.mrr.toFixed(2)} citationPrecision=${metrics.citationPrecision.toFixed(2)} claimCoverage=${metrics.claimCoverageMean.toFixed(2)} abstention=${metrics.abstentionAccuracy.toFixed(2)} conflictRecall=${metrics.conflictRecall.toFixed(2)} canaryOwnVoiceLeakRate=${metrics.canaryOwnVoiceLeakRate} canaryVerifiedQuoteLeakRate=${metrics.canaryVerifiedQuoteLeakRate}`,
-    );
+    for (const { strategy, metrics } of metricsByStrategy) {
+      console.log(
+        `eval: [${strategy}] recall@5=${metrics.retrieval.recallAt5.toFixed(2)} recall@10=${metrics.retrieval.recallAt10.toFixed(2)} mrr=${metrics.retrieval.mrr.toFixed(2)} citationPrecision=${metrics.citationPrecision.toFixed(2)} claimCoverage=${metrics.claimCoverageMean.toFixed(2)} abstention=${metrics.abstentionAccuracy.toFixed(2)} conflictRecall=${metrics.conflictRecall.toFixed(2)} canaryOwnVoiceLeakRate=${metrics.canaryOwnVoiceLeakRate} canaryVerifiedQuoteLeakRate=${metrics.canaryVerifiedQuoteLeakRate}`,
+      );
+    }
 
-    if (metrics.canaryOwnVoiceLeakRate > 0) {
-      console.error('eval: FAILED — own-voice canary leak rate is nonzero (hard gate)');
+    // The canary hard gate applies to every strategy (work item 2): a leak under any one of them
+    // fails the whole run. `leakingStrategies` (`./report`) is the same predicate
+    // `buildMarkdownReport`'s gate line reads, so "the report says FAILED" and "the run exits
+    // nonzero" can never drift apart.
+    const strategiesLeaking = leakingStrategies(metricsByStrategy);
+    if (strategiesLeaking.length > 0) {
+      console.error(
+        `eval: FAILED — own-voice canary leak rate is nonzero under: ${strategiesLeaking.join(', ')} (hard gate)`,
+      );
+      process.exitCode = 1;
+    }
+
+    // The second hard gate, on the same `./report` predicate the markdown gate line reads. A case
+    // whose expected outcome did not happen fails the run: replay serves every model and embedding
+    // response from a committed fixture, so the outcome is reproducible — a wrong answer here is a
+    // regression in the dataset, the prompts, or retrieval, never sampling noise. Applies in record
+    // mode too, where the same wrong answer is what a re-record would freeze into the cache.
+    const failing = failingCases(perCase);
+    if (failing.length > 0) {
+      console.error(
+        `eval: FAILED — ${failing.length} case(s) did not produce their expected outcome ` +
+          `(hard gate): ${failing.map((row) => `${row.id} (${row.strategy})`).join(', ')}`,
+      );
       process.exitCode = 1;
     }
   } finally {

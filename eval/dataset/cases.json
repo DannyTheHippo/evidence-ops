@@ -96,18 +96,18 @@
   {
     "id": "ans-007",
     "category": "answerable",
-    "question": "What is the net operating income for Fenwick Distribution Hub?",
+    "question": "According to the comps spreadsheet, what is Thornfield Industrial Park's net operating income?",
     "expectedLocators": [
       {
         "kind": "xlsx-cell",
         "file": "comps.xlsx",
         "sheet": "Comps",
-        "cell": "G7"
+        "cell": "G9"
       }
     ],
     "expectedOutcome": "answer",
-    "notes": "comps.xlsx row 7 (Fenwick Distribution Hub), Net Operating Income column: $3,891,300.",
-    "expectedAnswerContains": ["3,891,300"]
+    "notes": "comps.xlsx row 9 (Thornfield Industrial Park), Net Operating Income column: $2,901,600. noi-summary.csv carries the same figure for this property, so the two sources agree and no conflict is formable; the question names the comps spreadsheet so the ground-truth locator is one cell rather than either of two agreeing sources.",
+    "expectedAnswerContains": ["2,901,600"]
   },
   {
     "id": "ans-008",
@@ -493,5 +493,38 @@
     "expectedOutcome": "surface_conflict",
     "notes": "The seeded cross-format conflict: comps.xlsx!G7 = $3,891,300 vs. noi-summary.csv 'CSV'!C7 = 4150000, a ~6.2% spread against the metric's 1% relative tolerance. Correct behaviour is to surface both, not to silently pick one.",
     "expectedAnswerContains": ["3,891,300", "4150000"]
+  },
+  {
+    "id": "con-007",
+    "category": "conflicting",
+    "question": "What is Kestrel Point Logistics Center's building area, and do the four sources agree?",
+    "expectedLocators": [
+      {
+        "kind": "xlsx-cell",
+        "file": "kestrel-point-pm-export.xlsx",
+        "sheet": "Rent Roll",
+        "cell": "B2"
+      },
+      {
+        "kind": "pdf-page",
+        "file": "kestrel-point-comp-extract.pdf",
+        "page": 1
+      },
+      {
+        "kind": "xlsx-cell",
+        "file": "kestrel-point-crm-export.csv",
+        "sheet": "CSV",
+        "cell": "B2"
+      },
+      {
+        "kind": "xlsx-cell",
+        "file": "kestrel-point-flyer-export.csv",
+        "sheet": "CSV",
+        "cell": "B2"
+      }
+    ],
+    "expectedOutcome": "surface_conflict",
+    "notes": "The seeded four-source conflict: kestrel-point-pm-export.xlsx!B2 = 128,400 sf (pm-export), kestrel-point-comp-extract.pdf page 1 = 121,900 sf (spreadsheet), kestrel-point-crm-export.csv!B2 = 133750 (unformatted, crm-export), kestrel-point-flyer-export.csv!B2 = 118300 (unformatted, crm-export, entered under the alias 'Kestrel Point Logistics Ctr') — each pair disagrees by more than the metric's 1% relative tolerance, and canonical-entity resolution folds the alias-named flyer row into the same group as the other three. Correct behaviour is to surface all four, not to silently pick one, even though the configured authority order (metric-ontology.ts) proposes the pm-export figure as the winner for a human reviewer.",
+    "expectedAnswerContains": ["128,400", "121,900", "133750", "118300"]
   }
 ]

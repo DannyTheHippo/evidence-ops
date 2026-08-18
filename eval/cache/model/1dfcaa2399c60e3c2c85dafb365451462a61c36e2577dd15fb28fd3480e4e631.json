@@ -1,0 +1,1 @@
+{"output":"","usage":{"inputTokens":1045,"outputTokens":74,"cacheCreationInputTokens":0,"cacheReadInputTokens":0},"costUsd":0.004245,"stopReason":"tool_use","toolCalls":[{"id":"toolu_01WkSYhLhMgiM8enqPLB3h1Q","name":"search_evidence","input":{"query":"valuation memo cap rate range industrial and flex assets Meridian Corridor"}}]}

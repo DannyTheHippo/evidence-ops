@@ -1,0 +1,1 @@
+{"output":"","usage":{"inputTokens":17840,"outputTokens":171,"cacheCreationInputTokens":0,"cacheReadInputTokens":0},"costUsd":0.056085,"stopReason":"tool_use","toolCalls":[{"id":"toolu_01K77yKybPe3i3G3ttmXh7J1","name":"search_evidence","input":{"query":"Fenwick"}},{"id":"toolu_013nXnN9gmD4ZJTFjTiBcGoD","name":"search_evidence","input":{"query":"NOI summary"}}]}

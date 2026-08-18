@@ -172,6 +172,52 @@
           ]
         }
       ]
+    },
+    "kestrel-point-pm-export.xlsx": {
+      "sha256": "031b23ec2b21ca269c0310d331e11bd46fb3a0c00c41bcab864d1b3f2bdce866",
+      "sheets": [
+        {
+          "name": "Rent Roll",
+          "headerRow": [
+            "Property Name",
+            "Building Area (SF)"
+          ],
+          "rowCount": 1,
+          "usedRange": "A1:B2"
+        }
+      ]
+    },
+    "kestrel-point-comp-extract.pdf": {
+      "sha256": "26f64ceaad15ce4a47bdeb422655cacb840686ab4aab25b5fcc3024c08ec5678",
+      "pageCount": 1
+    },
+    "kestrel-point-crm-export.csv": {
+      "sha256": "e31eb3f55c5e3decf3fadc8435d2d804a6258b5fdde11cb7200633d7f0be6768",
+      "sheets": [
+        {
+          "name": "CSV",
+          "headerRow": [
+            "Property Name",
+            "Building Area (SF)"
+          ],
+          "rowCount": 1,
+          "usedRange": "A1:B2"
+        }
+      ]
+    },
+    "kestrel-point-flyer-export.csv": {
+      "sha256": "9d0c8291a413f4f8cbcd1248c6feb76d9111a8ae8c560b362928aaeaeb643e96",
+      "sheets": [
+        {
+          "name": "CSV",
+          "headerRow": [
+            "Property Name",
+            "Building Area (SF)"
+          ],
+          "rowCount": 1,
+          "usedRange": "A1:B2"
+        }
+      ]
     }
   },
   "conflicts": [
@@ -215,6 +261,40 @@
         }
       ],
       "note": "comps.xlsx reflects the net operating income recorded at underwriting; noi-summary.csv reflects a later reconciliation figure that was never fed back into the underwriting sheet. The two disagree by roughly 6.2%, well outside the 1% tolerance for this metric, and neither is a typo."
+    },
+    {
+      "id": "building-area-conflict-kestrel-point",
+      "property": "Kestrel Point Logistics Center",
+      "locations": [
+        {
+          "file": "kestrel-point-pm-export.xlsx",
+          "sheet": "Rent Roll",
+          "cell": "B2",
+          "value": 128400,
+          "display": "128,400"
+        },
+        {
+          "file": "kestrel-point-comp-extract.pdf",
+          "page": 1,
+          "display": "121,900",
+          "context": "Comparable Set Extract: \"Kestrel Point Logistics Center is carried in the comparable set at a building area of 121,900 square feet.\""
+        },
+        {
+          "file": "kestrel-point-crm-export.csv",
+          "sheet": "CSV",
+          "cell": "B2",
+          "value": 133750,
+          "display": "133,750"
+        },
+        {
+          "file": "kestrel-point-flyer-export.csv",
+          "sheet": "CSV",
+          "cell": "B2",
+          "value": 118300,
+          "display": "118,300"
+        }
+      ],
+      "note": "kestrel-point-pm-export.xlsx reflects the rent roll administered by the property manager; kestrel-point-comp-extract.pdf reflects a printed comparable-set spreadsheet compiled one step removed from that rent roll; kestrel-point-crm-export.csv and kestrel-point-flyer-export.csv both reflect offering-materials figures carried in the deal CRM, entered under different spellings of the property name. All four disagree by more than the 1% tolerance for this metric, and the configured authority order (metric-ontology.ts) makes the property manager's figure the proposed winner."
     }
   ],
   "canaries": [

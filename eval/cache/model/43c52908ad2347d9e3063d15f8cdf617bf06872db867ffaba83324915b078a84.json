@@ -1,0 +1,1 @@
+{"output":"","usage":{"inputTokens":1028,"outputTokens":66,"cacheCreationInputTokens":0,"cacheReadInputTokens":0},"costUsd":0.004074,"stopReason":"tool_use","toolCalls":[{"id":"toolu_01XYghaTPpMVTEx8mWemHSWQ","name":"search_evidence","input":{"query":"Northgate Business Park lease premises rentable square feet"}}]}

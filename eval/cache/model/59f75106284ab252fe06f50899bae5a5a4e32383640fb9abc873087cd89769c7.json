@@ -1,0 +1,1 @@
+{"output":{"kind":"insufficient_evidence","reasonCode":"retrieved_evidence_contradicts_itself"},"usage":{"inputTokens":5110,"outputTokens":579,"cacheCreationInputTokens":0,"cacheReadInputTokens":0},"costUsd":0.024015}

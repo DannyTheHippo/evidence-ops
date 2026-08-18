@@ -1,0 +1,1 @@
+{"output":"","usage":{"inputTokens":1023,"outputTokens":63,"cacheCreationInputTokens":0,"cacheReadInputTokens":0},"costUsd":0.004014,"stopReason":"tool_use","toolCalls":[{"id":"toolu_01Ah8LecRgUbTJnNYKbQtTV2","name":"search_evidence","input":{"query":"Sablewood Retail Court zoning classification"}}]}

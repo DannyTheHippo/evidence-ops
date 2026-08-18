@@ -26,7 +26,12 @@ live call — not a bug. It also means the cache is only as complete as the last
 a run that died partway leaves the entries it had already written, which is why the counts here can
 grow without the eval yet producing results.
 
-Once recorded, both directories are committed: CI runs `npm run eval` replay-only, at zero cost.
-Re-record deliberately (`--record`) after any change to the corpus, the dataset questions, the
-prompt templates, or the model/embedding version — a stale cache entry silently freezes the
-old behaviour for whichever request key didn't change.
+Once recorded, both directories are committed, so a replay-only `npm run eval` runs at zero cost for
+anyone with the repo. `integration.yml`'s `eval` job runs it that way on every push and pull request
+(`ci.yml` and `e2e.yml` are the rest of the set and do not); `--record` remains a manual,
+operator-only step, because only it needs live keys and spends money. The CI job is red on three
+things: a replay cache miss, an own-voice canary leak, and any case whose expected outcome did not
+happen. Re-record deliberately (`--record`) after any change to the corpus, the dataset questions,
+the prompt templates, or the model/embedding version — a stale cache entry silently freezes the old
+behaviour for whichever request key didn't change, and a new or edited question has no entry at all,
+so replay fails on it until someone records.

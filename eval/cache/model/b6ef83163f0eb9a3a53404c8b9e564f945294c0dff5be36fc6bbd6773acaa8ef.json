@@ -1,0 +1,1 @@
+{"output":"","usage":{"inputTokens":1024,"outputTokens":63,"cacheCreationInputTokens":0,"cacheReadInputTokens":0},"costUsd":0.004017,"stopReason":"tool_use","toolCalls":[{"id":"toolu_01RKMrudwojpnsHn9WaXC3vc","name":"search_evidence","input":{"query":"office vacancy rate Meridian Corridor"}}]}
