@@ -47,6 +47,8 @@ export class AuthController {
   @HttpCode(HttpStatus.CREATED)
   @ApiResponse(registerApiExamples.created)
   @ApiResponse(registerApiExamples.conflict)
+  @ApiResponse(registerApiExamples.invalidInvitation)
+  @ApiResponse(registerApiExamples.invitationEmailConflict)
   async register(@Body() dto: RegisterRequestDto): Promise<MeResponseDto> {
     return toResponseDto(MeResponseDto, await this.authService.register(dto));
   }

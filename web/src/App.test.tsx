@@ -308,6 +308,19 @@ describe('App / shell', () => {
     expect(screen.getByRole('heading', { name: 'Evidence Ops' })).toBeInTheDocument();
   });
 
+  it('hides the sidebar and topbar chrome on /invite', () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue(null);
+
+    render(
+      <MemoryRouter initialEntries={['/invite?token=eo_inv_fixture']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole('navigation', { name: 'Primary' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Join your team' })).toBeInTheDocument();
+  });
+
   it('renders a 404 view with a way back home for an unmatched authenticated route', async () => {
     vi.spyOn(auth, 'ensureSession').mockResolvedValue({
       id: 'user-1',

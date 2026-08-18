@@ -276,4 +276,24 @@ describe('InvitationsService', () => {
       });
     });
   });
+
+  describe('accept', () => {
+    it('should stamp acceptedAt and record an audit event attributed to the joining user', async () => {
+      mockInvitationModel.updateOne.mockResolvedValueOnce({ acknowledged: true });
+      const userId = new Types.ObjectId().toString();
+
+      await service.accept(invitationId.toString(), userId, 'tenant-a');
+
+      expect(mockInvitationModel.updateOne).toHaveBeenCalledWith(
+        { _id: invitationId.toString() },
+        { acceptedAt: expect.any(Date) as Date },
+      );
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'invitations.accepted',
+        actorId: userId,
+        subject: { entityType: 'Invitation', entityId: invitationId.toString() },
+        tenantId: 'tenant-a',
+      });
+    });
+  });
 });

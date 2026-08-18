@@ -225,9 +225,10 @@ describe('Invitations (e2e)', () => {
   });
 
   /**
-   * There is no HTTP route that redeems an invitation — that is registration's job, a later step.
-   * `verify` is exercised directly through the service, exactly as a future consumer would call it,
-   * mirroring how `api-keys.e2e-spec.ts` exercises `TOKEN_VERIFIER` for the same reason.
+   * `verify` has no HTTP route of its own — `POST /api/v1/auth/register` is the only caller, and
+   * the redemption flow it drives (join the inviting tenant, refuse a stale token, refuse an
+   * already-registered invitation email) is covered in `auth.e2e-spec.ts`. Exercised directly here
+   * through the service, mirroring how `api-keys.e2e-spec.ts` exercises `TOKEN_VERIFIER`.
    */
   describe('InvitationsService.verify', () => {
     it('verifies a freshly minted, unredeemed token to the invitation’s tenant, email and role', async () => {

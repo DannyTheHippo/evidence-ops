@@ -178,6 +178,25 @@ export class InvitationsService {
     };
   }
 
+  /**
+   * Marks an invitation redeemed. `AuthService.register` calls this only after the joining user
+   * has actually been created — never before — so a failure between `verify()` and account
+   * creation leaves the token still redeemable rather than burning it on a user that never came
+   * into existence.
+   */
+  async accept(invitationId: string, userId: string, tenantId: string): Promise<void> {
+    await this.invitationModel.updateOne({ _id: invitationId }, { acceptedAt: new Date() });
+
+    await this.auditService.record({
+      action: 'invitations.accepted',
+      actorId: userId,
+      subject: { entityType: 'Invitation', entityId: invitationId },
+      tenantId,
+    });
+
+    this.logger.debug(`Invitation '${invitationId}' accepted by user '${userId}'`);
+  }
+
   /** `timingSafeEqual` throws on unequal-length buffers rather than returning `false` — sha256 hex
    *  digests are always 64 characters on both sides in practice, but the length check guards that
    *  precondition explicitly rather than letting a corrupt row crash verification instead of just

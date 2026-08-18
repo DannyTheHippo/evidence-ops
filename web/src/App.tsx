@@ -17,6 +17,8 @@ import AuditEventsPage from './pages/AuditEventsPage';
 import ConflictsPage from './pages/ConflictsPage';
 import DataRoomPage from './pages/DataRoomPage';
 import HomePage from './pages/HomePage';
+import InvitationsPage from './pages/InvitationsPage';
+import InvitePage from './pages/InvitePage';
 import LoginPage from './pages/LoginPage';
 import RunsPage from './pages/RunsPage';
 import SearchPage from './pages/SearchPage';
@@ -132,11 +134,12 @@ export default function App() {
   // Chrome visibility only, not an authorization check — RequireAuth on each route is the actual
   // gate. Route-based rather than session-based: an App-level probe would only run once on mount
   // (empty dep array) and would not notice a login that happens after that first render.
-  const showChrome = location.pathname !== '/login';
+  const showChrome = location.pathname !== '/login' && location.pathname !== '/invite';
 
   const routes = (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/invite" element={<InvitePage />} />
       <Route
         path="/"
         element={
@@ -254,6 +257,14 @@ export default function App() {
         element={
           <RequireAdmin>
             <AuditEventsPage />
+          </RequireAdmin>
+        }
+      />
+      <Route
+        path="/invitations"
+        element={
+          <RequireAdmin>
+            <InvitationsPage />
           </RequireAdmin>
         }
       />

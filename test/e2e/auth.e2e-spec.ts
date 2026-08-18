@@ -1,5 +1,9 @@
 import type { INestApplication } from '@nestjs/common';
+import { getModelToken } from '@nestjs/mongoose';
+import type { Model } from 'mongoose';
 import request from 'supertest';
+import { User, UserDocument } from '../../src/database/schemas/administration/user/user.schema';
+import { UserRole } from '../../src/shared/enums/user-role.enum';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
 import { registerTestUser } from '../utils/register-test-user';
 
@@ -28,9 +32,11 @@ const sessionCookieFromResponse = (setCookieHeader: string[] | undefined): strin
 
 describe('Auth (e2e)', () => {
   let app: INestApplication;
+  let userModel: Model<UserDocument>;
 
   beforeAll(async () => {
     app = await createTestApp();
+    userModel = app.get<Model<UserDocument>>(getModelToken(User.name));
   });
 
   afterAll(async () => {
@@ -88,6 +94,89 @@ describe('Auth (e2e)', () => {
     });
 
     expect(first.tenantId).not.toBe(second.tenantId);
+  });
+
+  describe('invitation-based registration', () => {
+    const password = 'correct-horse-battery-staple';
+
+    it('lands an invited user in the inviting tenant as a Member, who is then refused an admin-only control', async () => {
+      const admin = await registerTestUser(app, {
+        email: 'invite-flow-admin@example.com',
+        password,
+      });
+
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/invitations')
+        .set('Cookie', admin.cookie)
+        .send({ email: 'invite-flow-member@example.com', role: UserRole.Member });
+      const { token } = minted.body as { token: string };
+
+      const registerResponse = await request(getTestServer(app))
+        .post('/api/v1/auth/register')
+        .send({ password, invitationToken: token });
+      const registerBody = registerResponse.body as MeResponseBody;
+
+      expect(registerResponse.status).toBe(201);
+      expect(registerBody.email).toBe('invite-flow-member@example.com');
+      expect(registerBody.role).toBe('member');
+
+      const persisted = await userModel.findOne({ email: 'invite-flow-member@example.com' });
+      expect(persisted?.tenantId).toBe(admin.tenantId);
+
+      const loginResponse = await request(getTestServer(app))
+        .post('/api/v1/auth/login')
+        .send({ email: 'invite-flow-member@example.com', password });
+      const memberCookie = sessionCookieFromResponse(
+        loginResponse.headers['set-cookie'] as unknown as string[] | undefined,
+      );
+
+      // First refusal this gate has ever produced against a real (non-fixture-demoted) Member —
+      // proves the role travelled from the invitation into the session, not just the database row.
+      const forbidden = await request(getTestServer(app))
+        .post('/api/v1/invitations')
+        .set('Cookie', memberCookie)
+        .send({ email: 'invite-flow-outsider@example.com', role: UserRole.Member });
+
+      expect(forbidden.status).toBe(403);
+    });
+
+    it('refuses an unknown invitation token, failing closed rather than provisioning a fresh tenant', async () => {
+      const response = await request(getTestServer(app))
+        .post('/api/v1/auth/register')
+        .send({ password, invitationToken: 'eo_inv_never-minted-fixture' });
+
+      expect(response.status).toBe(400);
+    });
+
+    it('refuses redemption when the invitation email already has an account, leaving that account untouched', async () => {
+      const admin = await registerTestUser(app, {
+        email: 'invite-conflict-admin@example.com',
+        password,
+      });
+
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/invitations')
+        .set('Cookie', admin.cookie)
+        .send({ email: 'invite-conflict-target@example.com', role: UserRole.Member });
+      const { token } = minted.body as { token: string };
+
+      // The invited email registers on its own, without the token, before the invitation is
+      // redeemed — provisions its own fresh tenant and lands as that tenant's admin.
+      const independent = await registerTestUser(app, {
+        email: 'invite-conflict-target@example.com',
+        password: 'a-different-password-entirely',
+      });
+
+      const redeemResponse = await request(getTestServer(app))
+        .post('/api/v1/auth/register')
+        .send({ password, invitationToken: token });
+
+      expect(redeemResponse.status).toBe(400);
+
+      const persisted = await userModel.findOne({ email: 'invite-conflict-target@example.com' });
+      expect(persisted?.tenantId).toBe(independent.tenantId);
+      expect(persisted?.role).toBe(UserRole.Admin);
+    });
   });
 
   // Proves the global APP_GUARD JwtAuthGuard denies by default: only handlers explicitly

@@ -13,6 +13,7 @@ import {
   IconMessageCircle,
   IconPanelLeft,
   IconSearch,
+  IconUserPlus,
 } from '../icons';
 import Dialog from '../ui/Dialog';
 import IconButton from '../ui/IconButton';
@@ -46,6 +47,7 @@ export const NAV_LABELS: { to: string; label: string }[] = [
   { to: '/workflow-runs', label: 'Runs' },
   { to: '/api-keys', label: 'API Keys' },
   { to: '/audit-events', label: 'Audit Log' },
+  { to: '/invitations', label: 'Invitations' },
 ];
 
 function buildNavGroups(isAdmin: boolean): NavGroup[] {
@@ -78,7 +80,12 @@ function buildNavGroups(isAdmin: boolean): NavGroup[] {
       heading: 'Admin',
       items: [
         { to: '/api-keys', label: 'API Keys', icon: <IconKey /> },
-        ...(isAdmin ? [{ to: '/audit-events', label: 'Audit Log', icon: <IconClipboard /> }] : []),
+        ...(isAdmin
+          ? [
+              { to: '/audit-events', label: 'Audit Log', icon: <IconClipboard /> },
+              { to: '/invitations', label: 'Invitations', icon: <IconUserPlus /> },
+            ]
+          : []),
       ],
     },
   ];

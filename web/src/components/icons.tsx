@@ -422,3 +422,21 @@ export function IconClipboard({ size = 16, className }: IconProps) {
     </svg>
   );
 }
+
+export function IconUserPlus({ size = 16, className }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      focusable="false"
+      className={className}
+      {...strokeProps}
+    >
+      <circle cx="6" cy="5.5" r="2.5" />
+      <path d="M1.5 14C1.5 11 3.5 9.5 6 9.5C8.5 9.5 10.5 11 10.5 14" />
+      <path d="M12.5 5.5V9.5M10.5 7.5H14.5" />
+    </svg>
+  );
+}

@@ -9,6 +9,7 @@ import {
   TenantSchema,
 } from '../../../database/schemas/administration/tenant/tenant.schema';
 import { User, UserSchema } from '../../../database/schemas/administration/user/user.schema';
+import { InvitationsModule } from '../invitations/invitations.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -19,6 +20,8 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
       { name: User.name, schema: UserSchema },
       { name: Tenant.name, schema: TenantSchema },
     ]),
+    // Exports `InvitationsService` for `AuthService.register` to verify and redeem a token.
+    InvitationsModule,
     JwtModule.registerAsync({
       global: true,
       inject: [TypedConfigService],

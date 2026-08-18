@@ -1,4 +1,4 @@
-import { HttpStatus, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, HttpStatus, UnauthorizedException } from '@nestjs/common';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
@@ -12,7 +12,10 @@ import { AuthService } from '../../../../src/features/common/auth/auth.service';
 import {
   EmailAlreadyRegisteredException,
   InvalidCredentialsException,
+  InvalidInvitationException,
+  InvitationEmailConflictException,
 } from '../../../../src/features/common/auth/exceptions/auth.exception';
+import { InvitationsService } from '../../../../src/features/common/invitations/invitations.service';
 import { UserRole } from '../../../../src/shared/enums/user-role.enum';
 import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
@@ -29,6 +32,7 @@ describe('AuthService', () => {
   const mockTenantModel = getMockModel();
   const mockConfig = getMockConfig();
   const mockAuditService = { record: jest.fn() };
+  const mockInvitationsService = { verify: jest.fn(), accept: jest.fn() };
 
   const buildMockUser = (overrides: Record<string, unknown> = {}) => ({
     _id: { toString: () => mockUserId },
@@ -71,6 +75,10 @@ describe('AuthService', () => {
         {
           provide: AuditService,
           useValue: mockAuditService,
+        },
+        {
+          provide: InvitationsService,
+          useValue: mockInvitationsService,
         },
       ],
     }).compile();
@@ -193,6 +201,82 @@ describe('AuthService', () => {
       expect((error as EmailAlreadyRegisteredException).getStatus()).toBe(HttpStatus.CONFLICT);
       expect(mockUserModel.create).not.toHaveBeenCalled();
       expect(mockTenantModel.create).not.toHaveBeenCalled();
+    });
+
+    it('should throw BadRequestException when neither email nor invitationToken is present', async () => {
+      const error = await service.register({ password: 'password123' }).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect(mockUserModel.findOne).not.toHaveBeenCalled();
+    });
+
+    describe('with an invitation token', () => {
+      const invitationIdentity = {
+        id: 'invitation-id',
+        tenantId: 'invited-tenant-id',
+        email: 'invitee@example.com',
+        role: UserRole.Member,
+      };
+
+      it('should join the invitation’s tenant with its role, ignoring any submitted email, and mark it accepted', async () => {
+        mockInvitationsService.verify.mockResolvedValueOnce(invitationIdentity);
+        mockUserModel.findOne.mockResolvedValueOnce(null);
+        mockUserModel.create.mockImplementationOnce((doc: Record<string, unknown>) =>
+          Promise.resolve(buildMockUser(doc)),
+        );
+        mockInvitationsService.accept.mockResolvedValueOnce(undefined);
+
+        const result = await service.register({
+          password: 'password123',
+          invitationToken: 'eo_inv_token',
+        });
+
+        expect(mockInvitationsService.verify).toHaveBeenCalledWith('eo_inv_token');
+        expect(mockUserModel.findOne).toHaveBeenCalledWith({ email: invitationIdentity.email });
+        const [createCall] = mockUserModel.create.mock.calls[0] as [Record<string, unknown>];
+        expect(createCall.email).toBe(invitationIdentity.email);
+        expect(createCall.tenantId).toBe(invitationIdentity.tenantId);
+        expect(createCall.role).toBe(invitationIdentity.role);
+        expect(mockTenantModel.create).not.toHaveBeenCalled();
+        expect(mockInvitationsService.accept).toHaveBeenCalledWith(
+          invitationIdentity.id,
+          mockUserId,
+          invitationIdentity.tenantId,
+        );
+        expect(result.role).toBe(invitationIdentity.role);
+      });
+
+      it('should throw InvalidInvitationException with 400 Bad Request for an unknown, expired, or already-used token, and never create a tenant', async () => {
+        mockInvitationsService.verify.mockResolvedValueOnce(null);
+
+        const error = await service
+          .register({ password: 'password123', invitationToken: 'eo_inv_stale' })
+          .catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(InvalidInvitationException);
+        expect((error as InvalidInvitationException).getStatus()).toBe(HttpStatus.BAD_REQUEST);
+        expect(mockUserModel.create).not.toHaveBeenCalled();
+        expect(mockTenantModel.create).not.toHaveBeenCalled();
+        expect(mockInvitationsService.accept).not.toHaveBeenCalled();
+      });
+
+      it('should throw InvitationEmailConflictException with 400 Bad Request when the invitation’s email already has an account, leaving that account untouched', async () => {
+        mockInvitationsService.verify.mockResolvedValueOnce(invitationIdentity);
+        mockUserModel.findOne.mockResolvedValueOnce(
+          buildMockUser({ email: invitationIdentity.email }),
+        );
+
+        const error = await service
+          .register({ password: 'password123', invitationToken: 'eo_inv_token' })
+          .catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(InvitationEmailConflictException);
+        expect((error as InvitationEmailConflictException).getStatus()).toBe(
+          HttpStatus.BAD_REQUEST,
+        );
+        expect(mockUserModel.create).not.toHaveBeenCalled();
+        expect(mockInvitationsService.accept).not.toHaveBeenCalled();
+      });
     });
   });
 

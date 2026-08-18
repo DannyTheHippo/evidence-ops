@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
 import bcrypt from 'bcryptjs';
@@ -12,12 +12,15 @@ import { User, UserDocument } from '../../../database/schemas/administration/use
 import { UserRole } from '../../../shared/enums/user-role.enum';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
+import { InvitationsService } from '../invitations/invitations.service';
 import { LoginRequestDto } from './dtos/request/login.request.dto';
 import { RegisterRequestDto } from './dtos/request/register.request.dto';
 import { MeResponseDto } from './dtos/response/me.response.dto';
 import {
   EmailAlreadyRegisteredException,
   InvalidCredentialsException,
+  InvalidInvitationException,
+  InvitationEmailConflictException,
 } from './exceptions/auth.exception';
 import { LoginResult } from './types/login-result.type';
 
@@ -38,12 +41,23 @@ export class AuthService {
 
     private readonly jwtService: JwtService,
     private readonly auditService: AuditService,
+    private readonly invitationsService: InvitationsService,
     private readonly logger: AppLogger,
   ) {
     this.logger.init(AuthService.name);
   }
 
   async register(dto: RegisterRequestDto): Promise<MeResponseDto> {
+    if (dto.invitationToken) {
+      return this.registerWithInvitation(dto.invitationToken, dto.password);
+    }
+
+    // `RegisterRequestDto.email` is validated as required whenever `invitationToken` is absent
+    // (`@ValidateIf`); this guard only narrows the type for `tsc`, which cannot see across DTO
+    // validation.
+    if (!dto.email) {
+      throw new BadRequestException('Email is required to register without an invitation');
+    }
     const email = dto.email.toLowerCase();
 
     const existing = await this.userModel.findOne({ email });
@@ -70,6 +84,45 @@ export class AuthService {
 
     this.logger.debug(
       `User registered with the _id '${user._id.toString()}' as admin of tenant '${tenant.tenantId}'`,
+    );
+
+    return this.toMeDto(user);
+  }
+
+  /**
+   * Redeems a single-use invitation token: the invitation, not the caller, dictates the account's
+   * email, tenant and role. `verify` fails CLOSED — unknown, expired, or already-redeemed all
+   * return `null` — so any of those refuses with `InvalidInvitationException` rather than falling
+   * back to provisioning a fresh tenant. An invitation whose email already has an account is
+   * refused too, and that account is never touched — not moved, merged, or re-tenanted, since email
+   * is globally unique here. The invitation is marked accepted only once the user has actually been
+   * created, so a failure in between leaves the token still redeemable.
+   */
+  private async registerWithInvitation(token: string, rawPassword: string): Promise<MeResponseDto> {
+    const identity = await this.invitationsService.verify(token);
+    if (!identity) {
+      throw new InvalidInvitationException('Invitation is invalid, expired, or already used');
+    }
+
+    const existing = await this.userModel.findOne({ email: identity.email });
+    if (existing) {
+      throw new InvitationEmailConflictException(
+        `Email '${identity.email}' already has an account`,
+      );
+    }
+
+    const password = await bcrypt.hash(rawPassword, PASSWORD_HASH_COST);
+    const user = await this.userModel.create({
+      email: identity.email,
+      password,
+      tenantId: identity.tenantId,
+      role: identity.role,
+    });
+
+    await this.invitationsService.accept(identity.id, user._id.toString(), identity.tenantId);
+
+    this.logger.debug(
+      `User registered with the _id '${user._id.toString()}' via invitation, joining tenant '${identity.tenantId}' as '${identity.role}'`,
     );
 
     return this.toMeDto(user);

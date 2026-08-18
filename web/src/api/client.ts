@@ -80,6 +80,15 @@ export function register(email: string, password: string): Promise<Me> {
   return request<Me>('/auth/register', { method: 'POST', ...jsonBody({ email, password }) });
 }
 
+// The invitation dictates the account's email, tenant and role, so redemption collects only a
+// password — the server ignores any email the caller might otherwise supply.
+export function registerWithInvitation(password: string, invitationToken: string): Promise<Me> {
+  return request<Me>('/auth/register', {
+    method: 'POST',
+    ...jsonBody({ password, invitationToken }),
+  });
+}
+
 export async function login(email: string, password: string): Promise<AuthToken> {
   const result = await request<AuthToken>('/auth/login', {
     method: 'POST',
@@ -626,4 +635,39 @@ export function listApiKeys(): Promise<WithCount<ApiKey>> {
 
 export async function revokeApiKey(id: string): Promise<void> {
   await request<void>(`/api-keys/${id}`, { method: 'DELETE' });
+}
+
+// ── Invitations ──────────────────────────────────────────────────────────
+
+export interface Invitation {
+  id: string;
+  email: string;
+  role: UserRole;
+  expiresAt: string;
+  acceptedAt?: string;
+  createdAt: string;
+}
+
+// The plaintext `token` lives only here, mirroring `MintedApiKey` — mint is the sole response
+// shape that carries it, so nothing else in the SPA ever holds it.
+export interface MintedInvitation extends Invitation {
+  token: string;
+}
+
+export function mintInvitation(email: string, role: UserRole): Promise<MintedInvitation> {
+  return request<MintedInvitation>('/invitations', {
+    method: 'POST',
+    ...jsonBody({ email, role }),
+  });
+}
+
+export function listInvitations(pagination?: {
+  skip?: number;
+  limit?: number;
+}): Promise<WithCount<Invitation>> {
+  const query = new URLSearchParams();
+  if (pagination?.skip !== undefined) query.set('skip', String(pagination.skip));
+  if (pagination?.limit !== undefined) query.set('limit', String(pagination.limit));
+  const qs = query.toString();
+  return request<WithCount<Invitation>>(`/invitations${qs ? `?${qs}` : ''}`);
 }

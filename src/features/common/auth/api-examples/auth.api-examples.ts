@@ -35,6 +35,35 @@ export const registerApiExamples: Record<string, ApiResponseOptions> = {
       },
     },
   },
+  invalidInvitation: {
+    status: HttpStatus.BAD_REQUEST,
+    description: 'The invitation token is unknown, expired, or already used.',
+    examples: {
+      example: {
+        summary: 'Invalid invitation',
+        value: {
+          statusCode: HttpStatus.BAD_REQUEST,
+          message: 'Invitation is invalid, expired, or already used',
+          error: 'Bad Request',
+        },
+      },
+    },
+  },
+  invitationEmailConflict: {
+    status: HttpStatus.BAD_REQUEST,
+    description:
+      "The invitation's email already has an account. The existing account is untouched.",
+    examples: {
+      example: {
+        summary: 'Invitation email already registered',
+        value: {
+          statusCode: HttpStatus.BAD_REQUEST,
+          message: "Email 'colleague@example.com' already has an account",
+          error: 'Bad Request',
+        },
+      },
+    },
+  },
 };
 
 export const loginApiExamples: Record<string, ApiResponseOptions> = {
