@@ -177,6 +177,35 @@ describe('App / admin-only nav link', () => {
     expect(screen.queryByRole('link', { name: 'Audit Log' })).not.toBeInTheDocument();
   });
 
+  it('shows the Resolution Rules link to an admin', async () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue({
+      id: 'user-1',
+      email: 'admin@example.com',
+      role: 'admin',
+      createdAt: new Date().toISOString(),
+    });
+    stubMeFetch('admin');
+
+    renderAtHome();
+
+    expect(await screen.findByRole('link', { name: 'Resolution Rules' })).toBeInTheDocument();
+  });
+
+  it('hides the Resolution Rules link from a member', async () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue({
+      id: 'user-2',
+      email: 'member@example.com',
+      role: 'member',
+      createdAt: new Date().toISOString(),
+    });
+    stubMeFetch('member');
+
+    renderAtHome();
+
+    expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Resolution Rules' })).not.toBeInTheDocument();
+  });
+
   it('renders no Audit Log link while the session probe is still pending', () => {
     vi.spyOn(auth, 'ensureSession').mockReturnValue(new Promise(() => {}));
 

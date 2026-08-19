@@ -417,6 +417,74 @@ export function requestConflictResolution(
   });
 }
 
+// ── Resolution rules & hindsight ────────────────────────────────────────
+
+export type MetricId =
+  | 'cap_rate'
+  | 'sale_price'
+  | 'price_per_sf'
+  | 'building_area_sf'
+  | 'net_operating_income'
+  | 'base_rent_psf'
+  | 'lease_term_years'
+  | 'tenant_occupancy_share';
+
+export interface MetricPolicy {
+  id: string;
+  metric: MetricId;
+  // Absent means this row has no authored opinion on authority ranking, distinct from an empty
+  // array — 'No order configured' is the state this ever renders as, never a blank cell.
+  authorityOrder?: DocumentSourceClass[];
+  stalenessWindowMs?: number;
+  createdAt: string;
+}
+
+export function listMetricPolicies(): Promise<WithCount<MetricPolicy>> {
+  return request<WithCount<MetricPolicy>>('/metric-policies');
+}
+
+// Whole-row replace, mirroring the server: a field omitted here does not survive from an earlier
+// PUT, so a caller editing only authorityOrder must still pass through any existing
+// stalenessWindowMs it wants kept.
+export function upsertMetricPolicy(
+  metric: MetricId,
+  input: { authorityOrder?: DocumentSourceClass[]; stalenessWindowMs?: number },
+): Promise<MetricPolicy> {
+  return request<MetricPolicy>(`/metric-policies/${metric}`, {
+    method: 'PUT',
+    ...jsonBody(input),
+  });
+}
+
+export type ConflictResolutionOutcome = 'resolved' | 'rejected' | 'timed_out' | 'superseded';
+
+export type BacktestVerdict = 'agreed' | 'disagreed' | 'silent' | 'unscorable';
+
+export interface ConflictBacktestResult {
+  conflictId: string;
+  factKey: ConflictingFactKey;
+  verdict: BacktestVerdict;
+  recordedOutcome: ConflictResolutionOutcome;
+  recordedWinningFactId?: string;
+  replayedRuleFired?: ConflictRuleFired;
+  replayedWinningFactId?: string;
+  unscorableReason?: string;
+}
+
+export interface ResolutionBacktest {
+  results: ConflictBacktestResult[];
+  agreed: number;
+  disagreed: number;
+  silent: number;
+  unscorable: number;
+  // null, never 0, when nothing was scorable — 0 would assert the rule always disagreed.
+  agreementRate: number | null;
+}
+
+export function getResolutionBacktest(): Promise<ResolutionBacktest> {
+  return request<ResolutionBacktest>('/conflicts/resolution-backtest');
+}
+
 // ── Approvals ────────────────────────────────────────────────────────────
 
 export type ApprovalState = 'pending' | 'approved' | 'rejected';

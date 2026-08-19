@@ -20,6 +20,7 @@ import HomePage from './pages/HomePage';
 import InvitationsPage from './pages/InvitationsPage';
 import InvitePage from './pages/InvitePage';
 import LoginPage from './pages/LoginPage';
+import ResolutionRulesPage from './pages/ResolutionRulesPage';
 import RunsPage from './pages/RunsPage';
 import SearchPage from './pages/SearchPage';
 import SourceDetailPage from './pages/SourceDetailPage';
@@ -265,6 +266,14 @@ export default function App() {
         element={
           <RequireAdmin>
             <InvitationsPage />
+          </RequireAdmin>
+        }
+      />
+      <Route
+        path="/resolution-rules"
+        element={
+          <RequireAdmin>
+            <ResolutionRulesPage />
           </RequireAdmin>
         }
       />

@@ -1,9 +1,12 @@
-import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react';
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
   size?: 'md' | 'sm';
   children: ReactNode;
+  // Not typed by ButtonHTMLAttributes — declared explicitly so IconButton can forward its own
+  // ref through to this component's underlying DOM node.
+  ref?: Ref<HTMLButtonElement>;
 }
 
 const variantClass: Record<NonNullable<ButtonProps['variant']>, string> = {
@@ -21,6 +24,7 @@ export default function Button({
   type = 'button',
   className,
   children,
+  ref,
   ...rest
 }: ButtonProps) {
   const classes = ['btn', variantClass[variant], size === 'sm' ? 'btn--sm' : null, className]
@@ -28,7 +32,7 @@ export default function Button({
     .join(' ');
 
   return (
-    <button type={type} className={classes} {...rest}>
+    <button ref={ref} type={type} className={classes} {...rest}>
       {children}
     </button>
   );

@@ -119,6 +119,22 @@ export function IconChevronDown({ size = 16, className }: IconProps) {
   );
 }
 
+export function IconChevronUp({ size = 16, className }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      focusable="false"
+      className={className}
+      {...strokeProps}
+    >
+      <path d="M4 10L8 6L12 10" />
+    </svg>
+  );
+}
+
 export function IconChevronRight({ size = 16, className }: IconProps) {
   return (
     <svg

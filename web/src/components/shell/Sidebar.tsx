@@ -48,6 +48,7 @@ export const NAV_LABELS: { to: string; label: string }[] = [
   { to: '/api-keys', label: 'API Keys' },
   { to: '/audit-events', label: 'Audit Log' },
   { to: '/invitations', label: 'Invitations' },
+  { to: '/resolution-rules', label: 'Resolution Rules' },
 ];
 
 function buildNavGroups(isAdmin: boolean): NavGroup[] {
@@ -84,6 +85,7 @@ function buildNavGroups(isAdmin: boolean): NavGroup[] {
           ? [
               { to: '/audit-events', label: 'Audit Log', icon: <IconClipboard /> },
               { to: '/invitations', label: 'Invitations', icon: <IconUserPlus /> },
+              { to: '/resolution-rules', label: 'Resolution Rules', icon: <IconAlertTriangle /> },
             ]
           : []),
       ],
