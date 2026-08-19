@@ -108,7 +108,7 @@ export default function RuleEditorDialog({
         authorityOrder: order,
         stalenessWindowMs,
       });
-      notify('success', `Authority order updated for ${metric}.`);
+      notify('success', `Saved order for ${metric}.`);
       onSaved(updated);
     } catch (err: unknown) {
       setSaveError(err instanceof Error ? err.message : 'Failed to save authority order');

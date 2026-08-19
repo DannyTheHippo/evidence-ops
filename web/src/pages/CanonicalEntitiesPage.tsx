@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { deleteCanonicalEntity, listCanonicalEntities, type CanonicalEntity } from '../api/client';
+import { IconTag } from '../components/icons';
 import Button from '../components/ui/Button';
 import Dialog from '../components/ui/Dialog';
 import EmptyState from '../components/ui/EmptyState';
@@ -121,7 +122,7 @@ export default function CanonicalEntitiesPage() {
   }
 
   return (
-    <div className="view view--flow">
+    <div className="view">
       <div className="page-head">
         <div>
           <span className="eyebrow">Admin</span>
@@ -147,6 +148,7 @@ export default function CanonicalEntitiesPage() {
 
       {entities && entities.length === 0 && (
         <EmptyState
+          icon={<IconTag size={24} />}
           title="No canonical entities registered yet"
           description="Add one above to start grouping alternate spellings of a property under a single canonical name."
         />

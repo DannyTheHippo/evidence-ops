@@ -48,7 +48,7 @@ export default function EntityEditorDialog({ entity, onClose, onSaved }: EntityE
         : await createCanonicalEntity({ canonicalName: canonicalName.trim(), aliases });
       notify(
         'success',
-        entity ? `Updated "${saved.canonicalName}".` : `Added "${saved.canonicalName}".`,
+        entity ? `Saved changes to "${saved.canonicalName}".` : `Added "${saved.canonicalName}".`,
       );
       onSaved(saved);
     } catch (err: unknown) {
@@ -101,7 +101,7 @@ export default function EntityEditorDialog({ entity, onClose, onSaved }: EntityE
           Cancel
         </Button>
         <Button variant="primary" disabled={saving} onClick={() => void handleSave()}>
-          {saving ? 'Saving…' : entity ? 'Save changes' : 'Add entity'}
+          {saving ? (entity ? 'Saving…' : 'Adding…') : entity ? 'Save changes' : 'Add entity'}
         </Button>
       </div>
     </Dialog>

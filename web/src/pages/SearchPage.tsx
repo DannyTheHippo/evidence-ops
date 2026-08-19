@@ -5,6 +5,7 @@ import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import Field from '../components/ui/Field';
 import Skeleton from '../components/ui/Skeleton';
+import { IconSearch } from '../components/icons';
 import { buildDocumentVersionIndex, type ResolvedVersion } from '../lib/document-index';
 import { truncateSha256 } from '../lib/identifiers';
 import { formatLocator } from '../lib/locator';
@@ -89,7 +90,7 @@ export default function SearchPage() {
   }, [results]);
 
   return (
-    <div className="view view--flow">
+    <div className="view">
       <div className="page-head">
         <div>
           <span className="eyebrow">Evidence</span>
@@ -98,6 +99,9 @@ export default function SearchPage() {
         </div>
       </div>
 
+      {/* Untitled, unlike a filter card — the query field is the page's purpose, not a
+          refinement of something below it, and a "Search" heading under a page title that already
+          reads Search would repeat itself. */}
       <section className="card">
         <form onSubmit={(e) => void handleSubmit(e)} className="form">
           <Field
@@ -125,7 +129,7 @@ export default function SearchPage() {
       </section>
 
       {error && (
-        <p className="error" role="alert">
+        <p className="error error--page" role="alert">
           {error}
         </p>
       )}
@@ -134,6 +138,7 @@ export default function SearchPage() {
 
       {!loading && !error && results === null && (
         <EmptyState
+          icon={<IconSearch size={24} />}
           title="Search the evidence corpus"
           description="Find passages by meaning as well as by keyword — try a question or a phrase, not just an exact term. Each search spends a live lookup, so results only appear once you submit."
         />
@@ -141,6 +146,7 @@ export default function SearchPage() {
 
       {!loading && !error && results !== null && results.docs.length === 0 && (
         <EmptyState
+          icon={<IconSearch size={24} />}
           title="No results"
           description="Nothing matched that search. Try rewording it or using different terms."
         />

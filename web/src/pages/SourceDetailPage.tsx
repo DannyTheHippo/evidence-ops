@@ -22,8 +22,9 @@ import EmptyState from '../components/ui/EmptyState';
 import Field from '../components/ui/Field';
 import Select from '../components/ui/Select';
 import Skeleton from '../components/ui/Skeleton';
-import Table, { TableHeaderCell } from '../components/ui/Table';
+import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
 import { notify } from '../components/ui/toast';
+import { IconDatabase } from '../components/icons';
 import { formatInterval } from '../lib/format-interval';
 import { useSession } from '../lib/use-session';
 import { isTerminalRun } from '../lib/workflow-runs';
@@ -55,6 +56,14 @@ const TRACKED_OPTIONS = [
   { value: 'true', label: 'Synced by a connector' },
   { value: 'false', label: 'Catalogued only' },
 ];
+
+// Keeps the sync action's name stable across its whole lifecycle — 'Sync now' on the button, then
+// this label for the resulting run: an in-flight run always reads as the same gerund, a terminal
+// one as a past-tense confirmation, never `run.status`'s raw enum value.
+function syncRunLabel(run: WorkflowRun): string {
+  if (!isTerminalRun(run.status)) return 'Syncing…';
+  return run.status === 'completed' ? 'Synced' : 'Sync failed';
+}
 
 interface SourceDetailPageProps {
   // Overridable so tests can poll on a short interval instead of stubbing timers.
@@ -262,7 +271,7 @@ export default function SourceDetailPage({
       };
 
   return (
-    <div className="view view--flow">
+    <div className="view">
       <div className="page-head">
         <div>
           <span className="eyebrow">Evidence</span>
@@ -288,7 +297,7 @@ export default function SourceDetailPage({
 
       {notFound && <p className="notice notice--info">Source not found.</p>}
 
-      {!source && !error && !notFound && id && <Skeleton label="Loading…" />}
+      {!source && !error && !notFound && id && <Skeleton label="Loading source…" />}
 
       {source && (
         <>
@@ -325,12 +334,12 @@ export default function SourceDetailPage({
                 disabled={starting}
                 onClick={() => void handleSync()}
               >
-                {starting ? 'Starting…' : 'Sync now'}
+                {starting ? 'Syncing…' : 'Sync now'}
               </Button>
               {run && (
                 <Link to={`/workflow-runs/${run.id}`}>
-                  {isPolling && <span className="badge-dot" />}
-                  {isTerminalRun(run.status) ? `Sync ${run.status}` : 'Sync running…'}
+                  {isPolling && <span className="live-dot" />}
+                  {syncRunLabel(run)}
                 </Link>
               )}
             </div>
@@ -478,7 +487,8 @@ export default function SourceDetailPage({
           <section className="panel">
             {source.fileStates.length === 0 ? (
               <EmptyState
-                title="No files synced yet."
+                icon={<IconDatabase size={24} />}
+                title="No files synced yet"
                 description="File status appears here after the source's next sync."
               />
             ) : (
@@ -494,14 +504,22 @@ export default function SourceDetailPage({
                 <tbody>
                   {source.fileStates.map((fileState) => (
                     <tr key={fileState.path}>
-                      <td className="mono">{fileState.path}</td>
-                      <td>
+                      <TableCell label="File" className="mono">
+                        <span className="cell-truncate" title={fileState.path}>
+                          {fileState.path}
+                        </span>
+                      </TableCell>
+                      <TableCell label="Status">
                         <Badge tone={fileState.lastError ? 'rejected' : 'verified'}>
                           {fileState.status}
                         </Badge>
-                      </td>
-                      <td className="cell-sub">{fileState.lastError ?? '—'}</td>
-                      <td className="cell-sub">{new Date(fileState.mtimeMs).toLocaleString()}</td>
+                      </TableCell>
+                      <TableCell label="Last error" className="cell-sub">
+                        {fileState.lastError ?? '—'}
+                      </TableCell>
+                      <TableCell label="Last modified" className="cell-sub">
+                        {new Date(fileState.mtimeMs).toLocaleString()}
+                      </TableCell>
                     </tr>
                   ))}
                 </tbody>

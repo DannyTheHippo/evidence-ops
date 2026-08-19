@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { RequireAdmin } from '../App';
+import { RequireAdmin } from '../AuthenticatedRoutes';
 import { clearSession } from '../lib/auth';
 import InvitationsPage from './InvitationsPage';
 
@@ -113,7 +113,7 @@ describe('InvitationsPage', () => {
     fireEvent.change(screen.getByLabelText('Email'), {
       target: { value: 'new-hire@example.com' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Send invitation' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Invite' }));
 
     // The token rides the fragment, not the query string — a fragment is never sent to the server,
     // so it cannot end up in an access log.
@@ -154,7 +154,7 @@ describe('InvitationsPage', () => {
     fireEvent.change(screen.getByLabelText('Email'), {
       target: { value: 'new-hire@example.com' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Send invitation' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Invite' }));
 
     fireEvent.click(await screen.findByRole('button', { name: 'Copy' }));
 
@@ -184,7 +184,7 @@ describe('InvitationsPage', () => {
     fireEvent.change(screen.getByLabelText('Email'), {
       target: { value: 'existing@example.com' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Send invitation' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Invite' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Email already has an account');
   });

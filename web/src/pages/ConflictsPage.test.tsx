@@ -159,16 +159,16 @@ describe('ConflictsPage', () => {
 
     renderPage();
 
-    expect(screen.getByText('Loading…')).toBeInTheDocument();
+    expect(screen.getByText('Loading conflicts…')).toBeInTheDocument();
 
     expect(await screen.findByText('Northgate Business Park')).toBeInTheDocument();
-    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+    expect(screen.queryByText('Loading conflicts…')).not.toBeInTheDocument();
     expect(screen.getByText('cap_rate')).toBeInTheDocument();
     expect(screen.getByText('open')).toBeInTheDocument();
     expect(screen.getByText('6.1 percent')).toBeInTheDocument();
     expect(await screen.findByText('Rent Roll Q1 — p.2')).toBeInTheDocument();
     expect(
-      screen.getByRole('table', { name: /conflicting facts extracted from the evidence corpus/i }),
+      screen.getByRole('list', { name: /conflicting facts extracted from the evidence corpus/i }),
     ).toBeInTheDocument();
   });
 
@@ -177,7 +177,7 @@ describe('ConflictsPage', () => {
 
     renderPage();
 
-    expect(await screen.findByText('Recommended · authority')).toBeInTheDocument();
+    expect(await screen.findByText('recommended · authority')).toBeInTheDocument();
     expect(
       screen.getByText(
         "Source 'chunk-a' outranks the other value's source under the authority policy.",
@@ -190,7 +190,7 @@ describe('ConflictsPage', () => {
 
     renderPage();
 
-    expect(await screen.findByText('Recommended · recency')).toBeInTheDocument();
+    expect(await screen.findByText('recommended · recency')).toBeInTheDocument();
     expect(
       screen.getByText(
         "Source 'chunk-c' was ingested more recently than the conflicting value's source.",
@@ -208,7 +208,7 @@ describe('ConflictsPage', () => {
         'Policy has no recommendation for this conflict — No configured rule distinguishes between these sources.',
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/^Recommended ·/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^recommended ·/)).not.toBeInTheDocument();
   });
 
   it('shows an unscorable conflict with its reason and remaining evidence, instead of dropping the row', async () => {
@@ -222,7 +222,7 @@ describe('ConflictsPage', () => {
       screen.getByText('1 of 2 disagreeing fact(s) no longer resolve to an ExtractedFact.'),
     ).toBeInTheDocument();
     expect(screen.getByText('5.25 percent')).toBeInTheDocument();
-    expect(screen.queryByText(/^Recommended ·/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^recommended ·/)).not.toBeInTheDocument();
     // A resolved conflict never shows the resolve control regardless of unscorable — same gate
     // as `status === 'open'` for every other conflict.
     expect(screen.queryByRole('button', { name: 'Request resolution' })).not.toBeInTheDocument();
@@ -322,7 +322,7 @@ describe('ConflictsPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 
-    expect(await screen.findByText('Recommended · recency')).toBeInTheDocument();
+    expect(await screen.findByText('recommended · recency')).toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([url]) => url === '/api/v1/conflicts?skip=20&limit=20')).toBe(
       true,
     );
@@ -359,7 +359,7 @@ describe('ConflictsPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
 
-    expect(await screen.findByText('Recommended · recency')).toBeInTheDocument();
+    expect(await screen.findByText('recommended · recency')).toBeInTheDocument();
     expect(
       fetchMock.mock.calls.some(
         ([url]) => url === '/api/v1/conflicts?skip=0&limit=20&status=resolved',

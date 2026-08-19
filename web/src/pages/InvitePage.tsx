@@ -42,7 +42,7 @@ export default function InvitePage() {
 
   if (!token) {
     return (
-      <div className="view view--flow">
+      <div className="view">
         <p className="error error--page" role="alert">
           This invitation link is missing its token. Ask whoever invited you for a new link.
         </p>
@@ -51,7 +51,7 @@ export default function InvitePage() {
   }
 
   return (
-    <div className="view view--flow">
+    <div className="view">
       <div className="page-head">
         <div>
           <span className="eyebrow">You're invited</span>

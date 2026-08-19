@@ -320,7 +320,7 @@ describe('HomePage', () => {
 
     const connectStep = screen.getByText('Add a source or upload a document').closest('li');
     expect(connectStep).not.toBeNull();
-    expect(within(connectStep as HTMLElement).getByText('Done')).toBeInTheDocument();
+    expect(within(connectStep as HTMLElement).getByText('done')).toBeInTheDocument();
 
     const ingestStep = screen.getByText('Wait for ingestion to complete').closest('li');
     expect(ingestStep).not.toBeNull();

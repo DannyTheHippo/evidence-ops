@@ -10,6 +10,7 @@ import {
   type ApprovalState,
   type Conflict,
 } from '../api/client';
+import { IconCheck } from '../components/icons';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import Dialog from '../components/ui/Dialog';
@@ -83,8 +84,8 @@ function ApprovalRow({
       notify(
         'success',
         decision === 'approved'
-          ? 'Approval recorded — the workflow resumes.'
-          : 'Rejection recorded — the workflow resumes.',
+          ? 'Approved — the workflow resumes.'
+          : 'Rejected — the workflow resumes.',
       );
       setPendingDecision(null);
       setReason('');
@@ -148,7 +149,7 @@ function ApprovalRow({
           </p>
         ) : (
           <>
-            <Badge tone="info">Recommended · {conflict.ruleFired}</Badge>
+            <Badge tone="info">recommended · {conflict.ruleFired}</Badge>
             <p className="cell-sub">
               {winnerLabel ? `${winnerLabel} — ` : ''}
               {conflict.explanation}
@@ -178,7 +179,7 @@ function ApprovalRow({
         )}
         {approval.workflowId && (
           <Button variant="ghost" disabled={viewingRun} onClick={() => void viewRun()}>
-            {viewingRun ? 'Loading…' : 'View run'}
+            {viewingRun ? 'Viewing…' : 'View run'}
           </Button>
         )}
       </div>
@@ -299,10 +300,10 @@ export default function ApprovalsPage() {
   }
 
   return (
-    <div className="view view--flow">
+    <div className="view">
       <div className="page-head">
         <div>
-          <span className="eyebrow">Workflow</span>
+          <span className="eyebrow">Review</span>
           <h1 className="page-title">Approvals</h1>
           <p className="page-sub">Pending human decisions gating a workflow run.</p>
         </div>
@@ -326,10 +327,11 @@ export default function ApprovalsPage() {
         </p>
       )}
 
-      {!approvals && !error && <Skeleton label="Loading…" />}
+      {!approvals && !error && <Skeleton label="Loading approvals…" />}
 
       {approvals && approvals.length === 0 && appliedState === 'pending' && (
         <EmptyState
+          icon={<IconCheck size={24} />}
           title="Nothing waiting on you"
           description="Every approval has been decided. New requests appear here as workflows park on them."
         />
@@ -337,7 +339,8 @@ export default function ApprovalsPage() {
 
       {approvals && approvals.length === 0 && appliedState !== 'pending' && (
         <EmptyState
-          title="No approvals match this filter."
+          icon={<IconCheck size={24} />}
+          title="No approvals match this filter"
           description="Clear or adjust the state filter above."
         />
       )}

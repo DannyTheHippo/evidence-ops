@@ -2,6 +2,7 @@ import {
   useRef,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type TdHTMLAttributes,
   type ThHTMLAttributes,
 } from 'react';
 import { Link } from 'react-router-dom';
@@ -32,6 +33,24 @@ export function TableHeaderCell({ children, ...rest }: ThHTMLAttributes<HTMLTabl
     <th scope="col" {...rest}>
       {children}
     </th>
+  );
+}
+
+interface TableCellProps extends TdHTMLAttributes<HTMLTableCellElement> {
+  label?: string;
+}
+
+/** `<td>` that carries its column header as `data-label` — the mechanism `primitives.css`'s narrow
+ * `.grid` query reads via `content: attr(data-label)` to turn each row into a labelled card below
+ * 768px. A cell with no `label` renders a plain `<td>`: the CSS scopes the label rule to
+ * `[data-label]`, so an unlabelled cell never reserves a gutter for a label it doesn't have. This
+ * is the one place the stacked layout is driven from; every table still supplies its own `label`
+ * per cell, because only the page knows what its columns mean. */
+export function TableCell({ label, children, ...rest }: TableCellProps) {
+  return (
+    <td data-label={label} {...rest}>
+      {children}
+    </td>
   );
 }
 

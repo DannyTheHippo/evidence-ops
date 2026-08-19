@@ -138,9 +138,16 @@
   border-radius: var(--radius-xs);
   padding: 0 var(--space-1);
   overflow-wrap: anywhere;
+  transition: background var(--motion-row-hover) ease;
 }
+/* --surface-3 is the same next step .btn--secondary:hover takes off --surface-2, so a hovered
+   chip darkens in step with every other surface-2 control that gains a hover state. */
 a.trace-chip:hover {
   text-decoration: underline;
+  background: var(--surface-3);
+}
+a.trace-chip:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 @media (max-width: 560px) {

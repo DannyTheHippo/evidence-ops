@@ -285,6 +285,50 @@ describe('DocumentList', () => {
       });
     });
 
+    it('guards against a double submit between the click and the button becoming disabled', async () => {
+      const uploaded = {
+        id: 'doc-5',
+        title: 'Rent Roll',
+        sourceKind: 'pdf',
+        mimeType: 'application/pdf',
+        currentVersion: {
+          id: 'v-5',
+          versionNumber: 1,
+          sha256: 'e'.repeat(64),
+          sizeBytes: 50,
+          ingestionStatus: 'pending',
+          createdAt: new Date().toISOString(),
+        },
+        createdAt: new Date().toISOString(),
+      };
+
+      const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          return Promise.resolve(jsonResponse(uploaded));
+        }
+        return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      renderList();
+      await screen.findByText('No documents yet');
+
+      fireEvent.change(screen.getByLabelText('File', { exact: false }), {
+        target: { files: [new File(['a'], 'rent-roll.pdf', { type: 'application/pdf' })] },
+      });
+      const form = screen.getByRole('button', { name: 'Upload' }).closest('form');
+      if (!form) throw new Error('Upload form not found');
+      fireEvent.submit(form);
+      fireEvent.submit(form);
+
+      await waitFor(() => {
+        const uploadCalls = fetchMock.mock.calls.filter(
+          ([, init]) => init?.method === 'POST' && init.body instanceof FormData,
+        );
+        expect(uploadCalls).toHaveLength(1);
+      });
+    });
+
     it('offers the declarable source classes but never unclassified, and threads the chosen one into the upload', async () => {
       const uploaded = {
         id: 'doc-4',

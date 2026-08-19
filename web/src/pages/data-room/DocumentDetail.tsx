@@ -63,15 +63,15 @@ export default function DocumentDetail({ id }: { id: string }) {
   }
 
   return (
-    <div className="view view--flow">
+    <div className="view">
       <div className="page-head">
         <div>
           <span className="eyebrow">Evidence</span>
           <h1 className="page-title">{doc?.title ?? 'Document'}</h1>
-          <p className="page-sub">
-            <Link to="/documents">Back to Data Room</Link>
-          </p>
         </div>
+        <Link to="/documents" className="btn btn--secondary btn--sm">
+          Back to data room
+        </Link>
       </div>
 
       {error && (

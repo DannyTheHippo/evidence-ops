@@ -10,10 +10,8 @@
   padding: 0 var(--space-6);
 }
 
+/* The vertical rhythm every routed view sits in, tightened at the narrow breakpoint below. */
 .view {
-  padding: var(--space-8) 0;
-}
-.view--flow {
   padding: var(--space-8) 0;
 }
 .page-head {
@@ -23,11 +21,33 @@
   gap: var(--space-4);
   margin-bottom: var(--space-6);
 }
+/* The element immediately following the page head is a `.control-row` (no top margin of its
+   own) on some routes and a `.card` (`margin: var(--space-4) 0` in primitives.css) on others —
+   zeroing that shape's own top margin here means the visible gap below `.page-head` is always
+   exactly its own margin-bottom, regardless of which shape leads the page. */
+.page-head + * {
+  margin-top: 0;
+}
 
 /* ── Claims, citations & conflicts ──────────────────────────────────────── */
 
+/* The skeleton-to-answer swap is the only entrance in the app; the outcome is written
+   atomically server-side, so without this the page would jump from nothing to everything in
+   one frame. animation-duration is one of the three properties base.css's reduced-motion
+   query zeroes, so this collapses to the end state instantly rather than looping or holding. */
 .answer-outcome {
   margin-top: var(--space-4);
+  animation: answer-outcome-enter var(--motion-enter) ease-out;
+}
+@keyframes answer-outcome-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 .citation-quote {
   margin: 0 0 var(--space-2);
@@ -147,7 +167,7 @@
   .container {
     padding: 0 var(--space-4);
   }
-  .view--flow {
+  .view {
     padding: var(--space-4) 0;
   }
 }
@@ -229,6 +249,18 @@
   margin: 0;
   font-size: var(--text-sm);
   color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+/* The funnel's input step — what was retrieved and asserted, before the bar resolves it. */
+.ledger-line--input {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+/* The funnel's result step — the one number the reader came for. */
+.ledger-line--outcome {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--ink);
 }
 /* Proportional funnel bar: one flex segment per claim, verified and not-asserted tones only, so
    the row divides itself without a computed width. Frozen status tones carry the meaning. */
@@ -242,12 +274,41 @@
 }
 .ledger-bar-segment {
   flex: 1 0 0;
+  transform-origin: left;
+  animation: ledger-bar-fill var(--motion-enter) ease-out;
 }
 .ledger-bar-segment--verified {
   background: var(--status-verified-ink);
 }
 .ledger-bar-segment--caution {
   background: var(--status-caution-ink);
+}
+@keyframes ledger-bar-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+/* The funnel's result group: the verified ratio and, when something was dropped, the
+   not-asserted caveat and warn notice. Borrows the run timeline's state-through-border-left
+   language (.timeline-step above) rather than opacity, on the same --rail-line-* tokens, so the
+   funnel's outcome reads as the same species of object as a reached timeline step. */
+.ledger-outcome {
+  /* .ledger's own flex gap already contributes --space-1 above every child; the remainder
+     here lands the input-to-outcome transition at a full --space-3, wider than the --space-1
+     rhythm between the retrieved/asserted lines and the bar. */
+  margin-top: calc(var(--space-3) - var(--space-1));
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--rail-line-idle);
+}
+.ledger-outcome--verified {
+  border-left-color: var(--rail-line-verified);
+}
+.ledger-outcome--caution {
+  border-left-color: var(--rail-line-degraded);
 }
 
 /* Container for the answer's verification content, below the apparatus. Spacing only — its own

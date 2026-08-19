@@ -60,9 +60,10 @@ describe('VerificationLedger', () => {
     );
 
     expect(screen.getByText('5 chunks retrieved')).toBeInTheDocument();
-    expect(screen.getByText('0 of 1 claims verified against the source')).toBeInTheDocument();
+    expect(screen.getByText('0 of 1 claim verified against the source')).toBeInTheDocument();
     expect(screen.queryByText('0%')).not.toBeInTheDocument();
     expect(screen.queryByText(/^0%$/)).not.toBeInTheDocument();
+    expect(screen.getByText(/none of the asserted claims could be verified/i)).toBeInTheDocument();
   });
 
   it('insufficient_evidence, report absent (a model-authored abstention): frames it as an abstention, never a 0%', () => {
@@ -110,7 +111,7 @@ describe('VerificationLedger', () => {
     expect(screen.queryByText(/retrieved$/)).not.toBeInTheDocument();
   });
 
-  it('shows the fully-verified notice only when nothing was dropped', () => {
+  it('a fully-verified answer states the ratio alone: no zero line, no ok notice', () => {
     const clean: VerificationReport = {
       verifiedClaimCount: 2,
       totalClaimCount: 2,
@@ -118,9 +119,21 @@ describe('VerificationLedger', () => {
     };
     render(<VerificationLedger outcome={answered} verificationReport={clean} />);
 
+    expect(screen.getByText('2 of 2 claims verified against the source')).toBeInTheDocument();
     expect(
-      screen.getByText('Every claim in this answer was checked against the source and verified.'),
-    ).toBeInTheDocument();
-    expect(screen.getByText('0 not asserted')).toBeInTheDocument();
+      screen.queryByText('Every claim in this answer was checked against the source and verified.'),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/not asserted/)).not.toBeInTheDocument();
+  });
+
+  it('a single-claim answer states the ratio in the singular', () => {
+    const single: VerificationReport = {
+      verifiedClaimCount: 1,
+      totalClaimCount: 1,
+      droppedClaims: [],
+    };
+    render(<VerificationLedger outcome={answered} verificationReport={single} />);
+
+    expect(screen.getByText('1 of 1 claim verified against the source')).toBeInTheDocument();
   });
 });

@@ -1,33 +1,13 @@
-import type { ReactNode } from 'react';
-import { useState } from 'react';
-import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { logout } from './api/client';
-import { IconInfoSquare } from './components/icons';
+import ErrorBoundary from './components/ErrorBoundary';
 import Sidebar, { NAV_LABELS } from './components/shell/Sidebar';
 import Topbar from './components/shell/Topbar';
-import EmptyState from './components/ui/EmptyState';
 import Toaster from './components/ui/Toaster';
 import { useSession } from './lib/use-session';
-import AnswerDetailPage from './pages/AnswerDetailPage';
-import AnswersPage from './pages/AnswersPage';
-import ApiKeysPage from './pages/ApiKeysPage';
-import ApprovalsPage from './pages/ApprovalsPage';
-import AskPage from './pages/AskPage';
-import AuditEventsPage from './pages/AuditEventsPage';
-import CanonicalEntitiesPage from './pages/CanonicalEntitiesPage';
-import ConflictsPage from './pages/ConflictsPage';
-import DataRoomPage from './pages/DataRoomPage';
-import HomePage from './pages/HomePage';
-import InvitationsPage from './pages/InvitationsPage';
 import InvitePage from './pages/InvitePage';
 import LoginPage from './pages/LoginPage';
-import MeasuresPage from './pages/MeasuresPage';
-import ResolutionRulesPage from './pages/ResolutionRulesPage';
-import RunsPage from './pages/RunsPage';
-import SearchPage from './pages/SearchPage';
-import SourceDetailPage from './pages/SourceDetailPage';
-import SourcesPage from './pages/SourcesPage';
-import WorkflowRunPage from './pages/WorkflowRunPage';
 
 /** The nearest nav destination that owns `pathname` — an exact match first, then the longest nav
  * `to` that prefixes it, so a detail route like `/sources/:id` breadcrumbs to "Sources" rather
@@ -55,46 +35,12 @@ function breadcrumbFor(pathname: string): string {
   return prefixMatch?.label ?? 'Evidence Ops';
 }
 
-function NotFoundView() {
-  return (
-    <EmptyState
-      icon={<IconInfoSquare size={24} />}
-      title="Page not found"
-      description="The page you're looking for doesn't exist. Head back to somewhere that does."
-      action={
-        <Link to="/" className="btn btn--primary">
-          Go to Home
-        </Link>
-      }
-    />
-  );
-}
-
-function RequireAuth({ children }: { children: ReactNode }) {
-  // useSession() already fails CLOSED — a rejected probe resolves to 'anon', never 'authed'.
-  const { status } = useSession();
-
-  if (status === 'loading') return null;
-  if (status === 'anon') return <Navigate to="/login" replace />;
-  return <>{children}</>;
-}
-
-// Composes with RequireAuth by nesting: RequireAuth turns an unauthenticated visit into a
-// redirect to /login, RequireAdmin additionally turns an authenticated-but-non-admin visit into
-// a redirect to /. Both read the same useSession() cache, so wrapping a route in both never
-// issues a second session probe.
-//
-// This is a display convenience, not the security boundary — it only decides what the SPA
-// renders. Every admin-gated endpoint carries its own server-side role check (`RolesGuard` +
-// `@RequireRole(Admin)`) that a hidden or redirected route can never bypass.
-export function RequireAdmin({ children }: { children: ReactNode }) {
-  const { status, me } = useSession();
-
-  if (status === 'loading') return null;
-  if (status === 'anon') return <Navigate to="/login" replace />;
-  if (me.role !== 'admin') return <Navigate to="/" replace />;
-  return <>{children}</>;
-}
+// Everything reachable only after RequireAuth/RequireAdmin passes, loaded behind a single
+// Suspense boundary rather than statically — an anonymous visitor hitting /login never downloads
+// it. One lazy() call against one statically-imported module (AuthenticatedRoutes.tsx) rather
+// than one dynamic import per page: a visitor who is already authenticated fetches one chunk once
+// and then navigates the app with no further per-route loading state.
+const AuthenticatedRoutes = lazy(() => import('./AuthenticatedRoutes'));
 
 export default function App() {
   const navigate = useNavigate();
@@ -105,6 +51,28 @@ export default function App() {
   const isAdmin = session.status === 'authed' && session.me.role === 'admin';
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => readStoredCollapsed());
+  const mainRef = useRef<HTMLElement | null>(null);
+  // Seeded with the mount-time pathname rather than left empty, so the comparison below treats
+  // the render that mounts App as "no change yet" and never yanks focus from wherever the
+  // browser already put it (an autofocused field, the URL bar). It also makes StrictMode's
+  // post-mount double effect run a no-op: both invocations see the same pathname, so only a real
+  // navigation — where the dependency has actually changed since the ref was last written — moves
+  // focus. #main-content is rendered by App unconditionally, never inside the AuthenticatedRoutes
+  // Suspense boundary, so this effect never races the lazy chunk resolving.
+  const previousPathname = useRef(location.pathname);
+
+  useEffect(() => {
+    // breadcrumbFor falls back to the brand for a route outside NAV_LABELS — /login and /invite,
+    // which have no nav destination — so qualifying it there would title the tab "Evidence Ops ·
+    // Evidence Ops".
+    const label = breadcrumbFor(location.pathname);
+    document.title = label === 'Evidence Ops' ? label : `${label} · Evidence Ops`;
+
+    if (previousPathname.current === location.pathname) return;
+    previousPathname.current = location.pathname;
+    mainRef.current?.focus();
+    window.scrollTo(0, 0);
+  }, [location.pathname]);
 
   // Derived outside the setState updater deliberately: StrictMode double-invokes updaters, so a
   // write placed inside one runs twice per click.
@@ -143,164 +111,20 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/invite" element={<InvitePage />} />
+      {/* No fallback UI: an authed visitor already saw RequireAuth's own null loading state
+          (nothing renders) on the same page, so rendering nothing here continues that same
+          sequence instead of swapping in a differently-shaped placeholder.
+          ErrorBoundary sits outside Suspense: a lazy import() that rejects (a stale deploy
+          requesting a chunk a newer build removed) propagates as a render error on resolution,
+          and only an ancestor of Suspense — never a descendant — catches that. */}
       <Route
-        path="/"
+        path="/*"
         element={
-          <RequireAuth>
-            <HomePage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/measures"
-        element={
-          <RequireAuth>
-            <MeasuresPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/ask"
-        element={
-          <RequireAuth>
-            <AskPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/answers"
-        element={
-          <RequireAuth>
-            <AnswersPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/answers/:id"
-        element={
-          <RequireAuth>
-            <AnswerDetailPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/search"
-        element={
-          <RequireAuth>
-            <SearchPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/documents"
-        element={
-          <RequireAuth>
-            <DataRoomPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/documents/:id"
-        element={
-          <RequireAuth>
-            <DataRoomPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/sources"
-        element={
-          <RequireAuth>
-            <SourcesPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/sources/:id"
-        element={
-          <RequireAuth>
-            <SourceDetailPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/conflicts"
-        element={
-          <RequireAuth>
-            <ConflictsPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/approvals"
-        element={
-          <RequireAuth>
-            <ApprovalsPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/workflow-runs"
-        element={
-          <RequireAuth>
-            <RunsPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/workflow-runs/:id"
-        element={
-          <RequireAuth>
-            <WorkflowRunPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/api-keys"
-        element={
-          <RequireAuth>
-            <ApiKeysPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/audit-events"
-        element={
-          <RequireAdmin>
-            <AuditEventsPage />
-          </RequireAdmin>
-        }
-      />
-      <Route
-        path="/invitations"
-        element={
-          <RequireAdmin>
-            <InvitationsPage />
-          </RequireAdmin>
-        }
-      />
-      <Route
-        path="/resolution-rules"
-        element={
-          <RequireAdmin>
-            <ResolutionRulesPage />
-          </RequireAdmin>
-        }
-      />
-      <Route
-        path="/canonical-entities"
-        element={
-          <RequireAdmin>
-            <CanonicalEntitiesPage />
-          </RequireAdmin>
-        }
-      />
-      <Route
-        path="*"
-        element={
-          <RequireAuth>
-            <NotFoundView />
-          </RequireAuth>
+          <ErrorBoundary resetKey={location.pathname}>
+            <Suspense fallback={null}>
+              <AuthenticatedRoutes />
+            </Suspense>
+          </ErrorBoundary>
         }
       />
     </Routes>
@@ -326,13 +150,13 @@ export default function App() {
               onOpenMenu={() => setDrawerOpen(true)}
               onLogout={() => void handleLogout()}
             />
-            <main id="main-content" tabIndex={-1} className="container">
+            <main id="main-content" tabIndex={-1} className="container" ref={mainRef}>
               {routes}
             </main>
           </div>
         </div>
       ) : (
-        <main id="main-content" tabIndex={-1} className="container">
+        <main id="main-content" tabIndex={-1} className="container" ref={mainRef}>
           {routes}
         </main>
       )}

@@ -70,7 +70,7 @@ describe('AnswerView', () => {
     );
 
     expect(screen.getByText('4 chunks retrieved')).toBeInTheDocument();
-    expect(screen.getByText('1 of 1 claims verified against the source')).toBeInTheDocument();
+    expect(screen.getByText('1 of 1 claim verified against the source')).toBeInTheDocument();
     expect(screen.getByText('The cap rate is 6.1%.')).toBeInTheDocument();
     expect(screen.getByText('Cap rate: 6.1%')).toBeInTheDocument();
     expect(screen.getByText('p.2')).toBeInTheDocument();
@@ -177,7 +177,7 @@ describe('AnswerView', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('renders the fully-verified notice and no dropped-claims band when nothing was dropped', () => {
+  it('states a fully-verified answer once, with no dropped-claims band', () => {
     renderView(
       baseAnswer({
         outcome: {
@@ -188,10 +188,15 @@ describe('AnswerView', () => {
       }),
     );
 
-    expect(
-      screen.getByText('Every claim in this answer was checked against the source and verified.'),
-    ).toBeInTheDocument();
+    expect(screen.getByText('1 of 1 claim verified against the source')).toBeInTheDocument();
     expect(screen.queryByText(/claim.*dropped/)).not.toBeInTheDocument();
+    // The ratio is the whole statement on this path. A zero "not asserted" line and a notice
+    // restating the same fact both used to render alongside it, so a fully-verified answer said
+    // one thing three times, once as a double negative.
+    expect(screen.queryByText(/not asserted/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/was checked against the source and verified/),
+    ).not.toBeInTheDocument();
   });
 
   it('omits the dropped-claims band when the answer carries no verification report', () => {

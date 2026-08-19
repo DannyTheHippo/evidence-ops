@@ -48,6 +48,6 @@ describe('DataRoomPage', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole('link', { name: 'Back to Data Room' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to data room' })).toBeInTheDocument();
   });
 });

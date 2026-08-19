@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { listAnswers, type Answer, type AnswerRunStatus } from '../api/client';
+import { IconFileText } from '../components/icons';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
@@ -8,6 +9,7 @@ import Pager from '../components/ui/Pager';
 import Select from '../components/ui/Select';
 import Skeleton from '../components/ui/Skeleton';
 import Table, { RowLink, TableHeaderCell, TableRow } from '../components/ui/Table';
+import { answerBadge } from '../lib/answer-status';
 
 const PAGE_SIZE = 25;
 
@@ -18,34 +20,6 @@ const RUN_STATUS_OPTIONS = [
   { value: 'completed', label: 'Completed' },
   { value: 'failed', label: 'Failed' },
 ];
-
-type BadgeTone = 'verified' | 'caution' | 'rejected' | 'info' | 'neutral';
-
-// A run still in flight shows its run status, never a premature outcome. Once completed, all
-// three outcome kinds are first-class results, not a pass/fail collapse: `conflicting_evidence`
-// is a real finding (caution), `insufficient_evidence` is a correct abstention (info) — neither
-// reads as an error.
-const RUN_STATUS_TONE: Record<Exclude<AnswerRunStatus, 'completed'>, BadgeTone> = {
-  queued: 'neutral',
-  running: 'info',
-  failed: 'rejected',
-};
-
-function outcomeBadge(answer: Answer): { tone: BadgeTone; label: string } {
-  if (answer.runStatus !== 'completed') {
-    return { tone: RUN_STATUS_TONE[answer.runStatus], label: answer.runStatus };
-  }
-  switch (answer.outcome?.kind) {
-    case 'answered':
-      return { tone: 'verified', label: 'answered' };
-    case 'conflicting_evidence':
-      return { tone: 'caution', label: 'conflicting evidence' };
-    case 'insufficient_evidence':
-      return { tone: 'info', label: 'insufficient evidence' };
-    default:
-      return { tone: 'neutral', label: answer.runStatus };
-  }
-}
 
 export default function AnswersPage() {
   const [answers, setAnswers] = useState<Answer[] | null>(null);
@@ -82,7 +56,7 @@ export default function AnswersPage() {
   const hasFilter = appliedRunStatus !== '';
 
   return (
-    <div className="view view--flow">
+    <div className="view">
       <div className="page-head">
         <div>
           <span className="eyebrow">Ask</span>
@@ -104,22 +78,24 @@ export default function AnswersPage() {
       </form>
 
       {error && (
-        <p className="error" role="alert">
+        <p className="error error--page" role="alert">
           {error}
         </p>
       )}
 
-      {!answers && !error && <Skeleton label="Loading…" />}
+      {!answers && !error && <Skeleton label="Loading answers…" />}
 
       {answers && answers.length === 0 && hasFilter && (
         <EmptyState
-          title="No answers match this filter."
+          icon={<IconFileText size={24} />}
+          title="No answers match this filter"
           description="Clear or adjust the run status filter above."
         />
       )}
 
       {answers && answers.length === 0 && !hasFilter && (
         <EmptyState
+          icon={<IconFileText size={24} />}
           title="No answers yet"
           description="Ask a question to see it appear here."
           action={
@@ -143,7 +119,7 @@ export default function AnswersPage() {
             </thead>
             <tbody>
               {answers.map((answer) => {
-                const badge = outcomeBadge(answer);
+                const badge = answerBadge(answer);
                 return (
                   <TableRow key={answer.id} to={`/answers/${answer.id}`}>
                     <td>

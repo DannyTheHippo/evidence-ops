@@ -6,6 +6,7 @@ import {
   type AuditEventSubject,
   type AuditEventView,
 } from '../api/client';
+import { IconClipboard } from '../components/icons';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
@@ -32,11 +33,13 @@ function AuditSubject({ subject }: { subject: AuditEventSubject }) {
   const base = ENTITY_ROUTE_BASE[subject.entityType];
   const label = `${subject.entityType} ${shortId(subject.entityId)}`;
   return base ? (
-    <Link to={`${base}/${subject.entityId}`} title={subject.entityId}>
+    <Link to={`${base}/${subject.entityId}`} className="cell-truncate" title={subject.entityId}>
       {label}
     </Link>
   ) : (
-    <span title={subject.entityId}>{label}</span>
+    <span className="cell-truncate" title={subject.entityId}>
+      {label}
+    </span>
   );
 }
 
@@ -138,10 +141,10 @@ export default function AuditEventsPage() {
   }
 
   return (
-    <div className="view view--flow">
+    <div className="view">
       <div className="page-head">
         <div>
-          <span className="eyebrow">Platform</span>
+          <span className="eyebrow">Admin</span>
           <h1 className="page-title">Audit Log</h1>
           <p className="page-sub">
             Every recorded action, filterable by action, entity type, id, origin or refusal reason.
@@ -203,16 +206,17 @@ export default function AuditEventsPage() {
       </section>
 
       {error && (
-        <p className="error" role="alert">
+        <p className="error error--page" role="alert">
           {error}
         </p>
       )}
 
-      {!events && !error && <Skeleton label="Loading…" />}
+      {!events && !error && <Skeleton label="Loading audit events…" />}
 
       {events && events.length === 0 && (
         <EmptyState
-          title="No audit events match these filters."
+          icon={<IconClipboard size={24} />}
+          title="No matching audit events"
           description="Clear or adjust the filters above."
         />
       )}

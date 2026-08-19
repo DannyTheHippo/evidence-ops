@@ -7,6 +7,7 @@ import {
   type MetricPolicy,
   type ResolutionBacktest,
 } from '../api/client';
+import { IconAlertTriangle } from '../components/icons';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
@@ -87,7 +88,7 @@ export default function ResolutionRulesPage() {
   }
 
   return (
-    <div className="view view--flow">
+    <div className="view">
       <div className="page-head">
         <div>
           <span className="eyebrow">Admin</span>
@@ -159,6 +160,7 @@ export default function ResolutionRulesPage() {
         {!backtest && !backtestError && <Skeleton label="Loading hindsight check…" />}
         {backtest && backtest.results.length === 0 && (
           <EmptyState
+            icon={<IconAlertTriangle size={24} />}
             title="Nothing to backtest yet"
             description="No conflict in this tenant has ever reached a resolution attempt."
           />

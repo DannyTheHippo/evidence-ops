@@ -68,8 +68,8 @@ describe('RunsPage', () => {
 
     renderRunsPage();
 
-    expect(screen.getByText('Loading…')).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('Loading…');
+    expect(screen.getByText('Loading workflow runs…')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading workflow runs…');
 
     expect(
       await screen.findByRole('table', { name: 'Workflow runs, most recent first' }),

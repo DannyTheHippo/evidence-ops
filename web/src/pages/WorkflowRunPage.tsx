@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import {
   decideApproval,
   getWorkflowRunById,
@@ -108,8 +108,8 @@ export default function WorkflowRunPage({
       notify(
         'success',
         decision === 'approved'
-          ? 'Approval recorded — the workflow resumes.'
-          : 'Rejection recorded — the workflow resumes.',
+          ? 'Approved — the workflow resumes.'
+          : 'Rejected — the workflow resumes.',
       );
       // `decide()` (`approvals.service.ts`) only ever accepts a pending approval, so a success
       // response means it has left the pending inbox `listApprovals()` returns — matching
@@ -196,13 +196,16 @@ export default function WorkflowRunPage({
   const isResumed = everPaused && isTerminal;
 
   return (
-    <div className="view view--flow">
+    <div className="view">
       <div className="page-head">
         <div>
-          <span className="eyebrow">Workflow</span>
+          <span className="eyebrow">Review</span>
           <h1 className="page-title">Run timeline</h1>
           <p className="page-sub">Watch a run pause for a human decision and resume after it.</p>
         </div>
+        <Link to="/workflow-runs" className="btn btn--secondary btn--sm">
+          Back to runs
+        </Link>
       </div>
 
       {error && (
@@ -217,7 +220,7 @@ export default function WorkflowRunPage({
         </p>
       )}
 
-      {!run && !error && id && <Skeleton label="Loading…" />}
+      {!run && !error && id && <Skeleton label="Loading run timeline…" />}
 
       {run && (
         <section className="card">

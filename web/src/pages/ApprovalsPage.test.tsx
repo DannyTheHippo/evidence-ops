@@ -126,14 +126,14 @@ describe('ApprovalsPage', () => {
 
     renderPage();
 
-    expect(screen.getByText('Loading…')).toBeInTheDocument();
+    expect(screen.getByText('Loading approvals…')).toBeInTheDocument();
 
     expect(
       await screen.findByText(
         'Resolve Northgate Business Park cap_rate (2025-03) in favor of 5.25% over 6.10%.',
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+    expect(screen.queryByText('Loading approvals…')).not.toBeInTheDocument();
     expect(screen.getByText('Requested by analyst@example.com')).toBeInTheDocument();
     expect(
       screen.getByText(`Requested ${new Date(pendingApproval.createdAt).toLocaleString()}`),
@@ -150,7 +150,7 @@ describe('ApprovalsPage', () => {
 
     renderPage();
 
-    expect(await screen.findByText('Recommended · authority')).toBeInTheDocument();
+    expect(await screen.findByText('recommended · authority')).toBeInTheDocument();
     expect(
       screen.getByText(
         "5.25 percent — Source 'chunk-a' outranks the other value's source under the authority policy.",
@@ -177,7 +177,7 @@ describe('ApprovalsPage', () => {
 
     renderPage();
 
-    expect(await screen.findByText('Recommended · recency')).toBeInTheDocument();
+    expect(await screen.findByText('recommended · recency')).toBeInTheDocument();
     expect(
       screen.getByText(
         "6.1 percent — Source 'chunk-b' was ingested more recently than the conflicting value's source.",
@@ -205,7 +205,7 @@ describe('ApprovalsPage', () => {
         'Policy has no recommendation for this conflict — No configured rule distinguishes between these sources.',
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/^Recommended ·/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^recommended ·/)).not.toBeInTheDocument();
   });
 
   it('an admin sees the decide controls, and clicking Approve opens a dialog naming the approval', async () => {

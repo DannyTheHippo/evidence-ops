@@ -1,7 +1,7 @@
 import type { FormEvent } from 'react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ApiError, login, register } from '../api/client';
+import { login, register } from '../api/client';
 import Button from '../components/ui/Button';
 import Field from '../components/ui/Field';
 
@@ -26,21 +26,17 @@ export default function LoginPage() {
       await login(email, password);
       await navigate('/');
     } catch (err: unknown) {
-      // A server-authored ApiError message (e.g. "Invalid email or password") is specific and
-      // safe to show verbatim. Anything else — a dropped connection, a CORS failure — is a raw
-      // browser exception string, not something to put in front of a first-time visitor.
-      setError(
-        err instanceof ApiError
-          ? err.message
-          : 'Could not reach the server. Check your connection and try again.',
-      );
+      // Every error `login`/`register` can throw is an `ApiError` — an HTTP failure, or a
+      // transport failure the client already turned into one — so its message is always the
+      // right thing to show here, whether it names an invalid credential or an unreachable server.
+      setError(err instanceof Error ? err.message : 'Something went wrong.');
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="view view--flow">
+    <div className="view">
       <div className="page-head">
         <div>
           <span className="eyebrow">{mode === 'login' ? 'Welcome back' : 'Create account'}</span>

@@ -29,7 +29,7 @@ export default function VerificationLedger({
 }: VerificationLedgerProps) {
   const retrievedLine =
     typeof retrievedChunkCount === 'number' ? (
-      <p className="ledger-line">
+      <p className="ledger-line ledger-line--input">
         {retrievedChunkCount} chunk{retrievedChunkCount === 1 ? '' : 's'} retrieved
       </p>
     ) : null;
@@ -65,7 +65,7 @@ export default function VerificationLedger({
   return (
     <div className="ledger">
       {retrievedLine}
-      <p className="ledger-line">
+      <p className="ledger-line ledger-line--input">
         {totalClaimCount} claim{totalClaimCount === 1 ? '' : 's'} asserted
       </p>
       {totalClaimCount > 0 && (
@@ -86,15 +86,24 @@ export default function VerificationLedger({
           ))}
         </div>
       )}
-      <p className="ledger-line">
-        {verifiedClaimCount} of {totalClaimCount} claims verified against the source
-      </p>
-      <p className="ledger-line">{notAssertedCount} not asserted</p>
-      {notAssertedCount === 0 && (
-        <p className="notice notice--ok">
-          Every claim in this answer was checked against the source and verified.
+      <div
+        className={`ledger-outcome ${notAssertedCount === 0 ? 'ledger-outcome--verified' : 'ledger-outcome--caution'}`}
+      >
+        <p className="ledger-line ledger-line--outcome">
+          {verifiedClaimCount} of {totalClaimCount} claim{totalClaimCount === 1 ? '' : 's'} verified
+          against the source
         </p>
-      )}
+        {notAssertedCount > 0 && <p className="ledger-line">{notAssertedCount} not asserted</p>}
+        {/* A bare "0 of N verified" ratio reads as total failure rather than the grounding
+            check's protective degradation; every other ratio is self-explanatory alongside the
+            bar and needs no elaboration. */}
+        {verifiedClaimCount === 0 && totalClaimCount > 0 && (
+          <p className="notice notice--warn">
+            None of the asserted claims could be verified against the source; the grounding check
+            dropped every one.
+          </p>
+        )}
+      </div>
     </div>
   );
 }

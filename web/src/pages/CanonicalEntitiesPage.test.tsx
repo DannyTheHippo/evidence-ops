@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { RequireAdmin } from '../App';
+import { RequireAdmin } from '../AuthenticatedRoutes';
 import { clearSession } from '../lib/auth';
 import CanonicalEntitiesPage from './CanonicalEntitiesPage';
 

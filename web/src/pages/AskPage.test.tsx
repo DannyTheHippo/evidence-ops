@@ -301,10 +301,11 @@ describe('AskPage', () => {
 
     expect(screen.getByText('Cap rate: 6.1%')).toBeInTheDocument();
     expect(screen.getByText('p.2')).toBeInTheDocument();
-    expect(screen.getByText('1 of 1 claims verified against the source')).toBeInTheDocument();
+    expect(screen.getByText('1 of 1 claim verified against the source')).toBeInTheDocument();
+    expect(screen.queryByText(/not asserted/)).not.toBeInTheDocument();
     expect(
-      screen.getByText('Every claim in this answer was checked against the source and verified.'),
-    ).toBeInTheDocument();
+      screen.queryByText(/was checked against the source and verified/),
+    ).not.toBeInTheDocument();
   });
 
   it('renders the verification panel disclosure for a dropped claim', async () => {
@@ -399,5 +400,27 @@ describe('AskPage', () => {
     // The terminal event closes the source itself; a poll must never have been issued either.
     expect(source.closed).toBe(true);
     expect(fetchMock.mock.calls.some(([url]) => url === '/api/v1/answers/answer-7')).toBe(false);
+  });
+
+  it('guards against a double submit between the click and the button becoming disabled', async () => {
+    const fetchMock = vi.fn((_url: string) =>
+      Promise.resolve(jsonResponse({ id: 'answer-8', runStatus: 'queued' }, 201)),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter>
+        <AskPage pollIntervalMs={5} />
+      </MemoryRouter>,
+    );
+
+    fireEvent.change(screen.getByLabelText('Question'), { target: { value: 'Q' } });
+    const button = screen.getByRole('button', { name: 'Ask' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    await screen.findByText('queued');
+
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/questions')).toHaveLength(1);
   });
 });

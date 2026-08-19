@@ -21,6 +21,12 @@ function ingestionTone(
   return 'caution';
 }
 
+// `listVersionChunks` has no `skip`/`limit` and returns every chunk in one response — the drill-in
+// renders straight from that array, never a fetch page. At ~700 tokens of prose each, a card per
+// chunk is what actually costs DOM weight, so the cap below bounds cards mounted at once rather
+// than bytes transferred.
+const CHUNK_PREVIEW_LIMIT = 20;
+
 /** One version row in `DocumentDetail`'s version table, plus its own expandable chunk drill-in —
  * chunks are fetched lazily on first expand and cached in state, so collapsing and re-expanding
  * never re-fetches. */
@@ -29,6 +35,7 @@ export default function VersionRow({ version }: { version: DocumentVersion }) {
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showAllChunks, setShowAllChunks] = useState(false);
 
   function toggleChunks() {
     if (expanded) {
@@ -88,16 +95,36 @@ export default function VersionRow({ version }: { version: DocumentVersion }) {
               <p className="cell-sub">No chunks for this version.</p>
             )}
             {chunks && chunks.length > 0 && (
-              <ul className="chunk-list">
-                {chunks.map((chunk) => (
-                  <li key={chunk.id} className="card card--narrow">
-                    <p className="cell-sub">
-                      {chunk.locator.kind} · {chunk.tokenCount} tokens
-                    </p>
-                    <p>{chunk.text}</p>
-                  </li>
-                ))}
-              </ul>
+              <>
+                <ul className="chunk-list">
+                  {(showAllChunks ? chunks : chunks.slice(0, CHUNK_PREVIEW_LIMIT)).map((chunk) => (
+                    <li key={chunk.id} className="card card--narrow">
+                      <p className="cell-sub">
+                        {chunk.locator.kind} · {chunk.tokenCount} tokens
+                      </p>
+                      <p>{chunk.text}</p>
+                    </li>
+                  ))}
+                </ul>
+                {chunks.length > CHUNK_PREVIEW_LIMIT && (
+                  <div className="pager">
+                    {!showAllChunks && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => setShowAllChunks(true)}
+                      >
+                        Show all {chunks.length} chunks
+                      </Button>
+                    )}
+                    <span className="cell-sub">
+                      Showing {showAllChunks ? chunks.length : CHUNK_PREVIEW_LIMIT} of{' '}
+                      {chunks.length} chunks
+                    </span>
+                  </div>
+                )}
+              </>
             )}
           </td>
         </tr>

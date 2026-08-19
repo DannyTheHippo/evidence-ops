@@ -112,13 +112,13 @@ describe('SourceDetailPage', () => {
 
     renderAt('source-1');
 
-    expect(screen.getByText('Loading…')).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('Loading…');
+    expect(screen.getByText('Loading source…')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading source…');
 
     resolveSource!(jsonResponse(sourceWithFileStates));
 
     expect(await screen.findByText('Deal Room Inbox')).toBeInTheDocument();
-    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+    expect(screen.queryByText('Loading source…')).not.toBeInTheDocument();
   });
 
   it('shows a failing file and its error, distinct from an ok file', async () => {
@@ -251,7 +251,7 @@ describe('SourceDetailPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Sync now' }));
 
-    const link = await screen.findByRole('link', { name: 'Sync completed' });
+    const link = await screen.findByRole('link', { name: 'Synced' });
     expect(link).toHaveAttribute('href', '/workflow-runs/run-1');
     expect(getToasts()).toContainEqual(
       expect.objectContaining({ kind: 'success', message: 'Sync started for Deal Room Inbox.' }),

@@ -85,7 +85,7 @@ export default function MeasuresPage() {
   }, []);
 
   return (
-    <div className="view view--flow">
+    <div className="view">
       <div className="page-head">
         <div>
           <span className="eyebrow">Overview</span>
@@ -97,13 +97,17 @@ export default function MeasuresPage() {
       </div>
 
       {error && (
-        <p className="error" role="alert">
+        <p className="error error--page" role="alert">
           {error}
         </p>
       )}
 
-      {!measures && !error && <Skeleton label="Loading…" />}
+      {!measures && !error && <Skeleton label="Loading measures…" />}
 
+      {/* A table, not a card list: every row is a fixed measure with no action and no per-item
+          state, so there is nothing for a card to earn — the one thing worth optimizing for is
+          scanning seven numbers in a single aligned column, which `.num`'s tabular numerals give
+          for free and a stacked list would not. */}
       {measures && (
         <section className="panel">
           <Table caption="Pilot measures">

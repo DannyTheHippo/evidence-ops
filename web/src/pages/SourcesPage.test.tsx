@@ -143,10 +143,8 @@ describe('SourcesPage', () => {
 
     renderPage();
 
-    expect(
-      await screen.findByText('No sources yet — add one to start syncing documents.'),
-    ).toBeInTheDocument();
-    expect(screen.getByText('No inventory-only repositories yet.')).toBeInTheDocument();
+    expect(await screen.findByText('No sources yet')).toBeInTheDocument();
+    expect(screen.getByText('No inventory-only repositories yet')).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
@@ -158,7 +156,7 @@ describe('SourcesPage', () => {
     renderPage();
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load sources');
-    expect(await screen.findByText('No inventory-only repositories yet.')).toBeInTheDocument();
+    expect(await screen.findByText('No inventory-only repositories yet')).toBeInTheDocument();
   });
 
   it('lists a populated source with its status, interval, owner, reach, class, last sync, and file count', async () => {
@@ -372,7 +370,7 @@ describe('SourcesPage', () => {
 
     renderPage();
 
-    await screen.findByText('No sources yet — add one to start syncing documents.');
+    await screen.findByText('No sources yet');
 
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New Source' } });
     fireEvent.change(screen.getByLabelText('Owner'), { target: { value: 'Jane Doe, IT' } });
@@ -421,7 +419,7 @@ describe('SourcesPage', () => {
 
     renderPage();
 
-    await screen.findByText('No inventory-only repositories yet.');
+    await screen.findByText('No inventory-only repositories yet');
 
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Export Drop' } });
     fireEvent.change(screen.getByLabelText('Owner'), { target: { value: 'Ops Team' } });
@@ -431,6 +429,88 @@ describe('SourcesPage', () => {
 
     expect(await screen.findByText('Export Drop')).toBeInTheDocument();
     expect(inventoryCall).toBe(2);
+  });
+
+  it('names the Name field on a source-name conflict, not the page-level error', async () => {
+    stubFetch({
+      '/api/v1/sources': (init) =>
+        init?.method === 'POST'
+          ? jsonResponse(
+              { message: "A source named 'Deal Room Inbox' already exists for this tenant" },
+              409,
+            )
+          : Promise.reject(new Error('unexpected')),
+    });
+
+    renderPage();
+
+    await screen.findByText('No sources yet');
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Deal Room Inbox' } });
+    fireEvent.change(screen.getByLabelText('Owner'), { target: { value: 'Jane Doe, IT' } });
+    fireEvent.change(screen.getByLabelText('Folder path'), { target: { value: 'deal-room' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "A source named 'Deal Room Inbox' already exists for this tenant",
+    );
+    expect(screen.getByLabelText('Name')).toHaveAttribute('aria-invalid', 'true');
+  });
+
+  it('shows a failed source creation as a page-level error, leaving the Name field unmarked', async () => {
+    stubFetch({
+      '/api/v1/sources': (init) =>
+        init?.method === 'POST'
+          ? jsonResponse({ message: 'Failed to create source' }, 500)
+          : Promise.reject(new Error('unexpected')),
+    });
+
+    renderPage();
+
+    await screen.findByText('No sources yet');
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Deal Room Inbox' } });
+    fireEvent.change(screen.getByLabelText('Owner'), { target: { value: 'Jane Doe, IT' } });
+    fireEvent.change(screen.getByLabelText('Folder path'), { target: { value: 'deal-room' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to create source');
+    expect(screen.getByLabelText('Name')).not.toHaveAttribute('aria-invalid', 'true');
+  });
+
+  it('guards against a double submit between the click and the button becoming disabled', async () => {
+    const created = makeSource({ id: 'source-9', name: 'Deal Room Inbox' });
+    let trackedCall = 0;
+    const fetchMock = stubFetch({
+      [TRACKED_URL]: () => {
+        trackedCall += 1;
+        return trackedCall === 1
+          ? jsonResponse({ docs: [], count: 0 })
+          : jsonResponse({ docs: [created], count: 1 });
+      },
+      '/api/v1/sources': (init) =>
+        init?.method === 'POST'
+          ? jsonResponse(created, 201)
+          : Promise.reject(new Error('unexpected')),
+    });
+
+    renderPage();
+    await screen.findByText('No sources yet');
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Deal Room Inbox' } });
+    fireEvent.change(screen.getByLabelText('Owner'), { target: { value: 'Jane Doe, IT' } });
+    fireEvent.change(screen.getByLabelText('Folder path'), { target: { value: 'deal-room' } });
+    const button = screen.getByRole('button', { name: 'Add source' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    await screen.findByText('Deal Room Inbox');
+
+    expect(
+      fetchMock.mock.calls.filter(
+        ([url, init]) => url === '/api/v1/sources' && init?.method === 'POST',
+      ),
+    ).toHaveLength(1);
   });
 
   it('toggles a source from enabled to disabled', async () => {
@@ -487,7 +567,7 @@ describe('SourcesPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Sync now' }));
 
-    const link = await screen.findByRole('link', { name: 'Sync completed' });
+    const link = await screen.findByRole('link', { name: 'Synced' });
     expect(link).toHaveAttribute('href', '/workflow-runs/run-1');
 
     fireEvent.click(link);
@@ -509,7 +589,7 @@ describe('SourcesPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Sync now' }));
 
-    await screen.findByRole('link', { name: 'Sync completed' });
+    await screen.findByRole('link', { name: 'Synced' });
 
     // Assert the poll count stops growing rather than that a poisoned response fails to render:
     // with a short interval several polls are in flight before React re-renders, so a
@@ -521,7 +601,7 @@ describe('SourcesPage', () => {
     await new Promise((resolve) => setTimeout(resolve, 60));
 
     expect(pollCalls()).toBe(callsAtCompletion);
-    expect(screen.getByRole('link', { name: 'Sync completed' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Synced' })).toBeInTheDocument();
   });
 
   it('keeps a single polling interval across sync-run ticks that repeat the same status', async () => {
@@ -577,7 +657,7 @@ describe('SourcesPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Sync now' }));
 
-    await screen.findByRole('link', { name: 'Sync completed' });
+    await screen.findByRole('link', { name: 'Synced' });
 
     // act's async exit crosses a macrotask boundary, which drains the released response's whole
     // promise chain — no timer, so no wall-clock race.
@@ -586,8 +666,8 @@ describe('SourcesPage', () => {
       await stale.response;
     });
 
-    expect(screen.getByRole('link', { name: 'Sync completed' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Sync running…' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Synced' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Syncing…' })).not.toBeInTheDocument();
   });
 
   it('shows an error when the sync request fails, without blocking further attempts', async () => {
@@ -642,7 +722,7 @@ describe('SourcesPage', () => {
 
     renderPage();
 
-    await screen.findByText('No sources yet — add one to start syncing documents.');
+    await screen.findByText('No sources yet');
     expect(
       screen.queryByText('Adding and configuring sources requires an admin.'),
     ).not.toBeInTheDocument();

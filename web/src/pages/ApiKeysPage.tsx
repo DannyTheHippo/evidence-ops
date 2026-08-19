@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   listApiKeys,
   mintApiKey,
@@ -6,7 +6,7 @@ import {
   type ApiKey,
   type MintedApiKey,
 } from '../api/client';
-import { IconCopy } from '../components/icons';
+import { IconCopy, IconKey } from '../components/icons';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import Dialog from '../components/ui/Dialog';
@@ -112,6 +112,23 @@ export default function ApiKeysPage() {
   // matching the server's one-time delivery.
   const [minted, setMinted] = useState<MintedApiKey | null>(null);
   const [copied, setCopied] = useState(false);
+  // Blocks a double mint between the click and the re-render that disables the submit button —
+  // `disabled={minting}` alone only takes effect once React has committed it.
+  const mintInFlightRef = useRef(false);
+
+  // The plaintext token above is the only copy that will ever exist; closing the tab or reloading
+  // while the panel holds one destroys it exactly as if the operator had never seen it. In-app
+  // navigation away from this page is not covered — this app uses the declarative router, which
+  // has no navigation-blocking API, only `beforeunload` for a full document unload.
+  useEffect(() => {
+    if (!minted) return;
+    function handleBeforeUnload(e: BeforeUnloadEvent) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [minted]);
 
   const load = useCallback(() => {
     return listApiKeys({ skip, limit: PAGE_SIZE })
@@ -131,6 +148,8 @@ export default function ApiKeysPage() {
 
   async function handleMint(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (mintInFlightRef.current) return;
+    mintInFlightRef.current = true;
     setMinting(true);
     setMintError(null);
     setCopied(false);
@@ -153,6 +172,7 @@ export default function ApiKeysPage() {
       setMintError(err instanceof Error ? err.message : 'Failed to mint API key');
     } finally {
       setMinting(false);
+      mintInFlightRef.current = false;
     }
   }
 
@@ -175,10 +195,10 @@ export default function ApiKeysPage() {
   }
 
   return (
-    <div className="view view--flow">
+    <div className="view">
       <div className="page-head">
         <div>
-          <span className="eyebrow">Platform</span>
+          <span className="eyebrow">Admin</span>
           <h1 className="page-title">API Keys</h1>
           <p className="page-sub">Tokens an MCP client uses to authenticate as you.</p>
         </div>
@@ -257,7 +277,7 @@ export default function ApiKeysPage() {
       </section>
 
       {error && (
-        <p className="error" role="alert">
+        <p className="error error--page" role="alert">
           {error}
         </p>
       )}
@@ -266,6 +286,7 @@ export default function ApiKeysPage() {
 
       {keys && keys.length === 0 && (
         <EmptyState
+          icon={<IconKey size={24} />}
           title="No API keys yet"
           description="An API key authenticates the MCP surface as you. Mint one above to connect an MCP client."
         />

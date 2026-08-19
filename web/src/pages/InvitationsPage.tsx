@@ -6,6 +6,7 @@ import {
   type MintedInvitation,
   type UserRole,
 } from '../api/client';
+import { IconUserPlus } from '../components/icons';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
@@ -99,7 +100,7 @@ export default function InvitationsPage() {
   }
 
   return (
-    <div className="view view--flow">
+    <div className="view">
       <div className="page-head">
         <div>
           <span className="eyebrow">Admin</span>
@@ -163,7 +164,7 @@ export default function InvitationsPage() {
           />
           <div className="form-actions">
             <Button type="submit" variant="primary" disabled={minting}>
-              {minting ? 'Inviting…' : 'Send invitation'}
+              {minting ? 'Inviting…' : 'Invite'}
             </Button>
           </div>
         </form>
@@ -175,7 +176,7 @@ export default function InvitationsPage() {
       </section>
 
       {error && (
-        <p className="error" role="alert">
+        <p className="error error--page" role="alert">
           {error}
         </p>
       )}
@@ -184,6 +185,7 @@ export default function InvitationsPage() {
 
       {invitations && invitations.length === 0 && (
         <EmptyState
+          icon={<IconUserPlus size={24} />}
           title="No invitations yet"
           description="Invite a colleague above to bring them into this tenant."
         />

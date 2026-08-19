@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import {
+  ApiError,
   createSource,
   getWorkflowRunById,
   listSources,
@@ -10,15 +11,16 @@ import {
   type SourceReachability,
   type WorkflowRun,
 } from '../api/client';
-import Badge from '../components/ui/Badge';
+import Badge, { type BadgeTone } from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import Field from '../components/ui/Field';
 import Pager from '../components/ui/Pager';
 import Select from '../components/ui/Select';
 import Skeleton from '../components/ui/Skeleton';
-import Table, { RowLink, TableHeaderCell, TableRow } from '../components/ui/Table';
+import Table, { RowLink, TableCell, TableHeaderCell, TableRow } from '../components/ui/Table';
 import { notify } from '../components/ui/toast';
+import { IconDatabase } from '../components/icons';
 import { formatInterval } from '../lib/format-interval';
 import { useSession } from '../lib/use-session';
 import { isTerminalRun } from '../lib/workflow-runs';
@@ -46,14 +48,19 @@ function reachTone(reachability: SourceReachability): 'verified' | 'caution' | '
 // once the source is both enabled and idle — a stalled folder sync is a "watch this", not the
 // verification-grade rejection the same tone means elsewhere in the app — so it never turns an
 // otherwise-healthy list alarming.
-function sourceStatusTone(
-  source: Source,
-  isPolling: boolean,
-): { tone: 'verified' | 'caution' | 'rejected' | 'info' | 'neutral'; label: string } {
+function sourceStatusTone(source: Source, isPolling: boolean): { tone: BadgeTone; label: string } {
   if (isPolling) return { tone: 'info', label: 'syncing' };
   if (!source.enabled) return { tone: 'neutral', label: 'disabled' };
   if (source.lastSyncError) return { tone: 'caution', label: 'failed' };
   return { tone: 'verified', label: 'enabled' };
+}
+
+// Keeps the sync action's name stable across its whole lifecycle — 'Sync now' on the button, then
+// this label for the resulting run: an in-flight run always reads as the same gerund, a terminal
+// one as a past-tense confirmation, never `run.status`'s raw enum value.
+function syncRunLabel(run: WorkflowRun): string {
+  if (!isTerminalRun(run.status)) return 'Syncing…';
+  return run.status === 'completed' ? 'Synced' : 'Sync failed';
 }
 
 function SourceRow({
@@ -137,27 +144,37 @@ function SourceRow({
 
   return (
     <TableRow to={`/sources/${source.id}`}>
-      <td>
+      <TableCell label="Name">
         <RowLink to={`/sources/${source.id}`}>{source.name}</RowLink>
-      </td>
-      <td className="cell-sub mono">{source.path}</td>
-      <td>{source.owner ?? <span className="cell-sub">Unassigned</span>}</td>
-      <td className="cell-sub">{formatInterval(source.intervalMs)}</td>
-      <td>
+      </TableCell>
+      <TableCell label="Path" className="cell-sub mono">
+        <span className="cell-truncate" title={source.path}>
+          {source.path}
+        </span>
+      </TableCell>
+      <TableCell label="Owner">
+        {source.owner ?? <span className="cell-sub">Unassigned</span>}
+      </TableCell>
+      <TableCell label="Interval" className="cell-sub">
+        {formatInterval(source.intervalMs)}
+      </TableCell>
+      <TableCell label="Status">
         <Badge tone={status.tone}>{status.label}</Badge>
-      </td>
-      <td>
+      </TableCell>
+      <TableCell label="Reach">
         <Badge tone={reachTone(source.reachability)}>{source.reachability}</Badge>
         <div className="cell-sub">{source.connectivity}</div>
-      </td>
-      <td>{source.sourceClass}</td>
-      <td className="cell-sub">
+      </TableCell>
+      <TableCell label="Class">{source.sourceClass}</TableCell>
+      <TableCell label="Last sync" className="cell-sub">
         {source.lastSyncAt ? new Date(source.lastSyncAt).toLocaleString() : 'Never synced'}
         {source.lastSyncStatus && <div>{source.lastSyncStatus}</div>}
         {source.lastSyncError && <div>{source.lastSyncError}</div>}
-      </td>
-      <td className="num">{source.fileCount}</td>
-      <td>
+      </TableCell>
+      <TableCell label="Files" className="num">
+        {source.fileCount}
+      </TableCell>
+      <TableCell label="Actions" className="cell-actions">
         <div className="form-actions">
           {canManage && (
             <Button
@@ -170,12 +187,12 @@ function SourceRow({
             </Button>
           )}
           <Button variant="primary" size="sm" disabled={starting} onClick={() => void handleSync()}>
-            {starting ? 'Starting…' : 'Sync now'}
+            {starting ? 'Syncing…' : 'Sync now'}
           </Button>
           {run && (
             <Link to={`/workflow-runs/${run.id}`}>
-              {isPolling && <span className="badge-dot" />}
-              {isTerminalRun(run.status) ? `Sync ${run.status}` : 'Sync running…'}
+              {isPolling && <span className="live-dot" />}
+              {syncRunLabel(run)}
             </Link>
           )}
         </div>
@@ -189,7 +206,7 @@ function SourceRow({
             {syncError}
           </p>
         )}
-      </td>
+      </TableCell>
     </TableRow>
   );
 }
@@ -199,16 +216,22 @@ function SourceRow({
 function InventoryRow({ source }: { source: Source }) {
   return (
     <TableRow to={`/sources/${source.id}`}>
-      <td>
+      <TableCell label="Name">
         <RowLink to={`/sources/${source.id}`}>{source.name}</RowLink>
-      </td>
-      <td className="cell-sub mono">{source.path}</td>
-      <td>{source.owner ?? <span className="cell-sub">Unassigned</span>}</td>
-      <td>
+      </TableCell>
+      <TableCell label="Path" className="cell-sub mono">
+        <span className="cell-truncate" title={source.path}>
+          {source.path}
+        </span>
+      </TableCell>
+      <TableCell label="Owner">
+        {source.owner ?? <span className="cell-sub">Unassigned</span>}
+      </TableCell>
+      <TableCell label="Reach">
         <Badge tone={reachTone(source.reachability)}>{source.reachability}</Badge>
         <div className="cell-sub">{source.connectivity}</div>
-      </td>
-      <td>{source.sourceClass}</td>
+      </TableCell>
+      <TableCell label="Class">{source.sourceClass}</TableCell>
     </TableRow>
   );
 }
@@ -247,6 +270,12 @@ export default function SourcesPage({
   const [intervalMs, setIntervalMs] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  // A name conflict names the Name field specifically (the unique {tenantId, name} index behind
+  // it), so it renders on that field rather than in the page-level createError below.
+  const [nameError, setNameError] = useState<string | null>(null);
+  // Blocks a double submit between the click and the re-render that disables the submit button —
+  // `disabled={creating}` alone only takes effect once React has committed it.
+  const createInFlightRef = useRef(false);
 
   const loadTracked = useCallback(() => {
     return listSources({ tracked: true, skip: trackedSkip, limit: PAGE_SIZE })
@@ -282,8 +311,11 @@ export default function SourcesPage({
 
   async function handleCreate(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (createInFlightRef.current) return;
+    createInFlightRef.current = true;
     setCreating(true);
     setCreateError(null);
+    setNameError(null);
     try {
       const created = await createSource({
         name,
@@ -311,9 +343,17 @@ export default function SourcesPage({
       setTracked('true');
       setIntervalMs('');
     } catch (err: unknown) {
-      setCreateError(err instanceof Error ? err.message : 'Failed to create source');
+      // The create route documents exactly one 409: the unique {tenantId, name} index
+      // (sources.service.ts's `create`) — every other failure (validation, auth, transport, 500)
+      // stays page-level, since nothing else here identifies a single field.
+      if (err instanceof ApiError && err.status === 409) {
+        setNameError(err.message);
+      } else {
+        setCreateError(err instanceof Error ? err.message : 'Failed to create source');
+      }
     } finally {
       setCreating(false);
+      createInFlightRef.current = false;
     }
   }
 
@@ -324,7 +364,7 @@ export default function SourcesPage({
   }
 
   return (
-    <div className="view view--flow">
+    <div className="view">
       <div className="page-head">
         <div>
           <span className="eyebrow">Evidence</span>
@@ -342,7 +382,7 @@ export default function SourcesPage({
         )}
         {canManage && (
           <form onSubmit={(e) => void handleCreate(e)} className="form">
-            <Field label="Name">
+            <Field label="Name" error={nameError ?? undefined}>
               {(inputProps) => (
                 <input
                   type="text"
@@ -424,8 +464,9 @@ export default function SourcesPage({
 
       {trackedSources && trackedSources.length === 0 && trackedCount === 0 && (
         <EmptyState
-          title="No sources yet — add one to start syncing documents."
-          description="A source is a watched folder that keeps this data room current. Use the form above to add one."
+          icon={<IconDatabase size={24} />}
+          title="No sources yet"
+          description="A source is a watched folder that keeps this data room current — use the form above to add one."
         />
       )}
 
@@ -485,7 +526,8 @@ export default function SourcesPage({
 
       {inventorySources && inventorySources.length === 0 && inventoryCount === 0 && (
         <EmptyState
-          title="No inventory-only repositories yet."
+          icon={<IconDatabase size={24} />}
+          title="No inventory-only repositories yet"
           description="A repository with no connector still belongs in the estate map — add one and leave it catalogued only."
         />
       )}

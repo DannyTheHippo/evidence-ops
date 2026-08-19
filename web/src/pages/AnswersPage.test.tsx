@@ -90,7 +90,7 @@ describe('AnswersPage', () => {
 
     renderPage();
 
-    expect(screen.getByText('Loading…')).toBeInTheDocument();
+    expect(screen.getByText('Loading answers…')).toBeInTheDocument();
     expect(await screen.findByText(answered.questionText)).toBeInTheDocument();
 
     const answeredRow = screen.getByText(answered.questionText).closest('tr');
@@ -178,7 +178,7 @@ describe('AnswersPage', () => {
     fireEvent.change(screen.getByLabelText('Run status'), { target: { value: 'failed' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
 
-    expect(await screen.findByText('No answers match this filter.')).toBeInTheDocument();
+    expect(await screen.findByText('No answers match this filter')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Ask a question' })).not.toBeInTheDocument();
   });
 

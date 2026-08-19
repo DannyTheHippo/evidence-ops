@@ -62,7 +62,7 @@ describe('MeasuresPage', () => {
 
     renderPage();
 
-    expect(screen.getByText('Loading…')).toBeInTheDocument();
+    expect(screen.getByText('Loading measures…')).toBeInTheDocument();
 
     const table = await screen.findByRole('table', { name: 'Pilot measures' });
     expect(within(table).getByText('42')).toBeInTheDocument();

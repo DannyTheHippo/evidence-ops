@@ -31,6 +31,16 @@ const chunks = {
   count: 1,
 };
 
+function manyChunks(count: number) {
+  const docs = Array.from({ length: count }, (_, index) => ({
+    id: `chunk-${index}`,
+    text: `Chunk text number ${index}.`,
+    tokenCount: 700,
+    locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Summary', cell: `B${index}` },
+  }));
+  return { docs, count };
+}
+
 // A version row renders as <tr>/<td> — a bare table row outside <table><tbody> is invalid HTML
 // and jsdom logs a nesting warning on every test without this wrapper.
 function renderRow(v: DocumentVersion = version) {
@@ -90,5 +100,33 @@ describe('VersionRow', () => {
       'aria-expanded',
       'false',
     );
+  });
+
+  it('caps a version with more chunks than the preview limit, with a "show all" affordance', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(manyChunks(45))));
+    renderRow();
+
+    fireEvent.click(screen.getByRole('button', { name: 'View chunks' }));
+
+    await screen.findByText('Chunk text number 0.');
+    expect(screen.getAllByText(/^Chunk text number \d+\.$/)).toHaveLength(20);
+    expect(screen.getByText('Showing 20 of 45 chunks')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show all 45 chunks' }));
+
+    expect(screen.getAllByText(/^Chunk text number \d+\.$/)).toHaveLength(45);
+    expect(screen.getByText('Showing 45 of 45 chunks')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show all 45 chunks' })).not.toBeInTheDocument();
+  });
+
+  it('shows no cap affordance when there are fewer chunks than the preview limit', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(manyChunks(5))));
+    renderRow();
+
+    fireEvent.click(screen.getByRole('button', { name: 'View chunks' }));
+
+    await screen.findByText('Chunk text number 0.');
+    expect(screen.getAllByText(/^Chunk text number \d+\.$/)).toHaveLength(5);
+    expect(screen.queryByText(/Showing \d+ of \d+ chunks/)).not.toBeInTheDocument();
   });
 });

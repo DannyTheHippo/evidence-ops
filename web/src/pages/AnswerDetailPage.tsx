@@ -4,18 +4,8 @@ import { ApiError, getAnswerById, type Answer } from '../api/client';
 import AnswerView from '../components/AnswerView';
 import Badge from '../components/ui/Badge';
 import Skeleton from '../components/ui/Skeleton';
+import { RUN_STATUS_TONE } from '../lib/answer-status';
 import { useAnswerEnrichment } from '../lib/use-answer-enrichment';
-
-// A run still in flight or failed shows its run status as a badge — matches AnswersPage's own
-// tone assignment for the same three non-completed states.
-const RUN_STATUS_TONE: Record<
-  Exclude<Answer['runStatus'], 'completed'>,
-  'neutral' | 'info' | 'rejected'
-> = {
-  queued: 'neutral',
-  running: 'info',
-  failed: 'rejected',
-};
 
 export default function AnswerDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -43,10 +33,10 @@ export default function AnswerDetailPage() {
   const { documentIndex, conflictChunkIndex } = useAnswerEnrichment(answer);
 
   return (
-    <div className="view view--flow view--roomy">
+    <div className="view view--roomy">
       <div className="page-head">
         <div>
-          <span className="eyebrow">Question & answer</span>
+          <span className="eyebrow">Ask</span>
           <h1 className="page-title">{answer ? answer.questionText : 'Answer'}</h1>
           <p className="page-sub">A previously asked question and its grounding.</p>
         </div>
@@ -56,20 +46,20 @@ export default function AnswerDetailPage() {
       </div>
 
       {error && (
-        <p className="error" role="alert">
+        <p className="error error--page" role="alert">
           {error}
         </p>
       )}
 
       {!id && (
-        <p className="error" role="alert">
+        <p className="error error--page" role="alert">
           No answer id provided.
         </p>
       )}
 
       {notFound && <p className="notice notice--info">Answer not found.</p>}
 
-      {!answer && !error && !notFound && id && <Skeleton label="Loading…" />}
+      {!answer && !error && !notFound && id && <Skeleton label="Loading answer…" />}
 
       {answer && (
         <section className="card">

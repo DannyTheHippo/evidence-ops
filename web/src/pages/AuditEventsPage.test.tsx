@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { RequireAdmin } from '../App';
+import { RequireAdmin } from '../AuthenticatedRoutes';
 import { clearSession } from '../lib/auth';
 import AuditEventsPage from './AuditEventsPage';
 
@@ -107,8 +107,8 @@ describe('AuditEventsPage', () => {
 
     renderPage();
 
-    expect(screen.getByText('Loading…')).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('Loading…');
+    expect(screen.getByText('Loading audit events…')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading audit events…');
 
     expect(await screen.findByText('document.deleted')).toBeInTheDocument();
     expect(screen.getByText('admin@example.com')).toBeInTheDocument();
@@ -182,7 +182,7 @@ describe('AuditEventsPage', () => {
 
     renderPage();
 
-    expect(await screen.findByText('No audit events match these filters.')).toBeInTheDocument();
+    expect(await screen.findByText('No matching audit events')).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 

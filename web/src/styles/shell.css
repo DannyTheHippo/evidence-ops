@@ -81,11 +81,17 @@
   font-size: var(--text-sm);
   font-weight: 500;
   white-space: nowrap;
+  transition:
+    background var(--motion-row-hover) ease,
+    color var(--motion-row-hover) ease;
 }
 .sidebar-link:hover {
   color: var(--ink);
   background: var(--surface-2);
   text-decoration: none;
+}
+.sidebar-link:active:not(:disabled) {
+  transform: translateY(1px);
 }
 .sidebar-link.is-active {
   color: var(--signal);
@@ -129,6 +135,33 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-6);
+}
+
+/* Repositions the shared `.dialog` from its default centred placement to a left-anchored,
+   full-height panel — author `position`/`inset`/`margin` override the browser's default modal
+   centring without touching `showModal()`, so the focus trap, Escape handling, focus restoration
+   and backdrop that `Dialog` provides are unaffected. Scoped to `.sidebar-drawer .dialog` so only
+   the navigation drawer is repositioned; every other `Dialog` consumer keeps the centred card. */
+.sidebar-drawer .dialog {
+  position: fixed;
+  inset: 0 auto 0 0;
+  margin: 0;
+  width: min(300px, calc(100% - var(--space-8)));
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  overflow-y: auto;
+  border-radius: 0;
+  border-right: 1px solid var(--hairline-strong);
+  animation: sidebar-drawer-enter var(--motion-enter) ease-out;
+}
+@keyframes sidebar-drawer-enter {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
 }
 
 /* ── Top bar ─────────────────────────────────────────────────────────────── */

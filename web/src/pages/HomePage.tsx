@@ -7,49 +7,20 @@ import {
   listDocuments,
   listSources,
   type Answer,
-  type AnswerRunStatus,
   type Approval,
   type Conflict,
   type EvidenceDocument,
   type Source,
 } from '../api/client';
 import Badge from '../components/ui/Badge';
+import EmptyState from '../components/ui/EmptyState';
 import Skeleton from '../components/ui/Skeleton';
-
-type BadgeTone = 'verified' | 'caution' | 'info' | 'rejected' | 'neutral';
+import { answerBadge } from '../lib/answer-status';
 
 interface FetchState<T> {
   docs: T[] | null;
   count: number | null;
   error: string | null;
-}
-
-// A run still in flight or failed shows its run status, never a premature outcome — matches
-// AnswersPage's own tone assignment for the same three non-completed states.
-const RUN_STATUS_TONE: Record<Exclude<AnswerRunStatus, 'completed'>, BadgeTone> = {
-  queued: 'neutral',
-  running: 'info',
-  failed: 'rejected',
-};
-
-/** Maps an answer to the Badge tone/label the recent-answers row shows. All three completed
- * outcomes are equally valid results — `insufficient_evidence` is an honest abstention, not a
- * failure, so it never shares a tone with `failed`. An answer that has not finished its run shows
- * `runStatus` in place of an outcome, since there is no outcome to show yet. */
-function outcomeBadge(answer: Answer): { tone: BadgeTone; label: string } {
-  if (answer.runStatus !== 'completed') {
-    return { tone: RUN_STATUS_TONE[answer.runStatus], label: answer.runStatus };
-  }
-  switch (answer.outcome?.kind) {
-    case 'answered':
-      return { tone: 'verified', label: 'answered' };
-    case 'conflicting_evidence':
-      return { tone: 'caution', label: 'conflicting evidence' };
-    case 'insufficient_evidence':
-      return { tone: 'info', label: 'insufficient evidence' };
-    default:
-      return { tone: 'neutral', label: answer.runStatus };
-  }
 }
 
 interface WorkQueueItem {
@@ -113,7 +84,9 @@ function WorkQueueSection({
         </p>
       )}
       {loading && !approvals.error && !conflicts.error && <Skeleton label="Loading work queue…" />}
-      {!loading && items.length === 0 && <p className="cell-sub">Nothing needs your attention.</p>}
+      {!loading && items.length === 0 && (
+        <EmptyState className="empty-state--inline" title="Nothing needs your attention" />
+      )}
       {items.length > 0 && (
         <ul className="actionable-list">
           {items.map((item) => (
@@ -188,7 +161,9 @@ function CorpusHealthSection({
       {loading && !failedDocuments.error && !failedSources.error && (
         <Skeleton label="Loading corpus health…" />
       )}
-      {!loading && items.length === 0 && <p className="cell-sub">No failed ingestions or syncs.</p>}
+      {!loading && items.length === 0 && (
+        <EmptyState className="empty-state--inline" title="No failed ingestions or syncs" />
+      )}
       {items.length > 0 && (
         <ul className="actionable-list">
           {items.map((item) => (
@@ -221,12 +196,12 @@ function RecentAnswersSection({ answers }: { answers: FetchState<Answer> }) {
       )}
       {!answers.error && !answers.docs && <Skeleton label="Loading recent answers…" />}
       {!answers.error && answers.docs && answers.docs.length === 0 && (
-        <p className="cell-sub">No answers yet.</p>
+        <EmptyState className="empty-state--inline" title="No answers yet" />
       )}
       {!answers.error && answers.docs && answers.docs.length > 0 && (
         <ul className="dashboard-answers">
           {answers.docs.map((answer) => {
-            const badge = outcomeBadge(answer);
+            const badge = answerBadge(answer);
             return (
               <li key={answer.id} className="dashboard-answer">
                 <Link to={`/answers/${answer.id}`} className="dashboard-answer-question">
@@ -264,7 +239,7 @@ function FirstRunChecklist({ steps }: { steps: ChecklistStep[] }) {
           <li key={step.key} className="actionable-row">
             <span className="actionable-row-name">{step.label}</span>
             {step.done ? (
-              <Badge tone="verified">Done</Badge>
+              <Badge tone="verified">done</Badge>
             ) : (
               <Link to={step.to} className="btn btn--secondary btn--sm">
                 {step.cta}
@@ -443,7 +418,7 @@ export default function HomePage() {
   ];
 
   return (
-    <div className="view view--flow">
+    <div className="view">
       <div className="page-head">
         <div>
           <span className="eyebrow">Overview</span>

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ApiKeysPage from './ApiKeysPage';
 
@@ -356,12 +356,71 @@ describe('ApiKeysPage', () => {
 
     expect(await screen.findByText('eo_pat_brandnewtoken123')).toBeInTheDocument();
     // Minting from page 2 must not strand the new key off-screen: the view returns to page 1,
-    // where it actually sorts, and page 2's row is gone from view.
-    expect(await screen.findByText('Local dev')).toBeInTheDocument();
+    // where it actually sorts, and page 2's row is gone from view. Scoped to the table since the
+    // one-time token panel above also titles itself with the key's name.
+    const table = await screen.findByRole('table');
+    expect(within(table).getByText('Local dev')).toBeInTheDocument();
     expect(screen.queryByText('MCP integration')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
     expect(
       fetchMock.mock.calls.filter(([url]) => url === '/api/v1/api-keys?skip=0&limit=20').length,
     ).toBe(2);
+  });
+
+  it('guards against a double mint between the click and the button becoming disabled', async () => {
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url === '/api/v1/api-keys' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse(mintedKey, 201));
+      }
+      return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<ApiKeysPage />);
+    await screen.findByText('No API keys yet');
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Local dev' } });
+    const button = screen.getByRole('button', { name: 'Mint key' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    await screen.findByText(mintedKey.token);
+
+    expect(
+      fetchMock.mock.calls.filter(
+        ([url, init]) => url === '/api/v1/api-keys' && init?.method === 'POST',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('warns before an unload once a freshly minted token is on screen, and stays silent once it is gone', async () => {
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url === '/api/v1/api-keys' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse(mintedKey, 201));
+      }
+      return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<ApiKeysPage />);
+    await screen.findByText('No API keys yet');
+
+    function dispatchBeforeUnload(): Event {
+      const event = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(event);
+      return event;
+    }
+
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(false);
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Local dev' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Mint key' }));
+    await screen.findByText(mintedKey.token);
+
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+
+    expect(dispatchBeforeUnload().defaultPrevented).toBe(false);
   });
 });

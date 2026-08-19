@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { answerEventsUrl, getAnswerById, startQuestion, type Answer } from '../api/client';
 import AnswerView from '../components/AnswerView';
 import Badge from '../components/ui/Badge';
@@ -6,6 +6,7 @@ import Button from '../components/ui/Button';
 import Field from '../components/ui/Field';
 import Skeleton from '../components/ui/Skeleton';
 import { notify } from '../components/ui/toast';
+import { answerBadge } from '../lib/answer-status';
 import { useAnswerEnrichment } from '../lib/use-answer-enrichment';
 import { useEventStream } from '../lib/use-event-stream';
 
@@ -14,32 +15,6 @@ const DEFAULT_POLL_INTERVAL_MS = 1500;
 interface AskPageProps {
   // Overridable so tests can poll on a short interval instead of stubbing timers.
   pollIntervalMs?: number;
-}
-
-type BadgeTone = 'verified' | 'caution' | 'rejected' | 'info' | 'neutral';
-
-// A run still in flight or failed shows its run status, never a premature outcome — matches
-// AnswersPage's own tone assignment for the same three non-completed states.
-const RUN_STATUS_TONE: Record<Exclude<Answer['runStatus'], 'completed'>, BadgeTone> = {
-  queued: 'neutral',
-  running: 'info',
-  failed: 'rejected',
-};
-
-function outcomeBadge(answer: Answer): { tone: BadgeTone; label: string } {
-  if (answer.runStatus !== 'completed') {
-    return { tone: RUN_STATUS_TONE[answer.runStatus], label: answer.runStatus };
-  }
-  switch (answer.outcome?.kind) {
-    case 'answered':
-      return { tone: 'verified', label: 'answered' };
-    case 'insufficient_evidence':
-      return { tone: 'info', label: 'insufficient evidence' };
-    case 'conflicting_evidence':
-      return { tone: 'caution', label: 'conflicting evidence' };
-    default:
-      return { tone: 'neutral', label: answer.runStatus };
-  }
 }
 
 // A run is terminal only on a named `answer` event carrying a finished runStatus — `heartbeat`
@@ -54,9 +29,14 @@ export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: A
   const [answer, setAnswer] = useState<Answer | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Blocks a double submit between the click and the re-render that disables the submit button —
+  // `disabled={submitting}` alone only takes effect once React has committed it.
+  const submitInFlightRef = useRef(false);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     setSubmitting(true);
     setError(null);
     setAnswer(null);
@@ -78,6 +58,7 @@ export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: A
       notify('error', message);
     } finally {
       setSubmitting(false);
+      submitInFlightRef.current = false;
     }
   }
 
@@ -131,15 +112,18 @@ export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: A
   const isInFlight = answer?.runStatus === 'queued' || answer?.runStatus === 'running';
 
   return (
-    <div className="view view--flow view--roomy">
+    <div className="view view--roomy">
       <div className="page-head">
         <div>
-          <span className="eyebrow">Question & answer</span>
+          <span className="eyebrow">Ask</span>
           <h1 className="page-title">Ask</h1>
           <p className="page-sub">Ask a question grounded in the uploaded evidence.</p>
         </div>
       </div>
 
+      {/* Untitled, unlike a filter card — the question field is the page's purpose, not a
+          refinement of something below it, and a "Ask" heading under a page title that already
+          reads Ask would repeat itself. */}
       <section className="card">
         <form onSubmit={(e) => void handleSubmit(e)} className="form">
           <Field label="Question">
@@ -173,10 +157,10 @@ export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: A
           <div className="card-head">
             <h2 className="card-title">{answer.questionText}</h2>
             {(() => {
-              const badge = outcomeBadge(answer);
+              const badge = answerBadge(answer);
               return (
                 <Badge tone={badge.tone}>
-                  {isInFlight && <span className="badge-dot" />}
+                  {isInFlight && <span className="live-dot" />}
                   {badge.label}
                 </Badge>
               );

@@ -48,7 +48,7 @@ describe('AnswerDetailPage', () => {
 
     renderAt('answer-1');
 
-    expect(screen.getByRole('status')).toHaveTextContent('Loading…');
+    expect(screen.getByRole('status')).toHaveTextContent('Loading answer…');
 
     resolveAnswer!(jsonResponse(completedAnswer));
 

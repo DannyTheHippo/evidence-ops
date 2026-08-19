@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   documentEventsUrl,
   listDocuments,
@@ -16,6 +16,7 @@ import Select from '../../components/ui/Select';
 import Skeleton from '../../components/ui/Skeleton';
 import Table, { RowLink, TableHeaderCell, TableRow } from '../../components/ui/Table';
 import { notify } from '../../components/ui/toast';
+import { IconFolder } from '../../components/icons';
 import { useEventStream } from '../../lib/use-event-stream';
 import { formatBytes } from './format-size';
 
@@ -51,6 +52,10 @@ export default function DocumentList() {
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // Blocks a double submit between the click and the re-render that disables the submit button —
+  // `disabled={uploading}` alone only takes effect once React has committed it, and each upload
+  // creates a real document.
+  const uploadInFlightRef = useRef(false);
 
   const refetch = useCallback(() => {
     listDocuments({ skip, limit: PAGE_SIZE })
@@ -97,6 +102,8 @@ export default function DocumentList() {
   async function handleUpload(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (files.length === 0) return;
+    if (uploadInFlightRef.current) return;
+    uploadInFlightRef.current = true;
     setUploading(true);
     setUploadError(null);
     // Sequential, not Promise.all — accumulate one error per file rather than letting an early
@@ -117,6 +124,7 @@ export default function DocumentList() {
     setSourceClass('');
     setFiles([]);
     setUploading(false);
+    uploadInFlightRef.current = false;
     refetch();
     if (uploadedCount > 0) {
       notify(
@@ -128,7 +136,7 @@ export default function DocumentList() {
   }
 
   return (
-    <div className="view view--flow">
+    <div className="view">
       <div className="page-head">
         <div>
           <span className="eyebrow">Evidence</span>
@@ -200,6 +208,7 @@ export default function DocumentList() {
 
       {documents && documents.length === 0 && (
         <EmptyState
+          icon={<IconFolder size={24} />}
           title="No documents yet"
           description="Upload a source document above to start tracking its ingestion."
         />

@@ -17,11 +17,30 @@
   transition:
     background var(--motion-press) ease,
     border-color var(--motion-press) ease,
-    opacity var(--motion-press) ease;
+    color var(--motion-press) ease;
 }
+/* Half-opacity would composite --signal-ink over --signal at 50% on .btn--primary, the least
+   legible combination in the app; a dedicated surface/ink pair stays readable on every variant. */
 .btn:disabled {
-  opacity: 0.5;
+  background: var(--surface-3);
+  color: var(--muted);
+  border-color: var(--hairline);
   cursor: not-allowed;
+}
+/* Press feedback is a uniform, non-chromatic depression rather than a third shade — the palette
+   freeze leaves --signal-press as .btn--primary's only extra hue, not enough to cover every
+   variant. No transition on transform: press is an instant state change, so there is nothing here
+   for the reduced-motion block in base.css to neutralise — it only zeroes transition/animation
+   durations. */
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+/* Reserves enough width to absorb a label swap to a pending state (e.g. "Ask" becoming "Asking…")
+   without the button visibly resizing under the pointer. Scoped off .btn--sm: every icon-only
+   control in the app renders at that size, and .theme-toggle (also sm) sets its own wider
+   min-width for its three rotating labels — this rule must not compete with either. */
+.btn:not(.btn--sm) {
+  min-width: 6.5rem;
 }
 .btn--primary {
   background: var(--signal);
@@ -112,14 +131,23 @@
   max-width: 420px;
 }
 /* Title row for a section header, with or without a card border: title (plus an optional
-   .eyebrow above it) on the start edge, an optional trailing action on the end edge. */
+   .eyebrow above it) on the start edge, an optional trailing action on the end edge. Both sides can
+   carry user-supplied text — a filesystem path, a document name — so the row wraps rather than
+   forcing the heading to shrink under a `white-space: nowrap` badge or button. */
 .card-head,
 .section-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: var(--space-3);
   margin-bottom: var(--space-4);
+}
+/* A flex item's automatic minimum size is its content, so an unbroken path or digest would push
+   the row wider than the card instead of wrapping inside it. */
+.card-head > :first-child,
+.section-head > :first-child {
+  min-width: 0;
 }
 /* Section heading inside a card or a `.section-head`. Sits a full step above body text and level
    with `.dialog-title`, so the page reads as page title → section → body rather than one flat
@@ -208,6 +236,62 @@
    just the inline run of text inside it. */
 .row-link {
   display: block;
+}
+
+/* Below 768px a wide `.grid` has no room to lay its columns out side by side — `.panel`'s
+   `overflow: auto` would otherwise fall back to a horizontal scrollbar that drags the sticky
+   `thead` sideways with it, losing the column names it exists to preserve. This turns each row
+   into a labelled card instead: the header row is redundant once every cell states its own label,
+   so it is hidden rather than left to render sideways. `RowLink` stays exactly where the page put
+   it — nothing here reorders or hides a cell's children, only adds a label above them. */
+@media (max-width: 768px) {
+  .grid thead {
+    display: none;
+  }
+  .grid,
+  .grid tbody,
+  .grid tr {
+    display: block;
+    width: 100%;
+  }
+  .grid tbody tr {
+    margin-bottom: var(--space-3);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius);
+  }
+  .grid tbody tr:last-child {
+    margin-bottom: 0;
+  }
+  .grid tbody td {
+    display: block;
+    border-bottom: none;
+    padding: var(--space-2) var(--space-4);
+  }
+  /* Scoped to `[data-label]` so a cell with no label — `TableCell`'s default — renders its value
+     with no reserved gutter above it, rather than an empty uppercase line. */
+  .grid tbody td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: var(--space-1);
+    color: var(--muted);
+    font-weight: 600;
+    font-size: var(--text-2xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  /* The desktop grid right-aligns a numeric or actions column against its neighbours; stacked
+     under its own label, right alignment only pushes the value away from the label above it. */
+  .grid tbody td.num,
+  .grid tbody td.cell-actions {
+    text-align: left;
+  }
+  /* .cell-actions holds up to three buttons plus, on a sync failure, an error paragraph — the
+     desktop `white-space: nowrap` that keeps the column compact would force that content onto one
+     unreadable line at card width. `.form-actions`'s own `flex-wrap: wrap` then lets the buttons
+     break across lines instead of collapsing into a clipped strip. */
+  .grid tbody td.cell-actions {
+    white-space: normal;
+  }
 }
 
 /* ── Badges ──────────────────────────────────────────────────────────────── */
@@ -349,7 +433,7 @@
   padding: var(--space-3) var(--space-3);
   background: var(--surface);
   color: var(--ink);
-  border: 1px solid var(--hairline-strong);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   font-family: inherit;
   font-size: var(--text-md);
@@ -365,6 +449,15 @@
   background-position: right var(--space-4) center;
   background-size: 10px 6px;
 }
+/* appearance: none strips the OS hover affordance from .select along with its default chrome;
+   this restores a visible response for both it and a plain input. Declared before focus-visible
+   below so a field that is both hovered and keyboard-focused still shows the focus ring border,
+   not this one — both selectors carry equal specificity, and source order breaks the tie. */
+.field input:hover,
+.field textarea:hover,
+.select:hover {
+  border-color: var(--hairline-strong);
+}
 .field input:focus-visible,
 .field textarea:focus-visible,
 .select:focus-visible {
@@ -373,6 +466,17 @@
 .field input[aria-invalid='true'],
 .field textarea[aria-invalid='true'] {
   border-color: var(--status-reject-line);
+}
+/* Declared last among the field/select state rules so it wins any specificity tie against hover
+   or the invalid state — a disabled control must read as disabled regardless of what else applies
+   to it. */
+.field input:disabled,
+.field textarea:disabled,
+.select:disabled {
+  background: var(--surface-2);
+  color: var(--muted);
+  border-color: var(--hairline);
+  cursor: not-allowed;
 }
 .field-hint {
   font-weight: 400;
@@ -506,6 +610,14 @@
 .empty-state-action {
   margin-top: var(--space-2);
 }
+/* An empty state standing in for one section inside a populated page, rather than for the whole
+   view. It keeps the shared voice and type treatment but drops the centring and the tall padding,
+   which would otherwise open a 32px well inside a dashboard card that is only a few rows deep. */
+.empty-state--inline {
+  align-items: flex-start;
+  text-align: left;
+  padding: var(--space-2) 0;
+}
 
 /* ── Dialog ──────────────────────────────────────────────────────────────── */
 
@@ -546,9 +658,13 @@
   font-family: inherit;
   font-size: var(--text-sm);
   cursor: pointer;
+  transition: background var(--motion-row-hover) ease;
 }
 .menu-trigger:hover {
   background: var(--surface-2);
+}
+.menu-trigger:active:not(:disabled) {
+  transform: translateY(1px);
 }
 .menu-surface {
   position: absolute;
@@ -576,10 +692,14 @@
   font-size: var(--text-sm);
   text-align: left;
   cursor: pointer;
+  transition: background var(--motion-row-hover) ease;
 }
 .menu-item:hover,
 .menu-item:focus-visible {
   background: var(--surface-2);
+}
+.menu-item:active:not(:disabled) {
+  transform: translateY(1px);
 }
 .menu-item[aria-disabled='true'] {
   color: var(--muted);
@@ -621,4 +741,19 @@
   flex: 1;
   margin: 0;
   font-size: var(--text-sm);
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 560px) {
+  /* `right` alone leaves the stack unbounded on the left, so a long message on a narrow phone
+     runs off-screen; a matching `left` inset keeps it inside the viewport on both edges. Clearing
+     `max-width` here matters: past ~425px the two insets alone leave more than 24rem between them,
+     and a `fixed` box with `left`, `right` and a `max-width` that binds tighter than that gap drops
+     `right` from the used layout (the LTR resolution of an over-constrained box), silently
+     re-anchoring the stack to the left edge instead of spanning both insets. */
+  .toast-stack {
+    left: var(--space-4);
+    max-width: none;
+  }
 }

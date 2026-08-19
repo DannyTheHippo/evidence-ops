@@ -179,11 +179,13 @@ export default function Sidebar({
         </div>
         <NavGroups groups={groups} />
       </nav>
-      <Dialog open={drawerOpen} onClose={onCloseDrawer} title="Navigation">
-        <div className="sidebar-drawer-nav">
-          <NavGroups groups={groups} onNavigate={onCloseDrawer} />
-        </div>
-      </Dialog>
+      <div className="sidebar-drawer">
+        <Dialog open={drawerOpen} onClose={onCloseDrawer} title="Navigation">
+          <div className="sidebar-drawer-nav">
+            <NavGroups groups={groups} onNavigate={onCloseDrawer} />
+          </div>
+        </Dialog>
+      </div>
     </>
   );
 }

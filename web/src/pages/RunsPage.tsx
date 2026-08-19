@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { listWorkflowRuns, type WorkflowRun, type WorkflowRunStatus } from '../api/client';
+import { IconActivity } from '../components/icons';
 import Badge from '../components/ui/Badge';
 import EmptyState from '../components/ui/EmptyState';
 import Pager from '../components/ui/Pager';
@@ -36,7 +37,7 @@ export default function RunsPage() {
   }, [skip]);
 
   return (
-    <div className="view view--flow">
+    <div className="view">
       <div className="page-head">
         <div>
           <span className="eyebrow">Review</span>
@@ -51,10 +52,11 @@ export default function RunsPage() {
         </p>
       )}
 
-      {!runs && !error && <Skeleton label="Loading…" />}
+      {!runs && !error && <Skeleton label="Loading workflow runs…" />}
 
       {runs && runs.length === 0 && (
         <EmptyState
+          icon={<IconActivity size={24} />}
           title="No runs yet"
           description="Runs appear here once a question, ingestion, sync, or conflict resolution starts."
           action={
@@ -89,7 +91,11 @@ export default function RunsPage() {
                   <td>
                     <Badge tone={STATUS_TONE[run.status]}>{run.status}</Badge>
                     {run.status === 'failed' && run.errorMessage && (
-                      <p className="cell-sub">{run.errorMessage}</p>
+                      <p className="cell-sub">
+                        <span className="cell-truncate" title={run.errorMessage}>
+                          {run.errorMessage}
+                        </span>
+                      </p>
                     )}
                   </td>
                   <td className="cell-sub">{new Date(run.createdAt).toLocaleString()}</td>

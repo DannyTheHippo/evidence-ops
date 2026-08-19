@@ -1,7 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import App, { RequireAdmin } from './App';
+import App from './App';
+import { RequireAdmin } from './AuthenticatedRoutes';
 import * as auth from './lib/auth';
 
 function jsonResponse(body: unknown, status = 200): Response {

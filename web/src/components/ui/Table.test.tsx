@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
-import Table, { RowLink, TableHeaderCell, TableRow } from './Table';
+import Table, { RowLink, TableCell, TableHeaderCell, TableRow } from './Table';
 
 describe('Table', () => {
   it('exposes the caption as the table role accessible name', () => {
@@ -22,6 +22,22 @@ describe('Table', () => {
 
     expect(screen.getByRole('table', { name: 'API keys' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Name' })).toHaveAttribute('scope', 'col');
+  });
+
+  it('renders a TableCell with its column label as data-label, and without one when no label is given', () => {
+    render(
+      <Table caption="Sources">
+        <tbody>
+          <tr>
+            <TableCell label="Name">Contracts</TableCell>
+            <TableCell>No label</TableCell>
+          </tr>
+        </tbody>
+      </Table>,
+    );
+
+    expect(screen.getByText('Contracts')).toHaveAttribute('data-label', 'Name');
+    expect(screen.getByText('No label')).not.toHaveAttribute('data-label');
   });
 
   it('renders a plain row unchanged when TableRow carries no destination', () => {

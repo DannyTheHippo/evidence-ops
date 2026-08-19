@@ -125,10 +125,10 @@ describe('WorkflowRunPage', () => {
 
     renderAt('run-1');
 
-    expect(screen.getByText('Loading…')).toBeInTheDocument();
+    expect(screen.getByText('Loading run timeline…')).toBeInTheDocument();
 
     expect(await screen.findByText('Paused — awaiting approval')).toBeInTheDocument();
-    expect(screen.queryByText('Loading…')).not.toBeInTheDocument();
+    expect(screen.queryByText('Loading run timeline…')).not.toBeInTheDocument();
     expect(
       screen.getByText(
         'Resolve Northgate Business Park cap_rate (2025-03) in favor of 5.25% over 6.10%.',
@@ -244,7 +244,7 @@ describe('WorkflowRunPage', () => {
 
     renderAt('run-1');
 
-    expect(screen.getByText('Loading…')).toBeInTheDocument();
+    expect(screen.getByText('Loading run timeline…')).toBeInTheDocument();
 
     const [source] = FakeEventSource.instances;
     act(() => {

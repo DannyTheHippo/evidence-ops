@@ -24,6 +24,29 @@ export class ApiError extends Error {
   }
 }
 
+// The one place this wording lives — every page that used to write its own "can't reach the
+// server" fallback reads it from here instead via `TransportError`.
+const TRANSPORT_ERROR_MESSAGE = 'Could not reach the server. Check your connection and try again.';
+
+/** Thrown when `fetch` itself never produces an HTTP response — a dropped connection, DNS
+ * failure, or the request's own timeout. `status` is `0`, the sentinel for "no server status to
+ * report," distinguishing this from any status a server actually returned. */
+export class TransportError extends ApiError {
+  constructor() {
+    super(0, TRANSPORT_ERROR_MESSAGE);
+  }
+}
+
+// Bounds an ordinary JSON call: generous enough that a slow-but-working request still finishes,
+// short enough that a genuinely dead connection surfaces as a transport error instead of hanging
+// the UI forever. Model synthesis itself runs on the answer-question workflow and is polled or
+// streamed separately — nothing awaits it inline through this helper.
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+// A document upload carries a full file body over what may be a much slower link than the JSON
+// calls above; the default budget would abort a large file partway through.
+const UPLOAD_TIMEOUT_MS = 120_000;
+
 async function readErrorMessage(res: Response): Promise<string> {
   try {
     const text = await res.text();
@@ -50,9 +73,34 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...(init?.headers as Record<string, string> | undefined),
   };
 
-  // The credential is now an HttpOnly cookie, not a header the SPA attaches itself —
-  // 'same-origin' is what makes the browser actually send it.
-  const res = await fetch(`${API}${path}`, { ...init, headers, credentials: 'same-origin' });
+  const timeoutController = new AbortController();
+  const timeoutId = setTimeout(
+    () => timeoutController.abort(),
+    isFormData ? UPLOAD_TIMEOUT_MS : DEFAULT_TIMEOUT_MS,
+  );
+  // No caller passes its own signal today; composing rather than overwriting keeps that case
+  // correct if one ever does.
+  const signal = init?.signal
+    ? AbortSignal.any([init.signal, timeoutController.signal])
+    : timeoutController.signal;
+
+  let res: Response;
+  try {
+    // The credential is now an HttpOnly cookie, not a header the SPA attaches itself —
+    // 'same-origin' is what makes the browser actually send it.
+    res = await fetch(`${API}${path}`, { ...init, headers, credentials: 'same-origin', signal });
+  } catch (err) {
+    // A rejection this helper recognizes as "no response ever arrived" — our own timeout, or the
+    // TypeError a browser throws for a dropped connection, blocked CORS request, or DNS failure —
+    // becomes the typed transport error. Anything else propagates unchanged: swallowing an
+    // unrecognized rejection into a generic message would hide a real defect instead of surfacing it.
+    if (timeoutController.signal.aborted || err instanceof TypeError) {
+      throw new TransportError();
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (res.status === 401 && !path.startsWith('/auth/')) {
     window.location.assign('/login');

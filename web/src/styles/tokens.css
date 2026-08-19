@@ -22,7 +22,10 @@
      The stroke tracks --muted; %23 is the escaped # a data URI requires. */
   --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%235a6478' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
-  /* Signal — one instrument color for primary actions, active nav, focus ring */
+  /* Signal — one instrument color for primary actions, active nav, focus ring.
+     --signal-press is spent by .btn--primary:hover only; pointer-down feedback across every
+     interactive family is a non-chromatic transform (primitives.css's :active rules), so this
+     stays a two-shade ladder rather than growing a third stop for press. */
   --signal: #0a6e8c;
   --signal-press: #085770;
   --signal-ink: #ffffff;
@@ -99,6 +102,7 @@
   --motion-row-hover: 0.1s;
   --motion-shimmer: 1.4s;
   --motion-pulse: 1.6s;
+  --motion-enter: 0.3s;
 
   /* Provenance rail */
   --rail-width: 2px;
