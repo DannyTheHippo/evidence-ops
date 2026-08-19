@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 import {
   IconActivity,
   IconAlertTriangle,
+  IconBarChart,
   IconCheck,
   IconClipboard,
   IconDatabase,
@@ -37,6 +38,7 @@ interface NavGroup {
 // eslint-disable-next-line react-refresh/only-export-components -- non-component export: App.tsx's breadcrumb lookup and this file's own nav-group builder both read it
 export const NAV_LABELS: { to: string; label: string }[] = [
   { to: '/', label: 'Home' },
+  { to: '/measures', label: 'Measures' },
   { to: '/ask', label: 'Ask' },
   { to: '/answers', label: 'Answers' },
   { to: '/search', label: 'Search' },
@@ -53,7 +55,12 @@ export const NAV_LABELS: { to: string; label: string }[] = [
 
 function buildNavGroups(isAdmin: boolean): NavGroup[] {
   return [
-    { items: [{ to: '/', label: 'Home', icon: <IconHome />, end: true }] },
+    {
+      items: [
+        { to: '/', label: 'Home', icon: <IconHome />, end: true },
+        { to: '/measures', label: 'Measures', icon: <IconBarChart /> },
+      ],
+    },
     {
       heading: 'Ask',
       items: [

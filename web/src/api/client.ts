@@ -813,3 +813,20 @@ export function listInvitations(pagination?: {
   const qs = query.toString();
   return request<WithCount<Invitation>>(`/invitations${qs ? `?${qs}` : ''}`);
 }
+
+// ── Measures ─────────────────────────────────────────────────────────────
+
+export interface Measures {
+  answersCompleted: number;
+  answersWithVerifiedCitations: number;
+  conflictsSurfaced: number;
+  conflictsResolved: number;
+  // null means nothing was measurable yet, never 0 — an empty tenant has no mean to report.
+  meanEvidenceDocumentsPerAnswer: number | null;
+  medianAnswerLatencyMs: number | null;
+  p95AnswerLatencyMs: number | null;
+}
+
+export function getMeasures(): Promise<Measures> {
+  return request<Measures>('/measures');
+}

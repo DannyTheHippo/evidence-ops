@@ -15,6 +15,7 @@ import { ConflictsModule } from './features/evidence/conflicts/conflicts.module'
 import { DocumentsModule } from './features/evidence/documents/documents.module';
 import { FactsModule } from './features/evidence/facts/facts.module';
 import { IngestionModule } from './features/evidence/ingestion/ingestion.module';
+import { MeasuresModule } from './features/evidence/measures/measures.module';
 import { QaModule } from './features/evidence/qa/qa.module';
 import { RetrievalModule } from './features/evidence/retrieval/retrieval.module';
 import { SourcesModule } from './features/evidence/sources/sources.module';
@@ -89,6 +90,7 @@ class ThrottlingModule {}
     FactsModule,
     ConflictsModule,
     QaModule,
+    MeasuresModule,
     RetrievalModule,
     ApprovalsModule,
     WorkflowRunsModule,

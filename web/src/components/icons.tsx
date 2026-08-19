@@ -456,3 +456,22 @@ export function IconUserPlus({ size = 16, className }: IconProps) {
     </svg>
   );
 }
+
+export function IconBarChart({ size = 16, className }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      focusable="false"
+      className={className}
+      {...strokeProps}
+    >
+      <path d="M2.5 13.5H13.5" />
+      <path d="M4.5 13.5V9.5" />
+      <path d="M8 13.5V6.5" />
+      <path d="M11.5 13.5V3.5" />
+    </svg>
+  );
+}

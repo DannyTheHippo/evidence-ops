@@ -20,6 +20,7 @@ import HomePage from './pages/HomePage';
 import InvitationsPage from './pages/InvitationsPage';
 import InvitePage from './pages/InvitePage';
 import LoginPage from './pages/LoginPage';
+import MeasuresPage from './pages/MeasuresPage';
 import ResolutionRulesPage from './pages/ResolutionRulesPage';
 import RunsPage from './pages/RunsPage';
 import SearchPage from './pages/SearchPage';
@@ -146,6 +147,14 @@ export default function App() {
         element={
           <RequireAuth>
             <HomePage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/measures"
+        element={
+          <RequireAuth>
+            <MeasuresPage />
           </RequireAuth>
         }
       />
