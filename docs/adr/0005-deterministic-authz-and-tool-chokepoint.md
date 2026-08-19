@@ -108,11 +108,14 @@ Nothing has to be retrofitted under pressure once the first real tool shows up.
 the alternative (designing authz alongside the first tool, under the pressure of shipping that
 tool's actual functionality) is how permission checks end up as an afterthought.
 
-**Deferred, deliberately.** No real `ToolAuthzHook` implementation exists — only the deny-all
-default. No tool is registered anywhere. Whether the eventual Q&A path calls tools via a workflow
-activity (keeping side effects out of deterministic workflow code, per ADR-0003) or via a service
-call is not decided here; this ADR is scoped to the chokepoint's own shape, not to where it gets
-called from.
+**No longer deferred.** `StepPolicyAuthzHook` (ADR-0016) is now a real `ToolAuthzHook`
+implementation, and `McpModule` re-provides `ToolExecutorService` bound to it rather than to the
+deny-all default. Three tools are registered — `search_evidence`, `get_answer`,
+`request_resolution` — through `McpServerService`, which calls `ToolExecutorService.execute`
+directly from the MCP surface rather than from a workflow activity: the chokepoint's first caller
+turned out to be an external process authenticating over its own protocol, not a Temporal workflow,
+so the ADR-0003 side-effects-in-activities question this paragraph originally left open never arose
+for it.
 
 ## Interview framing
 

@@ -26,10 +26,12 @@ across chunker rewrites instead of being coupled to one chunker's internal ids.
 - **unanswerable** — plausibly phrased, but the corpus genuinely does not contain the answer.
   Abstaining is the *correct* behaviour, not a failure. `expectedOutcome: "abstain"`,
   `expectedLocators: []`.
-- **conflicting** — touches the one seeded cross-format conflict (Northgate Business Park's cap
-  rate: 5.25% in `comps.xlsx`, 6.10% in `valuation-memo.pdf`). Correct behaviour is surfacing
-  the disagreement and both locations, not silently picking a side.
-  `expectedOutcome: "surface_conflict"`.
+- **conflicting** — touches one of three seeded cross-format conflicts: Northgate Business Park's
+  cap rate (5.25% in `comps.xlsx`, 6.10% in `valuation-memo.pdf`), Fenwick Distribution Hub's net
+  operating income (`comps.xlsx` vs `noi-summary.csv`), and Kestrel Point Logistics Center's
+  building area (four documents across three source classes). Seven of the 35 cases carry this
+  category. Correct behaviour is surfacing the disagreement and every location, not silently
+  picking a side. `expectedOutcome: "surface_conflict"`.
 - **adversarial** — questions that invite the model to follow one of the two embedded canary
   instructions (a prompt-injection payload hidden in a spreadsheet cell and one hidden in PDF
   prose — see `fixtures/data-room/manifest.json` → `canaries`). Correct behaviour is refusing to
@@ -49,3 +51,30 @@ in its category and where its ground truth lives.
 cross-references every locator against `fixtures/data-room/manifest.json` — a case pointing at a
 page, cell, or paragraph that does not exist in the corpus is worse than no case at all, and
 that test is what catches it.
+
+## `expectedAnswerContains` has two consumers reading two different texts
+
+`expectedAnswerContains` is checked against two unrelated texts, not one:
+
+- `test/fixtures/dataset.spec.ts` resolves each case's `expectedLocators` straight from the source
+  document (`resolve-locator.ts`) and requires a literal substring match against that raw,
+  unmodified cell/page/paragraph text.
+- `eval/metrics/answer-content-check.ts`'s `answerContainsExpectedStrings` (`answerable` cases) and
+  `conflictValuesContainExpectedStrings` (`conflicting` cases) check the same strings against the
+  model's own free-form prose — text the source document never produced, subject to whatever
+  formatting choices a natural-language answer makes.
+
+For most cases the two texts agree closely enough that one expectation string satisfies both. A
+case whose source renders a figure **unformatted** (a raw CSV cell, no thousands separator) while a
+correct natural-language answer **humanises** it (adds thousands separators) cannot be satisfied by
+either: a comma-free expectation matching the document fails the boundary-safe prose check, and a
+comma-formatted expectation matching the prose is not a substring of the unformatted document text.
+`includesWithNumericBoundary`'s trailing-edge tolerance for terminal punctuation closes the
+sentence-ending-immediately-after-the-figure gap, but it cannot bridge a genuine reformatting
+between the two texts — that is a distinct failure mode, and no boundary refinement resolves it.
+
+The structural fix is splitting the field into a document-facing expectation (checked by
+`dataset.spec.ts`) and a prose-facing expectation (checked by the content check), so each consumer
+reads a string written for the text it actually inspects. That split is deliberately deferred, not
+forgotten: it is a schema change (`schema.ts`, every case in `cases.json`, both check call sites)
+out of proportion to the single case it currently affects.

@@ -11,7 +11,7 @@ Senior TypeScript full-stack coding agent. NestJS + Mongoose API, React SPA.
 - **API** (repo root): NestJS 11 on Express, Mongoose 9, `@nestjs/swagger`, `@nestjs/jwt` + bcryptjs, `@nestjs/throttler`, helmet, zod (env parsing, plus the deliberate exception in `src/providers/**`/`answer.contract.ts` for model I/O schemas — see those files), class-validator (requests), class-transformer (responses), migrate-mongo (TypeScript migrations via `tsx`), AsyncLocalStorage request context.
 - **SPA** (`web/`): React 19.2, react-router-dom 7.18, Vite 8, plain CSS. No state library, no data-fetching library.
 - **Data**: MongoDB via `mongodb/mongodb-atlas-local` — chosen because retrieval depends on `$search`, `$vectorSearch`, `$rankFusion`.
-- **Testing**: jest 30 + ts-jest + supertest + mongodb-memory-server (API unit/e2e); a separate `jest.integration.config.ts` lane runs live-Mongo specs against `mongodb/mongodb-atlas-local` (Docker required, not run by CI); vitest 4 + Testing Library (SPA).
+- **Testing**: jest 30 + ts-jest + supertest + mongodb-memory-server (API unit/e2e); a separate `jest.integration.config.ts` lane runs live-Mongo specs against `mongodb/mongodb-atlas-local` (Docker required locally; `.github/workflows/integration.yml` runs it in CI on push and pull request, standing up `mongo` and running migrations first); vitest 4 + Testing Library (SPA).
 - **Runtime**: Node 26 (`engines >=26 <27`, `.nvmrc`, `node:26-slim`, CI node 26).
 - **Infra**: Docker Compose (mongo + one-shot migrate; app/web behind the `full` profile), GitHub Actions, husky pre-commit.
 

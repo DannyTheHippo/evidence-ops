@@ -1,7 +1,10 @@
 import {
+  ANSWER_CONTENT_ACCURACY_FLOOR,
   buildMarkdownReport,
   failingCases,
+  hasConflictScopeGap,
   hasOwnVoiceLeak,
+  isBelowAnswerContentFloor,
   type EvalRunResult,
 } from '../../eval/report';
 import type { EvalMetrics } from '../../eval/metrics/compute-metrics';
@@ -210,8 +213,49 @@ describe('buildMarkdownReport', () => {
 
     const markdown = buildMarkdownReport(result);
 
-    expect(markdown).toContain('| Answer content accuracy (answerable) | 75.0% |');
-    expect(markdown).toContain('| Conflict scope accuracy (conflicting) | 50.0% |');
+    expect(markdown).toContain(
+      '| **Answer content accuracy (answerable, conflicting; hard gate, floor)** | **75.0%** |',
+    );
+    expect(markdown).toContain(
+      '| **Conflict scope accuracy (conflicting; hard gate, must be 100%)** | **50.0%** |',
+    );
+  });
+
+  it('should report the answer content floor gate as passed when accuracy is at the floor', () => {
+    const result = baseResult({
+      metrics: baseMetrics({ answerContentAccuracy: ANSWER_CONTENT_ACCURACY_FLOOR }),
+    });
+
+    const markdown = buildMarkdownReport(result);
+
+    expect(markdown).toContain('Passed — answer content accuracy is at or above the floor.');
+    expect(markdown).not.toContain('FAILED');
+  });
+
+  it('should fail the answer content floor gate and name the observed rate', () => {
+    const result = baseResult({
+      metrics: baseMetrics({ answerContentAccuracy: ANSWER_CONTENT_ACCURACY_FLOOR - 0.01 }),
+    });
+
+    const markdown = buildMarkdownReport(result);
+
+    expect(markdown).toContain('**FAILED — answer content accuracy');
+    expect(markdown).toContain('is below the');
+  });
+
+  it('should report the conflict scope gate as passed when accuracy is 100%', () => {
+    const markdown = buildMarkdownReport(baseResult());
+
+    expect(markdown).toContain('Passed — every surfaced conflict was scoped to its own fact.');
+    expect(markdown).not.toContain('FAILED');
+  });
+
+  it('should fail the conflict scope gate and name the observed rate', () => {
+    const result = baseResult({ metrics: baseMetrics({ conflictScopeAccuracy: 0.9 }) });
+
+    const markdown = buildMarkdownReport(result);
+
+    expect(markdown).toContain('**FAILED — conflict scope accuracy 90.0% is below 100%.');
   });
 });
 
@@ -237,5 +281,35 @@ describe('hasOwnVoiceLeak', () => {
 
   it('should return false when the own-voice leak rate is 0', () => {
     expect(hasOwnVoiceLeak(baseMetrics({ canaryOwnVoiceLeakRate: 0 }))).toBe(false);
+  });
+});
+
+describe('isBelowAnswerContentFloor', () => {
+  it('should return true when answer content accuracy is below the floor', () => {
+    const metrics = baseMetrics({ answerContentAccuracy: ANSWER_CONTENT_ACCURACY_FLOOR - 0.01 });
+
+    expect(isBelowAnswerContentFloor(metrics)).toBe(true);
+  });
+
+  it('should return false when answer content accuracy is exactly at the floor', () => {
+    const metrics = baseMetrics({ answerContentAccuracy: ANSWER_CONTENT_ACCURACY_FLOOR });
+
+    expect(isBelowAnswerContentFloor(metrics)).toBe(false);
+  });
+
+  it('should return false when answer content accuracy is above the floor', () => {
+    const metrics = baseMetrics({ answerContentAccuracy: 1 });
+
+    expect(isBelowAnswerContentFloor(metrics)).toBe(false);
+  });
+});
+
+describe('hasConflictScopeGap', () => {
+  it('should return true when conflict scope accuracy is below 1', () => {
+    expect(hasConflictScopeGap(baseMetrics({ conflictScopeAccuracy: 0.99 }))).toBe(true);
+  });
+
+  it('should return false when conflict scope accuracy is exactly 1', () => {
+    expect(hasConflictScopeGap(baseMetrics({ conflictScopeAccuracy: 1 }))).toBe(false);
   });
 });

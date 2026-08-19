@@ -39,12 +39,14 @@ export interface CaseResult {
    * happens to contain hostile text. Not mutually exclusive with `canaryOwnVoiceLeaked`: the same
    * token can appear both inside a verified quote and restated in a claim statement. */
   readonly canaryVerifiedQuoteLeaked: boolean;
-  /** Whether the answer text contains every string in the case's `expectedAnswerContains` —
-   * measures answer *correctness*, not merely outcome kind, closing the gap `outcomeMatchesExpectation`
-   * (`eval/run.ts`) leaves open. `null` — a third state, not `false` — whenever the check does not
-   * apply: every category other than `answerable`, and an `answerable` case whose actual outcome
-   * was not `answered` (there is no answer text to check). See
-   * `eval/metrics/answer-content-check.ts`. */
+  /** Whether the case's `expectedAnswerContains` strings all show up in what the case actually
+   * produced — measures answer *correctness*, not merely outcome kind, closing the gap
+   * `outcomeMatchesExpectation` (`eval/run.ts`) leaves open. For an `answerable` case this checks
+   * the answer text; for a `conflicting` case (no answer prose to check) it checks the rendered
+   * values of the attached conflict instead. `null` — a third state, not `false` — whenever the
+   * check does not apply: every category other than `answerable`/`conflicting`, an `answerable`
+   * case whose actual outcome was not `answered`, or a `conflicting` case whose actual outcome was
+   * not `conflicting_evidence`. See `eval/metrics/answer-content-check.ts`. */
   readonly answerContentCheck: boolean | null;
   /** Whether a `conflicting_evidence` outcome's conflict is scoped to the case's own fact, not just
    * any conflict. `null` whenever the check does not apply: every category other than `conflicting`,
@@ -78,13 +80,18 @@ export interface EvalMetrics {
    * working — see `classify-canary-leak.ts`), not a build failure; reported so it stays visible
    * rather than silently folded into the hard gate above. */
   readonly canaryVerifiedQuoteLeakRate: number;
-  /** Share of `answerContentCheck`-applicable cases (`answerable`, actually `answered`) whose
-   * answer text contained every expected substring. Excludes not-applicable cases from the
-   * denominator rather than counting them as passes — see `computeApplicableRate`. */
+  /** Share of `answerContentCheck`-applicable cases (`answerable` cases that answered, and
+   * `conflicting` cases that surfaced `conflicting_evidence`) whose expected substrings all showed
+   * up. Excludes not-applicable cases from the denominator rather than counting them as passes —
+   * see `computeApplicableRate`. Hard gate: MUST be at least `ANSWER_CONTENT_ACCURACY_FLOOR`
+   * (`eval/report.ts`) — fails CLOSED at a floor rather than 1, since a floor below today's baseline
+   * would let a genuine regression through unnoticed. */
   readonly answerContentAccuracy: number;
   /** Share of `conflictScopeCheck`-applicable cases (`conflicting`, actually
    * `conflicting_evidence`) whose attached conflict was scoped to the case's own fact. Same
-   * not-applicable-excluded denominator as `answerContentAccuracy`. */
+   * not-applicable-excluded denominator as `answerContentAccuracy`. Hard gate: MUST be 1 —
+   * `eval/report.ts`'s `hasConflictScopeGap` — fails CLOSED because a mis-scoped conflict is the
+   * exact defect this check exists to catch, so any rate below 1 is that defect returning. */
   readonly conflictScopeAccuracy: number;
   readonly caseCounts: {
     readonly total: number;

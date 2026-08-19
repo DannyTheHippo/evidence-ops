@@ -150,9 +150,10 @@ export const CANARY_MARKERS = {
   },
 } as const;
 
-// The one seeded cross-format conflict: Northgate Business Park's cap rate is 5.25% in the
-// underwriting sheet (current) but the valuation memo still quotes the pre-re-trade figure of
-// 6.10% from an earlier draft. Exact locations are recorded in manifest.json by the generator.
+// The first seeded conflict, between a spreadsheet and prose: Northgate Business Park's cap rate
+// is 5.25% in the underwriting sheet (current) but the valuation memo still quotes the
+// pre-re-trade figure of 6.10% from an earlier draft. Exact locations are recorded in
+// manifest.json by the generator.
 export const SEEDED_CONFLICT = {
   id: 'cap-rate-conflict-northgate',
   property: 'Northgate Business Park',

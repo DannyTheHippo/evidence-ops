@@ -1,4 +1,4 @@
-# ADR-0018 — Metrics and alerting shape: five signals, no dashboard, no pager
+# ADR-0018 — Metrics and alerting shape: six signals, no dashboard, no pager
 
 - **Status:** Accepted
 - **Date:** 2026-08-17
@@ -23,14 +23,14 @@ difference. A trace of the one request that hit any of these looks unremarkable 
 distinguishes a normal rate of grounding rejections from a model quietly losing its grounding is the
 *rate*, not any single span. That is a metrics question, and Jaeger — already wired, per-request by
 design — is the wrong tool to answer it. This ADR is the decision to scrape the instruments that
-already exist and alert on the five that turn a threshold crossing into something a human sees
+already exist and alert on the six that turn a threshold crossing into something a human sees
 without first having a reason to go looking.
 
 ## Decision
 
 ### Metrics close the gap tracing structurally cannot
 
-Every one of these five failure modes is defined by its aggregate behavior over a window, not by
+Every one of these six failure modes is defined by its aggregate behavior over a window, not by
 any property a single request carries. One dropped claim is the grounding gate doing exactly what
 ADR-0004 built it to do; a sustained rise in dropped claims is the model quietly losing its
 grounding. One empty retrieval is a genuinely unanswerable question; a sustained rise is a broken
@@ -41,20 +41,23 @@ that notion on top of a trace backend would mean reimplementing exactly the coun
 `domain-metrics.ts` already exports. Metrics are not a replacement for the tracing this codebase
 already has — they answer a question tracing cannot, not a question tracing answers slowly.
 
-### Five signals, each tied to something already emitted
+### Six signals, each tied to something already emitted
 
-`observability/prometheus/alert-rules.yml` defines exactly five rules, deliberately not one more:
+`observability/prometheus/alert-rules.yml` defines exactly six rules, deliberately not one more:
 
 - **WorkerDown**, from Prometheus's own `up{job="evidence-ops-worker"}` series. This is the only
   alert that depends on no application code emitting anything — it fires the moment the scrape
   target itself goes away — which also makes it the one alert provably testable without driving the
   application into a failure state: stop the worker container, watch it fire.
+- **McpDown**, from the same `up{job="evidence-ops-mcp"}` mechanism as `WorkerDown` above. Every
+  MCP client integration is dark while this holds, but the SPA and REST surfaces are unaffected —
+  which is why it carries `severity: warning` rather than `critical`.
 - **WorkflowFailures**, from `evidence_ops_workflow_run_failed_total`
   (`workflowRunFailedCounter`). A durable pipeline recording its own run as failed is already an
   application-level judgment that something broke; this alert just makes sure a human hears about
   it without polling Temporal's UI.
 - **GroundingRejectSpike**, from `evidence_ops_grounding_claims_dropped_total`
-  (`groundingClaimsDroppedCounter`). Named first among the five silent failures in the task this ADR
+  (`groundingClaimsDroppedCounter`). Named first among the six silent failures in the task this ADR
   responds to, and for good reason: a claim the grounding gate drops never reaches the caller as an
   error, it just makes the answer shorter. This is the alert that catches a model quietly losing its
   grounding — the threat model's own words for the failure mode nothing previously watched for.
@@ -107,7 +110,7 @@ a monitoring stack, so it is deliberately absent from the default, profile-less 
 ## Deliberately out of scope
 
 Grafana, Alertmanager, and paging are not in this change, and the omission is the point, not a gap to
-close next. This is a pilot's minimum viable alerting — a way for the five silent failures above to
+close next. This is a pilot's minimum viable alerting — a way for the six silent failures above to
 become visible to whoever is watching Prometheus's own alert list — not an SRE stack. Each of the
 three has a real cost this pilot has no use for yet:
 
@@ -125,7 +128,7 @@ three has a real cost this pilot has no use for yet:
 - **Paging** assumes an on-call rotation this pilot does not have. A page with nobody carrying the
   pager is worse than a page nobody sent: it trains whoever eventually reads the tool that alerts
   don't mean anything, which is the exact failure mode the task brief's own words warn about — "a
-  threshold nobody can justify gets muted, and a muted alert is worse than none." The five thresholds
+  threshold nobody can justify gets muted, and a muted alert is worse than none." The six thresholds
   in `alert-rules.yml` are sized to be watchable by a person checking Prometheus's alert list
   directly, not to page anyone.
 
@@ -136,13 +139,14 @@ them now, ahead of that need, is exactly the over-engineering this cycle exists 
 ## Consequences
 
 **Good.** Every failure the threat model's § 6 called out as invisible without someone already
-looking now has a rule that surfaces it without that precondition — worker liveness provably (kill
-the container, watch it fire), the other four by the same instruments the application already emits.
+looking now has a rule that surfaces it without that precondition — worker and MCP liveness provably
+(kill either container, watch it fire), the other four by the same instruments the application
+already emits.
 The scrape config and alert rules are both plain committed text, reviewable in a diff like any other
 change, not state accumulated by hand in a dashboard UI nobody exported.
 
 **Costs.** A fourth long-running container in the `full`/`observability` profiles, with its own
-memory budget to track alongside the seven services `docker-compose.yml` already runs. Five
+memory budget to track alongside the seven services `docker-compose.yml` already runs. Six
 thresholds chosen without production traffic to tune them against — each is defensible for a pilot,
 none is validated by real incident data yet, and a threshold that turns out wrong in either direction
 (too twitchy, muted; too loose, silent) is a config edit away from correct once real signal exists to
@@ -150,9 +154,9 @@ correct it against. A subtler cost: an OTel counter emits no sample at all until
 call, so `WorkflowFailures`/`GroundingRejectSpike`/`EmptyRetrievals`/`ApprovalTimeouts` are absent
 from `/metrics` in a freshly started deployment, and `rate()`/`increase()` cannot see a jump from
 "series does not exist" to its first value — only a *second* increment inside the same window is
-guaranteed to fire. `WorkerDown` does not share this gap, because `up` is Prometheus's own series and
-exists the moment a target is scraped at all, which is part of why it is the rule this cycle proves
-end to end rather than one of the four counter-backed rules.
+guaranteed to fire. `WorkerDown` and `McpDown` do not share this gap, because `up` is Prometheus's
+own series and exists the moment a target is scraped at all, which is part of why `WorkerDown` is the
+rule this cycle proves end to end rather than one of the four counter-backed rules.
 
 **Deferred, deliberately.** Two residual risks from threat-model.md § 6 are unchanged by this ADR:
 `OTEL_CAPTURE_MODEL_CONTENT` remains unwatched (it is a boolean flag, not a rate, and does not fit
@@ -163,7 +167,7 @@ claims to close.
 
 ## Interview framing
 
-> The reason this is five rules and not a dashboard: every one of these failures produces a plausible
+> The reason this is six rules and not a dashboard: every one of these failures produces a plausible
 > response and no error, which means the only thing that turns it into an event a human sees is an
 > alert — a trace or a log line just sits there until someone already suspects a problem goes looking
 > for it, and the threat model already said as much before I wrote a line of this. The one I'd defend

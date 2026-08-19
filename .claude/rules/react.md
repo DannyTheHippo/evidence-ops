@@ -8,7 +8,7 @@ Applies to the SPA under `web/`. The NestJS API under `src/` follows `nestjs.md`
 
 Stack: React 19.2, react-router-dom 7.18, vite 8, vitest 4.
 
-Before adding a component, read `web/src/pages/LoginPage.tsx` and `web/src/App.tsx` and match them exactly. `web/src/pages/` holds fifteen pages, each carrying a colocated `*.test.tsx`, so "match the sibling" is always a short read; inventing structure ahead of need is the main failure mode here.
+Before adding a component, read `web/src/pages/LoginPage.tsx` and `web/src/App.tsx` and match them exactly. `web/src/pages/` holds twenty pages, each carrying a colocated `*.test.tsx`, so "match the sibling" is always a short read; inventing structure ahead of need is the main failure mode here.
 
 # React SPA Patterns
 

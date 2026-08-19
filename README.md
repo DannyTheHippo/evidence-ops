@@ -299,10 +299,11 @@ below, which is a different failure mode with no other fix.
 
 There is one compose file, and the split between it and `.env` is deliberate:
 
-- **`.env` holds five values**: four credentials — `JWT_SECRET`, `ANTHROPIC_API_KEY`,
-  `OPENAI_API_KEY`, `VOYAGE_API_KEY` — and the one spend ceiling, `MODEL_SPEND_DAILY_LIMIT_USD`.
-  `api`, `worker` and `mcp` load it with `required: false`, so a missing file does not fail `up`.
-  Keeping it this short is what makes it auditable and safe to talk about.
+- **`.env` holds six values**: four credentials — `JWT_SECRET`, `ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `VOYAGE_API_KEY` — one provider switch, `MODEL_PROVIDER`, and the one spend
+  ceiling, `MODEL_SPEND_DAILY_LIMIT_USD`. `api`, `worker` and `mcp` load it with `required: false`,
+  so a missing file does not fail `up`. Keeping it this short is what makes it auditable and safe to
+  talk about.
 - **Every non-secret knob is declared in `docker-compose.yml`**, in the top-level
   `x-app-environment` anchor merged into `api`, `worker` and `mcp`. Worker-only knobs — Voyage
   settings, extraction concurrency, source inbox and sync interval — are added on `worker`, because
@@ -519,8 +520,8 @@ start a workflow while Temporal is down, that process keeps failing until you re
 the API is the fix.
 
 **`npm run eval` requires a recorded cache, and fails loudly on a miss.** Default mode is
-replay-only: no live API calls, zero cost, byte-stable. The committed cache holds 473 model entries
-and 214 embedding entries. `eval/dataset/cases.json` holds 35 cases; the newest run committed under
+replay-only: no live API calls, zero cost, byte-stable. The committed cache holds 478 model entries
+and 216 embedding entries. `eval/dataset/cases.json` holds 35 cases; the newest run committed under
 `eval/results/` is a 32-case replay at `Cache mode: replay` with 0 failing cases, so a full replay
 of the dataset as it stands is not among the committed results — expect to re-record before
 trusting a run over the current dataset. A request whose key

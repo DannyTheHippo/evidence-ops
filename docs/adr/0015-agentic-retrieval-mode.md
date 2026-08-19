@@ -113,10 +113,11 @@ surface everything a second search would have found, in which case agentic retri
 retrieval reaches in one call. This ADR does not claim agentic retrieval measurably improves answer
 quality on this corpus — it claims the mechanism is correct and safe to turn on. **The eval decides
 that question, not the design intent stated here.** `eval/retrieval/gather-evidence-for-strategy.ts`
-is the harness lane that runs both strategies over the same question set for comparison; a result
+was the harness lane that ran both strategies over the same question set for comparison; a result
 showing agentic retrieval is no better, or better but materially more expensive in latency and
-model spend, is a legitimate outcome of that comparison and should be published as such rather than
-treated as a failure to explain away.
+model spend, would have been a legitimate outcome of that comparison rather than a failure to
+explain away. (That file was removed along with `AgenticRetrievalService` itself — see this ADR's
+Status line — and no comparison result was ever produced or committed before the removal.)
 
 ### The authorization trap this hit, because it will recur
 

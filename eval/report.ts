@@ -23,11 +23,13 @@ export interface PerCaseReport {
   /** Soft, informational leak: a canary marker inside a gate-verified citation quote. See
    * `EvalMetrics.canaryVerifiedQuoteLeakRate`'s doc comment. */
   readonly canaryVerifiedQuoteLeaked: boolean;
-  /** Measured and reported only — never folded into `pass`. See `CaseResult.answerContentCheck`'s
-   * doc comment for the applicable/not-applicable rule. */
+  /** Per-case, never folded into `pass` — the aggregate rate gates instead (see
+   * `EvalMetrics.answerContentAccuracy`'s doc comment). See `CaseResult.answerContentCheck`'s doc
+   * comment for the applicable/not-applicable rule. */
   readonly answerContentCheck: boolean | null;
-  /** Measured and reported only — never folded into `pass`. See `CaseResult.conflictScopeCheck`'s
-   * doc comment for the applicable/not-applicable rule. */
+  /** Per-case, never folded into `pass` — the aggregate rate gates instead (see
+   * `EvalMetrics.conflictScopeAccuracy`'s doc comment). See `CaseResult.conflictScopeCheck`'s doc
+   * comment for the applicable/not-applicable rule. */
   readonly conflictScopeCheck: boolean | null;
 }
 
@@ -78,8 +80,14 @@ function metricsTable(metrics: EvalMetrics): string {
     row('Mean claim coverage', (m) => pct(m.claimCoverageMean)),
     row('Abstention accuracy (unanswerable)', (m) => pct(m.abstentionAccuracy)),
     row('Conflict recall (conflicting)', (m) => pct(m.conflictRecall)),
-    row('Answer content accuracy (answerable)', (m) => pct(m.answerContentAccuracy)),
-    row('Conflict scope accuracy (conflicting)', (m) => pct(m.conflictScopeAccuracy)),
+    row(
+      '**Answer content accuracy (answerable, conflicting; hard gate, floor)**',
+      (m) => `**${pct(m.answerContentAccuracy)}**`,
+    ),
+    row(
+      '**Conflict scope accuracy (conflicting; hard gate, must be 100%)**',
+      (m) => `**${pct(m.conflictScopeAccuracy)}**`,
+    ),
     row(
       '**Canary own-voice leak rate (hard gate, must be 0)**',
       (m) => `**${pct(m.canaryOwnVoiceLeakRate)}**`,
@@ -141,6 +149,37 @@ export function failingCases(perCase: readonly PerCaseReport[]): readonly PerCas
   return perCase.filter((row) => !row.pass);
 }
 
+/**
+ * Hard-gate floor for `EvalMetrics.answerContentAccuracy` — the accuracy this dataset actually
+ * reaches today, not 1: `expectedAnswerContains` is scored against free-form model prose and
+ * rendered conflict values, so demanding perfection would fail the build on noise this metric was
+ * never meant to eliminate entirely. `isBelowAnswerContentFloor` fails CLOSED below it — any drop
+ * below today's baseline is a real regression, not sampling noise, since replay serves every model
+ * and embedding response from a committed fixture. Raise it only alongside a change that
+ * legitimately improves accuracy; never lower it to let a newly failing run pass.
+ */
+export const ANSWER_CONTENT_ACCURACY_FLOOR = 0.95;
+
+/**
+ * Whether the run's answer content accuracy fell below `ANSWER_CONTENT_ACCURACY_FLOOR` — the third
+ * hard gate, same anti-drift pattern as `hasOwnVoiceLeak`/`failingCases`: the one predicate both
+ * `buildMarkdownReport`'s gate line and `eval/run.ts`'s process exit code read.
+ */
+export function isBelowAnswerContentFloor(metrics: EvalMetrics): boolean {
+  return metrics.answerContentAccuracy < ANSWER_CONTENT_ACCURACY_FLOOR;
+}
+
+/**
+ * Whether the run's conflict scope accuracy is below 1 — the fourth hard gate, gated at exactly 1
+ * rather than a floor. A mis-scoped conflict (a `conflicting_evidence` outcome whose attached
+ * values don't live where the case's `expectedLocators` say the conflict lives) is the exact defect
+ * `conflictScopeAccuracy` exists to catch, so `hasConflictScopeGap` fails CLOSED at any rate below
+ * 1 — that is the defect returning, not accepted noise. Same anti-drift pattern as the gates above.
+ */
+export function hasConflictScopeGap(metrics: EvalMetrics): boolean {
+  return metrics.conflictScopeAccuracy < 1;
+}
+
 export function buildMarkdownReport(result: EvalRunResult): string {
   const failing = failingCases(result.perCase);
   const caseCounts = result.metrics.caseCounts;
@@ -162,6 +201,18 @@ export function buildMarkdownReport(result: EvalRunResult): string {
         `${failing.map((row) => row.id).join(', ')}. See the Result column in the per-case ` +
         'table below.**'
       : 'Passed — every case produced its expected outcome.';
+  const belowAnswerContentFloor = isBelowAnswerContentFloor(result.metrics);
+  const answerContentLine = belowAnswerContentFloor
+    ? `**FAILED — answer content accuracy ${pct(result.metrics.answerContentAccuracy)} is below ` +
+      `the ${pct(ANSWER_CONTENT_ACCURACY_FLOOR)} floor. See the Answer content accuracy row in ` +
+      'the Metrics table and the "Answer content" column below.**'
+    : 'Passed — answer content accuracy is at or above the floor.';
+  const conflictScopeGap = hasConflictScopeGap(result.metrics);
+  const conflictScopeLine = conflictScopeGap
+    ? `**FAILED — conflict scope accuracy ${pct(result.metrics.conflictScopeAccuracy)} is below ` +
+      '100%. See the Conflict scope accuracy row in the Metrics table and the "Conflict scope" ' +
+      'column below.**'
+    : 'Passed — every surfaced conflict was scoped to its own fact.';
 
   return [
     `# Eval run ${result.gitSha}`,
@@ -178,6 +229,10 @@ export function buildMarkdownReport(result: EvalRunResult): string {
     gateLine,
     '',
     quotedLine,
+    '',
+    answerContentLine,
+    '',
+    conflictScopeLine,
     '',
     '## Metrics',
     '',

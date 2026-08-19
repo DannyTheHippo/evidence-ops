@@ -32,8 +32,8 @@ instead means a client's AI tooling inherits the same trust guarantee a human us
 ### `ToolExecutorService` stays the single validation and authz authority
 
 `McpServerService.buildServer` routes every `tools/call` request through the same
-`ToolExecutorService.execute` chokepoint (ADR-0005) that `AgenticRetrievalService` uses
-(ADR-0015) — `toCallToolResult` maps a chokepoint refusal onto the MCP wire shape (`isError: true`,
+`ToolExecutorService.execute` chokepoint (ADR-0005) that `AgenticRetrievalService` (ADR-0015,
+since removed) originally proved out — `toCallToolResult` maps a chokepoint refusal onto the MCP wire shape (`isError: true`,
 the refusal's own reason and detail as the text content) rather than a thrown protocol error, so a
 caller gets an ordinary inspectable tool result either way. Nothing in `src/mcp/**` re-implements
 argument validation, step allowlisting, or an authorization decision — `mcp-tools.ts` declares
@@ -143,12 +143,15 @@ propose an action a human still has to authorize" from becoming "AI decides what
 
 ### The re-provide pattern, repeated
 
-`McpModule` hits the identical DI trap ADR-0015 documents for `QaModule`: `ToolExecutorService`'s
-constructor dependency (`TOOL_AUTHZ_HOOK`) is resolved in whichever module declares the provider, so
-importing `QaModule` for its `EvidenceRetrievalService`/`QaService` exports does not also hand this
-module a `ToolExecutorService` bound to a real policy — it would hand back `QaModule`'s own instance,
-already registered with that module's own tools, not this surface's `get_answer`/
-`request_resolution`. `McpModule` declares both `ToolExecutorService` and `{ provide:
+`McpModule` needs its own `ToolExecutorService` instance for the same structural reason ADR-0015
+first ran into: `ToolExecutorService`'s constructor dependency (`TOOL_AUTHZ_HOOK`) is resolved in
+whichever module declares the provider, so importing a module that merely uses the chokepoint does
+not hand back an instance bound to a different, real policy — importing `AuthzModule` alone would
+hand back its own default-deny instance. `QaModule` does not carry this pattern today:
+`AgenticRetrievalService`, the caller that originally forced it to re-provide the chokepoint, was
+removed along with agentic retrieval (ADR-0015's Status line), and `QaModule` re-provides nothing
+authz-related now — so `McpModule` avoids the same structural trap on its own account, not a live
+one another module currently exhibits. `McpModule` declares both `ToolExecutorService` and `{ provide:
 TOOL_AUTHZ_HOOK, useClass: StepPolicyAuthzHook }` directly in its own `providers`, giving this
 process a second, independent `ToolExecutorService` instance with its own tool registry
 (`search_evidence`, `get_answer`, `request_resolution`), constructed once in `McpServerService`'s

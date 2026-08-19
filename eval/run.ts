@@ -11,7 +11,10 @@ import casesJson from './dataset/cases.json';
 import { EvalDatasetSchema, type EvalCase } from './dataset/schema';
 import { ingestFixtures, type IngestedFixture } from './ingest-fixtures';
 import { loadExistingCorpus } from './load-existing-corpus';
-import { answerContainsExpectedStrings } from './metrics/answer-content-check';
+import {
+  answerContainsExpectedStrings,
+  conflictValuesContainExpectedStrings,
+} from './metrics/answer-content-check';
 import { classifyCanaryLeak } from './metrics/classify-canary-leak';
 import { computeMetrics, type CaseOutcomeKind, type CaseResult } from './metrics/compute-metrics';
 import { conflictValuesOverlapExpectedLocators } from './metrics/conflict-scope-check';
@@ -26,9 +29,12 @@ import {
 import { assertAtlasSearchSupported } from '../src/providers/retrieval/atlas-search-capability.util';
 import { assertRequiredSearchIndexesExist } from '../src/providers/retrieval/required-search-indexes.util';
 import {
+  ANSWER_CONTENT_ACCURACY_FLOOR,
   buildMarkdownReport,
   failingCases,
+  hasConflictScopeGap,
   hasOwnVoiceLeak,
+  isBelowAnswerContentFloor,
   type EvalRunResult,
   type PerCaseReport,
   type RetrievalModeSummary,
@@ -354,11 +360,13 @@ async function main(): Promise<void> {
 
       const recallHitRank = retrievedOverlaps.length > 0 ? retrievedOverlaps.indexOf(true) + 1 : 0;
 
-      // Two measured-only checks (never folded into `pass` — see the D2/P2 note on
-      // `outcomeMatchesExpectation` below): `answerContentCheck` scores answer *correctness* for
-      // `answerable` cases, and `conflictScopeCheck` scores whether a surfaced conflict is the
-      // case's own fact rather than any conflict at all. Both are `null` — a third state, not
-      // `false` — outside their applicable category/outcome combination; see
+      // Two measured checks (see `outcomeMatchesExpectation`'s doc comment and the hard-gate block
+      // near the end of `main` for how each ends up gated): `answerContentCheck` scores answer
+      // *correctness* — the answer text for an `answerable` case, or the attached values for a
+      // `conflicting` case's `conflicting_evidence` outcome (there is no answer prose to check
+      // there) — and `conflictScopeCheck` scores whether a surfaced conflict is the case's own fact
+      // rather than any conflict at all. Both are `null` — a third state, not `false` — outside
+      // their applicable category/outcome combination; see
       // `CaseResult.answerContentCheck`/`conflictScopeCheck`'s doc comments.
       const answerContentCheck: boolean | null =
         evalCase.category === 'answerable' && actualOutcomeKind === 'answered'
@@ -366,7 +374,13 @@ async function main(): Promise<void> {
               groundingResult.claims.map((claim) => claim.statement).join(' '),
               evalCase.expectedAnswerContains ?? [],
             )
-          : null;
+          : evalCase.category === 'conflicting' &&
+              groundingResult.outcome.kind === 'conflicting_evidence'
+            ? conflictValuesContainExpectedStrings(
+                groundingResult.outcome.values,
+                evalCase.expectedAnswerContains ?? [],
+              )
+            : null;
 
       // Resolves against `corpusChunkById` (every chunk under the eval tenant), not
       // `chunkByChunkId` (this question's `retrievedChunks`) — this scores whether every side of
@@ -407,8 +421,11 @@ async function main(): Promise<void> {
         actualOutcomeKind,
         // Only the hard (own-voice) leak fails a case — a verified-quote leak is accepted,
         // measured behaviour (see `EvalMetrics.canaryVerifiedQuoteLeakRate`'s doc comment).
-        // `answerContentCheck`/`conflictScopeCheck` are measured and reported only, never folded
-        // in here — a later phase gates on them once the baseline is known.
+        // `answerContentCheck`/`conflictScopeCheck` are never folded into this per-case `pass` —
+        // they gate at the aggregate rate instead (`answerContentAccuracy`/`conflictScopeAccuracy`,
+        // checked against `ANSWER_CONTENT_ACCURACY_FLOOR`/`hasConflictScopeGap` near the end of
+        // `main`), so one wrong figure in an otherwise-correct answer doesn't flip a case's outcome
+        // gate.
         pass:
           outcomeMatchesExpectation(
             evalCase.category,
@@ -541,6 +558,29 @@ async function main(): Promise<void> {
       console.error(
         `eval: FAILED — ${failing.length} case(s) did not produce their expected outcome ` +
           `(hard gate): ${failing.map((row) => row.id).join(', ')}`,
+      );
+      process.exitCode = 1;
+    }
+
+    // The third hard gate, on the same `./report` predicate the markdown gate line reads. Gated at
+    // a floor (`ANSWER_CONTENT_ACCURACY_FLOOR`), not 1 — `expectedAnswerContains` is scored against
+    // free-form model prose and rendered conflict values, so a floor at the dataset's own baseline
+    // catches a regression without demanding perfection this metric was never meant to reach.
+    if (isBelowAnswerContentFloor(metrics)) {
+      console.error(
+        `eval: FAILED — answer content accuracy ${metrics.answerContentAccuracy} is below the ` +
+          `${ANSWER_CONTENT_ACCURACY_FLOOR} floor (hard gate)`,
+      );
+      process.exitCode = 1;
+    }
+
+    // The fourth hard gate, on the same `./report` predicate the markdown gate line reads. Gated at
+    // exactly 1 — a mis-scoped conflict is the exact defect `conflictScopeAccuracy` exists to
+    // catch, so any rate below 1 fails the run rather than being averaged away.
+    if (hasConflictScopeGap(metrics)) {
+      console.error(
+        `eval: FAILED — conflict scope accuracy ${metrics.conflictScopeAccuracy} is below 1 ` +
+          `(hard gate)`,
       );
       process.exitCode = 1;
     }

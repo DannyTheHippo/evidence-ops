@@ -22,15 +22,15 @@ lives: `$search` + `$vectorSearch` fused by `$rankFusion`
 ```mermaid
 flowchart TB
   subgraph SPA["SPA — web/"]
-    Pages["LoginPage / DataRoomPage / SourcesPage / AskPage /<br/>ConflictsPage / ApprovalsPage / ApiKeysPage / AuditEventsPage"]
+    Pages["LoginPage / DataRoomPage / SourcesPage / AskPage /<br/>ConflictsPage / ApprovalsPage / ApiKeysPage / AuditEventsPage /<br/>MeasuresPage / CanonicalEntitiesPage"]
     Client["api/client.ts — relative base '/api/v1',<br/>HttpOnly session cookie, no client-held credential"]
     Pages --> Client
   end
 
   subgraph API["API process — src/main.ts"]
     Guards["JwtAuthGuard (global APP_GUARD, deny-by-default)<br/>ThrottlerGuard (global APP_GUARD)<br/>ValidationPipe (whitelist + forbidNonWhitelisted)"]
-    Ctrls["DocumentsController / SourcesController / QaController /<br/>ConflictsController / ApiKeysController / AuthController"]
-    ApiSvc["DocumentsService · SourcesService · QaService ·<br/>ConflictsService · ApiKeysService"]
+    Ctrls["DocumentsController / SourcesController / QaController /<br/>ConflictsController / ApiKeysController / AuthController /<br/>MeasuresController / CanonicalEntitiesController"]
+    ApiSvc["DocumentsService · SourcesService · QaService ·<br/>ConflictsService · ApiKeysService · MeasuresService · CanonicalEntityService"]
     Guards --> Ctrls --> ApiSvc
   end
 
@@ -345,9 +345,9 @@ name, a task class). Never a tenant id, a document id, or any text a user or mod
 metrics backend aggregates by attribute value, so a free-text attribute would be both a cardinality
 explosion and a content leak into a system this codebase does not otherwise send documents to.
 
-`observability/prometheus/alert-rules.yml` defines five rules over those series plus Prometheus's
-own `up`. `WorkerDown` depends on no application code emitting anything, which makes it the one rule
-provably testable by stopping a container. `GroundingRejectSpike` compares a short window against
+`observability/prometheus/alert-rules.yml` defines six rules over those series plus Prometheus's
+own `up`. `WorkerDown` and `McpDown` depend on no application code emitting anything, which makes
+them the two rules provably testable by stopping a container. `GroundingRejectSpike` compares a short window against
 the metric's own trailing baseline rather than an absolute count, because a fixed threshold at pilot
 volume either fires on a quiet day's single rejection or misses a spike on a busy one. Every alert
 annotation names a concrete first step. Note the exporter's naming: `.` becomes `_` and monotonic
@@ -371,4 +371,4 @@ counters gain a `_total` suffix, so `evidence_ops.grounding.claims_dropped` is q
 - `docs/adr/0016-mcp-server-surface.md` — the MCP surface, its two steps, and why approvals are not
   reachable from it.
 - `docs/adr/0017-survivorship-policy.md` — the deterministic rules that propose a conflict winner.
-- `docs/adr/0018-metrics-and-alerting-shape.md` — the five signals and why there are not more.
+- `docs/adr/0018-metrics-and-alerting-shape.md` — the six signals and why there are not more.
