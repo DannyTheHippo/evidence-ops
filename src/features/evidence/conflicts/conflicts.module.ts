@@ -25,6 +25,7 @@ import { FactsModule } from '../facts/facts.module';
 import { WorkflowRunsModule } from '../workflow-runs/workflow-runs.module';
 import { ConflictsController } from './conflicts.controller';
 import { ConflictsService } from './conflicts.service';
+import { ResolutionBacktestService } from './resolution-backtest.service';
 
 // `ProvidersModule` import is for `WORKFLOW_ENGINE`, `WorkflowRunsModule` for
 // `WorkflowRunsService` — both `ConflictsService.requestResolution` needs (see its own doc
@@ -49,7 +50,7 @@ import { ConflictsService } from './conflicts.service';
     WorkflowRunsModule,
   ],
   controllers: [ConflictsController],
-  providers: [ConflictsService],
+  providers: [ConflictsService, ResolutionBacktestService],
   exports: [ConflictsService],
 })
 export class ConflictsModule {}

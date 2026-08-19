@@ -21,11 +21,16 @@ import { ConflictsService } from './conflicts.service';
 import { ListConflictsRequestDto } from './dtos/request/list-conflicts.request.dto';
 import { RequestConflictResolutionRequestDto } from './dtos/request/request-conflict-resolution.request.dto';
 import { ConflictResponseDto } from './dtos/response/conflict.response.dto';
+import { ResolutionBacktestResponseDto } from './dtos/response/resolution-backtest.response.dto';
+import { ResolutionBacktestService } from './resolution-backtest.service';
 
 @Controller('conflicts')
 @ApiTags('conflicts')
 export class ConflictsController {
-  constructor(private readonly conflictsService: ConflictsService) {}
+  constructor(
+    private readonly conflictsService: ConflictsService,
+    private readonly resolutionBacktestService: ResolutionBacktestService,
+  ) {}
 
   @Get()
   @Version('1')
@@ -44,6 +49,23 @@ export class ConflictsController {
     const { docs, count } = await this.conflictsService.list(query, user.userId, user.tenantId);
 
     return { docs: docs.map((doc) => toResponseDto(ConflictResponseDto, doc)), count };
+  }
+
+  @Get('resolution-backtest')
+  @Version('1')
+  @HttpCode(HttpStatus.OK)
+  @ApiResponse(conflictsApiExamples.resolutionBacktest)
+  async resolutionBacktest(
+    @CurrentUser() user: AuthenticatedRequest['user'],
+  ): Promise<ResolutionBacktestResponseDto> {
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    return toResponseDto(
+      ResolutionBacktestResponseDto,
+      await this.resolutionBacktestService.run(user.tenantId),
+    );
   }
 
   @Post(':id/resolution-requests')

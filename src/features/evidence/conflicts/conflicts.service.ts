@@ -51,6 +51,7 @@ import {
   ConflictResolutionAlreadyPendingException,
   InvalidConflictResolutionException,
 } from './exceptions/conflicts.exception';
+import { loadSourceClassByFactId } from './load-source-class-by-fact-id';
 import {
   resolveConflictPolicy,
   type ConflictingFactForResolution,
@@ -225,7 +226,12 @@ export class ConflictsService {
       ].map((id) => new Types.ObjectId(id));
       const facts = await this.extractedFactModel.find({ _id: { $in: everyFactId }, tenantId });
       factById = new Map(facts.map((fact) => [fact._id.toString(), fact]));
-      sourceClassByFactId = await this.loadSourceClassByFactId(facts, tenantId);
+      sourceClassByFactId = await loadSourceClassByFactId(
+        this.documentVersionModel,
+        this.documentModel,
+        facts,
+        tenantId,
+      );
       policies = await this.metricPoliciesService.resolveForTenant(tenantId);
     }
 
@@ -658,63 +664,6 @@ export class ConflictsService {
   }
 
   /**
-   * Batch-resolves each fact's document `sourceClass` via its `documentVersionId` — two `$in`
-   * queries total (`DocumentVersion` then `Document`), never one per fact, so a page of conflicts
-   * costs the same two extra round-trips regardless of how many facts it touches. Every query is
-   * scoped to `tenantId` explicitly, not left to `tenantScopePlugin`'s ALS backstop alone: the
-   * plugin is a backstop by its own doc comment, not the primary control, and this method's
-   * result flows into a response payload — the same reasoning `list`'s own explicit-tenantId
-   * queries apply to theirs.
-   *
-   * Fails OPEN to `'unclassified'` when a fact's `documentVersionId` or that version's `documentId`
-   * no longer resolves — this is enrichment for a proposal a human still has to approve, not the
-   * factIds/values integrity check `toConflictDto` applies to its own data; a fact's document
-   * missing is exactly what `'unclassified'` already means (`Document.sourceClass`'s own doc
-   * comment: "no authority information"), not a data-integrity fault worth aborting the read for.
-   */
-  private async loadSourceClassByFactId(
-    facts: readonly Pick<ExtractedFactDocument, '_id' | 'documentVersionId'>[],
-    tenantId: string,
-  ): Promise<Map<string, DocumentSourceClass>> {
-    if (facts.length === 0) {
-      return new Map();
-    }
-
-    const versionIds = [...new Set(facts.map((fact) => fact.documentVersionId.toString()))].map(
-      (id) => new Types.ObjectId(id),
-    );
-    const versions = await this.documentVersionModel.find(
-      { _id: { $in: versionIds }, tenantId },
-      { documentId: 1 },
-    );
-    const documentIdByVersionId = new Map(
-      versions.map((version) => [version._id.toString(), version.documentId.toString()]),
-    );
-
-    const documentIds = [...new Set(versions.map((version) => version.documentId.toString()))].map(
-      (id) => new Types.ObjectId(id),
-    );
-    const documents =
-      documentIds.length === 0
-        ? []
-        : await this.documentModel.find(
-            { _id: { $in: documentIds }, tenantId },
-            { sourceClass: 1 },
-          );
-    const sourceClassByDocumentId = new Map(
-      documents.map((document) => [document._id.toString(), document.sourceClass]),
-    );
-
-    const sourceClassByFactId = new Map<string, DocumentSourceClass>();
-    for (const fact of facts) {
-      const documentId = documentIdByVersionId.get(fact.documentVersionId.toString());
-      const sourceClass = documentId ? sourceClassByDocumentId.get(documentId) : undefined;
-      sourceClassByFactId.set(fact._id.toString(), sourceClass ?? 'unclassified');
-    }
-    return sourceClassByFactId;
-  }
-
-  /**
    * Pure given its inputs: looks up `metricId` in the tenant's resolved survivorship-policy map
    * (`policies`, built once per request by `MetricPoliciesService.resolveForTenant` — see `list`
    * and `requestResolution`, its only two callers) and calls `resolveConflictPolicy`.
@@ -761,7 +710,12 @@ export class ConflictsService {
       _id: { $in: conflict.factIds },
       tenantId,
     });
-    const sourceClassByFactId = await this.loadSourceClassByFactId(facts, tenantId);
+    const sourceClassByFactId = await loadSourceClassByFactId(
+      this.documentVersionModel,
+      this.documentModel,
+      facts,
+      tenantId,
+    );
     // `loadSourceClassByFactId` sets an entry for every fact in the array it was given, and
     // `facts` is that exact array — the lookup below can never miss, so `as` (not `??`) keeps
     // TypeScript satisfied without an untestable fallback branch.
