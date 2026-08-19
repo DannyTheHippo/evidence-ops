@@ -634,7 +634,6 @@ describe('SourcesService', () => {
         id: 'run-1',
         workflowId: 'wf-sync-1',
         status: 'running',
-        currentStep: undefined,
         errorMessage: undefined,
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
       };
@@ -670,7 +669,6 @@ describe('SourcesService', () => {
         id: 'run-1',
         workflowId: 'wf-sync-1',
         status: 'running',
-        currentStep: undefined,
         errorMessage: undefined,
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
       };
@@ -1008,6 +1006,32 @@ describe('SourcesService', () => {
       expect(byPath.get('new.pdf')).toMatchObject({ documentId: newDocumentId });
       expect(byPath.get('huge.pdf')).toBeUndefined();
       expect(byPath.get('mystery.exe')).toBeUndefined();
+    });
+  });
+
+  describe('findTenantIdForSync', () => {
+    it('should return undefined for a malformed id, without querying the model', async () => {
+      const result = await service.findTenantIdForSync('not-an-object-id');
+
+      expect(result).toBeUndefined();
+      expect(mockSourceModel.findById).not.toHaveBeenCalled();
+    });
+
+    it('should return undefined when no source matches the id', async () => {
+      mockSourceModel.findById.mockResolvedValueOnce(null);
+
+      const result = await service.findTenantIdForSync(sourceId.toString());
+
+      expect(result).toBeUndefined();
+    });
+
+    it("should return the source's tenantId, projecting only that field", async () => {
+      mockSourceModel.findById.mockResolvedValueOnce({ tenantId: DEFAULT_TENANT_ID });
+
+      const result = await service.findTenantIdForSync(sourceId.toString());
+
+      expect(mockSourceModel.findById).toHaveBeenCalledWith(sourceId.toString(), { tenantId: 1 });
+      expect(result).toBe(DEFAULT_TENANT_ID);
     });
   });
 });

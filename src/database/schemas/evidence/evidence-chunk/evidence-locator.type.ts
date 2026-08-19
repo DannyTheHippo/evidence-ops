@@ -63,12 +63,3 @@ export type EvidenceLocator =
   | XlsxCellLocator
   | TextBlockLocator
   | PptxSlideLocator;
-
-export const EVIDENCE_LOCATOR_KINDS = [
-  'pdf-page',
-  'docx-paragraph',
-  'xlsx-region',
-  'xlsx-cell',
-  'text-block',
-  'pptx-slide',
-] as const;

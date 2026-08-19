@@ -59,7 +59,11 @@ export const environmentSchema = z
       .enum(['development', 'test', 'production', 'staging', 'local'])
       .default('development'),
     PORT: zNum(3000),
-    LOG_LEVEL: z.string().default('info'),
+    // Nest's `LogLevel` union has no `info` member; it is accepted here as an alias for `log`
+    // because it is the value this project's operators already know from `docker-compose.yml`.
+    LOG_LEVEL: z
+      .enum(['fatal', 'error', 'warn', 'log', 'info', 'debug', 'verbose'])
+      .default('info'),
     URL: z.string().default('http://localhost:3000'),
     CORS_ORIGIN: z.string().default('http://localhost:5173'),
     // Express `trust proxy` hop count. Zero by default: `req.ip` is always the direct socket peer

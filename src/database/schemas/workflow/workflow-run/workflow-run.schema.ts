@@ -41,9 +41,6 @@ export class WorkflowRun extends AuditableDocument {
   @Prop({ type: String, required: true, enum: WORKFLOW_RUN_STATUSES, default: 'queued' })
   status: WorkflowRunStatus;
 
-  @Prop({ type: String })
-  currentStep?: string;
-
   @Prop({ type: Types.ObjectId, ref: 'Answer' })
   answerId?: Types.ObjectId;
 

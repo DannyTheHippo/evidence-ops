@@ -60,7 +60,6 @@ describe('WorkflowRunsService', () => {
         workflowId: 'wf-1',
         workflowType: 'resolve-conflict',
         status: 'running',
-        currentStep: undefined,
         errorMessage: undefined,
         createdAt,
       });
@@ -83,7 +82,6 @@ describe('WorkflowRunsService', () => {
         workflowId: 'wf-1',
         workflowType: 'resolve-conflict',
         status: 'running',
-        currentStep: undefined,
         errorMessage: undefined,
         createdAt,
       });
@@ -135,7 +133,6 @@ describe('WorkflowRunsService', () => {
         _id: id,
         workflowId: 'wf-1',
         status: 'running',
-        currentStep: 'awaiting_approval',
         errorMessage: undefined,
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
       };
@@ -162,7 +159,6 @@ describe('WorkflowRunsService', () => {
         _id: id,
         workflowId: 'wf-1',
         status: 'running',
-        currentStep: undefined,
         errorMessage: undefined,
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
       };
@@ -185,7 +181,6 @@ describe('WorkflowRunsService', () => {
         _id: id,
         workflowId: 'wf-1',
         status: 'running',
-        currentStep: undefined,
         errorMessage: undefined,
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
       };
@@ -221,7 +216,6 @@ describe('WorkflowRunsService', () => {
             id: id.toString(),
             workflowId: 'wf-1',
             status: 'running',
-            currentStep: undefined,
             errorMessage: undefined,
             createdAt: run.createdAt,
           },
@@ -277,7 +271,6 @@ describe('WorkflowRunsService', () => {
         _id: id,
         workflowId: 'wf-1',
         status: 'running',
-        currentStep: undefined,
         errorMessage: undefined,
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
       };
@@ -294,7 +287,6 @@ describe('WorkflowRunsService', () => {
         id: id.toString(),
         workflowId: 'wf-1',
         status: 'running',
-        currentStep: undefined,
         errorMessage: undefined,
         createdAt: run.createdAt,
       });
@@ -320,7 +312,6 @@ describe('WorkflowRunsService', () => {
         _id: id,
         workflowId: 'wf-1',
         status: 'running',
-        currentStep: undefined,
         errorMessage: undefined,
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
       };
@@ -348,7 +339,6 @@ describe('WorkflowRunsService', () => {
       _id: new Types.ObjectId(),
       workflowId: 'wf-1',
       status: 'running',
-      currentStep: undefined,
       errorMessage: undefined,
       createdAt: new Date('2026-07-01T00:00:00.000Z'),
       ...overrides,

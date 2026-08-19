@@ -44,7 +44,11 @@ export const mongooseModuleOptions: MongooseModuleAsyncOptions = {
       serverSelectionTimeoutMS: 10000,
       waitQueueTimeoutMS: 10000,
       maxIdleTimeMS: 60000,
-      autoIndex: !config.mongo.memoryServer,
+      // Migrations own index creation in a deployed database (`migrations/`, `.claude/rules/mongoose.md`);
+      // schema decorators alone never build one there. The memory-server test lane has no
+      // migrations to run, so it builds indexes explicitly instead, via `syncIndexes()`
+      // (`test/utils/create-test-app.ts`).
+      autoIndex: false,
     };
 
     return {

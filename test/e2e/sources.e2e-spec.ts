@@ -47,7 +47,6 @@ interface WorkflowRunBody {
   workflowId: string;
   workflowType?: string;
   status: string;
-  currentStep?: string;
   errorMessage?: string;
   createdAt: string;
 }

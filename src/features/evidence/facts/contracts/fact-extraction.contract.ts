@@ -45,5 +45,3 @@ export type FactCandidateOutput = z.infer<typeof factCandidateSchema>;
 export const factExtractionResultSchema = z.object({
   facts: z.array(factCandidateSchema),
 });
-
-export type FactExtractionResult = z.infer<typeof factExtractionResultSchema>;

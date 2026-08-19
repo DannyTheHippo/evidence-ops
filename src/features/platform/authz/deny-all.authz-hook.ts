@@ -3,12 +3,13 @@ import type { ToolAuthzDecision, ToolAuthzHook } from './authz-hook.interface';
 import type { ToolExecutionContext, ToolExecutionStep } from './types/tool-definition.type';
 
 /**
- * The module's default `TOOL_AUTHZ_HOOK` binding (`./authz.module.ts`). No caller is wired to
- * `ToolExecutorService` yet and no real authorization policy has been designed (see ADR-0005), so
- * the only honest default is refusing every call — a permission gate that "allows until told
- * otherwise" is exactly the failure mode the fail-closed rule in `rules/code-hygiene.md` exists to
- * prevent. Swapping this binding for a real policy is a decision a future caller makes explicitly
- * by providing its own `TOOL_AUTHZ_HOOK`, not a default anyone falls into.
+ * The module's default `TOOL_AUTHZ_HOOK` binding (`./authz.module.ts`). `McpServerService` is the
+ * one caller wired to `ToolExecutorService`, and no real authorization policy has been designed
+ * (see ADR-0005), so the only honest default is refusing every call — a permission gate that
+ * "allows until told otherwise" is exactly the failure mode the fail-closed rule in
+ * `rules/code-hygiene.md` exists to prevent. Swapping this binding for a real policy is a decision
+ * a future caller makes explicitly by providing its own `TOOL_AUTHZ_HOOK`, not a default anyone
+ * falls into.
  */
 @Injectable()
 export class DenyAllAuthzHook implements ToolAuthzHook {

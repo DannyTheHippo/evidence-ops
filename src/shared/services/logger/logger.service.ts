@@ -1,11 +1,17 @@
 import { ConsoleLogger, Inject, Injectable, Scope } from '@nestjs/common';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { TypedConfigService } from '../../../config/environment/typed-config.service';
 import { AlsContext } from '../../types/als-context.type';
+import { resolveLogLevels } from '../../utils/resolve-log-levels.util';
 
 @Injectable({ scope: Scope.TRANSIENT })
 export class AppLogger extends ConsoleLogger {
-  constructor(@Inject(AsyncLocalStorage) private readonly als: AsyncLocalStorage<AlsContext>) {
+  constructor(
+    @Inject(AsyncLocalStorage) private readonly als: AsyncLocalStorage<AlsContext>,
+    config: TypedConfigService,
+  ) {
     super();
+    this.setLogLevels(resolveLogLevels(config.app.logLevel));
   }
 
   init(context: string): void {

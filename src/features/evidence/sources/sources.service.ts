@@ -110,9 +110,12 @@ export interface ApplySourceClassDriftResult {
   readonly sourceClass: DocumentSourceClass;
 }
 
-/** Return of `runSync` — see `SyncSourceActivityResult`'s doc comment (`workflows/types.ts`), which
- *  this shape mirrors field-for-field; kept as a separate type rather than imported so this service
- *  never depends on the determinism-fenced `workflows/**` directory for a runtime type. */
+/** Return of `runSync`. `disabled: true` means the source's own `enabled` flag was off (or the
+ *  source no longer exists) and the sync loop must stop; `intervalMs: null` means either a
+ *  one-shot sync or that this attempt's lease was lost to a newer attempt (see `runSync`'s own doc
+ *  comment) — both end the workflow's loop without claiming the source itself is disabled. Kept as
+ *  a separate type rather than imported so this service never depends on the determinism-fenced
+ *  `workflows/**` directory for a runtime type. */
 export interface RunSyncResult {
   readonly disabled: boolean;
   readonly intervalMs: number | null;
@@ -427,7 +430,7 @@ export class SourcesService {
    * while I was working" — happens at `finalizeSync`, scoped by `{_id, syncLeaseToken: leaseToken}`
    * exactly like `finalizeCompletion`/`finalizeFailure`. A lost finalize discards this attempt's
    * results and returns `intervalMs: null` so this stale execution's loop exits without claiming
-   * the source itself is disabled — see `SyncSourceActivityResult`'s own doc comment.
+   * the source itself is disabled — see `RunSyncResult`'s own doc comment.
    */
   async runSync(sourceId: string, leaseToken: Types.ObjectId): Promise<RunSyncResult> {
     const source = await this.claimAttempt(new Types.ObjectId(sourceId), leaseToken);
@@ -474,6 +477,22 @@ export class SourcesService {
     }
 
     return { disabled: false, intervalMs };
+  }
+
+  /**
+   * `tenantId` lookup by `_id` alone, for the `runSourceSync` activity (`src/worker/activities.ts`)
+   * to open the tenant's ALS scope before calling `runSync` — `SyncSourceWorkflowInput` carries
+   * only `sourceId`, so the activity has no tenant to scope with until this resolves one.
+   * Unscoped and unaudited, mirroring `claimAttempt`'s own `{_id}`-only lookup: this exists only to
+   * name a tenant, not to authorize anything. Absent (`undefined`) covers both an invalid id and a
+   * source that no longer exists — the same case `runSync` itself handles by exiting the loop.
+   */
+  async findTenantIdForSync(id: string): Promise<string | undefined> {
+    if (!Types.ObjectId.isValid(id)) {
+      return undefined;
+    }
+    const source = await this.sourceModel.findById(id, { tenantId: 1 });
+    return source?.tenantId;
   }
 
   /**

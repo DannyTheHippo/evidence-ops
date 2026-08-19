@@ -1,5 +1,6 @@
 import type { INestApplicationContext } from '@nestjs/common';
 import { ApplicationFailure } from '@temporalio/common';
+import { Types } from 'mongoose';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ConflictsService } from '../../src/features/evidence/conflicts/conflicts.service';
 import {
@@ -14,6 +15,7 @@ import { EvidenceRetrievalService } from '../../src/features/evidence/qa/evidenc
 import { GroundingGateService } from '../../src/features/evidence/qa/grounding-gate.service';
 import { SynthesisService } from '../../src/features/evidence/qa/synthesis.service';
 import type { RetrievedChunk } from '../../src/features/evidence/qa/types/retrieved-chunk.type';
+import { SourcesService } from '../../src/features/evidence/sources/sources.service';
 import { APPROVAL_CHANNEL } from '../../src/providers/approval-channel/approval-channel.interface';
 import type { AlsContext } from '../../src/shared/types/als-context.type';
 import { createActivities } from '../../src/worker/activities';
@@ -41,6 +43,8 @@ function buildApp(overrides: {
   recordResolution?: jest.Mock;
   requestApproval?: jest.Mock;
   getDecision?: jest.Mock;
+  findTenantIdForSync?: jest.Mock;
+  runSync?: jest.Mock;
   als?: AsyncLocalStorage<AlsContext>;
 }): INestApplicationContext {
   const services = new Map<unknown, unknown>([
@@ -78,6 +82,13 @@ function buildApp(overrides: {
       {
         requestApproval: overrides.requestApproval ?? jest.fn(),
         getDecision: overrides.getDecision ?? jest.fn(),
+      },
+    ],
+    [
+      SourcesService,
+      {
+        findTenantIdForSync: overrides.findTenantIdForSync ?? jest.fn(),
+        runSync: overrides.runSync ?? jest.fn(),
       },
     ],
   ]);
@@ -169,7 +180,7 @@ describe('createActivities', () => {
    * `withTenantScope` (and the `requireTenantId` guard it composes) is a single helper shared by
    * every tenant-carrying activity, so exercising it through `ingestDocumentVersion` (a positional
    * `tenantId` argument) and `persistAnswer` (a `tenantId` field on an input object) covers both
-   * call shapes without repeating the same assertions across all twelve wrapped activities.
+   * call shapes without repeating the same assertions across every wrapped activity.
    */
   describe('tenant scoping (defence in depth)', () => {
     it('should reject an empty tenantId and do no work', async () => {
@@ -288,6 +299,30 @@ describe('createActivities', () => {
       tenantId: 'acme-corp',
     });
     expect(result).toBe(outcome);
+  });
+
+  // Regression: `SynthesisService` injects no Mongoose model directly, but `MODEL_PROVIDER`
+  // reserves/settles spend through `TenantSpendService`, which writes an `AuditableDocument` — so
+  // this activity needs the same ALS scope every other tenant-carrying activity opens, or that
+  // write's `createdBy`/`updatedBy` stamp nothing.
+  it('should run synthesizeAnswer inside an ALS scope reporting the given tenant', async () => {
+    const als = new AsyncLocalStorage<AlsContext>();
+    let observedTenant: string | undefined;
+    const mockSynthesizeAnswer = jest.fn(() => {
+      observedTenant = als.getStore()?.tenant;
+      return Promise.resolve({ kind: 'insufficient_evidence' as const, reason: 'none' });
+    });
+    const app = buildApp({ synthesizeAnswer: mockSynthesizeAnswer, als });
+
+    const activities = createActivities(app);
+    await activities.synthesizeAnswer({
+      questionText: 'What is the cap rate?',
+      chunks: [],
+      tenantId: 'acme-corp',
+    });
+
+    expect(observedTenant).toBe('acme-corp');
+    expect(als.getStore()).toBeUndefined();
   });
 
   it('should skip GroundingGateService.verify and pass the outcome through unchanged for a non-answered outcome', async () => {
@@ -1126,5 +1161,43 @@ describe('createActivities', () => {
 
     expect(mockRecordResolution).toHaveBeenCalledWith(input);
     expect(result).toBe(resolutionResult);
+  });
+
+  describe('runSourceSync', () => {
+    it('should look up the tenant, run the sync inside its ALS scope, and return the result', async () => {
+      const als = new AsyncLocalStorage<AlsContext>();
+      let observedTenant: string | undefined;
+      const syncResult = { disabled: false, intervalMs: 5000 };
+      const mockFindTenantIdForSync = jest.fn().mockResolvedValue('acme-corp');
+      const mockRunSync = jest.fn(() => {
+        observedTenant = als.getStore()?.tenant;
+        return Promise.resolve(syncResult);
+      });
+      const app = buildApp({
+        findTenantIdForSync: mockFindTenantIdForSync,
+        runSync: mockRunSync,
+        als,
+      });
+
+      const activities = createActivities(app);
+      const result = await activities.runSourceSync('source-1');
+
+      expect(mockFindTenantIdForSync).toHaveBeenCalledWith('source-1');
+      expect(mockRunSync).toHaveBeenCalledWith('source-1', expect.any(Types.ObjectId));
+      expect(observedTenant).toBe('acme-corp');
+      expect(result).toBe(syncResult);
+    });
+
+    it('should exit cleanly, without opening a scope or calling runSync, when the source no longer exists', async () => {
+      const mockFindTenantIdForSync = jest.fn().mockResolvedValue(undefined);
+      const mockRunSync = jest.fn();
+      const app = buildApp({ findTenantIdForSync: mockFindTenantIdForSync, runSync: mockRunSync });
+
+      const activities = createActivities(app);
+      const result = await activities.runSourceSync('source-1');
+
+      expect(mockRunSync).not.toHaveBeenCalled();
+      expect(result).toEqual({ disabled: true, intervalMs: null });
+    });
   });
 });

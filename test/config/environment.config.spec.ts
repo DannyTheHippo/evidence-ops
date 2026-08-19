@@ -155,6 +155,24 @@ describe('validateEnvironment', () => {
     });
   });
 
+  describe('LOG_LEVEL', () => {
+    it.each(['fatal', 'error', 'warn', 'log', 'info', 'debug', 'verbose'])(
+      'accepts %s',
+      (level) => {
+        const result = validateEnvironment({ ...validEnv, LOG_LEVEL: level });
+
+        expect(result.app.logLevel).toBe(level);
+      },
+    );
+
+    it('rejects an unknown LOG_LEVEL value', () => {
+      const env: Record<string, unknown> = { ...validEnv, LOG_LEVEL: 'lodebug' };
+
+      expect(() => validateEnvironment(env)).toThrow(/Invalid environment configuration/);
+      expect(() => validateEnvironment(env)).toThrow(/LOG_LEVEL/);
+    });
+  });
+
   describe('namespacing shape', () => {
     it('returns a config object namespaced by app/cors/mongo/auth', () => {
       const result = validateEnvironment(validEnv);

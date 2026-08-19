@@ -13,13 +13,6 @@
 .view {
   padding: var(--space-8) 0;
 }
-.view--fill {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  padding: var(--space-8) 0;
-}
 .view--flow {
   padding: var(--space-8) 0;
 }
@@ -142,11 +135,6 @@
 
 /* ── Table content states ────────────────────────────────────────────────── */
 
-.grid tbody td.grid-empty {
-  text-align: center;
-  padding: var(--space-6);
-  color: var(--muted);
-}
 .cell-sub {
   color: var(--muted);
   font-size: var(--text-xs);
@@ -159,7 +147,6 @@
   .container {
     padding: 0 var(--space-4);
   }
-  .view--fill,
   .view--flow {
     padding: var(--space-4) 0;
   }

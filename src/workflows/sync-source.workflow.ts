@@ -35,7 +35,7 @@ const MAX_ITERATIONS_BEFORE_CONTINUE = 50;
  * sync-relevant state of its own beyond `input.sourceId`, so a source's `enabled`/`intervalMs`/
  * `path` can change between iterations and the very next sweep picks it up.
  *
- * Three ways an iteration ends the loop, matching `SyncSourceActivityResult`'s own doc comment:
+ * Three ways an iteration ends the loop, matching `RunSyncResult`'s own doc comment:
  * `disabled: true` (the source was turned off, or no longer exists) exits outright; `intervalMs:
  * null` with `disabled: false` (a one-shot sync, or this execution's lease was lost to a newer
  * attempt) also exits, without implying the source itself is disabled; otherwise the workflow

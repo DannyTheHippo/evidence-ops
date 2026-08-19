@@ -62,7 +62,6 @@ export interface WorkflowRunResult {
   readonly workflowId: string;
   readonly workflowType?: WorkflowRunType;
   readonly status: WorkflowRunStatus;
-  readonly currentStep?: string;
   readonly errorMessage?: string;
   readonly createdAt: Date;
 }
@@ -357,7 +356,6 @@ export class WorkflowRunsService {
       workflowId: run.workflowId,
       workflowType: run.workflowType,
       status: statusOverride ?? run.status,
-      currentStep: run.currentStep,
       errorMessage: run.errorMessage,
       createdAt: run.createdAt,
     };

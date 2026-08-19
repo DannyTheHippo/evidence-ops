@@ -177,7 +177,8 @@ export interface Activities {
   /** `sourceId` only — mints a fresh `leaseToken` here, activity-side, on every call, since a
    * Temporal retry of this exact activity reuses the identical input and could never distinguish a
    * stale attempt from a newer one with a token threaded through the workflow instead (see
-   * `SourcesService.runSync`'s own doc comment). */
+   * `SourcesService.runSync`'s own doc comment). Also resolves and opens the tenant's ALS scope
+   * itself (`SourcesService.findTenantIdForSync`), since `sourceId` alone names no tenant. */
   runSourceSync(sourceId: string): Promise<RunSyncResult>;
 }
 
@@ -261,12 +262,19 @@ export function createActivities(app: INestApplicationContext): Activities {
     retrieveEvidence: (input) =>
       withTenantScope(als, input.tenantId, () => evidenceRetrievalService.retrieve(input)),
 
+    // `SynthesisService` injects no Mongoose model of its own, but `MODEL_PROVIDER`
+    // (`providers.module.ts`) wraps every provider with `TenantSpendService`, which reserves and
+    // settles spend through `ModelSpendWindow` — a document that extends `AuditableDocument` and so
+    // needs the same ALS scope every other tenant-carrying activity opens, or its `createdBy`/
+    // `updatedBy` stamp nothing.
     synthesizeAnswer: (input) =>
-      synthesisService.synthesizeAnswer({
-        question: input.questionText,
-        chunks: input.chunks,
-        tenantId: input.tenantId,
-      }),
+      withTenantScope(als, input.tenantId, () =>
+        synthesisService.synthesizeAnswer({
+          question: input.questionText,
+          chunks: input.chunks,
+          tenantId: input.tenantId,
+        }),
+      ),
 
     // `GroundingGateService.verify`'s input type only accepts the `answered` branch of
     // `AnswerContract` (see its own doc comment) — the model itself already said there was
@@ -476,6 +484,18 @@ export function createActivities(app: INestApplicationContext): Activities {
     recordConflictResolution: (input) =>
       withTenantScope(als, input.tenantId, () => conflictsService.recordResolution(input)),
 
-    runSourceSync: (sourceId) => sourcesService.runSync(sourceId, new Types.ObjectId()),
+    // `sourceId` names no tenant of its own (`SyncSourceWorkflowInput` carries only that), so the
+    // tenant to scope by is loaded fresh here via `findTenantIdForSync` before `runSync` runs.
+    // Absent (the source no longer exists) short-circuits to the same `{ disabled: true, intervalMs:
+    // null }` result `runSync` itself would produce, rather than opening a scope with no tenant.
+    runSourceSync: async (sourceId) => {
+      const tenantId = await sourcesService.findTenantIdForSync(sourceId);
+      if (!tenantId) {
+        return { disabled: true, intervalMs: null };
+      }
+      return withTenantScope(als, tenantId, () =>
+        sourcesService.runSync(sourceId, new Types.ObjectId()),
+      );
+    },
   };
 }

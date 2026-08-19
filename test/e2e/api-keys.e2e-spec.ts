@@ -339,10 +339,11 @@ describe('ApiKeys (e2e)', () => {
   });
 
   /**
-   * There is no HTTP route that accepts a personal access token — the MCP consumer that presents
-   * one is a later step, and `JwtAuthGuard` stays untouched by this change. The `mint → use →
-   * revoke → refused` chain, live role resolution, and expiry are all exercised through
-   * `TOKEN_VERIFIER` directly, exactly as a future consumer would call it.
+   * There is no HTTP route that accepts a personal access token — `JwtAuthGuard` stays untouched
+   * by this change; the MCP surface (`src/mcp/pat-token.verifier.ts`) authenticates every call
+   * with a personal access token instead of the SPA's session cookie. The `mint → use → revoke →
+   * refused` chain, live role resolution, and expiry are all exercised through `TOKEN_VERIFIER`
+   * directly, exactly as the MCP surface calls it.
    */
   describe('TOKEN_VERIFIER', () => {
     it('verifies a freshly minted token to the minting user’s identity', async () => {

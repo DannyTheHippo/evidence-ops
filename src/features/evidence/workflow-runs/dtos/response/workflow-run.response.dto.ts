@@ -41,14 +41,6 @@ export class WorkflowRunResponseDto {
 
   @Expose()
   @ApiProperty({
-    example: 'awaiting_approval',
-    description: 'Optional human-readable current step.',
-    required: false,
-  })
-  currentStep?: string;
-
-  @Expose()
-  @ApiProperty({
     example: 'Timed out waiting for approval',
     description: 'Error detail, present only when status is failed.',
     required: false,

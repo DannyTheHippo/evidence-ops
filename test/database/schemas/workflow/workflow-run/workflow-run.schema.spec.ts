@@ -67,7 +67,6 @@ describe('WorkflowRun schema', () => {
         tenantId: 'tenant-a',
         runId: 'run-1',
         status: 'running',
-        currentStep: 'retrieve',
         answerId,
       });
 

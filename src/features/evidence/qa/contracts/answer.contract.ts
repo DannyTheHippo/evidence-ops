@@ -118,8 +118,6 @@ export const modelClaimSchema = z.object({
   citations: z.array(modelCitationSchema).min(1),
 });
 
-export type ModelClaim = z.infer<typeof modelClaimSchema>;
-
 // Exported (unlike the other two outcome branches below) because the grounding gate
 // (`../grounding-gate.service.ts`) only ever verifies the `answered` branch — `insufficient_evidence`
 // and `conflicting_evidence` have no claims to check — and needs a name for that narrowed input
@@ -137,8 +135,6 @@ export const modelAnsweredOutcomeSchema = z.object({
   kind: z.literal('answered'),
   claims: z.array(modelClaimSchema).min(1),
 });
-
-export type ModelAnsweredOutcome = z.infer<typeof modelAnsweredOutcomeSchema>;
 
 // `insufficient_evidence` is a valid success state, not an error — the eval harness scores it as
 // correct (abstention accuracy) on genuinely unanswerable questions, so producing it beats
@@ -189,10 +185,6 @@ export const modelInsufficientEvidenceOutcomeSchema = z.object({
   kind: z.literal('insufficient_evidence'),
   reasonCode: insufficientEvidenceReasonCodeSchema,
 });
-
-export type ModelInsufficientEvidenceOutcome = z.infer<
-  typeof modelInsufficientEvidenceOutcomeSchema
->;
 
 const conflictingValueSchema = z.object({
   value: z.number(),

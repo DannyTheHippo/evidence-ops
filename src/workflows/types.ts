@@ -145,17 +145,3 @@ export interface ApprovalDecisionSignal {
 export interface SyncSourceWorkflowInput {
   readonly sourceId: string;
 }
-
-/**
- * Result of one `runSourceSync` activity call — the workflow's own loop condition, not a summary
- * for a caller (unlike `IngestDocumentVersionResult`/`AnswerQuestionResult`, nothing persists this
- * shape; `Source.lastSyncStatus`/`lastSyncError` are what a caller reads instead). `disabled: true`
- * means the source's own `enabled` flag was off (or the source no longer exists) and the loop must
- * stop; `intervalMs: null` means either a one-shot sync or that this activity's lease was lost to a
- * newer attempt (see `SourcesService.runSync`'s own doc comment) — both cases end this execution's
- * loop without claiming the source itself is disabled.
- */
-export interface SyncSourceActivityResult {
-  readonly disabled: boolean;
-  readonly intervalMs: number | null;
-}

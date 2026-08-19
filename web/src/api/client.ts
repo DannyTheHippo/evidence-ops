@@ -548,7 +548,6 @@ export interface WorkflowRun {
   workflowId: string;
   workflowType?: WorkflowRunType;
   status: WorkflowRunStatus;
-  currentStep?: string;
   errorMessage?: string;
   createdAt: string;
 }
