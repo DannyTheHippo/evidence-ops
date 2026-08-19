@@ -20,12 +20,18 @@ import {
   MetricPolicy,
   MetricPolicySchema,
 } from '../../../database/schemas/evidence/metric-policy/metric-policy.schema';
+import {
+  TenantMetric,
+  TenantMetricSchema,
+} from '../../../database/schemas/evidence/tenant-metric/tenant-metric.schema';
 import { ProvidersModule } from '../../../providers/providers.module';
 import { IngestionModule } from '../ingestion/ingestion.module';
 import { CanonicalEntityService } from './canonical-entity.service';
 import { FactsService } from './facts.service';
 import { MetricPoliciesController } from './metric-policies.controller';
 import { MetricPoliciesService } from './metric-policies.service';
+import { TenantMetricsController } from './tenant-metrics.controller';
+import { TenantMetricsService } from './tenant-metrics.service';
 
 @Module({
   imports: [
@@ -35,6 +41,7 @@ import { MetricPoliciesService } from './metric-policies.service';
       { name: EvidenceChunk.name, schema: EvidenceChunkSchema },
       { name: ExtractedFact.name, schema: ExtractedFactSchema },
       { name: MetricPolicy.name, schema: MetricPolicySchema },
+      { name: TenantMetric.name, schema: TenantMetricSchema },
     ]),
     ProvidersModule,
     // Only for its exported `ParserRegistry` — fact extraction re-parses a version's bytes itself
@@ -42,12 +49,12 @@ import { MetricPoliciesService } from './metric-policies.service';
     // deterministic xlsx facts, and for narrowing a prose fact's locator past its chunk's anchor).
     IngestionModule,
   ],
-  controllers: [MetricPoliciesController],
+  controllers: [MetricPoliciesController, TenantMetricsController],
   // Exported as well as registered: `FactsService` depends on `CanonicalEntityService` to
   // canonicalize an extracted fact's entity, but the registry is also reachable via DI on its own,
-  // the same way `FactsService` is. `MetricPoliciesService` is exported for the same reason —
-  // reachable on its own by a future caller (`ConflictsModule`) without depending on `FactsService`.
-  providers: [CanonicalEntityService, FactsService, MetricPoliciesService],
-  exports: [CanonicalEntityService, FactsService, MetricPoliciesService],
+  // the same way `FactsService` is. `MetricPoliciesService`/`TenantMetricsService` are exported for
+  // the same reason — reachable on their own by a future caller without depending on `FactsService`.
+  providers: [CanonicalEntityService, FactsService, MetricPoliciesService, TenantMetricsService],
+  exports: [CanonicalEntityService, FactsService, MetricPoliciesService, TenantMetricsService],
 })
 export class FactsModule {}
