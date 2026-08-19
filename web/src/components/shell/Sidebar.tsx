@@ -14,6 +14,7 @@ import {
   IconMessageCircle,
   IconPanelLeft,
   IconSearch,
+  IconTag,
   IconUserPlus,
 } from '../icons';
 import Dialog from '../ui/Dialog';
@@ -51,6 +52,7 @@ export const NAV_LABELS: { to: string; label: string }[] = [
   { to: '/audit-events', label: 'Audit Log' },
   { to: '/invitations', label: 'Invitations' },
   { to: '/resolution-rules', label: 'Resolution Rules' },
+  { to: '/canonical-entities', label: 'Canonical Entities' },
 ];
 
 function buildNavGroups(isAdmin: boolean): NavGroup[] {
@@ -93,6 +95,7 @@ function buildNavGroups(isAdmin: boolean): NavGroup[] {
               { to: '/audit-events', label: 'Audit Log', icon: <IconClipboard /> },
               { to: '/invitations', label: 'Invitations', icon: <IconUserPlus /> },
               { to: '/resolution-rules', label: 'Resolution Rules', icon: <IconAlertTriangle /> },
+              { to: '/canonical-entities', label: 'Canonical Entities', icon: <IconTag /> },
             ]
           : []),
       ],

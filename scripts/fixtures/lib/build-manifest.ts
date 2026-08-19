@@ -54,7 +54,7 @@ export interface DataRoomManifest {
    * `SEEDED_AREA_CONFLICT` (building area, four source documents) at index 2 — order and count are
    * fixed by this function, never data-dependent. `kestrel-point-flyer-export.csv` (the alias-
    * variant document) is that record's fourth location, not a separate record:
-   * `FactsService.extractFacts` canonicalizes its alias against the `CANONICAL_ENTITY_SEED`
+   * `FactsService.extractFacts` canonicalizes its alias against `CANONICAL_ENTITY_SEEDS`' Kestrel
    * registry row before grouping (see `constants.ts`'s `AREA_CONFLICT_ALIAS_VALUE` doc comment),
    * so `detectConflicts` groups all four documents together.
    */

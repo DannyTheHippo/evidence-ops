@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Db } from 'mongodb';
 import type { Model } from 'mongoose';
-import { CANONICAL_ENTITY_SEED } from '../scripts/fixtures/lib/constants';
+import { CANONICAL_ENTITY_SEEDS } from '../scripts/fixtures/lib/constants';
 import {
   CanonicalEntity,
   CanonicalEntityDocument,
@@ -174,15 +174,19 @@ export async function ingestFixtures(
     { upsert: true },
   );
 
-  // Seeds the registry row `kestrel-point-flyer-export.csv`'s alias needs. `FactsService.extractFacts`
-  // canonicalizes every candidate's entity text against this registry before `groupKey` computes
-  // `groupKeyNormalized`, so this row is what makes the flyer's alias resolve to the same group as
-  // the other three `kestrel-point-*` documents.
-  await canonicalEntityModel.create({
-    tenantId,
-    canonicalName: CANONICAL_ENTITY_SEED.canonicalName,
-    aliases: [...CANONICAL_ENTITY_SEED.aliases],
-  });
+  // Registers every property the corpus names in a seeded conflict — a real pilot tenant's
+  // consultant registers the estate, not just the one property (Kestrel) that happens to need an
+  // alias. `FactsService.extractFacts` canonicalizes every candidate's entity text against this
+  // registry before `groupKey` computes `groupKeyNormalized`, so Kestrel's row is what makes the
+  // flyer's alias resolve to the same group as the other three `kestrel-point-*` documents; the
+  // other two rows carry no alias and change no existing fact's grouping.
+  await canonicalEntityModel.create(
+    CANONICAL_ENTITY_SEEDS.map((seed) => ({
+      tenantId,
+      canonicalName: seed.canonicalName,
+      aliases: [...seed.aliases],
+    })),
+  );
 
   const fixtures: IngestedFixture[] = [];
   const filenameByDocVersionId = new Map<string, string>();

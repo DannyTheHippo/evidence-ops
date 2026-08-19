@@ -23,3 +23,15 @@ export class InvalidMetricIdException extends BaseException {
     super(message, HttpStatus.BAD_REQUEST, cause);
   }
 }
+
+export class CanonicalEntityNotFoundException extends BaseException {
+  constructor(message: string, cause?: unknown) {
+    super(message, HttpStatus.NOT_FOUND, cause);
+  }
+}
+
+export class CanonicalEntityNameConflictException extends BaseException {
+  constructor(message: string, cause?: unknown) {
+    super(message, HttpStatus.CONFLICT, cause);
+  }
+}

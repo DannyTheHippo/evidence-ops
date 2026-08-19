@@ -475,3 +475,20 @@ export function IconBarChart({ size = 16, className }: IconProps) {
     </svg>
   );
 }
+
+export function IconTag({ size = 16, className }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      focusable="false"
+      className={className}
+      {...strokeProps}
+    >
+      <path d="M8.5 2.5H13.5V7.5L7 14L1.5 8.5L8.5 2.5Z" />
+      <circle cx="10.5" cy="5.5" r="1" />
+    </svg>
+  );
+}

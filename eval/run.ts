@@ -279,10 +279,17 @@ async function main(): Promise<void> {
         chunks: retrievedChunks,
         tenantId: EVAL_TENANT_ID,
       });
+      // `questionText` is what lets `groundingCheck` (`scopeConflictToQuestion`/
+      // `resolveQuestionEntity`, `src/features/evidence/qa/scope-conflict-to-question.ts`) name the
+      // question's own entity — omitted, `resolveQuestionEntity` sees an empty string, names no
+      // entity, and every conflict-attachment fork fails closed to abstention regardless of what the
+      // retrieved evidence and canonical-entity registry actually support. The production workflow
+      // (`answer-question.workflow.ts`) always threads it through; this activity call must match.
       const groundingResult = await activities.groundingCheck({
         outcome: rawOutcome,
         retrievedChunks,
         tenantId: EVAL_TENANT_ID,
+        questionText: evalCase.question,
       });
 
       const chunkByChunkId = new Map(retrievedChunks.map((chunk) => [chunk.chunkId, chunk]));

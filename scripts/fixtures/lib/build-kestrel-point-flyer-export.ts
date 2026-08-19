@@ -7,8 +7,8 @@ const HEADERS = ['Property Name', 'Building Area (SF)'] as const;
 /**
  * Builds `kestrel-point-flyer-export.csv`: a one-row CRM export for the same property as
  * `SEEDED_AREA_CONFLICT`, but under `AREA_CONFLICT_PROPERTY_ALIAS` — the abbreviated form a
- * marketing flyer or a hand-entered CRM record would use. `CANONICAL_ENTITY_SEED` is the registry
- * row that maps this alias back to `AREA_CONFLICT_PROPERTY`; `FactsService.extractFacts`
+ * marketing flyer or a hand-entered CRM record would use. `CANONICAL_ENTITY_SEEDS`' Kestrel row is
+ * the registry row that maps this alias back to `AREA_CONFLICT_PROPERTY`; `FactsService.extractFacts`
  * canonicalizes against it before grouping, so `detectConflicts` folds this row's fact into the
  * same group as the other three `kestrel-point-*` documents (see `constants.ts`'s
  * `AREA_CONFLICT_ALIAS_VALUE` doc comment).

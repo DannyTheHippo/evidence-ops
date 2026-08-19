@@ -224,19 +224,25 @@ export const SEEDED_AREA_CONFLICT = {
 /**
  * kestrel-point-flyer-export.csv reports the same property's building area under
  * `AREA_CONFLICT_PROPERTY_ALIAS` rather than `AREA_CONFLICT_PROPERTY`. `FactsService.extractFacts`
- * canonicalizes this alias against the `CANONICAL_ENTITY_SEED` registry row below before `groupKey`
- * computes `groupKeyNormalized`, so `detectConflicts` (`conflicts/detect-conflicts.ts`) groups this
+ * canonicalizes this alias against `CANONICAL_ENTITY_SEEDS`' Kestrel registry row below before
+ * `groupKey` computes `groupKeyNormalized`, so `detectConflicts` (`conflicts/detect-conflicts.ts`) groups this
  * fact together with `SEEDED_AREA_CONFLICT`'s other three documents — a fourth disagreement in the
  * same conflict, not a separate one.
  */
 export const AREA_CONFLICT_ALIAS_VALUE = { raw: 118_300, display: '118,300' } as const;
 
 /**
- * The registry row `kestrel-point-flyer-export.csv`'s alias needs to resolve to
- * `AREA_CONFLICT_PROPERTY` — seeded into `canonical_entities` by `eval/ingest-fixtures.ts`, the
- * same tenant-scoped script that turns every other fixture file into live documents and facts.
+ * The registry rows `eval/ingest-fixtures.ts` seeds into `canonical_entities` for the eval tenant —
+ * one per property the corpus actually names in a conflict, mirroring what a real pilot tenant's
+ * consultant would do: register the estate's entities, not just the one that happens to need an
+ * alias. `AREA_CONFLICT_PROPERTY`'s alias is load-bearing —
+ * `kestrel-point-flyer-export.csv`'s fact needs it to canonicalize into `SEEDED_AREA_CONFLICT`'s
+ * group. `SEEDED_CONFLICT.property` and `SEEDED_NOI_CONFLICT.property` carry no alias: every
+ * fixture document already names them by their exact `COMP_PROPERTIES` string, so registering them
+ * is a no-op for `groupKeyNormalized` — no existing fact's grouping changes.
  */
-export const CANONICAL_ENTITY_SEED = {
-  canonicalName: AREA_CONFLICT_PROPERTY,
-  aliases: [AREA_CONFLICT_PROPERTY_ALIAS],
-} as const;
+export const CANONICAL_ENTITY_SEEDS = [
+  { canonicalName: SEEDED_CONFLICT.property, aliases: [] },
+  { canonicalName: SEEDED_NOI_CONFLICT.property, aliases: [] },
+  { canonicalName: AREA_CONFLICT_PROPERTY, aliases: [AREA_CONFLICT_PROPERTY_ALIAS] },
+] as const;

@@ -14,6 +14,7 @@ import ApiKeysPage from './pages/ApiKeysPage';
 import ApprovalsPage from './pages/ApprovalsPage';
 import AskPage from './pages/AskPage';
 import AuditEventsPage from './pages/AuditEventsPage';
+import CanonicalEntitiesPage from './pages/CanonicalEntitiesPage';
 import ConflictsPage from './pages/ConflictsPage';
 import DataRoomPage from './pages/DataRoomPage';
 import HomePage from './pages/HomePage';
@@ -283,6 +284,14 @@ export default function App() {
         element={
           <RequireAdmin>
             <ResolutionRulesPage />
+          </RequireAdmin>
+        }
+      />
+      <Route
+        path="/canonical-entities"
+        element={
+          <RequireAdmin>
+            <CanonicalEntitiesPage />
           </RequireAdmin>
         }
       />

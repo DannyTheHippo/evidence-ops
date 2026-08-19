@@ -829,3 +829,44 @@ export interface Measures {
 export function getMeasures(): Promise<Measures> {
   return request<Measures>('/measures');
 }
+
+// ── Canonical entities ───────────────────────────────────────────────────
+
+export interface CanonicalEntity {
+  id: string;
+  canonicalName: string;
+  aliases: string[];
+  createdAt: string;
+}
+
+export function listCanonicalEntities(params?: {
+  skip?: number;
+  limit?: number;
+}): Promise<WithCount<CanonicalEntity>> {
+  const query = new URLSearchParams();
+  if (params?.skip !== undefined) query.set('skip', String(params.skip));
+  if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  const qs = query.toString();
+  return request<WithCount<CanonicalEntity>>(`/canonical-entities${qs ? `?${qs}` : ''}`);
+}
+
+export function createCanonicalEntity(input: {
+  canonicalName: string;
+  aliases?: string[];
+}): Promise<CanonicalEntity> {
+  return request<CanonicalEntity>('/canonical-entities', { method: 'POST', ...jsonBody(input) });
+}
+
+export function updateCanonicalEntity(
+  id: string,
+  input: { canonicalName?: string; aliases?: string[] },
+): Promise<CanonicalEntity> {
+  return request<CanonicalEntity>(`/canonical-entities/${id}`, {
+    method: 'PATCH',
+    ...jsonBody(input),
+  });
+}
+
+export async function deleteCanonicalEntity(id: string): Promise<void> {
+  await request<void>(`/canonical-entities/${id}`, { method: 'DELETE' });
+}

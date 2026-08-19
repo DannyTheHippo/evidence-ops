@@ -1,12 +1,18 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import {
   CanonicalEntity,
   CanonicalEntityDocument,
   normalizeEntityName,
 } from '../../../database/schemas/evidence/canonical-entity/canonical-entity.schema';
+import type { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
+import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import {
+  CanonicalEntityNameConflictException,
+  CanonicalEntityNotFoundException,
+} from './exceptions/facts.exception';
 
 /** Result of `CanonicalEntityService.resolve`. `matched` is the explicit "did this actually
  *  resolve" signal — `name` alone cannot carry that, since an unmatched input is returned
@@ -24,6 +30,29 @@ export interface CanonicalEntityListing {
   readonly canonicalName: string;
   readonly canonicalNameNormalized: string;
   readonly aliasesNormalized: readonly string[];
+}
+
+/** One tenant-authored row as the API returns it — `canonicalNameNormalized`/`aliasesNormalized`
+ *  deliberately excluded, they are internal derivations `resolve`/`resolveMany` match against, not
+ *  something a caller authors or reads back. Mapped to a plain result rather than a returned
+ *  document for the same reason {@link CanonicalEntityListing}'s siblings across this codebase
+ *  are — `toResponseDto` runs `plainToInstance` with `excludeExtraneousValues`, which reads own
+ *  enumerable properties only, and a document's `id` is a virtual getter that a document handed
+ *  straight to the DTO would silently serialise without (`MetricPolicyResult`'s doc comment). */
+export interface CanonicalEntityResult {
+  readonly id: string;
+  readonly canonicalName: string;
+  readonly aliases: readonly string[];
+  readonly createdAt: Date;
+}
+
+function toCanonicalEntityResult(row: CanonicalEntityDocument): CanonicalEntityResult {
+  return {
+    id: row._id.toString(),
+    canonicalName: row.canonicalName,
+    aliases: row.aliases,
+    createdAt: row.createdAt,
+  };
 }
 
 /**
@@ -161,5 +190,132 @@ export class CanonicalEntityService {
       canonicalNameNormalized: entity.canonicalNameNormalized,
       aliasesNormalized: entity.aliasesNormalized,
     }));
+  }
+
+  /** The tenant's authored rows, paginated — not {@link listCanonicalEntities}'s unpaginated,
+   *  match-oriented projection. Sorted newest-first, matching `ApiKeysService.list`/
+   *  `InvitationsService.list`'s identical paginated-listing shape. */
+  async listForTenant(
+    tenantId: string,
+    pagination: PaginationRequestDto,
+  ): Promise<DocumentResultWithCount<CanonicalEntityResult>> {
+    const filter = { tenantId };
+
+    const [rows, count] = await Promise.all([
+      this.canonicalEntityModel.find(filter, null, {
+        sort: { createdAt: -1 },
+        skip: pagination.skip,
+        limit: pagination.limit,
+      }),
+      this.canonicalEntityModel.countDocuments(filter),
+    ]);
+
+    return { docs: rows.map((row) => toCanonicalEntityResult(row)), count };
+  }
+
+  /** Maps the unique `{tenantId, canonicalNameNormalized}` index
+   *  (`canonical-entity.schema.ts`) onto a 409 — the application-layer surface for a race the
+   *  index itself already prevents at the driver level, the same pattern
+   *  `SourcesService.create` uses for its own unique-name index. */
+  async create(
+    tenantId: string,
+    input: { canonicalName: string; aliases?: string[] },
+  ): Promise<CanonicalEntityResult> {
+    let entity: CanonicalEntityDocument;
+    try {
+      entity = await this.canonicalEntityModel.create({
+        tenantId,
+        canonicalName: input.canonicalName,
+        aliases: input.aliases ?? [],
+      });
+    } catch (error) {
+      if (this.isDuplicateKeyError(error)) {
+        throw new CanonicalEntityNameConflictException(
+          `A canonical entity named '${input.canonicalName}' already exists for this tenant`,
+          error,
+        );
+      }
+      throw error;
+    }
+
+    this.logger.debug(
+      `Created canonical entity '${entity._id.toString()}' for tenant '${tenantId}'`,
+    );
+
+    return toCanonicalEntityResult(entity);
+  }
+
+  /**
+   * Loaded with `findOne` and mutated via `.save()`, not `findOneAndUpdate`: this schema's
+   * `pre('validate')` hook derives `canonicalNameNormalized`/`aliasesNormalized` from
+   * `canonicalName`/`aliases`, and that document middleware only fires on the document-level save
+   * path (`DocumentsService.addVersion`/`AnswerPersistenceService.persist` use the same
+   * findOne-then-mutate-then-save shape for the same reason). A `findOneAndUpdate` here would
+   * write new display fields while leaving the normalized fields stale — since every lookup in
+   * this service matches on the normalized fields, a renamed row would silently stop resolving.
+   * Renaming does not retroactively regroup facts already extracted under the old canonical name —
+   * `ExtractedFact.groupKeyNormalized` was computed at extraction time and stays as it was.
+   */
+  async update(
+    id: string,
+    tenantId: string,
+    updates: { canonicalName?: string; aliases?: string[] },
+  ): Promise<CanonicalEntityResult> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new CanonicalEntityNotFoundException(`Canonical entity '${id}' not found`);
+    }
+
+    const entity = await this.canonicalEntityModel.findOne({ _id: id, tenantId });
+    if (!entity) {
+      throw new CanonicalEntityNotFoundException(`Canonical entity '${id}' not found`);
+    }
+
+    if (updates.canonicalName !== undefined) {
+      entity.canonicalName = updates.canonicalName;
+    }
+    if (updates.aliases !== undefined) {
+      entity.aliases = updates.aliases;
+    }
+
+    try {
+      await entity.save();
+    } catch (error) {
+      if (this.isDuplicateKeyError(error)) {
+        throw new CanonicalEntityNameConflictException(
+          `A canonical entity named '${entity.canonicalName}' already exists for this tenant`,
+          error,
+        );
+      }
+      throw error;
+    }
+
+    this.logger.debug(`Updated canonical entity '${id}' for tenant '${tenantId}'`);
+
+    return toCanonicalEntityResult(entity);
+  }
+
+  /** Deleting a row does not retroactively regroup facts already extracted under its
+   *  `groupKeyNormalized` — that key was computed at extraction time, so a fact extracted while
+   *  this row resolved its entity keeps grouping under the name that was canonical then. */
+  async remove(id: string, tenantId: string): Promise<void> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new CanonicalEntityNotFoundException(`Canonical entity '${id}' not found`);
+    }
+
+    const entity = await this.canonicalEntityModel.findOneAndDelete({ _id: id, tenantId });
+    if (!entity) {
+      throw new CanonicalEntityNotFoundException(`Canonical entity '${id}' not found`);
+    }
+
+    this.logger.debug(`Removed canonical entity '${id}' from tenant '${tenantId}'`);
+  }
+
+  private isDuplicateKeyError(error: unknown): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code?: unknown }).code === 11000
+    );
   }
 }

@@ -57,7 +57,8 @@ export const CanonicalEntitySchema = SchemaFactory.createForClass(CanonicalEntit
  * `pre('validate')` runs before the `required` path validators, so `canonicalNameNormalized`
  * still passes its own `required` check on a freshly constructed document. Does not fire on
  * `updateOne`/`findOneAndUpdate`-style updates (Mongoose only runs document middleware on
- * document `save()`), which is not a gap today — this registry has no update path yet.
+ * document `save()`) — `CanonicalEntityService.update` loads the document with `findOne` and
+ * mutates it via `.save()` specifically so this hook still runs on a rename.
  */
 CanonicalEntitySchema.pre('validate', function (this: CanonicalEntityDocument): void {
   this.canonicalNameNormalized = normalizeEntityName(this.canonicalName);

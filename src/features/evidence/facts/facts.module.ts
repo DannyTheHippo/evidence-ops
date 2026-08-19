@@ -26,6 +26,7 @@ import {
 } from '../../../database/schemas/evidence/tenant-metric/tenant-metric.schema';
 import { ProvidersModule } from '../../../providers/providers.module';
 import { IngestionModule } from '../ingestion/ingestion.module';
+import { CanonicalEntitiesController } from './canonical-entities.controller';
 import { CanonicalEntityService } from './canonical-entity.service';
 import { FactsService } from './facts.service';
 import { MetricPoliciesController } from './metric-policies.controller';
@@ -49,7 +50,7 @@ import { TenantMetricsService } from './tenant-metrics.service';
     // deterministic xlsx facts, and for narrowing a prose fact's locator past its chunk's anchor).
     IngestionModule,
   ],
-  controllers: [MetricPoliciesController, TenantMetricsController],
+  controllers: [CanonicalEntitiesController, MetricPoliciesController, TenantMetricsController],
   // Exported as well as registered: `FactsService` depends on `CanonicalEntityService` to
   // canonicalize an extracted fact's entity, but the registry is also reachable via DI on its own,
   // the same way `FactsService` is. `MetricPoliciesService`/`TenantMetricsService` are exported for

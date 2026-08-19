@@ -3,7 +3,12 @@ import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { DEFAULT_TENANT_ID } from '../../../../src/database/constants/tenant.constant';
 import { CanonicalEntity } from '../../../../src/database/schemas/evidence/canonical-entity/canonical-entity.schema';
+import {
+  CanonicalEntityNameConflictException,
+  CanonicalEntityNotFoundException,
+} from '../../../../src/features/evidence/facts/exceptions/facts.exception';
 import { CanonicalEntityService } from '../../../../src/features/evidence/facts/canonical-entity.service';
+import { DEFAULT_PAGINATION_LIMIT } from '../../../../src/shared/constants/pagination-defaults.constant';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
 import { getMockModel } from '../../../utils/get-mock-model';
@@ -253,6 +258,232 @@ describe('CanonicalEntityService', () => {
       const result = await service.listCanonicalEntities(DEFAULT_TENANT_ID);
 
       expect(result).toEqual([]);
+    });
+  });
+
+  describe('listForTenant', () => {
+    it('should return the tenant-authored rows paginated as { docs, count }, mapped to plain results', async () => {
+      mockCanonicalEntityModel.find.mockResolvedValueOnce([
+        buildMockCanonicalEntity({ _id: { toString: () => 'entity-1' } }),
+      ]);
+      mockCanonicalEntityModel.countDocuments.mockResolvedValueOnce(1);
+
+      const result = await service.listForTenant(DEFAULT_TENANT_ID, {
+        skip: 0,
+        limit: DEFAULT_PAGINATION_LIMIT,
+      });
+
+      expect(mockCanonicalEntityModel.find).toHaveBeenCalledWith(
+        { tenantId: DEFAULT_TENANT_ID },
+        null,
+        expect.objectContaining({
+          sort: { createdAt: -1 },
+          skip: 0,
+          limit: DEFAULT_PAGINATION_LIMIT,
+        }),
+      );
+      expect(result.count).toBe(1);
+      expect(result.docs).toEqual([
+        {
+          id: 'entity-1',
+          canonicalName: 'Northgate Business Park',
+          aliases: ['Northgate Bus. Park'],
+          createdAt: undefined,
+        },
+      ]);
+    });
+
+    it('should page results using the given skip and limit', async () => {
+      mockCanonicalEntityModel.find.mockResolvedValueOnce([]);
+      mockCanonicalEntityModel.countDocuments.mockResolvedValueOnce(5);
+
+      const result = await service.listForTenant(DEFAULT_TENANT_ID, { skip: 2, limit: 1 });
+
+      expect(mockCanonicalEntityModel.find).toHaveBeenCalledWith(
+        { tenantId: DEFAULT_TENANT_ID },
+        null,
+        expect.objectContaining({ skip: 2, limit: 1 }),
+      );
+      expect(result.count).toBe(5);
+    });
+  });
+
+  describe('create', () => {
+    it('should create a row scoped to the tenant and default aliases to an empty array', async () => {
+      const created = buildMockCanonicalEntity({
+        _id: { toString: () => 'entity-1' },
+        aliases: [],
+      });
+      mockCanonicalEntityModel.create.mockResolvedValueOnce(created);
+
+      const result = await service.create(DEFAULT_TENANT_ID, {
+        canonicalName: 'Northgate Business Park',
+      });
+
+      expect(mockCanonicalEntityModel.create).toHaveBeenCalledWith({
+        tenantId: DEFAULT_TENANT_ID,
+        canonicalName: 'Northgate Business Park',
+        aliases: [],
+      });
+      expect(result).toEqual({
+        id: 'entity-1',
+        canonicalName: 'Northgate Business Park',
+        aliases: [],
+        createdAt: undefined,
+      });
+    });
+
+    it('should pass aliases through when given', async () => {
+      const created = buildMockCanonicalEntity({ _id: { toString: () => 'entity-1' } });
+      mockCanonicalEntityModel.create.mockResolvedValueOnce(created);
+
+      await service.create(DEFAULT_TENANT_ID, {
+        canonicalName: 'Northgate Business Park',
+        aliases: ['Northgate Bus. Park'],
+      });
+
+      expect(mockCanonicalEntityModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ aliases: ['Northgate Bus. Park'] }),
+      );
+    });
+
+    it('should map a duplicate-name E11000 error to CanonicalEntityNameConflictException', async () => {
+      mockCanonicalEntityModel.create.mockRejectedValueOnce({ code: 11000 });
+
+      await expect(
+        service.create(DEFAULT_TENANT_ID, { canonicalName: 'Northgate Business Park' }),
+      ).rejects.toBeInstanceOf(CanonicalEntityNameConflictException);
+    });
+
+    it('should rethrow a non-duplicate-key error unchanged', async () => {
+      const error = new Error('connection reset');
+      mockCanonicalEntityModel.create.mockRejectedValueOnce(error);
+
+      await expect(
+        service.create(DEFAULT_TENANT_ID, { canonicalName: 'Northgate Business Park' }),
+      ).rejects.toBe(error);
+    });
+  });
+
+  describe('update', () => {
+    const buildSavableEntity = (overrides: Record<string, unknown> = {}) => ({
+      ...buildMockCanonicalEntity({ _id: { toString: () => 'entity-1' } }),
+      save: jest.fn().mockResolvedValue(undefined),
+      ...overrides,
+    });
+
+    it('should throw CanonicalEntityNotFoundException for a malformed id, without querying the model', async () => {
+      await expect(
+        service.update('not-an-object-id', DEFAULT_TENANT_ID, { canonicalName: 'New Name' }),
+      ).rejects.toBeInstanceOf(CanonicalEntityNotFoundException);
+      expect(mockCanonicalEntityModel.findOne).not.toHaveBeenCalled();
+    });
+
+    it('should throw CanonicalEntityNotFoundException when no row matches the id and tenant', async () => {
+      mockCanonicalEntityModel.findOne.mockResolvedValueOnce(null);
+
+      await expect(
+        service.update('65f1c2e4a1b2c3d4e5f6a7b8', DEFAULT_TENANT_ID, {
+          canonicalName: 'New Name',
+        }),
+      ).rejects.toBeInstanceOf(CanonicalEntityNotFoundException);
+    });
+
+    it("should load the row with findOne and mutate then save it, so the schema’s pre('validate') normalization hook fires", async () => {
+      const entity = buildSavableEntity();
+      mockCanonicalEntityModel.findOne.mockResolvedValueOnce(entity);
+
+      const result = await service.update('65f1c2e4a1b2c3d4e5f6a7b8', DEFAULT_TENANT_ID, {
+        canonicalName: 'Northgate Renamed',
+        aliases: ['Northgate Renamed Alias'],
+      });
+
+      expect(mockCanonicalEntityModel.findOne).toHaveBeenCalledWith({
+        _id: '65f1c2e4a1b2c3d4e5f6a7b8',
+        tenantId: DEFAULT_TENANT_ID,
+      });
+      expect(entity.canonicalName).toBe('Northgate Renamed');
+      expect(entity.aliases).toEqual(['Northgate Renamed Alias']);
+      expect(entity.save).toHaveBeenCalled();
+      expect(result.canonicalName).toBe('Northgate Renamed');
+      expect(result.aliases).toEqual(['Northgate Renamed Alias']);
+    });
+
+    it('should leave aliases untouched when omitted from updates', async () => {
+      const entity = buildSavableEntity();
+      mockCanonicalEntityModel.findOne.mockResolvedValueOnce(entity);
+
+      await service.update('65f1c2e4a1b2c3d4e5f6a7b8', DEFAULT_TENANT_ID, {
+        canonicalName: 'Northgate Renamed',
+      });
+
+      expect(entity.canonicalName).toBe('Northgate Renamed');
+      expect(entity.aliases).toEqual(['Northgate Bus. Park']);
+    });
+
+    it('should leave canonicalName untouched when omitted from updates', async () => {
+      const entity = buildSavableEntity();
+      mockCanonicalEntityModel.findOne.mockResolvedValueOnce(entity);
+
+      await service.update('65f1c2e4a1b2c3d4e5f6a7b8', DEFAULT_TENANT_ID, {
+        aliases: ['New Alias'],
+      });
+
+      expect(entity.canonicalName).toBe('Northgate Business Park');
+      expect(entity.aliases).toEqual(['New Alias']);
+    });
+
+    it('should map a duplicate-name E11000 error on save to CanonicalEntityNameConflictException', async () => {
+      const entity = buildSavableEntity({ save: jest.fn().mockRejectedValueOnce({ code: 11000 }) });
+      mockCanonicalEntityModel.findOne.mockResolvedValueOnce(entity);
+
+      await expect(
+        service.update('65f1c2e4a1b2c3d4e5f6a7b8', DEFAULT_TENANT_ID, {
+          canonicalName: 'Sablewood Retail Court',
+        }),
+      ).rejects.toBeInstanceOf(CanonicalEntityNameConflictException);
+    });
+
+    it('should rethrow a non-duplicate-key save error unchanged', async () => {
+      const error = new Error('connection reset');
+      const entity = buildSavableEntity({ save: jest.fn().mockRejectedValueOnce(error) });
+      mockCanonicalEntityModel.findOne.mockResolvedValueOnce(entity);
+
+      await expect(
+        service.update('65f1c2e4a1b2c3d4e5f6a7b8', DEFAULT_TENANT_ID, {
+          canonicalName: 'New Name',
+        }),
+      ).rejects.toBe(error);
+    });
+  });
+
+  describe('remove', () => {
+    it('should throw CanonicalEntityNotFoundException for a malformed id, without querying the model', async () => {
+      await expect(service.remove('not-an-object-id', DEFAULT_TENANT_ID)).rejects.toBeInstanceOf(
+        CanonicalEntityNotFoundException,
+      );
+      expect(mockCanonicalEntityModel.findOneAndDelete).not.toHaveBeenCalled();
+    });
+
+    it('should throw CanonicalEntityNotFoundException when no row matches the id and tenant', async () => {
+      mockCanonicalEntityModel.findOneAndDelete.mockResolvedValueOnce(null);
+
+      await expect(
+        service.remove('65f1c2e4a1b2c3d4e5f6a7b8', DEFAULT_TENANT_ID),
+      ).rejects.toBeInstanceOf(CanonicalEntityNotFoundException);
+    });
+
+    it('should delete the row scoped to the tenant', async () => {
+      mockCanonicalEntityModel.findOneAndDelete.mockResolvedValueOnce(
+        buildMockCanonicalEntity({ _id: { toString: () => 'entity-1' } }),
+      );
+
+      await service.remove('65f1c2e4a1b2c3d4e5f6a7b8', DEFAULT_TENANT_ID);
+
+      expect(mockCanonicalEntityModel.findOneAndDelete).toHaveBeenCalledWith({
+        _id: '65f1c2e4a1b2c3d4e5f6a7b8',
+        tenantId: DEFAULT_TENANT_ID,
+      });
     });
   });
 });
