@@ -55,6 +55,13 @@ export class DocumentsController {
   // has exactly one upload route, so a route-parameter variant (`/documents/:id/versions`)
   // would add a second endpoint outside that contract. Omitting `documentId` creates a new
   // document from this upload; supplying it targets that document's version chain.
+  //
+  // Deliberately left member-accessible, unlike `SourcesController.create`'s admin gate on
+  // `sourceClass`: a connector source configures where evidence comes from for the whole tenant,
+  // while `dto.sourceClass` here only declares what a file the uploader already chose to add is —
+  // no more consequential than the upload itself, which is already ungated. Gating it would leave
+  // a Member able to add unclassified evidence but not to say what it is, so every browser upload
+  // stayed unclassified regardless — the exact gap this endpoint exists to close.
   @Post()
   @Version('1')
   @HttpCode(HttpStatus.CREATED)
@@ -67,6 +74,7 @@ export class DocumentsController {
         documentId: { type: 'string' },
         title: { type: 'string' },
         requireApproval: { type: 'boolean' },
+        sourceClass: { type: 'string' },
       },
     },
   })
@@ -87,7 +95,9 @@ export class DocumentsController {
 
     return toResponseDto(
       DocumentResponseDto,
-      await this.documentsService.upload(file, dto, user.tenantId),
+      await this.documentsService.upload(file, dto, user.tenantId, {
+        sourceClass: dto.sourceClass,
+      }),
     );
   }
 

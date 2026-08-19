@@ -1,7 +1,13 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
-import type { DocumentSourceKind } from '../../../../../database/schemas/evidence/document/document.schema';
-import { DOCUMENT_SOURCE_KINDS } from '../../../../../database/schemas/evidence/document/document.schema';
+import type {
+  DocumentSourceClass,
+  DocumentSourceKind,
+} from '../../../../../database/schemas/evidence/document/document.schema';
+import {
+  DOCUMENT_SOURCE_CLASSES,
+  DOCUMENT_SOURCE_KINDS,
+} from '../../../../../database/schemas/evidence/document/document.schema';
 import { DocumentVersionResponseDto } from './document-version.response.dto';
 
 export class DocumentResponseDto {
@@ -27,6 +33,16 @@ export class DocumentResponseDto {
     description: 'Raw content type as uploaded.',
   })
   mimeType: string;
+
+  @Expose()
+  @ApiProperty({
+    example: 'unclassified',
+    enum: DOCUMENT_SOURCE_CLASSES,
+    description:
+      "Authority classification for this document. 'unclassified' means nobody has declared one " +
+      '— the survivorship policy treats that as no authority information, not the lowest rank.',
+  })
+  sourceClass: DocumentSourceClass;
 
   @Expose()
   @Type(() => DocumentVersionResponseDto)

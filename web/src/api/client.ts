@@ -136,6 +136,9 @@ export interface EvidenceDocument {
   title: string;
   sourceKind: DocumentSourceKind;
   mimeType: string;
+  // Authority classification for the survivorship policy. 'unclassified' means nobody has
+  // declared one — never rendered as an option an uploader can pick, only as the default state.
+  sourceClass: DocumentSourceClass;
   currentVersion: DocumentVersion;
   createdAt: string;
 }
@@ -151,12 +154,19 @@ export interface WithCount<T> {
 
 export function uploadDocument(
   file: File,
-  options?: { documentId?: string; title?: string },
+  options?: {
+    documentId?: string;
+    title?: string;
+    // Ignored by the server when documentId is set — a new version never changes its document's
+    // class. Never 'unclassified': that is what omitting this field already means.
+    sourceClass?: DocumentSourceClass;
+  },
 ): Promise<EvidenceDocument> {
   const formData = new FormData();
   formData.append('file', file);
   if (options?.documentId) formData.append('documentId', options.documentId);
   else formData.append('title', options?.title?.trim() || file.name);
+  if (options?.sourceClass) formData.append('sourceClass', options.sourceClass);
   return request<EvidenceDocument>('/documents', { method: 'POST', body: formData });
 }
 

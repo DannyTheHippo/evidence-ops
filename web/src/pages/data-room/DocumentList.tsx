@@ -3,6 +3,7 @@ import {
   documentEventsUrl,
   listDocuments,
   uploadDocument,
+  type DocumentSourceClass,
   type DocumentVersionIngestionStatus,
   type EvidenceDocument,
 } from '../../api/client';
@@ -11,6 +12,7 @@ import Button from '../../components/ui/Button';
 import EmptyState from '../../components/ui/EmptyState';
 import Field from '../../components/ui/Field';
 import Pager from '../../components/ui/Pager';
+import Select from '../../components/ui/Select';
 import Skeleton from '../../components/ui/Skeleton';
 import Table, { RowLink, TableHeaderCell, TableRow } from '../../components/ui/Table';
 import { notify } from '../../components/ui/toast';
@@ -19,6 +21,17 @@ import { formatBytes } from './format-size';
 
 const POLL_INTERVAL_MS = 3000;
 const PAGE_SIZE = 20;
+
+// No 'unclassified' option — leaving the field unset is how an uploader says that; the server
+// defaults an omitted sourceClass to it already.
+const SOURCE_CLASS_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: 'Not specified' },
+  { value: 'crm-export', label: 'CRM export' },
+  { value: 'pm-export', label: 'PM export' },
+  { value: 'spreadsheet', label: 'Spreadsheet' },
+  { value: 'memo', label: 'Memo' },
+  { value: 'report', label: 'Report' },
+];
 
 function ingestionTone(
   status: DocumentVersionIngestionStatus,
@@ -34,6 +47,7 @@ export default function DocumentList() {
   const [error, setError] = useState<string | null>(null);
   const [skip, setSkip] = useState(0);
   const [title, setTitle] = useState('');
+  const [sourceClass, setSourceClass] = useState<DocumentSourceClass | ''>('');
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -90,13 +104,17 @@ export default function DocumentList() {
     const errors: string[] = [];
     for (const uploadFile of files) {
       try {
-        await uploadDocument(uploadFile, { title: title || undefined });
+        await uploadDocument(uploadFile, {
+          title: title || undefined,
+          sourceClass: sourceClass || undefined,
+        });
       } catch (err: unknown) {
         errors.push(`${uploadFile.name}: ${err instanceof Error ? err.message : 'Upload failed'}`);
       }
     }
     const uploadedCount = files.length - errors.length;
     setTitle('');
+    setSourceClass('');
     setFiles([]);
     setUploading(false);
     refetch();
@@ -135,6 +153,13 @@ export default function DocumentList() {
               />
             )}
           </Field>
+          <Select
+            label="Source class"
+            hint="Authority for future conflicts on this metric. Leave unset for unclassified."
+            options={SOURCE_CLASS_OPTIONS}
+            value={sourceClass}
+            onChange={(value) => setSourceClass(value as DocumentSourceClass | '')}
+          />
           {/* Mirrors UPLOAD_EXTENSION_ALLOWLIST in documents.constant.ts — the eight kinds the
               upload gate accepts. A narrower list here hides formats the server would take. */}
           <Field

@@ -59,6 +59,7 @@ interface DocumentBody {
   title: string;
   sourceKind: string;
   mimeType: string;
+  sourceClass: string;
   currentVersion: DocumentVersionBody;
   createdAt: string;
 }
@@ -211,8 +212,19 @@ describe('Documents (e2e)', () => {
     // Asserting the exact key set is the only gate that catches a response-DTO field missing
     // @Expose() — such a field is silently dropped from the payload with no error anywhere.
     expect(Object.keys(body).sort()).toEqual(
-      ['id', 'title', 'sourceKind', 'mimeType', 'currentVersion', 'createdAt'].sort(),
+      [
+        'id',
+        'title',
+        'sourceKind',
+        'mimeType',
+        'sourceClass',
+        'currentVersion',
+        'createdAt',
+      ].sort(),
     );
+    // No sourceClass was supplied on this upload — the field still round-trips, at the schema's
+    // own default, not omitted from the payload.
+    expect(body.sourceClass).toBe('unclassified');
     expect(Object.keys(body.currentVersion).sort()).toEqual(
       ['id', 'versionNumber', 'sha256', 'sizeBytes', 'ingestionStatus', 'createdAt'].sort(),
     );
@@ -387,6 +399,142 @@ describe('Documents (e2e)', () => {
     );
 
     expect(response.status).toBe(400);
+  });
+
+  describe('POST /documents sourceClass', () => {
+    it('round-trips a valid sourceClass on a newly created document', async () => {
+      const response = await upload(comps, 'comps.xlsx', XLSX_MIME, {
+        title: 'Classified Upload',
+        sourceClass: 'crm-export',
+      });
+      const body = response.body as DocumentBody;
+
+      expect(response.status).toBe(201);
+      expect(body.sourceClass).toBe('crm-export');
+    });
+
+    // The guard this closes: `resolveConflictPolicy` refuses to rank a fact whose document is
+    // 'unclassified' because that means no authority information was recorded, not the lowest
+    // rank — accepting the word here as an explicit value would be a second way to say nothing,
+    // the same reasoning `UpsertMetricPolicyRequestDto.authorityOrder` already applies.
+    it('refuses an explicit sourceClass of unclassified', async () => {
+      const response = await upload(comps, 'comps.xlsx', XLSX_MIME, {
+        title: 'Explicit Unclassified',
+        sourceClass: 'unclassified',
+      });
+
+      expect(response.status).toBe(400);
+    });
+
+    it('refuses a sourceClass outside the declared enum', async () => {
+      const response = await upload(comps, 'comps.xlsx', XLSX_MIME, {
+        title: 'Bogus Class',
+        sourceClass: 'bogus-class',
+      });
+
+      expect(response.status).toBe(400);
+    });
+
+    // Absent means unclassified, and unclassified means no proposal for this document's facts —
+    // this is the ungated default the field's addition must never change.
+    it('still succeeds with no sourceClass, defaulting to unclassified', async () => {
+      const response = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'No Class Given' });
+      const body = response.body as DocumentBody;
+
+      expect(response.status).toBe(201);
+      expect(body.sourceClass).toBe('unclassified');
+    });
+
+    // End to end, not just at the DTO boundary: an upload that leaves sourceClass unset must
+    // still flow through to `resolveConflictPolicy` refusing a proposal for it —
+    // `net_operating_income` carries a real `authorityOrder` default (`metric-ontology.ts`), so a
+    // classified counterpart fact in the same conflict WOULD win a proposal if this document's
+    // default were anything other than 'unclassified'.
+    it("carries the uploaded document's unclassified default through to a conflict, refusing a proposal for it", async () => {
+      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, {
+        title: 'Unclassified NOI Source',
+      });
+      const uploadedVersionId = (uploaded.body as DocumentBody).currentVersion.id;
+
+      const pmDocument = await documentModel.create({
+        tenantId,
+        title: 'Rent Roll.xlsx',
+        sourceKind: 'xlsx',
+        mimeType: XLSX_MIME,
+        sourceClass: 'pm-export',
+      });
+      const pmVersion = await documentVersionModel.create({
+        tenantId,
+        documentId: pmDocument._id,
+        versionNumber: 1,
+        sha256: 'e'.repeat(64),
+        sizeBytes: 100,
+        storageKey: `pm-rent-roll-${pmDocument._id.toString()}`,
+      });
+
+      // A `Document` whose `currentVersionId` is unset is a state no upload path produces, and
+      // `DocumentsService.list` refuses it with a 500 rather than serving a document it cannot
+      // describe. Linking the version back keeps this fixture to states the API can actually reach.
+      pmDocument.currentVersionId = pmVersion._id;
+      await pmDocument.save();
+
+      const factKey = {
+        entity: 'Unclassified Default Business Park',
+        metric: 'net_operating_income',
+        period: '2025-05',
+      };
+      const unclassifiedFact = await extractedFactModel.create({
+        tenantId,
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        value: { amount: 480000, unit: 'usd' },
+        rawText: 'NOI of $480,000',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-unclassified',
+        documentVersionId: new Types.ObjectId(uploadedVersionId),
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'B2' },
+      });
+      const pmFact = await extractedFactModel.create({
+        tenantId,
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        value: { amount: 500000, unit: 'usd' },
+        rawText: 'NOI of $500,000',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-pm',
+        documentVersionId: pmVersion._id,
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Rent Roll', cell: 'B2' },
+      });
+      const conflict = await conflictModel.create({
+        tenantId,
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        factIds: [unclassifiedFact._id, pmFact._id],
+        magnitude: 20000,
+        status: 'open',
+      });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/conflicts')
+        .set('Cookie', cookie);
+      const body = response.body as {
+        docs: Array<{
+          id: string;
+          ruleFired: string;
+          explanation: string;
+          proposedWinnerFactId?: string;
+        }>;
+      };
+
+      expect(response.status).toBe(200);
+      const listed = body.docs.find((doc) => doc.id === conflict._id.toString());
+      expect(listed).toBeDefined();
+      expect(listed?.ruleFired).toBe('none');
+      expect(listed?.explanation).toContain('unclassified');
+      expect(listed?.proposedWinnerFactId).toBeUndefined();
+    });
   });
 
   it('lists uploaded documents with a count', async () => {

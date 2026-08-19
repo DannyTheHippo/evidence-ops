@@ -17,6 +17,7 @@ const exampleDocument = {
   title: 'Q3 Rent Roll',
   sourceKind: 'xlsx',
   mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  sourceClass: 'unclassified',
   currentVersion: exampleVersion,
   createdAt: '2026-07-01T00:00:00.000Z',
 };

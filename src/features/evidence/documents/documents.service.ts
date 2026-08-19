@@ -107,9 +107,10 @@ interface UploadResult {
   isNewVersion: boolean;
 }
 
-/** Not on `UploadDocumentRequestDto`: a browser upload has neither a source class to inherit nor
- * a source to attribute — only a connector sync (`SourcesService.syncOneFile`) knows the
- * originating `Source` and passes both here for a new document to inherit. */
+/** `sourceClass` arrives two ways: a browser upload's own `UploadDocumentRequestDto.sourceClass`
+ * (the uploader declaring what the file is), or a connector sync (`SourcesService.syncOneFile`)
+ * inheriting it from the originating `Source.sourceClass`. `sourceId` only ever comes from the
+ * sync path — a browser upload has no source to attribute. */
 interface UploadSourceOptions {
   sourceClass?: DocumentSourceClass;
   sourceId?: Types.ObjectId;
@@ -798,6 +799,7 @@ export class DocumentsService {
       title: document.title,
       sourceKind: document.sourceKind,
       mimeType: document.mimeType,
+      sourceClass: document.sourceClass,
       currentVersion: this.toVersionDto(currentVersion),
       createdAt: document.createdAt,
     };

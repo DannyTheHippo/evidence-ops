@@ -285,6 +285,62 @@ describe('DocumentList', () => {
       });
     });
 
+    it('offers the declarable source classes but never unclassified, and threads the chosen one into the upload', async () => {
+      const uploaded = {
+        id: 'doc-4',
+        title: 'Classified',
+        sourceKind: 'pdf',
+        mimeType: 'application/pdf',
+        sourceClass: 'memo',
+        currentVersion: {
+          id: 'v-4',
+          versionNumber: 1,
+          sha256: 'd'.repeat(64),
+          sizeBytes: 50,
+          ingestionStatus: 'pending',
+          createdAt: new Date().toISOString(),
+        },
+        createdAt: new Date().toISOString(),
+      };
+
+      const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          return Promise.resolve(jsonResponse(uploaded));
+        }
+        return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      renderList();
+      await screen.findByText('No documents yet');
+
+      const select = screen.getByLabelText('Source class');
+      const optionLabels = screen
+        .getAllByRole('option')
+        .filter((option) => option.closest('select') === select)
+        .map((option) => option.textContent);
+      expect(optionLabels).not.toContain('Unclassified');
+      expect(optionLabels).toContain('Memo');
+
+      fireEvent.change(select, { target: { value: 'memo' } });
+      fireEvent.change(screen.getByLabelText('File', { exact: false }), {
+        target: { files: [new File(['a'], 'memo.pdf', { type: 'application/pdf' })] },
+      });
+      const form = screen.getByRole('button', { name: 'Upload' }).closest('form');
+      if (!form) throw new Error('Upload form not found');
+      fireEvent.submit(form);
+
+      await waitFor(() => {
+        const uploadCall = fetchMock.mock.calls.find(
+          ([, init]) => init?.method === 'POST' && init.body instanceof FormData,
+        );
+        if (!uploadCall) throw new Error('No upload call found');
+        const body = uploadCall[1]?.body;
+        if (!(body instanceof FormData)) throw new Error('Upload body was not FormData');
+        expect(body.get('sourceClass')).toBe('memo');
+      });
+    });
+
     it('keeps polling while any version is pending, and stops once none is', async () => {
       vi.useFakeTimers();
       const pendingDoc = {
