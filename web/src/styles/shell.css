@@ -258,4 +258,37 @@
     gap: var(--space-3);
     padding: 0 var(--space-4);
   }
+  /* The breadcrumb yields before the controls do: it restates the page title sitting directly
+     below it, while each control in `.topbar-end` is the only way to reach what it does. */
+  .breadcrumb {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .topbar-end {
+    flex: none;
+    gap: var(--space-2);
+  }
+  /* The toggle's visible label duplicates the `aria-label` the button already carries, so at phone
+     width the text gives way and the control does not. Clipped rather than `display: none` to keep
+     it in the accessibility tree, and dropping it releases the min-width that pins the button wide
+     enough for "System"/"Light"/"Dark" — there is nothing left to pin once only the icon shows.
+     `.connection-status` stays visible: it is an `aria-live` region reporting whether updates are
+     arriving at all, which is not something a narrow viewport makes less worth knowing. */
+  .theme-toggle {
+    min-width: 0;
+    justify-content: center;
+  }
+  .theme-toggle > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
 }
