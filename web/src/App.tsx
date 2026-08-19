@@ -71,7 +71,13 @@ export default function App() {
     if (previousPathname.current === location.pathname) return;
     previousPathname.current = location.pathname;
     mainRef.current?.focus();
-    window.scrollTo(0, 0);
+    // `#main-content` carries `.container`'s `overflow-y: auto` and is the element that actually
+    // scrolls — `body` is `overflow: hidden` under a `100vh` root, so the document scrolling element
+    // never moves and `window.scrollTo` would do nothing. Focusing the container scrolls its
+    // ancestors to reveal it; it does not reset the container's own offset, so this is separate.
+    // Assigning `scrollTop` rather than calling `scrollTo`: the property is what jsdom implements,
+    // so the reset stays assertable in a test.
+    if (mainRef.current) mainRef.current.scrollTop = 0;
   }, [location.pathname]);
 
   // Derived outside the setState updater deliberately: StrictMode double-invokes updaters, so a

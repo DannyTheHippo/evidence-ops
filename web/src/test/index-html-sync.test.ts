@@ -13,8 +13,12 @@ import { THEME_STORAGE_KEY } from '../components/shell/ThemeToggle';
  * `@types/node`, and its Docker build stage copies only `web/`, so a `node:*` import type-checks
  * on a developer machine — where TypeScript walks up to the API root's `node_modules` — and fails
  * inside the container. */
+/** The script element's text content, which is what CSP hashes — the newline immediately after the
+ * open tag included. The HTML parser's "drop one leading newline" rule covers `pre`, `textarea` and
+ * `listing` only, never `script`, so a capture that starts after that newline hashes to a value no
+ * browser ever computes. */
 function inlineThemeScript(): string {
-  const match = indexHtml.match(/<script>\n([\s\S]*?)<\/script>/);
+  const match = indexHtml.match(/<script>([\s\S]*?)<\/script>/);
   expect(match).not.toBeNull();
   return match![1];
 }
@@ -22,6 +26,13 @@ function inlineThemeScript(): string {
 describe('index.html ↔ nginx.conf', () => {
   /** Fails CLOSED. A stale hash blocks the bootstrap under CSP, and because the bootstrap exists
    * to set `data-theme` before first paint, every cold load then flashes the wrong theme. */
+  it('hashes the script element text content, newline included', () => {
+    // The property the hash depends on, asserted directly: a capture that trimmed this newline
+    // would still agree with whatever value nginx.conf happened to hold, so comparing the two is
+    // not on its own enough to catch it. Every browser hashes the text content as parsed.
+    expect(inlineThemeScript().startsWith('\n')).toBe(true);
+  });
+
   it('pins the current bytes of the inline theme script in the CSP script-src hash', async () => {
     const digest = await crypto.subtle.digest(
       'SHA-256',

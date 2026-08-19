@@ -190,9 +190,9 @@ describe('AnswerView', () => {
 
     expect(screen.getByText('1 of 1 claim verified against the source')).toBeInTheDocument();
     expect(screen.queryByText(/claim.*dropped/)).not.toBeInTheDocument();
-    // The ratio is the whole statement on this path. A zero "not asserted" line and a notice
-    // restating the same fact both used to render alongside it, so a fully-verified answer said
-    // one thing three times, once as a double negative.
+    // The ratio is the whole statement on this path: a zero "not asserted" line and a notice
+    // restating it would each say the same fact a second and third time, the first as a double
+    // negative.
     expect(screen.queryByText(/not asserted/)).not.toBeInTheDocument();
     expect(
       screen.queryByText(/was checked against the source and verified/),

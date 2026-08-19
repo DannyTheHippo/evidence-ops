@@ -41,20 +41,25 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
   render(): ReactNode {
     if (this.state.hasError) {
       return (
-        <EmptyState
-          icon={<IconXOctagon size={24} />}
-          title="This page couldn't load"
-          description="Something broke while rendering it. Reload to try again."
-          action={
-            <button
-              type="button"
-              className="btn btn--primary"
-              onClick={() => window.location.reload()}
-            >
-              Reload
-            </button>
-          }
-        />
+        // `EmptyState` carries no role of its own — an empty list is not an event worth
+        // interrupting for. A crash is: this replaces whatever the reader was on, with no other
+        // signal that it happened, so the wrapper supplies the live region the fallback needs.
+        <div role="alert">
+          <EmptyState
+            icon={<IconXOctagon size={24} />}
+            title="This page couldn't load"
+            description="Something broke while rendering it. Reload to try again."
+            action={
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={() => window.location.reload()}
+              >
+                Reload
+              </button>
+            }
+          />
+        </div>
       );
     }
     return this.props.children;

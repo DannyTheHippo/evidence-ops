@@ -238,21 +238,25 @@
   display: block;
 }
 
-/* Below 768px a wide `.grid` has no room to lay its columns out side by side — `.panel`'s
-   `overflow: auto` would otherwise fall back to a horizontal scrollbar that drags the sticky
-   `thead` sideways with it, losing the column names it exists to preserve. This turns each row
-   into a labelled card instead: the header row is redundant once every cell states its own label,
-   so it is hidden rather than left to render sideways. `RowLink` stays exactly where the page put
-   it — nothing here reorders or hides a cell's children, only adds a label above them. */
-/* Below this width a wide table stops being readable as a grid: the only alternative the app had
-   was a horizontal scrollbar it never announced, under a `position: sticky` thead that sticks
-   vertically only — so scrolling right loses the column names it was preserving.
+/* Below this width a wide table stops being readable as a grid: `.panel`'s `overflow: auto` falls
+   back to a horizontal scrollbar the app never announces, under a `position: sticky` thead that
+   sticks vertically only — so scrolling right loses the column names it exists to preserve. Each
+   row becomes a labelled card instead, and the header row is hidden because every cell now states
+   its own label. `RowLink` stays exactly where the page put it: nothing here reorders or hides a
+   cell's children, it only adds a label above them.
 
    Every rule is scoped to `.grid:has(td[data-label])`, which makes the transformation opt-in: a
    table becomes a stack of labelled cards only once its cells carry labels via `TableCell`. A table
    still on bare `<td>` keeps the scroll it has today, because stacking it would hide the header row
-   and leave its values in an unlabelled column with nothing to identify them. */
-@media (max-width: 768px) {
+   and leave its values in an unlabelled column with nothing to identify them.
+
+   `screen` is load-bearing, not decoration. In paged media the media-query viewport is the page box:
+   Letter and A4 at default margins both land under 768px, so a bare `max-width` query matches while
+   printing. `:has()` also carries the specificity of its argument, putting these rules at (0,2,2)
+   against the print block's (0,1,1) — and media queries add none — so on paper they would beat the
+   print rules outright rather than tying and losing on source order, taking the repeating table
+   header with them and stacking every row into a full-width card. */
+@media screen and (max-width: 768px) {
   .grid:has(td[data-label]) thead {
     display: none;
   }
@@ -435,13 +439,17 @@
   font-weight: 600;
   color: var(--ink-dim);
 }
+/* The resting border stays on `--hairline-strong`: it is the whole visual boundary of the control,
+   so it is the one carrying the non-text contrast requirement. `--hairline` is the divider tone,
+   drawn between things that are already separated by layout, and is too light to stand as a
+   control's own edge. Hover moves toward the signal tone instead of borrowing this one. */
 .field input,
 .field textarea,
 .select {
   padding: var(--space-3) var(--space-3);
   background: var(--surface);
   color: var(--ink);
-  border: 1px solid var(--hairline);
+  border: 1px solid var(--hairline-strong);
   border-radius: var(--radius-sm);
   font-family: inherit;
   font-size: var(--text-md);
@@ -464,7 +472,7 @@
 .field input:hover,
 .field textarea:hover,
 .select:hover {
-  border-color: var(--hairline-strong);
+  border-color: var(--signal-line);
 }
 .field input:focus-visible,
 .field textarea:focus-visible,

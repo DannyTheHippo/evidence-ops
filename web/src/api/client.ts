@@ -24,8 +24,8 @@ export class ApiError extends Error {
   }
 }
 
-// The one place this wording lives — every page that used to write its own "can't reach the
-// server" fallback reads it from here instead via `TransportError`.
+// The single wording for an unreachable server, reached by every call site through
+// `TransportError` rather than restated per page.
 const TRANSPORT_ERROR_MESSAGE = 'Could not reach the server. Check your connection and try again.';
 
 /** Thrown when `fetch` itself never produces an HTTP response — a dropped connection, DNS
@@ -84,16 +84,51 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ? AbortSignal.any([init.signal, timeoutController.signal])
     : timeoutController.signal;
 
-  let res: Response;
+  // The timer spans the body read as well as the response, not just `fetch`: `fetch` settles as
+  // soon as the headers arrive, so a server that sends headers and then stalls mid-body would hold
+  // the request open indefinitely if the timeout were cleared at that point.
   try {
-    // The credential is now an HttpOnly cookie, not a header the SPA attaches itself —
-    // 'same-origin' is what makes the browser actually send it.
-    res = await fetch(`${API}${path}`, { ...init, headers, credentials: 'same-origin', signal });
+    // The credential is an HttpOnly cookie the SPA never handles itself; 'same-origin' is what
+    // makes the browser attach it.
+    const res = await fetch(`${API}${path}`, {
+      ...init,
+      headers,
+      credentials: 'same-origin',
+      signal,
+    });
+
+    if (res.status === 401 && !path.startsWith('/auth/')) {
+      window.location.assign('/login');
+      throw new ApiError(401, 'Unauthorized');
+    }
+
+    if (!res.ok) {
+      throw new ApiError(res.status, await readErrorMessage(res));
+    }
+
+    if (res.status === 204) {
+      return undefined as T;
+    }
+
+    const text = await res.text();
+    if (!text) return undefined as T;
+
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      // A 2xx whose body is not JSON means something answered in the API's place — a proxy landing
+      // on the wrong upstream, or a captive portal. Raising `ApiError` holds the guarantee every
+      // call site relies on, that this module throws `ApiError` and nothing else; the raw
+      // `SyntaxError` would put "Unexpected token '<'" in front of the user instead.
+      throw new ApiError(res.status, 'The server sent a response this app could not read.');
+    }
   } catch (err) {
-    // A rejection this helper recognizes as "no response ever arrived" — our own timeout, or the
-    // TypeError a browser throws for a dropped connection, blocked CORS request, or DNS failure —
-    // becomes the typed transport error. Anything else propagates unchanged: swallowing an
-    // unrecognized rejection into a generic message would hide a real defect instead of surfacing it.
+    // Recognized as "no complete response arrived": this helper's own timeout, whether it fired
+    // against the connection or against a stalled body, or the TypeError a browser throws for a
+    // dropped connection, blocked CORS request, or DNS failure. `ApiError` passes through — a
+    // server that answered is not a transport failure — and so does anything unrecognized, because
+    // swallowing it into a generic message would hide a real defect rather than surface it.
+    if (err instanceof ApiError) throw err;
     if (timeoutController.signal.aborted || err instanceof TypeError) {
       throw new TransportError();
     }
@@ -101,22 +136,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   } finally {
     clearTimeout(timeoutId);
   }
-
-  if (res.status === 401 && !path.startsWith('/auth/')) {
-    window.location.assign('/login');
-    throw new ApiError(401, 'Unauthorized');
-  }
-
-  if (!res.ok) {
-    throw new ApiError(res.status, await readErrorMessage(res));
-  }
-
-  if (res.status === 204) {
-    return undefined as T;
-  }
-
-  const text = await res.text();
-  return (text ? (JSON.parse(text) as T) : undefined) as T;
 }
 
 function jsonBody(data: unknown): RequestInit {

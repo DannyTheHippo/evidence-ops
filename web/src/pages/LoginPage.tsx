@@ -26,9 +26,10 @@ export default function LoginPage() {
       await login(email, password);
       await navigate('/');
     } catch (err: unknown) {
-      // Every error `login`/`register` can throw is an `ApiError` — an HTTP failure, or a
-      // transport failure the client already turned into one — so its message is always the
-      // right thing to show here, whether it names an invalid credential or an unreachable server.
+      // `login`/`register` throw `ApiError` and nothing else: the client converts a transport
+      // failure and an unreadable body into one before either reaches here. Its message is
+      // therefore always presentable, whether it names an invalid credential or an unreachable
+      // server, and never a raw browser exception string.
       setError(err instanceof Error ? err.message : 'Something went wrong.');
     } finally {
       setLoading(false);
