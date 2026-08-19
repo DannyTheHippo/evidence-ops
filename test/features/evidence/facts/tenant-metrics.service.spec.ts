@@ -10,6 +10,7 @@ import {
 import { InvalidMetricIdException } from '../../../../src/features/evidence/facts/exceptions/facts.exception';
 import { METRIC_ONTOLOGY } from '../../../../src/features/evidence/facts/metric-ontology';
 import { TenantMetricsService } from '../../../../src/features/evidence/facts/tenant-metrics.service';
+import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
 import { getMockModel } from '../../../utils/get-mock-model';
@@ -25,16 +26,19 @@ function fact(overrides: Partial<FactForConflictScan> = {}): FactForConflictScan
 
 describe('TenantMetricsService', () => {
   const EPOCH = new Date('2026-01-01T00:00:00.000Z');
+  const actorId = '65f1c2e4a1b2c3d4e5f6a7b9';
   let service: TenantMetricsService;
 
   const mockTenantMetricModel = getMockModel();
   const mockLogger = getMockLogger();
+  const mockAuditService = { record: jest.fn() };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         TenantMetricsService,
         { provide: getModelToken(TenantMetric.name), useValue: mockTenantMetricModel },
+        { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: mockLogger },
       ],
     }).compile();
@@ -100,10 +104,11 @@ describe('TenantMetricsService', () => {
   describe('upsert', () => {
     it('should throw InvalidMetricIdException for a malformed metricId and write nothing', async () => {
       await expect(
-        service.upsert(DEFAULT_TENANT_ID, 'Not A Metric!', 'Some Label'),
+        service.upsert(DEFAULT_TENANT_ID, 'Not A Metric!', 'Some Label', actorId),
       ).rejects.toThrow(InvalidMetricIdException);
 
       expect(mockTenantMetricModel.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(mockAuditService.record).not.toHaveBeenCalled();
     });
 
     it('should rename a code-ontology metric by upserting its label', async () => {
@@ -114,7 +119,12 @@ describe('TenantMetricsService', () => {
         createdAt: EPOCH,
       });
 
-      const result = await service.upsert(DEFAULT_TENANT_ID, 'cap_rate', 'Capitalization Rate');
+      const result = await service.upsert(
+        DEFAULT_TENANT_ID,
+        'cap_rate',
+        'Capitalization Rate',
+        actorId,
+      );
 
       expect(mockTenantMetricModel.findOneAndUpdate).toHaveBeenCalledWith(
         { tenantId: DEFAULT_TENANT_ID, metricId: 'cap_rate' },
@@ -122,6 +132,12 @@ describe('TenantMetricsService', () => {
         { upsert: true, new: true, setDefaultsOnInsert: true },
       );
       expect(result.isCustom).toBe(false);
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'tenant-metrics.upserted',
+        actorId,
+        subject: { entityType: 'TenantMetric', entityId: 'row-1' },
+        tenantId: DEFAULT_TENANT_ID,
+      });
     });
 
     it('should add a new measure for a metricId outside METRIC_IDS', async () => {
@@ -132,7 +148,7 @@ describe('TenantMetricsService', () => {
         createdAt: EPOCH,
       });
 
-      const result = await service.upsert(DEFAULT_TENANT_ID, 'walk_score', 'Walk Score');
+      const result = await service.upsert(DEFAULT_TENANT_ID, 'walk_score', 'Walk Score', actorId);
 
       expect(result.isCustom).toBe(true);
     });
@@ -156,7 +172,7 @@ describe('TenantMetricsService', () => {
         label: 'Capitalization Rate (renamed)',
         createdAt: EPOCH,
       });
-      await service.upsert(DEFAULT_TENANT_ID, 'cap_rate', 'Capitalization Rate (renamed)');
+      await service.upsert(DEFAULT_TENANT_ID, 'cap_rate', 'Capitalization Rate (renamed)', actorId);
 
       const after = detectConflicts(facts, METRIC_ONTOLOGY);
 
@@ -167,30 +183,43 @@ describe('TenantMetricsService', () => {
 
   describe('remove', () => {
     it('should throw InvalidMetricIdException for a malformed metricId and delete nothing', async () => {
-      await expect(service.remove(DEFAULT_TENANT_ID, 'Not A Metric!')).rejects.toThrow(
+      await expect(service.remove(DEFAULT_TENANT_ID, 'Not A Metric!', actorId)).rejects.toThrow(
         InvalidMetricIdException,
       );
 
-      expect(mockTenantMetricModel.deleteOne).not.toHaveBeenCalled();
+      expect(mockTenantMetricModel.findOneAndDelete).not.toHaveBeenCalled();
+      expect(mockAuditService.record).not.toHaveBeenCalled();
     });
 
-    it('should delete the tenant-scoped row for the given metricId', async () => {
-      mockTenantMetricModel.deleteOne.mockResolvedValueOnce({ deletedCount: 1 });
+    it('should delete the tenant-scoped row for the given metricId and record an audit event naming it', async () => {
+      mockTenantMetricModel.findOneAndDelete.mockResolvedValueOnce({
+        _id: 'row-1',
+        metricId: 'cap_rate',
+      });
 
-      await service.remove(DEFAULT_TENANT_ID, 'cap_rate');
+      await service.remove(DEFAULT_TENANT_ID, 'cap_rate', actorId);
 
-      expect(mockTenantMetricModel.deleteOne).toHaveBeenCalledWith({
+      expect(mockTenantMetricModel.findOneAndDelete).toHaveBeenCalledWith({
         tenantId: DEFAULT_TENANT_ID,
         metricId: 'cap_rate',
+      });
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'tenant-metrics.removed',
+        actorId,
+        subject: { entityType: 'TenantMetric', entityId: 'row-1' },
+        tenantId: DEFAULT_TENANT_ID,
       });
     });
 
     // Idempotent: a metricId with no authored row is already at its default (or was never
-    // added), so a second revert is a no-op rather than an error.
-    it('should not throw when no row exists for the metricId', async () => {
-      mockTenantMetricModel.deleteOne.mockResolvedValueOnce({ deletedCount: 0 });
+    // added), so a second revert is a no-op rather than an error — and there is no surviving
+    // document to audit.
+    it('should not throw and should not record an audit event when no row exists for the metricId', async () => {
+      mockTenantMetricModel.findOneAndDelete.mockResolvedValueOnce(null);
 
-      await expect(service.remove(DEFAULT_TENANT_ID, 'cap_rate')).resolves.toBeUndefined();
+      await expect(service.remove(DEFAULT_TENANT_ID, 'cap_rate', actorId)).resolves.toBeUndefined();
+
+      expect(mockAuditService.record).not.toHaveBeenCalled();
     });
   });
 });

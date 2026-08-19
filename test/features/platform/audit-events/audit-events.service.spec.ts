@@ -33,6 +33,7 @@ describe('AuditEventsService', () => {
     origin: AuditEventOrigin;
     toolName?: string;
     refusalReason?: string;
+    modifiedCount?: number;
   }
 
   const buildEvent = (overrides: Partial<MockAuditEvent> = {}): MockAuditEvent => ({
@@ -108,6 +109,21 @@ describe('AuditEventsService', () => {
         ],
         count: 1,
       });
+    });
+
+    // `modifiedCount` is the only field distinguishing "reconciled 400 rows" from "reconciled
+    // 0" on a `sources.class_drift_applied` row — mapped explicitly so the field never regresses
+    // to write-only again.
+    it('should map modifiedCount through for a row that carries it', async () => {
+      const actorId = new Types.ObjectId().toString();
+      const event = buildEvent({ action: 'sources.class_drift_applied', modifiedCount: 400 });
+      mockAuditEventModel.find.mockResolvedValueOnce([event]);
+      mockAuditEventModel.countDocuments.mockResolvedValueOnce(1);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      const result = await service.list({ skip: 0, limit: 20 }, actorId, 'tenant-a');
+
+      expect(result.docs[0].modifiedCount).toBe(400);
     });
 
     it('should scope the lookup to an explicit tenantId when provided', async () => {

@@ -42,22 +42,42 @@ function continuesNumberAt(haystack: string, index: number): boolean {
 }
 
 /**
- * `haystack.includes(needle)`, except a `needle` that starts or ends with a digit must not match
- * flush against a longer number in `haystack` — plain substring containment lets a short numeric
- * expectation like `'5%'` match inside `'25%'`, or `'4.1%'` match inside `'14.1%'`, which would
- * report a case correct when the actual figure the answer stated was a different number entirely.
- * The trailing edge (`continuesNumberAt`) additionally tolerates a `.`/`,` immediately after the
- * needle when nothing digit-shaped follows it, so a cited figure sitting at the end of a sentence
- * still matches cleanly instead of being rejected as if the sentence's own period were continuing
- * the number. Non-numeric needles (a tenant name, a full phrase) are unaffected: a word-boundary
- * rule there would reject legitimate prose matches this check has no reason to require.
+ * Whether `edge` — the first or last character of a needle — participates in a number, so that
+ * `includesWithNumericBoundary` knows to guard that side. A bare digit always does. A `.`/`,`
+ * separator does only when `adjacent` — the next character inward, i.e. the needle's second or
+ * second-to-last character — is itself a digit: that is what distinguishes a numeric needle's own
+ * internal separator (`'5,'`, `'.5'`, `',000'`) from a separator that merely sits at the edge of a
+ * non-numeric needle (`'Vantage Fulfillment Co.'`), which must not trigger the guard.
+ */
+function isNumericNeedleEdge(edge: string | undefined, adjacent: string | undefined): boolean {
+  if (edge === undefined) {
+    return false;
+  }
+  return DIGIT_CHAR.test(edge) || (NUMERIC_SEPARATOR_CHAR.test(edge) && isDigit(adjacent));
+}
+
+/**
+ * `haystack.includes(needle)`, except a `needle` whose edge participates in a number
+ * (`isNumericNeedleEdge`) must not match flush against a longer number in `haystack` — plain
+ * substring containment lets a short numeric expectation like `'5%'` match inside `'25%'`, or
+ * `'4.1%'` match inside `'14.1%'`, which would report a case correct when the actual figure the
+ * answer stated was a different number entirely. The trailing edge (`continuesNumberAt`)
+ * additionally tolerates a `.`/`,` immediately after the needle when nothing digit-shaped follows
+ * it, so a cited figure sitting at the end of a sentence still matches cleanly instead of being
+ * rejected as if the sentence's own period were continuing the number. Non-numeric needles (a
+ * tenant name, a full phrase) are unaffected even when they happen to start or end with `.`/`,`: a
+ * word-boundary rule there would reject legitimate prose matches this check has no reason to
+ * require.
  */
 function includesWithNumericBoundary(haystack: string, needle: string): boolean {
   if (needle.length === 0) {
     return true;
   }
-  const needleStartsWithDigit = /^[0-9]/.test(needle);
-  const needleEndsWithDigit = /[0-9]$/.test(needle);
+  const needleStartIsNumeric = isNumericNeedleEdge(needle[0], needle[1]);
+  const needleEndIsNumeric = isNumericNeedleEdge(
+    needle[needle.length - 1],
+    needle[needle.length - 2],
+  );
 
   let searchFrom = 0;
   for (;;) {
@@ -66,9 +86,9 @@ function includesWithNumericBoundary(haystack: string, needle: string): boolean 
       return false;
     }
     const before = index > 0 ? haystack[index - 1] : undefined;
-    const startBoundaryOk = !needleStartsWithDigit || !isNumericBoundaryChar(before);
+    const startBoundaryOk = !needleStartIsNumeric || !isNumericBoundaryChar(before);
     const endBoundaryOk =
-      !needleEndsWithDigit || !continuesNumberAt(haystack, index + needle.length);
+      !needleEndIsNumeric || !continuesNumberAt(haystack, index + needle.length);
     if (startBoundaryOk && endBoundaryOk) {
       return true;
     }

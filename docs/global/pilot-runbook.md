@@ -1,7 +1,7 @@
 # Pilot Runbook
 
 Operating a single-host pilot deployment: bring-up, migrations, verification, backup/restore,
-tenant purge, co-tenanting, upgrades, and the alert-rule table. This is the single-host Docker
+tenant purge, joining an existing tenant, upgrades, and the alert-rule table. This is the single-host Docker
 Compose path, not a cloud deployment — see [What a cloud deployment would add](#what-a-cloud-deployment-would-add)
 for what is deliberately not built.
 
@@ -294,12 +294,34 @@ The `tenants` registry row itself is purged along with everything else — `Tena
 their own `tenantId` field, so the same generic per-collection filter matches the tenant's own
 registry entry, not only the data underneath it.
 
-## Co-tenanting a user
+## Joining an existing tenant
 
-Registration always provisions a brand-new tenant per registrant (`AuthService.register`) — there
-is no self-serve way to join an existing one. `scripts/co-tenant-user.ts`
-(`npm run tenant:co-tenant-user`) is the operator path for putting a second user into a tenant a
-different registrant already created:
+Registration on its own always provisions a brand-new tenant per registrant
+(`AuthService.register`). Two paths put a second user into a tenant someone else already
+provisioned, and they cover different starting points: one for an invitee who has not registered
+anywhere yet, one for a user who already has an account.
+
+**Invitations, for someone who has not registered.** A tenant's own admin mints an invitation —
+the SPA's Invitations page, or `POST /api/v1/invitations` with an `email` and a `role` — and gets
+back a single-use token exactly once (`MintedInvitationResponseDto`; nothing persists it
+server-side, so a lost response means minting again). The admin shares
+`https://<host>/invite#token=<token>` with the invitee out of band; the token lives in the URL
+fragment, never sent to the server as a query parameter, so it never reaches an access log. The
+invitee opens that link, sets a password, and the SPA's redemption call
+(`POST /api/v1/auth/register` with `invitationToken`) creates the account directly in the admin's
+tenant, with the role the admin chose — `UserRole.Member` included, no host shell, no direct Mongo
+access, no operator script. The token expires after `INVITATION_TTL_DAYS` (7 days) and is refused
+if the invitee's email already has an account anywhere.
+
+There is no revoke or recall for a pending invitation — `InvitationsController` exposes mint and
+list only, and no operator script touches the `invitations` collection. An admin who mints one for
+the wrong address cannot un-send it: the token stays redeemable by whoever holds the link until it
+expires on its own, seven days out. The only earlier stop is deleting the `Invitation` document
+directly against Mongo, which nothing in this repo wraps or documents further than that sentence.
+
+**`scripts/co-tenant-user.ts`, for a user who already has an account.** Invitation redemption
+refuses an email that is already registered, so moving an existing account into a different tenant
+is still the operator script's job:
 
 ```bash
 npm run tenant:co-tenant-user -- --user <email> --tenant <tenantId>
@@ -309,13 +331,14 @@ It refuses rather than guesses: the target tenant must already exist in the `ten
 the user must already exist, or nothing changes. It sets `tenantId` on the user row and on that
 user's `api_keys` rows, and nothing else. The keys move so they stay listable and revocable by
 their owner after the move; they also act in the new tenant from that point on, so review whether
-the moved user should still hold them. It never touches `role`, so a registrant who arrives
-already holding `UserRole.Admin` — every registrant does, per
+the moved user should still hold them. It never touches `role`, so a user who arrives already
+holding `UserRole.Admin` — every self-registered account does, per
 [ADR-0014](../adr/0014-tenant-provisioning-and-default-tenant-demotion.md) — keeps that role after
-the move, landing as a second admin of the target tenant rather than a member. It also leaves the
-vacated tenant's own `tenants` registry row behind; if the moved user was that tenant's only
-member, the row becomes an orphaned, empty tenant. `tenant-purge.ts --tenant <vacatedTenantId>`
-covers cleaning that up, since the registry row itself carries a matching `tenantId` field.
+the move, landing as a second admin of the target tenant rather than a member; use an invitation
+instead when the target role should be `member`. It also leaves the vacated tenant's own `tenants`
+registry row behind; if the moved user was that tenant's only member, the row becomes an orphaned,
+empty tenant. `tenant-purge.ts --tenant <vacatedTenantId>` covers cleaning that up, since the
+registry row itself carries a matching `tenantId` field.
 
 ### Host-invoked scripts
 

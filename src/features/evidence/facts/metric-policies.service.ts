@@ -6,6 +6,7 @@ import {
   MetricPolicy,
   MetricPolicyDocument,
 } from '../../../database/schemas/evidence/metric-policy/metric-policy.schema';
+import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { SurvivorshipPolicy } from '../conflicts/resolve-conflict-policy';
 import { UnknownMetricException } from './exceptions/facts.exception';
@@ -52,6 +53,7 @@ export class MetricPoliciesService {
     @InjectModel(MetricPolicy.name)
     private readonly metricPolicyModel: Model<MetricPolicyDocument>,
 
+    private readonly auditService: AuditService,
     private readonly logger: AppLogger,
   ) {
     this.logger.init(MetricPoliciesService.name);
@@ -104,6 +106,7 @@ export class MetricPoliciesService {
     tenantId: string,
     metric: MetricId,
     updates: { authorityOrder?: DocumentSourceClass[]; stalenessWindowMs?: number },
+    actorId: string,
   ): Promise<MetricPolicyResult> {
     if (!findMetricById(METRIC_ONTOLOGY, metric)) {
       throw new UnknownMetricException(`'${metric}' is not a recognized metric`);
@@ -136,6 +139,13 @@ export class MetricPoliciesService {
       setDefaultsOnInsert: true,
     });
 
+    await this.auditService.record({
+      action: 'metric-policies.upserted',
+      actorId,
+      subject: { entityType: 'MetricPolicy', entityId: policy._id.toString() },
+      tenantId,
+    });
+
     this.logger.debug(`Upserted metric policy for '${metric}' in tenant '${tenantId}'`);
 
     return toMetricPolicyResult(policy);
@@ -143,13 +153,23 @@ export class MetricPoliciesService {
 
   /** Reverts a metric to the code ontology default by deleting its authored row. Idempotent: a
    *  metric with no authored row is already at the default, so a second call is a no-op rather
-   *  than an error. */
-  async remove(tenantId: string, metric: MetricId): Promise<void> {
+   *  than an error — and, having deleted nothing, records no audit row either, since there is no
+   *  surviving document to name as the subject. */
+  async remove(tenantId: string, metric: MetricId, actorId: string): Promise<void> {
     if (!findMetricById(METRIC_ONTOLOGY, metric)) {
       throw new UnknownMetricException(`'${metric}' is not a recognized metric`);
     }
 
-    await this.metricPolicyModel.deleteOne({ tenantId, metric });
+    const policy = await this.metricPolicyModel.findOneAndDelete({ tenantId, metric });
+
+    if (policy) {
+      await this.auditService.record({
+        action: 'metric-policies.reverted',
+        actorId,
+        subject: { entityType: 'MetricPolicy', entityId: policy._id.toString() },
+        tenantId,
+      });
+    }
 
     this.logger.debug(`Reverted metric policy for '${metric}' in tenant '${tenantId}' to default`);
   }

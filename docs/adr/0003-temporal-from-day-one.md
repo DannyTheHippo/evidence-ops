@@ -1,6 +1,9 @@
 # ADR-0003 — Temporal from day one, with the determinism boundary as the design line
 
-- **Status:** Accepted — dependencies and dev server verified; workflows not yet implemented
+- **Status:** Accepted — implemented. `src/workflows/` holds four workflows
+  (`answerQuestion`, `ingestDocumentVersion`, `resolveConflict`, `syncSource`), each unit-tested,
+  bundled by `Worker.create` behind the determinism fence, and started by `npm run worker:dev`
+  against a running Temporal dev server
 - **Date:** 2026-08-10
 - **Supersedes:** —
 
@@ -79,9 +82,9 @@ deliberately — `startToCloseTimeout` bounds one attempt so a hung call is retr
 `scheduleToCloseTimeout` bounds the whole lifecycle including retries — with a low
 `maximumAttempts` and `nonRetryableErrorTypes` for 4xx classes so a bad prompt is never retried.
 
-**Verified so far.** SDK 1.22.0 installed; `temporal server start-dev` reports `SERVING` with the
-Web UI on 8233. No workflow code exists yet, and `worker:dev` deliberately exits 1 rather than
-pretending otherwise.
+**Verified.** SDK 1.22.0 installed; `temporal server start-dev` reports `SERVING` with the Web UI on
+8233. All four workflows are implemented under `src/workflows/`, and `worker:dev` starts a real
+`Worker` polling `config.temporal.taskQueue` rather than exiting early.
 
 ## Interview framing
 

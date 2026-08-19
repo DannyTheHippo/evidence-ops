@@ -7,6 +7,7 @@ import {
   normalizeEntityName,
 } from '../../../database/schemas/evidence/canonical-entity/canonical-entity.schema';
 import type { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
+import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
 import {
@@ -77,6 +78,7 @@ export class CanonicalEntityService {
     @InjectModel(CanonicalEntity.name)
     private readonly canonicalEntityModel: Model<CanonicalEntityDocument>,
 
+    private readonly auditService: AuditService,
     private readonly logger: AppLogger,
   ) {
     this.logger.init(CanonicalEntityService.name);
@@ -220,6 +222,7 @@ export class CanonicalEntityService {
   async create(
     tenantId: string,
     input: { canonicalName: string; aliases?: string[] },
+    actorId: string,
   ): Promise<CanonicalEntityResult> {
     let entity: CanonicalEntityDocument;
     try {
@@ -237,6 +240,13 @@ export class CanonicalEntityService {
       }
       throw error;
     }
+
+    await this.auditService.record({
+      action: 'canonical-entities.created',
+      actorId,
+      subject: { entityType: 'CanonicalEntity', entityId: entity._id.toString() },
+      tenantId,
+    });
 
     this.logger.debug(
       `Created canonical entity '${entity._id.toString()}' for tenant '${tenantId}'`,
@@ -260,6 +270,7 @@ export class CanonicalEntityService {
     id: string,
     tenantId: string,
     updates: { canonicalName?: string; aliases?: string[] },
+    actorId: string,
   ): Promise<CanonicalEntityResult> {
     if (!Types.ObjectId.isValid(id)) {
       throw new CanonicalEntityNotFoundException(`Canonical entity '${id}' not found`);
@@ -289,6 +300,13 @@ export class CanonicalEntityService {
       throw error;
     }
 
+    await this.auditService.record({
+      action: 'canonical-entities.updated',
+      actorId,
+      subject: { entityType: 'CanonicalEntity', entityId: id },
+      tenantId,
+    });
+
     this.logger.debug(`Updated canonical entity '${id}' for tenant '${tenantId}'`);
 
     return toCanonicalEntityResult(entity);
@@ -297,7 +315,7 @@ export class CanonicalEntityService {
   /** Deleting a row does not retroactively regroup facts already extracted under its
    *  `groupKeyNormalized` — that key was computed at extraction time, so a fact extracted while
    *  this row resolved its entity keeps grouping under the name that was canonical then. */
-  async remove(id: string, tenantId: string): Promise<void> {
+  async remove(id: string, tenantId: string, actorId: string): Promise<void> {
     if (!Types.ObjectId.isValid(id)) {
       throw new CanonicalEntityNotFoundException(`Canonical entity '${id}' not found`);
     }
@@ -306,6 +324,13 @@ export class CanonicalEntityService {
     if (!entity) {
       throw new CanonicalEntityNotFoundException(`Canonical entity '${id}' not found`);
     }
+
+    await this.auditService.record({
+      action: 'canonical-entities.removed',
+      actorId,
+      subject: { entityType: 'CanonicalEntity', entityId: id },
+      tenantId,
+    });
 
     this.logger.debug(`Removed canonical entity '${id}' from tenant '${tenantId}'`);
   }

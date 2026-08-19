@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
   listApiKeys,
   mintApiKey,
@@ -12,19 +12,12 @@ import Button from '../components/ui/Button';
 import Dialog from '../components/ui/Dialog';
 import EmptyState from '../components/ui/EmptyState';
 import Field from '../components/ui/Field';
+import Pager from '../components/ui/Pager';
 import Skeleton from '../components/ui/Skeleton';
 import Table, { TableHeaderCell } from '../components/ui/Table';
 import { notify } from '../components/ui/toast';
 
-/**
- * Drops the one-time plaintext `token` from a minted key, returning only the metadata the list
- * renders. This is the sole path a minted key takes into the `keys` state, so that state holds no
- * credential at any point.
- */
-// eslint-disable-next-line react-refresh/only-export-components -- non-component export: this file trades fast refresh for a token-stripping guarantee a test can assert directly
-export function toListedKey({ token: _token, ...listed }: MintedApiKey): ApiKey {
-  return listed;
-}
+const PAGE_SIZE = 20;
 
 function keyStatus(key: ApiKey): { tone: 'verified' | 'caution' | 'neutral'; label: string } {
   if (key.revokedAt) return { tone: 'neutral', label: 'revoked' };
@@ -65,6 +58,9 @@ function KeyRow({ apiKey, onRevoked }: { apiKey: ApiKey; onRevoked: (id: string)
       <td className="cell-sub">
         {apiKey.expiresAt ? new Date(apiKey.expiresAt).toLocaleString() : 'Never expires'}
       </td>
+      <td className="cell-sub">
+        {apiKey.lastUsedAt ? new Date(apiKey.lastUsedAt).toLocaleString() : 'Never used'}
+      </td>
       <td className="cell-actions">
         {!revoked && (
           <>
@@ -103,24 +99,35 @@ function KeyRow({ apiKey, onRevoked }: { apiKey: ApiKey; onRevoked: (id: string)
 
 export default function ApiKeysPage() {
   const [keys, setKeys] = useState<ApiKey[] | null>(null);
+  const [count, setCount] = useState(0);
+  const [skip, setSkip] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
   const [minting, setMinting] = useState(false);
   const [mintError, setMintError] = useState<string | null>(null);
-  // The page's only copy of a plaintext token, backing the one-time panel. `keys` receives a
-  // stripped copy, so dismissing the panel, starting another mint, or leaving the page destroys it,
+  // The page's only copy of a plaintext token, backing the one-time panel. `keys` is populated
+  // solely by re-fetching the list endpoint, whose response never carries a token, so dismissing
+  // the panel, starting another mint, or leaving the page destroys the only copy that exists,
   // matching the server's one-time delivery.
   const [minted, setMinted] = useState<MintedApiKey | null>(null);
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    listApiKeys()
-      .then(({ docs }) => setKeys(docs))
+  const load = useCallback(() => {
+    return listApiKeys({ skip, limit: PAGE_SIZE })
+      .then(({ docs, count: total }) => {
+        setKeys(docs);
+        setCount(total);
+        setError(null);
+      })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'Failed to load API keys');
       });
-  }, []);
+  }, [skip]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   async function handleMint(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -133,7 +140,12 @@ export default function ApiKeysPage() {
     try {
       const key = await mintApiKey(name, expiresAt ? new Date(expiresAt).toISOString() : undefined);
       setMinted(key);
-      setKeys((current) => [toListedKey(key), ...(current ?? [])]);
+      // The list sorts `createdAt: -1` server-side, so a new key always belongs on page 1
+      // regardless of which page mint was triggered from — reload rather than prepend into
+      // whatever page happens to be in view. `setSkip(0)` only re-triggers `load` (its effect
+      // dependency) when `skip` actually changes, so page 1 needs an explicit reload too.
+      if (skip === 0) void load();
+      else setSkip(0);
       setName('');
       setExpiresAt('');
       notify('success', `Minted "${key.name}".`);
@@ -218,7 +230,10 @@ export default function ApiKeysPage() {
               />
             )}
           </Field>
-          <Field label="Expires (optional)" hint="Leave blank for a key that never expires.">
+          <Field
+            label="Expires (optional)"
+            hint="Leave blank and the platform applies its own default expiry. Set a date to choose a different one."
+          >
             {(inputProps) => (
               <input
                 type="datetime-local"
@@ -265,6 +280,7 @@ export default function ApiKeysPage() {
                 <TableHeaderCell>Prefix</TableHeaderCell>
                 <TableHeaderCell>Status</TableHeaderCell>
                 <TableHeaderCell>Expires</TableHeaderCell>
+                <TableHeaderCell>Last used</TableHeaderCell>
                 <TableHeaderCell>Actions</TableHeaderCell>
               </tr>
             </thead>
@@ -276,6 +292,8 @@ export default function ApiKeysPage() {
           </Table>
         </section>
       )}
+
+      {keys && <Pager count={count} skip={skip} pageSize={PAGE_SIZE} onSkipChange={setSkip} />}
     </div>
   );
 }

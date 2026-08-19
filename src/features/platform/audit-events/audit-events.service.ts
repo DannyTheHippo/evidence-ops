@@ -22,6 +22,7 @@ export interface AuditEventResult {
   readonly origin: AuditEventOrigin;
   readonly toolName?: string;
   readonly refusalReason?: string;
+  readonly modifiedCount?: number;
 }
 
 @Injectable()
@@ -93,6 +94,7 @@ export class AuditEventsService {
       origin: event.origin,
       toolName: event.toolName,
       refusalReason: event.refusalReason,
+      modifiedCount: event.modifiedCount,
     };
   }
 }

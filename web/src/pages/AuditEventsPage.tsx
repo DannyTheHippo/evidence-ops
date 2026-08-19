@@ -243,6 +243,9 @@ export default function AuditEventsPage() {
                         </span>
                       </div>
                     )}
+                    {event.modifiedCount !== undefined && (
+                      <div className="cell-sub">{event.modifiedCount} documents modified</div>
+                    )}
                   </td>
                   <td className="cell-sub">
                     <AuditSubject subject={event.subject} />

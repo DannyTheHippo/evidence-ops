@@ -71,10 +71,15 @@ export class MetricPoliciesController {
 
     return toResponseDto(
       MetricPolicyResponseDto,
-      await this.metricPoliciesService.upsert(user.tenantId, metric as MetricId, {
-        authorityOrder: dto.authorityOrder,
-        stalenessWindowMs: dto.stalenessWindowMs,
-      }),
+      await this.metricPoliciesService.upsert(
+        user.tenantId,
+        metric as MetricId,
+        {
+          authorityOrder: dto.authorityOrder,
+          stalenessWindowMs: dto.stalenessWindowMs,
+        },
+        user.userId,
+      ),
     );
   }
 
@@ -95,6 +100,6 @@ export class MetricPoliciesController {
       throw new UnauthorizedException('No token provided');
     }
 
-    await this.metricPoliciesService.remove(user.tenantId, metric as MetricId);
+    await this.metricPoliciesService.remove(user.tenantId, metric as MetricId, user.userId);
   }
 }

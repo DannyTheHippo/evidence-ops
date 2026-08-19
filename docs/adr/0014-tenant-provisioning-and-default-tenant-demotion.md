@@ -1,6 +1,10 @@
 # ADR-0014 — Tenant provisioning and default-tenant demotion
 
-- **Status:** Accepted
+- **Status:** Accepted — extended by
+  `docs/adr/0020-tenant-invitations-and-the-real-member-role.md`, which adds an admin-minted
+  invitation as a second path into a tenant. The bounds below describing no self-serve join and
+  co-tenanting as the only way to a second member are this decision's own scope at the time, not
+  the system's current one; see that ADR for the invitation flow and its route-by-route role audit.
 - **Date:** 2026-08-17
 - **Supersedes:** —
 
@@ -26,16 +30,19 @@ row for it, and creates the registering `User` with that `tenantId` and `role: U
 not the schema's own default of `UserRole.Member`. The two writes are not atomic across collections,
 so if the user creation fails after the tenant row was created, `register` deletes the tenant row it
 just created before re-throwing, rather than leaving an orphaned tenant with no member in it. There
-is no code path for a registrant to join an existing tenant — the `tenantId` on the created user is
-never caller-supplied; `RegisterRequestDto` carries no tenant field at all.
+is no code path here for a registrant to join an existing tenant without an invitation — the
+`tenantId` on a plain registration is never caller-supplied; `RegisterRequestDto` carries no tenant
+field of its own. (`docs/adr/0020-tenant-invitations-and-the-real-member-role.md` later adds a
+second registration path, keyed by an admin-minted invitation token rather than a caller-supplied
+tenant field, so this bound is scoped to plain registration as this decision left it.)
 
 The consequence stated as-is, not redesigned here: because every registrant is the sole admin of a
-tenant containing only themselves, the two Admin-gated actions in the system
-(`STEP_MINIMUM_ROLE`'s `data-room-export` and `mcp-mutate` in
+tenant containing only themselves, the Admin-gated actions in the system at the time this decision
+was made — `STEP_MINIMUM_ROLE`'s Admin-floored steps in
 `src/features/platform/authz/step-policy.authz-hook.ts`, and the approval-decision endpoint
-ADR-0011 introduced) currently refuse nobody who reaches them through their own tenant. A role floor
-only does work once a tenant has a member who isn't its admin, and nothing in this milestone creates
-that situation — co-tenanting, below, is the only way one currently arises.
+ADR-0011 introduced — refused nobody who reached them through their own tenant. A role floor only
+does work once a tenant has a member who isn't its admin, and nothing in this milestone created that
+situation — co-tenanting, below, was the only way one could arise until ADR-0020's invitation flow.
 
 ### `email` stays globally unique — deliberate, not an oversight
 
@@ -72,8 +79,12 @@ uniform rejection message gives an attacker nothing to distinguish the two cases
 
 ### The operator co-tenanting path
 
-`scripts/co-tenant-user.ts` is the only way a second user joins a tenant someone else's registration
-already created, now that registration itself never does. It is intentionally narrow: it requires
+`scripts/co-tenant-user.ts` was, at this decision, the only way a second user joins a tenant someone
+else's registration already created, now that registration itself never does by default.
+`docs/adr/0020-tenant-invitations-and-the-real-member-role.md` later adds an admin-minted invitation
+as a self-serve path for a user who does not yet have an account; this script remains the only path
+for moving an *already-registered* user into a different tenant, since invitation redemption refuses
+an email that already has one. It is intentionally narrow: it requires
 both the target tenant and the user to already exist, sets `tenantId` on the user row and on that
 user's `api_keys` rows and nothing else, and refuses outright rather than creating either side
 implicitly. The key rows move because they carry their mint-time tenant and
@@ -142,11 +153,13 @@ uniqueness means a person cannot hold separate identities in two different tenan
 address; they need a second email if they need to be a genuinely separate account in a second
 tenant.
 
-**Deferred, deliberately.** Role demotion on co-tenanting was not built — every moved user keeps
-their prior role, and every registrant's prior role is always `Admin`. Multi-role-per-tenant
-provisioning (inviting a `Member` directly, rather than moving an existing `Admin`) was not built
-either; the only path into a non-solo tenant today is moving an account that was created solo.
-Neither trade was resolved here; both are named so they are not mistaken for having been built.
+**Deferred, deliberately, as of this decision.** Role demotion on co-tenanting was not built — every
+moved user keeps their prior role, and every registrant's prior role is always `Admin`. Neither
+trade was resolved here; named so it is not mistaken for having been built by this milestone.
+Multi-role-per-tenant provisioning — inviting a chosen role directly, rather than moving an existing
+`Admin` — was deferred here too, and was later built by
+`docs/adr/0020-tenant-invitations-and-the-real-member-role.md`; co-tenanting is no longer the only
+path into a non-solo tenant.
 
 ## Interview framing
 
@@ -172,3 +185,6 @@ Neither trade was resolved here; both are named so they are not mistaken for hav
   by.
 - `docs/global/pilot-runbook.md` — the operator-facing co-tenanting procedure, using the same script
   this ADR records the design of.
+- `docs/adr/0020-tenant-invitations-and-the-real-member-role.md` — the admin-minted invitation flow
+  that extends this ADR's per-registration-tenant decision with a second, self-serve path into an
+  existing tenant, and the route-by-route audit of the Admin-gated actions this ADR names.

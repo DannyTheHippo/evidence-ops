@@ -69,7 +69,7 @@ export class TenantMetricsController {
 
     return toResponseDto(
       TenantMetricResponseDto,
-      await this.tenantMetricsService.upsert(user.tenantId, metricId, dto.label),
+      await this.tenantMetricsService.upsert(user.tenantId, metricId, dto.label, user.userId),
     );
   }
 
@@ -90,6 +90,6 @@ export class TenantMetricsController {
       throw new UnauthorizedException('No token provided');
     }
 
-    await this.tenantMetricsService.remove(user.tenantId, metricId);
+    await this.tenantMetricsService.remove(user.tenantId, metricId, user.userId);
   }
 }

@@ -10,22 +10,26 @@ import {
   resolveConflictPolicy,
   type ConflictingFactForResolution,
 } from '../../../../src/features/evidence/conflicts/resolve-conflict-policy';
+import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
 import { getMockModel } from '../../../utils/get-mock-model';
 
 describe('MetricPoliciesService', () => {
   const EPOCH = new Date('2026-01-01T00:00:00.000Z');
+  const actorId = '65f1c2e4a1b2c3d4e5f6a7b9';
   let service: MetricPoliciesService;
 
   const mockMetricPolicyModel = getMockModel();
   const mockLogger = getMockLogger();
+  const mockAuditService = { record: jest.fn() };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         MetricPoliciesService,
         { provide: getModelToken(MetricPolicy.name), useValue: mockMetricPolicyModel },
+        { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: mockLogger },
       ],
     }).compile();
@@ -181,11 +185,12 @@ describe('MetricPoliciesService', () => {
 
   describe('upsert', () => {
     it('should throw UnknownMetricException for a metric outside METRIC_IDS', async () => {
-      await expect(service.upsert(DEFAULT_TENANT_ID, 'not_a_metric' as never, {})).rejects.toThrow(
-        UnknownMetricException,
-      );
+      await expect(
+        service.upsert(DEFAULT_TENANT_ID, 'not_a_metric' as never, {}, actorId),
+      ).rejects.toThrow(UnknownMetricException);
 
       expect(mockMetricPolicyModel.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(mockAuditService.record).not.toHaveBeenCalled();
     });
 
     it('should $set authorityOrder and $unset the omitted stalenessWindowMs', async () => {
@@ -194,7 +199,7 @@ describe('MetricPoliciesService', () => {
         metric: 'sale_price',
       });
 
-      await service.upsert(DEFAULT_TENANT_ID, 'sale_price', { authorityOrder: ['memo'] });
+      await service.upsert(DEFAULT_TENANT_ID, 'sale_price', { authorityOrder: ['memo'] }, actorId);
 
       expect(mockMetricPolicyModel.findOneAndUpdate).toHaveBeenCalledWith(
         { tenantId: DEFAULT_TENANT_ID, metric: 'sale_price' },
@@ -209,7 +214,7 @@ describe('MetricPoliciesService', () => {
         metric: 'sale_price',
       });
 
-      await service.upsert(DEFAULT_TENANT_ID, 'sale_price', { stalenessWindowMs: 5_000 });
+      await service.upsert(DEFAULT_TENANT_ID, 'sale_price', { stalenessWindowMs: 5_000 }, actorId);
 
       expect(mockMetricPolicyModel.findOneAndUpdate).toHaveBeenCalledWith(
         { tenantId: DEFAULT_TENANT_ID, metric: 'sale_price' },
@@ -224,10 +229,12 @@ describe('MetricPoliciesService', () => {
         metric: 'sale_price',
       });
 
-      await service.upsert(DEFAULT_TENANT_ID, 'sale_price', {
-        authorityOrder: ['memo'],
-        stalenessWindowMs: 5_000,
-      });
+      await service.upsert(
+        DEFAULT_TENANT_ID,
+        'sale_price',
+        { authorityOrder: ['memo'], stalenessWindowMs: 5_000 },
+        actorId,
+      );
 
       expect(mockMetricPolicyModel.findOneAndUpdate).toHaveBeenCalledWith(
         { tenantId: DEFAULT_TENANT_ID, metric: 'sale_price' },
@@ -244,7 +251,7 @@ describe('MetricPoliciesService', () => {
         metric: 'sale_price',
       });
 
-      await service.upsert(DEFAULT_TENANT_ID, 'sale_price', {});
+      await service.upsert(DEFAULT_TENANT_ID, 'sale_price', {}, actorId);
 
       expect(mockMetricPolicyModel.findOneAndUpdate).toHaveBeenCalledWith(
         { tenantId: DEFAULT_TENANT_ID, metric: 'sale_price' },
@@ -252,34 +259,64 @@ describe('MetricPoliciesService', () => {
         { upsert: true, new: true, setDefaultsOnInsert: true },
       );
     });
+
+    it('should record an audit event naming the upserted row as the subject', async () => {
+      mockMetricPolicyModel.findOneAndUpdate.mockResolvedValueOnce({
+        _id: 'policy-1',
+        metric: 'sale_price',
+      });
+
+      await service.upsert(DEFAULT_TENANT_ID, 'sale_price', { authorityOrder: ['memo'] }, actorId);
+
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'metric-policies.upserted',
+        actorId,
+        subject: { entityType: 'MetricPolicy', entityId: 'policy-1' },
+        tenantId: DEFAULT_TENANT_ID,
+      });
+    });
   });
 
   describe('remove', () => {
     it('should throw UnknownMetricException for a metric outside METRIC_IDS', async () => {
-      await expect(service.remove(DEFAULT_TENANT_ID, 'not_a_metric' as never)).rejects.toThrow(
-        UnknownMetricException,
-      );
+      await expect(
+        service.remove(DEFAULT_TENANT_ID, 'not_a_metric' as never, actorId),
+      ).rejects.toThrow(UnknownMetricException);
 
-      expect(mockMetricPolicyModel.deleteOne).not.toHaveBeenCalled();
+      expect(mockMetricPolicyModel.findOneAndDelete).not.toHaveBeenCalled();
+      expect(mockAuditService.record).not.toHaveBeenCalled();
     });
 
-    it('should delete the tenant-scoped row for the given metric', async () => {
-      mockMetricPolicyModel.deleteOne.mockResolvedValueOnce({ deletedCount: 1 });
+    it('should delete the tenant-scoped row for the given metric and record an audit event naming it', async () => {
+      mockMetricPolicyModel.findOneAndDelete.mockResolvedValueOnce({
+        _id: 'policy-1',
+        metric: 'sale_price',
+      });
 
-      await service.remove(DEFAULT_TENANT_ID, 'sale_price');
+      await service.remove(DEFAULT_TENANT_ID, 'sale_price', actorId);
 
-      expect(mockMetricPolicyModel.deleteOne).toHaveBeenCalledWith({
+      expect(mockMetricPolicyModel.findOneAndDelete).toHaveBeenCalledWith({
         tenantId: DEFAULT_TENANT_ID,
         metric: 'sale_price',
+      });
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'metric-policies.reverted',
+        actorId,
+        subject: { entityType: 'MetricPolicy', entityId: 'policy-1' },
+        tenantId: DEFAULT_TENANT_ID,
       });
     });
 
     // Idempotent: a metric with no authored row is already at the ontology default, so a second
-    // revert is a no-op rather than an error.
-    it('should not throw when no row exists for the metric', async () => {
-      mockMetricPolicyModel.deleteOne.mockResolvedValueOnce({ deletedCount: 0 });
+    // revert is a no-op rather than an error — and there is no surviving document to audit.
+    it('should not throw and should not record an audit event when no row exists for the metric', async () => {
+      mockMetricPolicyModel.findOneAndDelete.mockResolvedValueOnce(null);
 
-      await expect(service.remove(DEFAULT_TENANT_ID, 'sale_price')).resolves.toBeUndefined();
+      await expect(
+        service.remove(DEFAULT_TENANT_ID, 'sale_price', actorId),
+      ).resolves.toBeUndefined();
+
+      expect(mockAuditService.record).not.toHaveBeenCalled();
     });
   });
 });

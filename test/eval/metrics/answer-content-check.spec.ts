@@ -128,6 +128,47 @@ describe('answerContainsExpectedStrings', () => {
 
     expect(result).toBe(true);
   });
+
+  it("should not match '5,' inside '5,200' — a comma-edged numeric needle must not fall back to plain containment", () => {
+    const result = answerContainsExpectedStrings('The figure was 5,200 units.', ['5,']);
+
+    expect(result).toBe(false);
+  });
+
+  it("should not match '5.' inside '5.25' — a period-edged numeric needle must not fall back to plain containment", () => {
+    const result = answerContainsExpectedStrings('The rate is 5.25% today.', ['5.']);
+
+    expect(result).toBe(false);
+  });
+
+  it("should not match '.5' inside '2.5' — a leading-period numeric needle must not fall back to plain containment", () => {
+    const result = answerContainsExpectedStrings('The multiplier was 2.5 for this comp.', ['.5']);
+
+    expect(result).toBe(false);
+  });
+
+  it("should not match ',000' inside '92,000' — a leading-comma numeric needle must not fall back to plain containment", () => {
+    const result = answerContainsExpectedStrings('Area is 92,000 sf.', [',000']);
+
+    expect(result).toBe(false);
+  });
+
+  it("should not match '5.25%' inside '15.25%'", () => {
+    const result = answerContainsExpectedStrings('The going-in cap rate was 15.25% this quarter.', [
+      '5.25%',
+    ]);
+
+    expect(result).toBe(false);
+  });
+
+  it("should not match '2,901,600' inside '$2,901,600,000'", () => {
+    const result = answerContainsExpectedStrings(
+      'Net operating income for the portfolio was $2,901,600,000 for the quarter.',
+      ['2,901,600'],
+    );
+
+    expect(result).toBe(false);
+  });
 });
 
 describe('conflictValuesContainExpectedStrings', () => {

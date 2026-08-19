@@ -81,9 +81,10 @@ describe('Serialization (e2e)', () => {
     expect(body.sourceClass).toBe('crm-export');
   });
 
-  // Regression for the write-only audit fields (M1): `origin`, `toolName` and `refusalReason` are
-  // written by AuditService and persisted by the schema, but were readable through no DTO — this
-  // is the gate that catches any of the three losing its @Expose() again.
+  // Regression for the write-only audit fields (M1, plus modifiedCount found in the same class of
+  // gap after M1 landed): `origin`, `toolName`, `refusalReason` and `modifiedCount` are written by
+  // AuditService and persisted by the schema, but were readable through no DTO — this is the gate
+  // that catches any of the four losing its @Expose() again.
   it('exposes origin, toolName and refusalReason in the audit-events list response', async () => {
     const { cookie, tenantId } = await registerTestUser(app, {
       email: 'serialization-audit-events-e2e@example.com',
@@ -115,5 +116,35 @@ describe('Serialization (e2e)', () => {
     expect(body.docs[0].origin).toBe('mcp');
     expect(body.docs[0].toolName).toBe('get_answer');
     expect(body.docs[0].refusalReason).toBe('authz-denied');
+  });
+
+  it('exposes modifiedCount in the audit-events list response', async () => {
+    const { cookie, tenantId } = await registerTestUser(app, {
+      email: 'serialization-audit-events-modified-count-e2e@example.com',
+      password: 'correct-horse-battery',
+    });
+
+    const auditEventModel = app.get<Model<AuditEventDocument>>(getModelToken(AuditEvent.name));
+    const action = 'sources.class_drift_applied';
+    await auditEventModel.create({
+      actor: new Types.ObjectId(),
+      action,
+      subject: { entityType: 'Source', entityId: new Types.ObjectId() },
+      timestamp: new Date(),
+      correlationId: 'corr-serialization-modified-count-e2e',
+      origin: 'api',
+      modifiedCount: 400,
+      tenantId,
+    });
+
+    const response = await request(getTestServer(app))
+      .get('/api/v1/audit-events')
+      .query({ action, entityType: 'Source' })
+      .set('Cookie', cookie);
+    const body = response.body as { docs: Array<Record<string, unknown>> };
+
+    expect(response.status).toBe(200);
+    expect(body.docs).toHaveLength(1);
+    expect(body.docs[0].modifiedCount).toBe(400);
   });
 });

@@ -73,10 +73,14 @@ export class CanonicalEntitiesController {
 
     return toResponseDto(
       CanonicalEntityResponseDto,
-      await this.canonicalEntityService.create(user.tenantId, {
-        canonicalName: dto.canonicalName,
-        aliases: dto.aliases,
-      }),
+      await this.canonicalEntityService.create(
+        user.tenantId,
+        {
+          canonicalName: dto.canonicalName,
+          aliases: dto.aliases,
+        },
+        user.userId,
+      ),
     );
   }
 
@@ -101,10 +105,15 @@ export class CanonicalEntitiesController {
 
     return toResponseDto(
       CanonicalEntityResponseDto,
-      await this.canonicalEntityService.update(id, user.tenantId, {
-        canonicalName: dto.canonicalName,
-        aliases: dto.aliases,
-      }),
+      await this.canonicalEntityService.update(
+        id,
+        user.tenantId,
+        {
+          canonicalName: dto.canonicalName,
+          aliases: dto.aliases,
+        },
+        user.userId,
+      ),
     );
   }
 
@@ -125,6 +134,6 @@ export class CanonicalEntitiesController {
       throw new UnauthorizedException('No token provided');
     }
 
-    await this.canonicalEntityService.remove(id, user.tenantId);
+    await this.canonicalEntityService.remove(id, user.tenantId, user.userId);
   }
 }

@@ -28,9 +28,9 @@ flowchart TB
   end
 
   subgraph API["API process — src/main.ts"]
-    Guards["JwtAuthGuard (global APP_GUARD, deny-by-default)<br/>ThrottlerGuard (global APP_GUARD)<br/>ValidationPipe (whitelist + forbidNonWhitelisted)"]
-    Ctrls["DocumentsController / SourcesController / QaController /<br/>ConflictsController / ApiKeysController / AuthController /<br/>MeasuresController / CanonicalEntitiesController"]
-    ApiSvc["DocumentsService · SourcesService · QaService ·<br/>ConflictsService · ApiKeysService · MeasuresService · CanonicalEntityService"]
+    Guards["PreAuthThrottlerGuard (global APP_GUARD, IP-keyed, ahead of auth)<br/>JwtAuthGuard (global APP_GUARD, deny-by-default)<br/>UserThrottlerGuard (global APP_GUARD, user-keyed)<br/>ValidationPipe (whitelist + forbidNonWhitelisted)"]
+    Ctrls["DocumentsController / SourcesController / QaController /<br/>ConflictsController / ApiKeysController / AuthController /<br/>MeasuresController / CanonicalEntitiesController /<br/>RetrievalController / WorkflowRunsController"]
+    ApiSvc["DocumentsService · SourcesService · QaService ·<br/>ConflictsService · ApiKeysService · MeasuresService · CanonicalEntityService ·<br/>RetrievalService · WorkflowRunsService"]
     Guards --> Ctrls --> ApiSvc
   end
 
@@ -144,7 +144,7 @@ sequenceDiagram
   A->>A: create Answer row, runStatus queued
   A->>T: start answerQuestion with answerId + questionText
   A-->>U: 201 with answer id
-  U->>A: GET /api/v1/answers/:id — polls every 1.5s
+  U->>A: GET /api/v1/answers/:id/events — SSE, primary transport
   T->>W: dispatch to worker
   W->>R: retrieveEvidence
   R-->>W: retrieved chunks, rankFusion top-k
@@ -166,6 +166,13 @@ Two things this diagram is making explicit:
   `answerContractSchema` — the schema the model's structured output is constrained to
   (`src/features/evidence/qa/contracts/answer.contract.ts`). The model has no field to write them
   into, so it cannot forge its own verification result.
+
+`AskPage` opens the stream before it has anything to show and never reopens it once opened — a
+completed answer closes the connection server-side, and the client treats that as a clean finish
+rather than a dropped one. Polling `GET /api/v1/answers/:id` only runs once the stream has given up
+(a server-authored error frame, exhausted reconnect attempts, or no `EventSource` at all) and stops
+the moment `runStatus` reaches a terminal value. See [Live updates](#live-updates-server-sent-events)
+for the other two streams and the controls shared across all three.
 
 ## Provider bindings, and which are fakes today
 
@@ -249,6 +256,36 @@ Index definitions live in `migrations/0003-search-indexes.ts`; the store duplica
 rather than importing them (`tsconfig.build.json` scopes `rootDir` to `src`), and
 `test/features/evidence/retrieval/search-indexes.integration-spec.ts` is what keeps the two
 definitions honest against a live server.
+
+`GET /api/v1/retrieval/search` (`src/features/evidence/retrieval/retrieval.controller.ts`) is the
+one browser-reachable path onto this fusion directly — `RetrievalService` calls the same
+`EvidenceRetrievalService.retrieve` the answer workflow's `retrieveEvidence` activity calls, with no
+grounding gate or citation contract in between, since there is no model output here to check. It is
+the only ungated path to raw corpus text on the browser surface, so `RolesGuard` gates it explicitly
+(`@RequireRole(Member, Admin)`) rather than relying on the guard's default, and it carries its own
+per-tenant `@Throttle()` window narrower than the global default, because every call spends a live
+embedding request. `SearchPage` is the SPA consumer. MCP's `search_evidence` tool reaches the same
+`EvidenceRetrievalService` through a different path — `ToolExecutorService`, not `RolesGuard` — so
+the two entry points enforce the access floor with different mechanisms over the same read.
+
+## Live updates: Server-Sent Events
+
+Three routes stream over `@Sse()` rather than returning once: `GET /api/v1/answers/:id/events`
+(`QaController`), `GET /api/v1/documents/events` (`DocumentsController`), and
+`GET /api/v1/workflow-runs/:id/events` (`WorkflowRunsController`). All three are authenticated like
+any other route — SSE has no separate credential — and all three share two controls from
+`src/shared/utils/stream-session.util.ts`: `acquireStreamSlot` caps concurrent open connections per
+tenant and per user, refusing a new one with 429 once the configured ceiling is already held, and
+`reauthTicks$` closes a connection if the underlying user row is deleted or moves tenant while the
+stream is open.
+
+The three routes are not otherwise uniform. `streamAnswer` and `streamRun` terminate themselves once
+their subject's `runStatus` reaches `completed` or `failed`, and carry no independent time bound
+beyond that — a run that never reaches a terminal status holds its slot until the client disconnects.
+`streamList` (`documents/events`) has no terminal status of its own to close on, so it alone also
+carries a bare `SseConfig.maxStreamLifetimeMs` ceiling. See
+[`0019-stream-lifecycle-and-throttle-keying.md`](../adr/0019-stream-lifecycle-and-throttle-keying.md)
+for the per-route reasoning and `threat-model.md` §9 for the residual risk this leaves.
 
 ## The MCP surface
 
@@ -372,3 +409,5 @@ counters gain a `_total` suffix, so `evidence_ops.grounding.claims_dropped` is q
   reachable from it.
 - `docs/adr/0017-survivorship-policy.md` — the deterministic rules that propose a conflict winner.
 - `docs/adr/0018-metrics-and-alerting-shape.md` — the six signals and why there are not more.
+- `docs/adr/0019-stream-lifecycle-and-throttle-keying.md` — the three SSE streams' shared controls
+  and the one that is not shared.

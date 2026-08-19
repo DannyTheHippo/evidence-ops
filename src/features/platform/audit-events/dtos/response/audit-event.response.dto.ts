@@ -83,4 +83,13 @@ export class AuditEventResponseDto {
     required: false,
   })
   refusalReason?: string;
+
+  @Expose()
+  @ApiProperty({
+    example: 400,
+    description:
+      'How many rows a bulk write action actually touched. Present only on rows recording that class of action.',
+    required: false,
+  })
+  modifiedCount?: number;
 }

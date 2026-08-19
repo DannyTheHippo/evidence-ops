@@ -164,7 +164,9 @@ deliberate, not an oversight. There is no self-serve tenant creation; a second t
 in test setup (`tenant-isolation.e2e-spec.ts` flips a second registered user onto `'tenant-b'`
 directly on the row, then re-logs-in to pick up the new claim). "RBAC" here means exactly two roles
 (`UserRole.Admin`, `UserRole.Member`) and exactly one role-gated endpoint,
-`POST /api/v1/approvals/:id/decision`. New users default to `Member`
+`POST /api/v1/approvals/:id/decision` — the state at this decision, before later milestones gated
+further endpoints; `docs/adr/0020-tenant-invitations-and-the-real-member-role.md` carries the
+current route-by-route count. New users default to `Member`
 (`user.schema.ts`); pre-migration users were backfilled to `Admin` specifically so existing demo
 accounts keep working once the gate lands (`migrations/0010-user-tenancy-and-roles.ts`). Nothing
 else in the system checks role. This ADR does not claim more than that, and neither should a reader
@@ -195,12 +197,14 @@ per feature.
 3. **`upsert: true` gets whatever tenant the intersected filter or update document supplies, never
    one the plugin adds.** Covered by the same primary-control argument as everything else — the
    explicit-tenant service parameters are what get this right, the plugin was never going to.
-4. **Role granularity is exactly two values gating exactly one endpoint.** A member with valid
+4. **Role granularity is two values, gating one endpoint as of this decision.** A member with valid
    credentials can read and write everything else in their own tenant; there is no per-user
    ownership within a tenant, and no role finer than admin/member. Extending `@RequireRole` to a
    second endpoint requires deciding, per endpoint, whether member access to that action is
    actually a problem — it was not evaluated broadly here, only for the one irreversible
    human-judgement action in the system this cycle (ADR-0009's approval decision).
+   `docs/adr/0020-tenant-invitations-and-the-real-member-role.md` later extends the gate to every
+   other admin-only mutation and audits the full route set.
 
 ## Consequences
 
@@ -249,3 +253,7 @@ That trade was not resolved here; it was named so it isn't mistaken for coverage
 - `docs/adr/0009-durable-human-approval-gates.md` — the approval-decision endpoint this ADR's one
   role gate protects, and the fail-closed discipline `MongoApprovalChannel.getDecision` extends
   here to cross-tenant ids.
+- `docs/adr/0014-tenant-provisioning-and-default-tenant-demotion.md` — closes the tenant-provisioning
+  gap this ADR names under "Scope honesty".
+- `docs/adr/0020-tenant-invitations-and-the-real-member-role.md` — extends the role gate this ADR
+  introduced to every other admin-only mutation, with the current route-by-route count.

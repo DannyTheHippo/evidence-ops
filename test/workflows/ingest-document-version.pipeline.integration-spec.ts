@@ -175,7 +175,11 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
     // No canonical-entity rows are seeded for this tenant, so every candidate's entity resolves
     // unmatched and passes through unchanged — the pipeline's real-fixture assertions below are
     // about ingestion, extraction, and conflict detection, not entity canonicalization.
-    const canonicalEntityService = new CanonicalEntityService(canonicalEntityModel, logger);
+    const canonicalEntityService = new CanonicalEntityService(
+      canonicalEntityModel,
+      auditService,
+      logger,
+    );
     const factsService = new FactsService(
       documentVersionModel,
       evidenceChunkModel,
@@ -198,7 +202,11 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
     // No tenant rows are seeded in `metric_policies` either, so this resolves to `METRIC_ONTOLOGY`'s
     // own defaults — the same byte-identical-to-today behaviour `MetricPoliciesService
     // .resolveForTenant`'s own doc comment guarantees.
-    const metricPoliciesService = new MetricPoliciesService(metricPolicyModel, logger);
+    const metricPoliciesService = new MetricPoliciesService(
+      metricPolicyModel,
+      auditService,
+      logger,
+    );
     const conflictsService = new ConflictsService(
       extractedFactModel,
       conflictModel,

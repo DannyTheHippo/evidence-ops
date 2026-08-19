@@ -521,10 +521,10 @@ the API is the fix.
 
 **`npm run eval` requires a recorded cache, and fails loudly on a miss.** Default mode is
 replay-only: no live API calls, zero cost, byte-stable. The committed cache holds 478 model entries
-and 216 embedding entries. `eval/dataset/cases.json` holds 35 cases; the newest run committed under
-`eval/results/` is a 32-case replay at `Cache mode: replay` with 0 failing cases, so a full replay
-of the dataset as it stands is not among the committed results — expect to re-record before
-trusting a run over the current dataset. A request whose key
+and 216 embedding entries. `eval/dataset/cases.json` holds 35 cases, and the newest run committed
+under `eval/results/` (`caa98fb1c6d7c38e9e9927090a2c265610c987c6.json`) is a full 35-case replay at
+`Cache mode: replay` with 0 failing cases — answer-content accuracy 95.0%, conflict recall and
+conflict scope both 100.0%, zero canary leaks, all reproduced with zero live calls. A request whose key
 falls outside the cache — because the corpus, a prompt template, or the model/embedding version
 changed since the last recording — fails with `ModelReplayCacheMissError` or
 `EmbeddingReplayCacheMissError` rather than silently falling through to a live call.

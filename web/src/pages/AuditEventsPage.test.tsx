@@ -58,6 +58,18 @@ const unroutedEvent = {
   origin: 'api' as const,
 };
 
+const classDriftEvent = {
+  id: 'event-4',
+  actor: 'admin@example.com',
+  action: 'sources.class_drift_applied',
+  subject: { entityType: 'Source', entityId: 'source-1' },
+  timestamp: '2026-08-01T15:00:00.000Z',
+  correlationId: 'corr-4',
+  createdAt: '2026-08-01T15:00:00.000Z',
+  origin: 'api' as const,
+  modifiedCount: 400,
+};
+
 const mcpRefusalEvent = {
   id: 'event-3',
   actor: 'mcp-pat-holder@example.com',
@@ -132,6 +144,18 @@ describe('AuditEventsPage', () => {
     expect(within(table).getByText('get_answer')).toBeInTheDocument();
     expect(within(table).getByText('authz-denied')).toBeInTheDocument();
     expect(within(table).queryByText('api')).not.toBeInTheDocument();
+  });
+
+  it('renders the count of documents a class-drift remedy rewrote, stacked under the action', async () => {
+    stubFetch({
+      '/api/v1/audit-events?skip=0&limit=25': () =>
+        jsonResponse({ docs: [classDriftEvent], count: 1 }),
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('sources.class_drift_applied')).toBeInTheDocument();
+    expect(screen.getByText('400 documents modified')).toBeInTheDocument();
   });
 
   it('links a subject with a detail route, and leaves one without a route as plain text', async () => {

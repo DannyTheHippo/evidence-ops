@@ -595,6 +595,9 @@ export interface AuditEventView {
   origin: AuditEventOrigin;
   toolName?: string;
   refusalReason?: string;
+  // Written only on 'sources.class_drift_applied' — the count of documents the remedy rewrote.
+  // Absent on every other action.
+  modifiedCount?: number;
 }
 
 // Five independent optional filters, so this one builds its query with
@@ -754,6 +757,9 @@ export interface ApiKey {
   tokenPrefix: string;
   expiresAt?: string;
   revokedAt?: string;
+  // Stamped on every successful verify — the only signal distinguishing a live PAT from an
+  // abandoned one. Absent means the key has never authenticated a request.
+  lastUsedAt?: string;
   createdAt: string;
 }
 
@@ -770,8 +776,15 @@ export function mintApiKey(name: string, expiresAt?: string): Promise<MintedApiK
   });
 }
 
-export function listApiKeys(): Promise<WithCount<ApiKey>> {
-  return request<WithCount<ApiKey>>('/api-keys');
+export function listApiKeys(params?: {
+  skip?: number;
+  limit?: number;
+}): Promise<WithCount<ApiKey>> {
+  const query = new URLSearchParams();
+  if (params?.skip !== undefined) query.set('skip', String(params.skip));
+  if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  const qs = query.toString();
+  return request<WithCount<ApiKey>>(`/api-keys${qs ? `?${qs}` : ''}`);
 }
 
 export async function revokeApiKey(id: string): Promise<void> {

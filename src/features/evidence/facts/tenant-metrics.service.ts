@@ -5,6 +5,7 @@ import {
   TenantMetric,
   TenantMetricDocument,
 } from '../../../database/schemas/evidence/tenant-metric/tenant-metric.schema';
+import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import { InvalidMetricIdException } from './exceptions/facts.exception';
 import { METRIC_IDS } from './metric-ontology';
@@ -64,6 +65,7 @@ export class TenantMetricsService {
     @InjectModel(TenantMetric.name)
     private readonly tenantMetricModel: Model<TenantMetricDocument>,
 
+    private readonly auditService: AuditService,
     private readonly logger: AppLogger,
   ) {
     this.logger.init(TenantMetricsService.name);
@@ -84,7 +86,12 @@ export class TenantMetricsService {
    * hooks the former, and because a second `PUT` for the same `(tenantId, metricId)` must update
    * the existing row rather than colliding with the unique index.
    */
-  async upsert(tenantId: string, metricId: string, label: string): Promise<TenantMetricResult> {
+  async upsert(
+    tenantId: string,
+    metricId: string,
+    label: string,
+    actorId: string,
+  ): Promise<TenantMetricResult> {
     assertValidMetricId(metricId);
 
     const row = await this.tenantMetricModel.findOneAndUpdate(
@@ -92,6 +99,13 @@ export class TenantMetricsService {
       { $set: { label } },
       { upsert: true, new: true, setDefaultsOnInsert: true },
     );
+
+    await this.auditService.record({
+      action: 'tenant-metrics.upserted',
+      actorId,
+      subject: { entityType: 'TenantMetric', entityId: row._id.toString() },
+      tenantId,
+    });
 
     this.logger.debug(`Upserted tenant metric label for '${metricId}' in tenant '${tenantId}'`);
 
@@ -101,11 +115,21 @@ export class TenantMetricsService {
   /** Reverts a code-ontology metric to its default label, or removes a tenant-added measure
    *  entirely, by deleting its authored row. Idempotent: a metricId with no authored row is
    *  already at its default (or was never added), so a second call is a no-op rather than an
-   *  error. */
-  async remove(tenantId: string, metricId: string): Promise<void> {
+   *  error — and, having deleted nothing, records no audit row either, since there is no
+   *  surviving document to name as the subject. */
+  async remove(tenantId: string, metricId: string, actorId: string): Promise<void> {
     assertValidMetricId(metricId);
 
-    await this.tenantMetricModel.deleteOne({ tenantId, metricId });
+    const row = await this.tenantMetricModel.findOneAndDelete({ tenantId, metricId });
+
+    if (row) {
+      await this.auditService.record({
+        action: 'tenant-metrics.removed',
+        actorId,
+        subject: { entityType: 'TenantMetric', entityId: row._id.toString() },
+        tenantId,
+      });
+    }
 
     this.logger.debug(`Removed tenant metric label for '${metricId}' in tenant '${tenantId}'`);
   }

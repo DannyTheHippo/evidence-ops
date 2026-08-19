@@ -43,11 +43,12 @@ from `MCP_READ_STEP` so a read token and a mutating token stay distinguishable i
 three `ToolDefinition`s (`buildSearchEvidenceTool`, reused unchanged from
 `agentic-retrieval-tools.ts`; `buildGetAnswerTool` and `buildRequestResolutionTool`, both new), and
 hands every one to the same registration/execution path every other tool caller in this codebase
-uses. `StepPolicyAuthzHook`'s `STEP_MINIMUM_ROLE` map grants `'mcp-read'` the same `UserRole.Member`
-floor `'qa-answer'` and `'agentic-retrieval'` already have — read-only evidence search and answer
-lookup performed on behalf of a caller who could already ask the identical question through the
-REST API is not a capability worth gating behind a higher role than asking the question requires in
-the first place. `'mcp-mutate'` is gated at `UserRole.Admin` — starting a workflow that writes an
+uses. `StepPolicyAuthzHook`'s `STEP_MINIMUM_ROLE` map grants `'mcp-read'` a `UserRole.Member` floor —
+read-only evidence search and answer lookup performed on behalf of a caller who could already ask
+the identical question through the REST API is not a capability worth gating behind a higher role
+than asking the question requires in the first place. The map holds exactly two entries, `'mcp-read'`
+and `'mcp-mutate'`; any step absent from it is refused by `authorize`'s fail-closed default rather
+than granted. `'mcp-mutate'` is gated at `UserRole.Admin` — starting a workflow that writes an
 `Approval` row is a step above asking a question, even though the write itself only ever proposes
 (see § A proposing write is permitted; deciding one never will be, below).
 
