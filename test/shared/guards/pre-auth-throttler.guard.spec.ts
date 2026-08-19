@@ -1,6 +1,7 @@
 import type { ExecutionContext } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import type { ThrottlerStorage } from '@nestjs/throttler';
-import { ThrottlerException } from '@nestjs/throttler';
+import { SkipThrottle, ThrottlerException } from '@nestjs/throttler';
 import { PreAuthThrottlerGuard } from '../../../src/shared/guards/pre-auth-throttler.guard';
 import { getMockTypedConfig } from '../../utils/get-mock-typed-config';
 
@@ -40,6 +41,7 @@ describe('PreAuthThrottlerGuard', () => {
     [string, number, number, number, string]
   >;
   let storage: ThrottlerStorage;
+  let reflector: Reflector;
   let guard: PreAuthThrottlerGuard;
 
   beforeEach(() => {
@@ -47,7 +49,8 @@ describe('PreAuthThrottlerGuard', () => {
       .fn<Promise<ThrottlerStorageRecord>, [string, number, number, number, string]>()
       .mockResolvedValue(allowedRecord);
     storage = { increment };
-    guard = new PreAuthThrottlerGuard(storage, getMockTypedConfig());
+    reflector = { getAllAndOverride: jest.fn().mockReturnValue(false) } as unknown as Reflector;
+    guard = new PreAuthThrottlerGuard(storage, getMockTypedConfig(), reflector);
   });
 
   afterEach(() => {
@@ -98,5 +101,50 @@ describe('PreAuthThrottlerGuard', () => {
     const secondKey = increment.mock.calls[1][0];
 
     expect(firstKey).not.toBe(secondKey);
+  });
+
+  // Regression for the perimeter guard silently ignoring `@SkipThrottle()`: a route carrying the
+  // decorator must be let through even once the caller's bucket is already exhausted, the same way
+  // `UserThrottlerGuard` (which extends `@nestjs/throttler`'s `ThrottlerGuard` and gets this for
+  // free) already behaves.
+  it('should let a @SkipThrottle() route through without touching the storage bucket', async () => {
+    increment.mockResolvedValue(blockedRecord);
+    (reflector.getAllAndOverride as jest.Mock).mockReturnValue(true);
+    const context = buildContext({ ip: '203.0.113.7' });
+
+    const result = await guard.canActivate(context);
+
+    expect(result).toBe(true);
+    expect(increment).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Pins the guard's metadata key to the decorator that actually writes it. `@nestjs/throttler`
+   * does not re-export `THROTTLER_SKIP` from its package root, so the guard reconstructs the key
+   * as a literal rather than reaching into `dist/` internals — which means a library change to
+   * that key would restore the exact bug this guard was fixed for, with every mocked test above
+   * still passing. This applies the real decorator through a real `Reflector` so that change
+   * fails here instead of in production.
+   */
+  it('should read the same metadata key that @SkipThrottle() actually writes', async () => {
+    @SkipThrottle()
+    class SkippedController {
+      // `this: void` because the guard only ever reads metadata off this reference — it is never
+      // invoked, and the reference is passed detached from its class.
+      handler(this: void): void {}
+    }
+
+    const realReflector = new Reflector();
+    const pinnedGuard = new PreAuthThrottlerGuard(storage, getMockTypedConfig(), realReflector);
+    increment.mockResolvedValue(blockedRecord);
+
+    const context = {
+      getClass: () => SkippedController,
+      getHandler: () => SkippedController.prototype.handler,
+      switchToHttp: () => ({ getRequest: () => ({ ip: '203.0.113.9' }) }),
+    } as unknown as ExecutionContext;
+
+    await expect(pinnedGuard.canActivate(context)).resolves.toBe(true);
+    expect(increment).not.toHaveBeenCalled();
   });
 });

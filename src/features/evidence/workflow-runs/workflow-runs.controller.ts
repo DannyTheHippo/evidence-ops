@@ -65,8 +65,9 @@ export class WorkflowRunsController {
   // response unconditionally (see `@nestjs/core`'s `sse-stream.js`), so no `@Header()` decorator is
   // needed to get those two headers onto the wire — one would be silently overridden anyway, since
   // Nest applies its own values after any caller-set ones.
-  // `@SkipThrottle()` exempts this route from the global throttler entirely — an unbounded,
-  // unthrottled, long-lived connection with a `WORKFLOW_RUN_STREAM_INTERVAL_MS` DB tick.
+  // `@SkipThrottle()` exempts this route from both global throttler guards (`UserThrottlerGuard`
+  // and the pre-auth perimeter `PreAuthThrottlerGuard`) entirely — an unbounded, unthrottled,
+  // long-lived connection with a `WORKFLOW_RUN_STREAM_INTERVAL_MS` DB tick.
   // Per-tenant and per-user open-connection caps are enforced below (`acquireStreamSlot`, config'd
   // via `TypedConfigService.sse`), refusing with 429 once a tenant or user already has its
   // configured number of streams open. That bounds concurrency, not request rate — a burst of opens

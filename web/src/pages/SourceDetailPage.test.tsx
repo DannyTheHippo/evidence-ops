@@ -469,6 +469,27 @@ describe('SourceDetailPage', () => {
     expect(screen.getByRole('button', { name: 'Sync now' })).toBeInTheDocument();
   });
 
+  it('a member sees the class drift count but not the apply control, matching the server-side 403', async () => {
+    stubFetch(
+      {
+        [GET_URL]: () => jsonResponse(sourceWithFileStates),
+        [DRIFT_URL]: () => jsonResponse({ previousClass: 'memo', count: 2 }),
+      },
+      () => jsonResponse(member),
+    );
+
+    renderAt('source-1');
+
+    // Reading the drift count stays open to every role — only the apply control is admin-only.
+    expect(
+      await screen.findByText('2 documents still carry the previous class (memo).'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Applying class drift requires an admin.')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Apply current class to 2 documents' }),
+    ).not.toBeInTheDocument();
+  });
+
   it('withholds the admin-only notice until the session probe resolves, then admits the admin', async () => {
     let resolveMe: (res: Response) => void;
     const pendingMe = new Promise<Response>((resolve) => {

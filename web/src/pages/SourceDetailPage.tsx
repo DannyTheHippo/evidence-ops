@@ -419,52 +419,59 @@ export default function SourceDetailPage({
                 {drift.count} document{drift.count === 1 ? '' : 's'} still carr
                 {drift.count === 1 ? 'ies' : 'y'} the previous class ({drift.previousClass}).
               </p>
-              <div className="form-actions">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {
-                    setApplyError(null);
-                    setApplyDialogOpen(true);
-                  }}
-                >
-                  Apply current class to {drift.count} document{drift.count === 1 ? '' : 's'}
-                </Button>
-              </div>
-              <Dialog
-                open={applyDialogOpen}
-                onClose={() => setApplyDialogOpen(false)}
-                title={`Apply current class to ${drift.count} document${
-                  drift.count === 1 ? '' : 's'
-                }?`}
-              >
-                <p>
-                  {drift.count} document{drift.count === 1 ? '' : 's'} still carr
-                  {drift.count === 1 ? 'ies' : 'y'} the previous class ({drift.previousClass}). This
-                  applies {source.sourceClass} to every document still carrying{' '}
-                  {drift.previousClass} at the moment you confirm — the number actually changed can
-                  differ from {drift.count} if a sync completes before then.
-                </p>
-                <div className="form-actions">
-                  <Button variant="ghost" onClick={() => setApplyDialogOpen(false)}>
-                    Cancel
-                  </Button>
-                  <Button
-                    variant="danger"
-                    disabled={applying}
-                    onClick={() => void handleApplyDrift()}
+              {sessionResolved && !canManage && (
+                <p className="cell-sub">Applying class drift requires an admin.</p>
+              )}
+              {canManage && (
+                <>
+                  <div className="form-actions">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        setApplyError(null);
+                        setApplyDialogOpen(true);
+                      }}
+                    >
+                      Apply current class to {drift.count} document{drift.count === 1 ? '' : 's'}
+                    </Button>
+                  </div>
+                  <Dialog
+                    open={applyDialogOpen}
+                    onClose={() => setApplyDialogOpen(false)}
+                    title={`Apply current class to ${drift.count} document${
+                      drift.count === 1 ? '' : 's'
+                    }?`}
                   >
-                    {applying
-                      ? 'Applying…'
-                      : `Apply to ${drift.count} document${drift.count === 1 ? '' : 's'}`}
-                  </Button>
-                </div>
-                {applyError && (
-                  <p className="error" role="alert">
-                    {applyError}
-                  </p>
-                )}
-              </Dialog>
+                    <p>
+                      {drift.count} document{drift.count === 1 ? '' : 's'} still carr
+                      {drift.count === 1 ? 'ies' : 'y'} the previous class ({drift.previousClass}).
+                      This applies {source.sourceClass} to every document still carrying{' '}
+                      {drift.previousClass} at the moment you confirm — the number actually changed
+                      can differ from {drift.count} if a sync completes before then.
+                    </p>
+                    <div className="form-actions">
+                      <Button variant="ghost" onClick={() => setApplyDialogOpen(false)}>
+                        Cancel
+                      </Button>
+                      <Button
+                        variant="danger"
+                        disabled={applying}
+                        onClick={() => void handleApplyDrift()}
+                      >
+                        {applying
+                          ? 'Applying…'
+                          : `Apply to ${drift.count} document${drift.count === 1 ? '' : 's'}`}
+                      </Button>
+                    </div>
+                    {applyError && (
+                      <p className="error" role="alert">
+                        {applyError}
+                      </p>
+                    )}
+                  </Dialog>
+                </>
+              )}
             </section>
           )}
 

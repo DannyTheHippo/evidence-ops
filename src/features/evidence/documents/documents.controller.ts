@@ -116,8 +116,9 @@ export class DocumentsController {
   // the response status and streaming headers itself. No `@Header()` for
   // Cache-Control/X-Accel-Buffering either — see `WorkflowRunsController.streamRun`'s identical
   // note: `@nestjs/core`'s `SseStream` already sends both, unconditionally, on every SSE response.
-  // `@SkipThrottle()` exempts this route from the global throttler entirely — an unbounded,
-  // unthrottled, long-lived connection with a `DOCUMENTS_STREAM_INTERVAL_MS` DB tick. Per-tenant
+  // `@SkipThrottle()` exempts this route from both global throttler guards (`UserThrottlerGuard`
+  // and the pre-auth perimeter `PreAuthThrottlerGuard`) entirely — an unbounded, unthrottled,
+  // long-lived connection with a `DOCUMENTS_STREAM_INTERVAL_MS` DB tick. Per-tenant
   // and per-user open-connection caps are enforced below (`acquireStreamSlot`, config'd via
   // `TypedConfigService.sse`), refusing with 429 once a tenant or user already has its configured
   // number of streams open. That bounds concurrency, not request rate — a burst of opens that each
