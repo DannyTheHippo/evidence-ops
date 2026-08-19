@@ -14,7 +14,7 @@ import Field from '../components/ui/Field';
 import Pager from '../components/ui/Pager';
 import Select from '../components/ui/Select';
 import Skeleton from '../components/ui/Skeleton';
-import Table, { TableHeaderCell } from '../components/ui/Table';
+import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
 import { notify } from '../components/ui/toast';
 
 const PAGE_SIZE = 25;
@@ -207,12 +207,16 @@ export default function InvitationsPage() {
                 const status = invitationStatus(invitation);
                 return (
                   <tr key={invitation.id}>
-                    <td>{invitation.email}</td>
-                    <td className="cell-sub">{invitation.role}</td>
-                    <td>
+                    <TableCell label="Email">{invitation.email}</TableCell>
+                    <TableCell label="Role" className="cell-sub">
+                      {invitation.role}
+                    </TableCell>
+                    <TableCell label="Status">
                       <Badge tone={status.tone}>{status.label}</Badge>
-                    </td>
-                    <td className="cell-sub">{new Date(invitation.expiresAt).toLocaleString()}</td>
+                    </TableCell>
+                    <TableCell label="Expires" className="cell-sub">
+                      {new Date(invitation.expiresAt).toLocaleString()}
+                    </TableCell>
                   </tr>
                 );
               })}

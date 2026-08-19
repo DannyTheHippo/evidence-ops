@@ -6,7 +6,7 @@ import Badge from '../components/ui/Badge';
 import EmptyState from '../components/ui/EmptyState';
 import Pager from '../components/ui/Pager';
 import Skeleton from '../components/ui/Skeleton';
-import Table, { RowLink, TableHeaderCell, TableRow } from '../components/ui/Table';
+import Table, { RowLink, TableCell, TableHeaderCell, TableRow } from '../components/ui/Table';
 import { shortId, workflowTypeLabel } from '../lib/identifiers';
 
 const PAGE_SIZE = 25;
@@ -80,15 +80,15 @@ export default function RunsPage() {
             <tbody>
               {runs.map((run) => (
                 <TableRow key={run.id} to={`/workflow-runs/${run.id}`}>
-                  <td>
+                  <TableCell label="Run">
                     <RowLink to={`/workflow-runs/${run.id}`}>
                       {workflowTypeLabel(run.workflowType)}
                     </RowLink>
                     <p className="cell-sub mono" title={run.workflowId}>
                       {shortId(run.workflowId)}
                     </p>
-                  </td>
-                  <td>
+                  </TableCell>
+                  <TableCell label="Status">
                     <Badge tone={STATUS_TONE[run.status]}>{run.status}</Badge>
                     {run.status === 'failed' && run.errorMessage && (
                       <p className="cell-sub">
@@ -97,8 +97,10 @@ export default function RunsPage() {
                         </span>
                       </p>
                     )}
-                  </td>
-                  <td className="cell-sub">{new Date(run.createdAt).toLocaleString()}</td>
+                  </TableCell>
+                  <TableCell label="Created" className="cell-sub">
+                    {new Date(run.createdAt).toLocaleString()}
+                  </TableCell>
                 </TableRow>
               ))}
             </tbody>

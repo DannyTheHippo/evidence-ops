@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getMeasures, type Measures } from '../api/client';
 import Skeleton from '../components/ui/Skeleton';
-import Table, { TableHeaderCell } from '../components/ui/Table';
+import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
 
 // A null figure means nothing was measurable yet — rendering it as 0 or '—' would assert a
 // measurement that never happened, so both formatters below spell it out instead.
@@ -120,11 +120,13 @@ export default function MeasuresPage() {
             <tbody>
               {buildRows(measures).map((row) => (
                 <tr key={row.key}>
-                  <td>
+                  <TableCell label="Measure">
                     {row.name}
                     <div className="cell-sub">{row.explanation}</div>
-                  </td>
-                  <td className="num">{row.value}</td>
+                  </TableCell>
+                  <TableCell label="Value" className="num">
+                    {row.value}
+                  </TableCell>
                 </tr>
               ))}
             </tbody>

@@ -12,7 +12,7 @@ import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import Skeleton from '../components/ui/Skeleton';
-import Table, { TableHeaderCell } from '../components/ui/Table';
+import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
 import RuleEditorDialog from './resolution-rules/RuleEditorDialog';
 
 // The full ontology — mirrors METRIC_IDS (metric-ontology.ts) so the table always shows every
@@ -126,11 +126,11 @@ export default function ResolutionRulesPage() {
                   const order = policy?.authorityOrder;
                   return (
                     <tr key={metric}>
-                      <td>{metric}</td>
-                      <td className="cell-sub">
+                      <TableCell label="Metric">{metric}</TableCell>
+                      <TableCell label="Authority order" className="cell-sub">
                         {order && order.length > 0 ? order.join(' › ') : 'No order configured'}
-                      </td>
-                      <td className="cell-actions">
+                      </TableCell>
+                      <TableCell label="Actions" className="cell-actions">
                         <Button
                           variant="secondary"
                           size="sm"
@@ -138,7 +138,7 @@ export default function ResolutionRulesPage() {
                         >
                           Edit
                         </Button>
-                      </td>
+                      </TableCell>
                     </tr>
                   );
                 })}
@@ -188,13 +188,19 @@ export default function ResolutionRulesPage() {
                 <tbody>
                   {backtest.results.map((result) => (
                     <tr key={result.conflictId}>
-                      <td>{result.factKey.entity}</td>
-                      <td className="cell-sub">{result.factKey.metric}</td>
-                      <td className="cell-sub">{result.factKey.period}</td>
-                      <td>
+                      <TableCell label="Entity">{result.factKey.entity}</TableCell>
+                      <TableCell label="Metric" className="cell-sub">
+                        {result.factKey.metric}
+                      </TableCell>
+                      <TableCell label="Period" className="cell-sub">
+                        {result.factKey.period}
+                      </TableCell>
+                      <TableCell label="Verdict">
                         <Badge tone={VERDICT_TONE[result.verdict]}>{result.verdict}</Badge>
-                      </td>
-                      <td className="cell-sub">{verdictDetail(result)}</td>
+                      </TableCell>
+                      <TableCell label="Detail" className="cell-sub">
+                        {verdictDetail(result)}
+                      </TableCell>
                     </tr>
                   ))}
                 </tbody>

@@ -14,7 +14,7 @@ import EmptyState from '../components/ui/EmptyState';
 import Field from '../components/ui/Field';
 import Pager from '../components/ui/Pager';
 import Skeleton from '../components/ui/Skeleton';
-import Table, { TableHeaderCell } from '../components/ui/Table';
+import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
 import { notify } from '../components/ui/toast';
 
 const PAGE_SIZE = 20;
@@ -50,18 +50,20 @@ function KeyRow({ apiKey, onRevoked }: { apiKey: ApiKey; onRevoked: (id: string)
 
   return (
     <tr>
-      <td>{apiKey.name}</td>
-      <td className="cell-sub mono">{apiKey.tokenPrefix}…</td>
-      <td>
+      <TableCell label="Name">{apiKey.name}</TableCell>
+      <TableCell label="Prefix" className="cell-sub mono">
+        {apiKey.tokenPrefix}…
+      </TableCell>
+      <TableCell label="Status">
         <Badge tone={status.tone}>{status.label}</Badge>
-      </td>
-      <td className="cell-sub">
+      </TableCell>
+      <TableCell label="Expires" className="cell-sub">
         {apiKey.expiresAt ? new Date(apiKey.expiresAt).toLocaleString() : 'Never expires'}
-      </td>
-      <td className="cell-sub">
+      </TableCell>
+      <TableCell label="Last used" className="cell-sub">
         {apiKey.lastUsedAt ? new Date(apiKey.lastUsedAt).toLocaleString() : 'Never used'}
-      </td>
-      <td className="cell-actions">
+      </TableCell>
+      <TableCell label="Actions" className="cell-actions">
         {!revoked && (
           <>
             <Button variant="secondary" size="sm" onClick={() => setConfirmOpen(true)}>
@@ -92,7 +94,7 @@ function KeyRow({ apiKey, onRevoked }: { apiKey: ApiKey; onRevoked: (id: string)
             </Dialog>
           </>
         )}
-      </td>
+      </TableCell>
     </tr>
   );
 }

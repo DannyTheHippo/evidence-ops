@@ -14,7 +14,7 @@ import Field from '../../components/ui/Field';
 import Pager from '../../components/ui/Pager';
 import Select from '../../components/ui/Select';
 import Skeleton from '../../components/ui/Skeleton';
-import Table, { RowLink, TableHeaderCell, TableRow } from '../../components/ui/Table';
+import Table, { RowLink, TableCell, TableHeaderCell, TableRow } from '../../components/ui/Table';
 import { notify } from '../../components/ui/toast';
 import { IconFolder } from '../../components/icons';
 import { useEventStream } from '../../lib/use-event-stream';
@@ -229,23 +229,27 @@ export default function DocumentList() {
             <tbody>
               {documents.map((doc) => (
                 <TableRow key={doc.id} to={`/documents/${doc.id}`}>
-                  <td>
+                  <TableCell label="Title">
                     <RowLink to={`/documents/${doc.id}`}>{doc.title}</RowLink>
-                  </td>
-                  <td>
+                  </TableCell>
+                  <TableCell label="Source">
                     {doc.sourceKind}
                     <p className="cell-sub">{doc.mimeType}</p>
-                  </td>
-                  <td className="num">v{doc.currentVersion.versionNumber}</td>
-                  <td className="num">{formatBytes(doc.currentVersion.sizeBytes)}</td>
-                  <td>
+                  </TableCell>
+                  <TableCell label="Version" className="num">
+                    v{doc.currentVersion.versionNumber}
+                  </TableCell>
+                  <TableCell label="Size" className="num">
+                    {formatBytes(doc.currentVersion.sizeBytes)}
+                  </TableCell>
+                  <TableCell label="Ingestion">
                     <Badge tone={ingestionTone(doc.currentVersion.ingestionStatus)}>
                       {doc.currentVersion.ingestionStatus}
                     </Badge>
                     {doc.currentVersion.ingestionFailureReason && (
                       <p className="cell-sub">{doc.currentVersion.ingestionFailureReason}</p>
                     )}
-                  </td>
+                  </TableCell>
                 </TableRow>
               ))}
             </tbody>

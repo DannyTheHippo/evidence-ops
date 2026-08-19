@@ -14,7 +14,7 @@ import Field from '../components/ui/Field';
 import Pager from '../components/ui/Pager';
 import Select from '../components/ui/Select';
 import Skeleton from '../components/ui/Skeleton';
-import Table, { TableHeaderCell } from '../components/ui/Table';
+import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
 import { shortId } from '../lib/identifiers';
 
 const PAGE_SIZE = 25;
@@ -237,8 +237,10 @@ export default function AuditEventsPage() {
             <tbody>
               {events.map((event) => (
                 <tr key={event.id}>
-                  <td className="cell-sub">{event.actor}</td>
-                  <td>
+                  <TableCell label="Actor" className="cell-sub">
+                    {event.actor}
+                  </TableCell>
+                  <TableCell label="Action">
                     {event.action}
                     {event.refusalReason && (
                       <div>
@@ -250,15 +252,21 @@ export default function AuditEventsPage() {
                     {event.modifiedCount !== undefined && (
                       <div className="cell-sub">{event.modifiedCount} documents modified</div>
                     )}
-                  </td>
-                  <td className="cell-sub">
+                  </TableCell>
+                  <TableCell label="Subject" className="cell-sub">
                     <AuditSubject subject={event.subject} />
-                  </td>
-                  <td className="cell-sub mono" title={event.correlationId}>
+                  </TableCell>
+                  <TableCell
+                    label="Correlation"
+                    className="cell-sub mono"
+                    title={event.correlationId}
+                  >
                     {shortId(event.correlationId)}
-                  </td>
-                  <td className="cell-sub">{new Date(event.timestamp).toLocaleString()}</td>
-                  <td>
+                  </TableCell>
+                  <TableCell label="Timestamp" className="cell-sub">
+                    {new Date(event.timestamp).toLocaleString()}
+                  </TableCell>
+                  <TableCell label="Origin">
                     {event.origin === 'mcp' ? (
                       <>
                         <Badge tone="info">MCP</Badge>
@@ -267,7 +275,7 @@ export default function AuditEventsPage() {
                     ) : (
                       <span className="cell-sub">api</span>
                     )}
-                  </td>
+                  </TableCell>
                 </tr>
               ))}
             </tbody>

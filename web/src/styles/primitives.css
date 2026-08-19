@@ -244,32 +244,40 @@
    into a labelled card instead: the header row is redundant once every cell states its own label,
    so it is hidden rather than left to render sideways. `RowLink` stays exactly where the page put
    it — nothing here reorders or hides a cell's children, only adds a label above them. */
+/* Below this width a wide table stops being readable as a grid: the only alternative the app had
+   was a horizontal scrollbar it never announced, under a `position: sticky` thead that sticks
+   vertically only — so scrolling right loses the column names it was preserving.
+
+   Every rule is scoped to `.grid:has(td[data-label])`, which makes the transformation opt-in: a
+   table becomes a stack of labelled cards only once its cells carry labels via `TableCell`. A table
+   still on bare `<td>` keeps the scroll it has today, because stacking it would hide the header row
+   and leave its values in an unlabelled column with nothing to identify them. */
 @media (max-width: 768px) {
-  .grid thead {
+  .grid:has(td[data-label]) thead {
     display: none;
   }
-  .grid,
-  .grid tbody,
-  .grid tr {
+  .grid:has(td[data-label]),
+  .grid:has(td[data-label]) tbody,
+  .grid:has(td[data-label]) tr {
     display: block;
     width: 100%;
   }
-  .grid tbody tr {
+  .grid:has(td[data-label]) tbody tr {
     margin-bottom: var(--space-3);
     border: 1px solid var(--hairline);
     border-radius: var(--radius);
   }
-  .grid tbody tr:last-child {
+  .grid:has(td[data-label]) tbody tr:last-child {
     margin-bottom: 0;
   }
-  .grid tbody td {
+  .grid:has(td[data-label]) tbody td {
     display: block;
     border-bottom: none;
     padding: var(--space-2) var(--space-4);
   }
   /* Scoped to `[data-label]` so a cell with no label — `TableCell`'s default — renders its value
      with no reserved gutter above it, rather than an empty uppercase line. */
-  .grid tbody td[data-label]::before {
+  .grid:has(td[data-label]) tbody td[data-label]::before {
     content: attr(data-label);
     display: block;
     margin-bottom: var(--space-1);
@@ -281,15 +289,15 @@
   }
   /* The desktop grid right-aligns a numeric or actions column against its neighbours; stacked
      under its own label, right alignment only pushes the value away from the label above it. */
-  .grid tbody td.num,
-  .grid tbody td.cell-actions {
+  .grid:has(td[data-label]) tbody td.num,
+  .grid:has(td[data-label]) tbody td.cell-actions {
     text-align: left;
   }
   /* .cell-actions holds up to three buttons plus, on a sync failure, an error paragraph — the
      desktop `white-space: nowrap` that keeps the column compact would force that content onto one
      unreadable line at card width. `.form-actions`'s own `flex-wrap: wrap` then lets the buttons
      break across lines instead of collapsing into a clipped strip. */
-  .grid tbody td.cell-actions {
+  .grid:has(td[data-label]) tbody td.cell-actions {
     white-space: normal;
   }
 }

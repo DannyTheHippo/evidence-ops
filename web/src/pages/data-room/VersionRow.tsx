@@ -9,6 +9,7 @@ import {
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Skeleton from '../../components/ui/Skeleton';
+import { TableCell } from '../../components/ui/Table';
 import { IconDownload } from '../../components/icons';
 import { truncateSha256 } from '../../lib/identifiers';
 import { formatBytes } from './format-size';
@@ -57,20 +58,24 @@ export default function VersionRow({ version }: { version: DocumentVersion }) {
   return (
     <>
       <tr>
-        <td className="num">v{version.versionNumber}</td>
-        <td className="num">{formatBytes(version.sizeBytes)}</td>
-        <td>
+        <TableCell label="Version" className="num">
+          v{version.versionNumber}
+        </TableCell>
+        <TableCell label="Size" className="num">
+          {formatBytes(version.sizeBytes)}
+        </TableCell>
+        <TableCell label="Ingestion">
           <Badge tone={ingestionTone(version.ingestionStatus)}>{version.ingestionStatus}</Badge>
           {version.ingestionFailureReason && (
             <p className="cell-sub">{version.ingestionFailureReason}</p>
           )}
-        </td>
+        </TableCell>
         {/* The full digest is the chain-of-custody value, but 64 hex characters crowd out the
             rest of the row — head and tail on screen, whole value on hover. */}
-        <td className="cell-sub mono">
+        <TableCell label="sha256" className="cell-sub mono">
           <span title={version.sha256}>{truncateSha256(version.sha256)}</span>
-        </td>
-        <td className="cell-actions">
+        </TableCell>
+        <TableCell label="Actions" className="cell-actions">
           <div className="form-actions">
             <Button variant="ghost" size="sm" aria-expanded={expanded} onClick={toggleChunks}>
               {expanded ? 'Hide chunks' : 'View chunks'}
@@ -80,11 +85,11 @@ export default function VersionRow({ version }: { version: DocumentVersion }) {
               Download
             </a>
           </div>
-        </td>
+        </TableCell>
       </tr>
       {expanded && (
         <tr>
-          <td colSpan={5}>
+          <TableCell colSpan={5}>
             {loading && <Skeleton label="Loading chunks…" lines={2} />}
             {error && (
               <p className="error" role="alert">
@@ -126,7 +131,7 @@ export default function VersionRow({ version }: { version: DocumentVersion }) {
                 )}
               </>
             )}
-          </td>
+          </TableCell>
         </tr>
       )}
     </>

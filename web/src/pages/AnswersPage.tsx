@@ -8,7 +8,7 @@ import EmptyState from '../components/ui/EmptyState';
 import Pager from '../components/ui/Pager';
 import Select from '../components/ui/Select';
 import Skeleton from '../components/ui/Skeleton';
-import Table, { RowLink, TableHeaderCell, TableRow } from '../components/ui/Table';
+import Table, { RowLink, TableCell, TableHeaderCell, TableRow } from '../components/ui/Table';
 import { answerBadge } from '../lib/answer-status';
 
 const PAGE_SIZE = 25;
@@ -122,22 +122,24 @@ export default function AnswersPage() {
                 const badge = answerBadge(answer);
                 return (
                   <TableRow key={answer.id} to={`/answers/${answer.id}`}>
-                    <td>
+                    <TableCell label="Question">
                       <RowLink to={`/answers/${answer.id}`}>
                         <span className="cell-truncate" title={answer.questionText}>
                           {answer.questionText}
                         </span>
                       </RowLink>
-                    </td>
-                    <td>
+                    </TableCell>
+                    <TableCell label="Outcome">
                       <Badge tone={badge.tone}>{badge.label}</Badge>
-                    </td>
-                    <td className="cell-sub">
+                    </TableCell>
+                    <TableCell label="Claim coverage" className="cell-sub">
                       {typeof answer.claimCoverage === 'number'
                         ? `${Math.round(answer.claimCoverage * 100)}%`
                         : '—'}
-                    </td>
-                    <td className="cell-sub">{new Date(answer.createdAt).toLocaleString()}</td>
+                    </TableCell>
+                    <TableCell label="Created" className="cell-sub">
+                      {new Date(answer.createdAt).toLocaleString()}
+                    </TableCell>
                   </TableRow>
                 );
               })}

@@ -6,7 +6,7 @@ import Dialog from '../components/ui/Dialog';
 import EmptyState from '../components/ui/EmptyState';
 import Pager from '../components/ui/Pager';
 import Skeleton from '../components/ui/Skeleton';
-import Table, { TableHeaderCell } from '../components/ui/Table';
+import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
 import { notify } from '../components/ui/toast';
 import EntityEditorDialog from './canonical-entities/EntityEditorDialog';
 
@@ -40,11 +40,11 @@ function EntityRow({
 
   return (
     <tr>
-      <td>{entity.canonicalName}</td>
-      <td className="cell-sub">
+      <TableCell label="Canonical name">{entity.canonicalName}</TableCell>
+      <TableCell label="Aliases" className="cell-sub">
         {entity.aliases.length > 0 ? entity.aliases.join(', ') : 'No aliases'}
-      </td>
-      <td className="cell-actions">
+      </TableCell>
+      <TableCell label="Actions" className="cell-actions">
         <Button variant="secondary" size="sm" onClick={() => onEdit(entity)}>
           Edit
         </Button>
@@ -75,7 +75,7 @@ function EntityRow({
             </p>
           )}
         </Dialog>
-      </td>
+      </TableCell>
     </tr>
   );
 }
