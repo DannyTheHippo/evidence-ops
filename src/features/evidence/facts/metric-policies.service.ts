@@ -1,13 +1,40 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
+import type { DocumentSourceClass } from '../../../database/schemas/evidence/document/document.schema';
 import {
   MetricPolicy,
   MetricPolicyDocument,
 } from '../../../database/schemas/evidence/metric-policy/metric-policy.schema';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { SurvivorshipPolicy } from '../conflicts/resolve-conflict-policy';
-import { METRIC_ONTOLOGY, type MetricId } from './metric-ontology';
+import { UnknownMetricException } from './exceptions/facts.exception';
+import { findMetricById, METRIC_ONTOLOGY, type MetricId } from './metric-ontology';
+
+/**
+ * One authored row as the API returns it. `id` is a plain string rather than the document's
+ * ObjectId because `toResponseDto` runs `plainToInstance` with `excludeExtraneousValues`, which
+ * reads own enumerable properties only — a Mongoose document's `id` is a virtual getter, so a
+ * document handed straight to the DTO serialises without it, silently and with no error. Every
+ * sibling feature maps to a plain result for the same reason (`ApiKeyResult`).
+ */
+export interface MetricPolicyResult {
+  readonly id: string;
+  readonly metric: MetricId;
+  readonly authorityOrder?: DocumentSourceClass[];
+  readonly stalenessWindowMs?: number;
+  readonly createdAt: Date;
+}
+
+function toMetricPolicyResult(row: MetricPolicyDocument): MetricPolicyResult {
+  return {
+    id: row._id.toString(),
+    metric: row.metric,
+    authorityOrder: row.authorityOrder,
+    stalenessWindowMs: row.stalenessWindowMs,
+    createdAt: row.createdAt,
+  };
+}
 
 /**
  * Folds a tenant's authored `MetricPolicy` rows (`metric-policy.schema.ts`) over
@@ -54,5 +81,76 @@ export class MetricPoliciesService {
     );
 
     return policies;
+  }
+
+  /** The tenant's stored rows, exactly as authored — not `resolveForTenant`'s ontology-folded
+   *  map. Sorted by metric for a deterministic listing. Mapped to {@link MetricPolicyResult}
+   *  rather than returned as documents: see that interface's own comment for why a document
+   *  reaching the response DTO loses its `id`. */
+  async listForTenant(tenantId: string): Promise<MetricPolicyResult[]> {
+    const rows = await this.metricPolicyModel.find({ tenantId }, null, { sort: { metric: 1 } });
+    return rows.map((row) => toMetricPolicyResult(row));
+  }
+
+  /**
+   * Upserts one metric's whole row. `authorityOrder`/`stalenessWindowMs` duplicate-rank and
+   * `'unclassified'`/`>= 1` rejection happens on the request DTO before this runs — this method's
+   * job is only the whole-row replace: a field omitted from `updates` is `$unset`, not left at
+   * whatever an earlier `PUT` stored, so a repeated call can never leave a stale field behind.
+   * Uses `findOneAndUpdate` rather than `findOneAndReplace` because `auditablePlugin` only hooks
+   * the former — a replace would silently skip the `createdBy`/`updatedBy` stamp.
+   */
+  async upsert(
+    tenantId: string,
+    metric: MetricId,
+    updates: { authorityOrder?: DocumentSourceClass[]; stalenessWindowMs?: number },
+  ): Promise<MetricPolicyResult> {
+    if (!findMetricById(METRIC_ONTOLOGY, metric)) {
+      throw new UnknownMetricException(`'${metric}' is not a recognized metric`);
+    }
+
+    const $set: Record<string, unknown> = {};
+    const $unset: Record<string, ''> = {};
+    if (updates.authorityOrder !== undefined) {
+      $set.authorityOrder = updates.authorityOrder;
+    } else {
+      $unset.authorityOrder = '';
+    }
+    if (updates.stalenessWindowMs !== undefined) {
+      $set.stalenessWindowMs = updates.stalenessWindowMs;
+    } else {
+      $unset.stalenessWindowMs = '';
+    }
+
+    const update: Record<string, unknown> = {};
+    if (Object.keys($set).length > 0) {
+      update.$set = $set;
+    }
+    if (Object.keys($unset).length > 0) {
+      update.$unset = $unset;
+    }
+
+    const policy = await this.metricPolicyModel.findOneAndUpdate({ tenantId, metric }, update, {
+      upsert: true,
+      new: true,
+      setDefaultsOnInsert: true,
+    });
+
+    this.logger.debug(`Upserted metric policy for '${metric}' in tenant '${tenantId}'`);
+
+    return toMetricPolicyResult(policy);
+  }
+
+  /** Reverts a metric to the code ontology default by deleting its authored row. Idempotent: a
+   *  metric with no authored row is already at the default, so a second call is a no-op rather
+   *  than an error. */
+  async remove(tenantId: string, metric: MetricId): Promise<void> {
+    if (!findMetricById(METRIC_ONTOLOGY, metric)) {
+      throw new UnknownMetricException(`'${metric}' is not a recognized metric`);
+    }
+
+    await this.metricPolicyModel.deleteOne({ tenantId, metric });
+
+    this.logger.debug(`Reverted metric policy for '${metric}' in tenant '${tenantId}' to default`);
   }
 }

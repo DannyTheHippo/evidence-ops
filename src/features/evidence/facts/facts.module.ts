@@ -24,6 +24,7 @@ import { ProvidersModule } from '../../../providers/providers.module';
 import { IngestionModule } from '../ingestion/ingestion.module';
 import { CanonicalEntityService } from './canonical-entity.service';
 import { FactsService } from './facts.service';
+import { MetricPoliciesController } from './metric-policies.controller';
 import { MetricPoliciesService } from './metric-policies.service';
 
 @Module({
@@ -41,6 +42,7 @@ import { MetricPoliciesService } from './metric-policies.service';
     // deterministic xlsx facts, and for narrowing a prose fact's locator past its chunk's anchor).
     IngestionModule,
   ],
+  controllers: [MetricPoliciesController],
   // Exported as well as registered: `FactsService` depends on `CanonicalEntityService` to
   // canonicalize an extracted fact's entity, but the registry is also reachable via DI on its own,
   // the same way `FactsService` is. `MetricPoliciesService` is exported for the same reason —
