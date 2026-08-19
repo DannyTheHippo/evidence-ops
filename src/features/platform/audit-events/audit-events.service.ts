@@ -4,6 +4,7 @@ import { Model, Types } from 'mongoose';
 import {
   AuditEvent,
   type AuditEventDocument,
+  type AuditEventOrigin,
 } from '../../../database/schemas/audit/audit-event/audit-event.schema';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
@@ -18,6 +19,9 @@ export interface AuditEventResult {
   readonly timestamp: Date;
   readonly correlationId: string;
   readonly createdAt: Date;
+  readonly origin: AuditEventOrigin;
+  readonly toolName?: string;
+  readonly refusalReason?: string;
 }
 
 @Injectable()
@@ -51,6 +55,8 @@ export class AuditEventsService {
       ...(dto.action ? { action: dto.action } : {}),
       ...(dto.entityType ? { 'subject.entityType': dto.entityType } : {}),
       ...(dto.entityId ? { 'subject.entityId': new Types.ObjectId(dto.entityId) } : {}),
+      ...(dto.origin ? { origin: dto.origin } : {}),
+      ...(dto.refusalReason ? { refusalReason: dto.refusalReason } : {}),
     };
 
     const [events, count] = await Promise.all([
@@ -84,6 +90,9 @@ export class AuditEventsService {
       timestamp: event.timestamp,
       correlationId: event.correlationId,
       createdAt: event.createdAt,
+      origin: event.origin,
+      toolName: event.toolName,
+      refusalReason: event.refusalReason,
     };
   }
 }

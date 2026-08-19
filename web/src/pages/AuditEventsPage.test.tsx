@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RequireAdmin } from '../App';
@@ -42,6 +42,7 @@ const event = {
   timestamp: '2026-08-01T12:00:00.000Z',
   correlationId: 'corr-1',
   createdAt: '2026-08-01T12:00:00.000Z',
+  origin: 'api' as const,
 };
 
 // ApiKey carries no detail route in the SPA, unlike Document — the two events together prove the
@@ -54,6 +55,20 @@ const unroutedEvent = {
   timestamp: '2026-08-01T13:00:00.000Z',
   correlationId: 'corr-2',
   createdAt: '2026-08-01T13:00:00.000Z',
+  origin: 'api' as const,
+};
+
+const mcpRefusalEvent = {
+  id: 'event-3',
+  actor: 'mcp-pat-holder@example.com',
+  action: 'mcp.tool_call.refused',
+  subject: { entityType: 'Answer', entityId: 'answer-1' },
+  timestamp: '2026-08-01T14:00:00.000Z',
+  correlationId: 'corr-3',
+  createdAt: '2026-08-01T14:00:00.000Z',
+  origin: 'mcp' as const,
+  toolName: 'get_answer',
+  refusalReason: 'authz-denied',
 };
 
 // Dispatches by URL, matching ApprovalsPage.test.tsx's stubFetch shape.
@@ -88,9 +103,35 @@ describe('AuditEventsPage', () => {
     expect(screen.getByText('Document doc-1')).toBeInTheDocument();
     expect(screen.getByText('corr-1')).toBeInTheDocument();
     expect(screen.getByText(new Date(event.timestamp).toLocaleString())).toBeInTheDocument();
-    expect(
-      screen.getByRole('table', { name: 'Audit events matching the current filters' }),
-    ).toBeInTheDocument();
+    const table = screen.getByRole('table', {
+      name: 'Audit events matching the current filters',
+    });
+    expect(table).toBeInTheDocument();
+    // An api-origin row reads as muted plain text, not a badge — the badge is spent on the rarer
+    // mcp case. Scoped to the table because the Origin filter's own <option> labels carry both of
+    // these strings, so an unscoped query matches the filter as well as the cell.
+    expect(within(table).getByText('api')).toBeInTheDocument();
+    expect(within(table).queryByText('MCP')).not.toBeInTheDocument();
+  });
+
+  it('renders an mcp-origin row with the MCP badge, its tool name, and the refusal reason', async () => {
+    stubFetch({
+      '/api/v1/audit-events?skip=0&limit=25': () =>
+        jsonResponse({ docs: [mcpRefusalEvent], count: 1 }),
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('mcp.tool_call.refused')).toBeInTheDocument();
+    // Same scoping reason as above: 'MCP', 'api' and every refusal reason are also <option>
+    // labels on the filter form, so only a table-scoped query proves the *cell* rendered them.
+    const table = screen.getByRole('table', {
+      name: 'Audit events matching the current filters',
+    });
+    expect(within(table).getByText('MCP')).toBeInTheDocument();
+    expect(within(table).getByText('get_answer')).toBeInTheDocument();
+    expect(within(table).getByText('authz-denied')).toBeInTheDocument();
+    expect(within(table).queryByText('api')).not.toBeInTheDocument();
   });
 
   it('links a subject with a detail route, and leaves one without a route as plain text', async () => {
@@ -162,6 +203,37 @@ describe('AuditEventsPage', () => {
         ([url]) =>
           url ===
           '/api/v1/audit-events?skip=0&limit=25&action=document.deleted&entityType=Document&entityId=doc-1',
+      ),
+    ).toBe(true);
+  });
+
+  it('applies the origin and refusal reason filters as query parameters', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/audit-events?skip=0&limit=25') {
+        return Promise.resolve(jsonResponse({ docs: [mcpRefusalEvent], count: 1 }));
+      }
+      if (url === '/api/v1/audit-events?skip=0&limit=25&origin=mcp&refusalReason=authz-denied') {
+        return Promise.resolve(jsonResponse({ docs: [mcpRefusalEvent], count: 1 }));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+    await screen.findByText('mcp.tool_call.refused');
+
+    fireEvent.change(screen.getByLabelText('Origin'), { target: { value: 'mcp' } });
+    fireEvent.change(screen.getByLabelText('Refusal reason'), {
+      target: { value: 'authz-denied' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+
+    await screen.findByText('mcp.tool_call.refused');
+
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) =>
+          url === '/api/v1/audit-events?skip=0&limit=25&origin=mcp&refusalReason=authz-denied',
       ),
     ).toBe(true);
   });

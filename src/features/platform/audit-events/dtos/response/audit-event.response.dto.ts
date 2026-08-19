@@ -1,5 +1,9 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
+import {
+  AUDIT_EVENT_ORIGINS,
+  type AuditEventOrigin,
+} from '../../../../../database/schemas/audit/audit-event/audit-event.schema';
 
 export class AuditEventSubjectResponseDto {
   @Expose()
@@ -52,4 +56,31 @@ export class AuditEventResponseDto {
   @Expose()
   @ApiProperty({ example: '2026-07-02T00:00:00.000Z', description: 'Row creation timestamp.' })
   createdAt: Date;
+
+  @Expose()
+  @ApiProperty({
+    example: 'api',
+    enum: AUDIT_EVENT_ORIGINS,
+    description:
+      "Which surface the audited action reached the system through: 'mcp' for an AI client holding a PAT, 'api' for everything else.",
+  })
+  origin: AuditEventOrigin;
+
+  @Expose()
+  @ApiProperty({
+    example: 'search_evidence',
+    description:
+      'The MCP tool name a tools/call action was made against. Present only on rows written at the MCP boundary.',
+    required: false,
+  })
+  toolName?: string;
+
+  @Expose()
+  @ApiProperty({
+    example: 'authz-denied',
+    description:
+      "Why an mcp.tool_call.refused row was refused. Present only on that action's rows.",
+    required: false,
+  })
+  refusalReason?: string;
 }

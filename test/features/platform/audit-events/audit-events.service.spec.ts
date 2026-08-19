@@ -2,7 +2,10 @@ import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { Types } from 'mongoose';
-import { AuditEvent } from '../../../../src/database/schemas/audit/audit-event/audit-event.schema';
+import {
+  AuditEvent,
+  type AuditEventOrigin,
+} from '../../../../src/database/schemas/audit/audit-event/audit-event.schema';
 import { AuditEventsService } from '../../../../src/features/platform/audit-events/audit-events.service';
 import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
@@ -16,7 +19,23 @@ describe('AuditEventsService', () => {
   const mockAuditService = { record: jest.fn() };
   const mockLogger = getMockLogger();
 
-  const buildEvent = (overrides: Partial<Record<string, unknown>> = {}) => ({
+  // The subset of `AuditEventDocument` `toResult` reads. Declared rather than inferred from a
+  // `Record<string, unknown>` spread, which would type every field `unknown` and make each
+  // assertion below an unsafe assignment.
+  interface MockAuditEvent {
+    _id: Types.ObjectId;
+    actor: Types.ObjectId;
+    action: string;
+    subject: { entityType: string; entityId: Types.ObjectId };
+    timestamp: Date;
+    correlationId: string;
+    createdAt: Date;
+    origin: AuditEventOrigin;
+    toolName?: string;
+    refusalReason?: string;
+  }
+
+  const buildEvent = (overrides: Partial<MockAuditEvent> = {}): MockAuditEvent => ({
     _id: new Types.ObjectId(),
     actor: new Types.ObjectId(),
     action: 'approvals.decided',
@@ -24,6 +43,7 @@ describe('AuditEventsService', () => {
     timestamp: new Date('2026-07-02T00:00:00.000Z'),
     correlationId: 'a3f1b2c4-5678-4d9e-9abc-1234567890ab',
     createdAt: new Date('2026-07-02T00:00:00.000Z'),
+    origin: 'api',
     ...overrides,
   });
 
@@ -81,6 +101,9 @@ describe('AuditEventsService', () => {
             timestamp: event.timestamp,
             correlationId: event.correlationId,
             createdAt: event.createdAt,
+            origin: event.origin,
+            toolName: event.toolName,
+            refusalReason: event.refusalReason,
           },
         ],
         count: 1,
@@ -150,6 +173,44 @@ describe('AuditEventsService', () => {
         tenantId: 'tenant-a',
         'subject.entityId': new Types.ObjectId(entityId),
       };
+      expect(mockAuditEventModel.find).toHaveBeenCalledWith(expectedFilter, null, {
+        sort: { createdAt: -1 },
+        skip: 0,
+        limit: 20,
+      });
+      expect(mockAuditEventModel.countDocuments).toHaveBeenCalledWith(expectedFilter);
+    });
+
+    it('should filter by origin alone', async () => {
+      const actorId = new Types.ObjectId().toString();
+      mockAuditEventModel.find.mockResolvedValueOnce([]);
+      mockAuditEventModel.countDocuments.mockResolvedValueOnce(0);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      await service.list({ skip: 0, limit: 20, origin: 'mcp' }, actorId, 'tenant-a');
+
+      const expectedFilter = { tenantId: 'tenant-a', origin: 'mcp' };
+      expect(mockAuditEventModel.find).toHaveBeenCalledWith(expectedFilter, null, {
+        sort: { createdAt: -1 },
+        skip: 0,
+        limit: 20,
+      });
+      expect(mockAuditEventModel.countDocuments).toHaveBeenCalledWith(expectedFilter);
+    });
+
+    it('should filter by refusalReason alone', async () => {
+      const actorId = new Types.ObjectId().toString();
+      mockAuditEventModel.find.mockResolvedValueOnce([]);
+      mockAuditEventModel.countDocuments.mockResolvedValueOnce(0);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      await service.list(
+        { skip: 0, limit: 20, refusalReason: 'authz-denied' },
+        actorId,
+        'tenant-a',
+      );
+
+      const expectedFilter = { tenantId: 'tenant-a', refusalReason: 'authz-denied' };
       expect(mockAuditEventModel.find).toHaveBeenCalledWith(expectedFilter, null, {
         sort: { createdAt: -1 },
         skip: 0,

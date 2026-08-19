@@ -583,6 +583,8 @@ export interface AuditEventSubject {
   entityId: string;
 }
 
+export type AuditEventOrigin = 'api' | 'mcp';
+
 export interface AuditEventView {
   id: string;
   actor: string;
@@ -591,9 +593,12 @@ export interface AuditEventView {
   timestamp: string;
   correlationId: string;
   createdAt: string;
+  origin: AuditEventOrigin;
+  toolName?: string;
+  refusalReason?: string;
 }
 
-// Four independent optional filters, so this one builds its query with
+// Five independent optional filters, so this one builds its query with
 // URLSearchParams rather than the ad-hoc template literals above.
 export function listAuditEvents(params?: {
   skip?: number;
@@ -601,6 +606,8 @@ export function listAuditEvents(params?: {
   action?: string;
   entityType?: string;
   entityId?: string;
+  origin?: AuditEventOrigin;
+  refusalReason?: string;
 }): Promise<WithCount<AuditEventView>> {
   const query = new URLSearchParams();
   if (params?.skip !== undefined) query.set('skip', String(params.skip));
@@ -608,6 +615,8 @@ export function listAuditEvents(params?: {
   if (params?.action) query.set('action', params.action);
   if (params?.entityType) query.set('entityType', params.entityType);
   if (params?.entityId) query.set('entityId', params.entityId);
+  if (params?.origin) query.set('origin', params.origin);
+  if (params?.refusalReason) query.set('refusalReason', params.refusalReason);
   const qs = query.toString();
   return request<WithCount<AuditEventView>>(`/audit-events${qs ? `?${qs}` : ''}`);
 }

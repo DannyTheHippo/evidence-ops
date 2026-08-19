@@ -18,6 +18,9 @@ interface AuditEventBody {
   timestamp: string;
   correlationId: string;
   createdAt: string;
+  origin: string;
+  toolName?: string;
+  refusalReason?: string;
 }
 
 describe('AuditEvents (e2e)', () => {
@@ -106,11 +109,23 @@ describe('AuditEvents (e2e)', () => {
         entityType: 'EvidenceDocument',
         entityId: entityId.toString(),
       });
+      expect(doc.origin).toBe('api');
       // Asserting the exact key set is the only gate that catches a response-DTO field missing
       // @Expose() — such a field is silently dropped from the payload with no error anywhere. The
-      // nested `subject` keys are asserted separately since it is its own response DTO.
+      // nested `subject` keys are asserted separately since it is its own response DTO. `toolName`
+      // and `refusalReason` are absent here because the seeded row never set them — an
+      // undefined-valued @Expose() field drops from the JSON body rather than serializing as null.
       expect(Object.keys(doc).sort()).toEqual(
-        ['id', 'actor', 'action', 'subject', 'timestamp', 'correlationId', 'createdAt'].sort(),
+        [
+          'id',
+          'actor',
+          'action',
+          'subject',
+          'timestamp',
+          'correlationId',
+          'createdAt',
+          'origin',
+        ].sort(),
       );
       expect(Object.keys(doc.subject).sort()).toEqual(['entityType', 'entityId'].sort());
 
@@ -150,6 +165,76 @@ describe('AuditEvents (e2e)', () => {
       expect(response.status).toBe(200);
       expect(body.count).toBe(1);
       expect(body.docs.every((doc) => doc.action === actionA)).toBe(true);
+    });
+
+    it('narrows the result set with the origin filter', async () => {
+      const suffix = new Types.ObjectId().toString();
+      const action = `audit-e2e.origin-${suffix}`;
+      await auditEventModel.create({
+        actor: new Types.ObjectId(),
+        action,
+        subject: { entityType: 'Answer', entityId: new Types.ObjectId() },
+        timestamp: new Date(),
+        correlationId: 'corr-origin-api',
+        origin: 'api',
+        tenantId,
+      });
+      await auditEventModel.create({
+        actor: new Types.ObjectId(),
+        action,
+        subject: { entityType: 'Answer', entityId: new Types.ObjectId() },
+        timestamp: new Date(),
+        correlationId: 'corr-origin-mcp',
+        origin: 'mcp',
+        toolName: 'get_answer',
+        tenantId,
+      });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/audit-events')
+        .query({ action, origin: 'mcp' })
+        .set('Cookie', adminCookie);
+      const body = response.body as { docs: AuditEventBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.count).toBe(1);
+      expect(body.docs[0].origin).toBe('mcp');
+      expect(body.docs[0].toolName).toBe('get_answer');
+    });
+
+    it('narrows the result set with the refusalReason filter', async () => {
+      const suffix = new Types.ObjectId().toString();
+      const action = `audit-e2e.refusal-${suffix}`;
+      await auditEventModel.create({
+        actor: new Types.ObjectId(),
+        action,
+        subject: { entityType: 'Answer', entityId: new Types.ObjectId() },
+        timestamp: new Date(),
+        correlationId: 'corr-refusal-denied',
+        origin: 'mcp',
+        refusalReason: 'authz-denied',
+        tenantId,
+      });
+      await auditEventModel.create({
+        actor: new Types.ObjectId(),
+        action,
+        subject: { entityType: 'Answer', entityId: new Types.ObjectId() },
+        timestamp: new Date(),
+        correlationId: 'corr-refusal-invalid',
+        origin: 'mcp',
+        refusalReason: 'invalid-arguments',
+        tenantId,
+      });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/audit-events')
+        .query({ action, refusalReason: 'authz-denied' })
+        .set('Cookie', adminCookie);
+      const body = response.body as { docs: AuditEventBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.count).toBe(1);
+      expect(body.docs[0].refusalReason).toBe('authz-denied');
     });
 
     it('excludes a row belonging to a different tenant', async () => {

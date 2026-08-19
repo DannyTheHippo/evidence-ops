@@ -1,5 +1,12 @@
 import type { INestApplication } from '@nestjs/common';
+import { getModelToken } from '@nestjs/mongoose';
+import type { Model } from 'mongoose';
+import { Types } from 'mongoose';
 import request from 'supertest';
+import {
+  AuditEvent,
+  AuditEventDocument,
+} from '../../src/database/schemas/audit/audit-event/audit-event.schema';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
 import { registerTestUser } from '../utils/register-test-user';
 
@@ -72,5 +79,41 @@ describe('Serialization (e2e)', () => {
     expect(body.owner).toBe('Jane Doe, IT');
     expect(body.tracked).toBe(false);
     expect(body.sourceClass).toBe('crm-export');
+  });
+
+  // Regression for the write-only audit fields (M1): `origin`, `toolName` and `refusalReason` are
+  // written by AuditService and persisted by the schema, but were readable through no DTO — this
+  // is the gate that catches any of the three losing its @Expose() again.
+  it('exposes origin, toolName and refusalReason in the audit-events list response', async () => {
+    const { cookie, tenantId } = await registerTestUser(app, {
+      email: 'serialization-audit-events-e2e@example.com',
+      password: 'correct-horse-battery',
+    });
+
+    const auditEventModel = app.get<Model<AuditEventDocument>>(getModelToken(AuditEvent.name));
+    const action = `serialization-e2e.mcp-refusal-${Date.now()}`;
+    await auditEventModel.create({
+      actor: new Types.ObjectId(),
+      action,
+      subject: { entityType: 'Answer', entityId: new Types.ObjectId() },
+      timestamp: new Date(),
+      correlationId: 'corr-serialization-e2e',
+      origin: 'mcp',
+      toolName: 'get_answer',
+      refusalReason: 'authz-denied',
+      tenantId,
+    });
+
+    const response = await request(getTestServer(app))
+      .get('/api/v1/audit-events')
+      .query({ action })
+      .set('Cookie', cookie);
+    const body = response.body as { docs: Array<Record<string, unknown>> };
+
+    expect(response.status).toBe(200);
+    expect(body.docs).toHaveLength(1);
+    expect(body.docs[0].origin).toBe('mcp');
+    expect(body.docs[0].toolName).toBe('get_answer');
+    expect(body.docs[0].refusalReason).toBe('authz-denied');
   });
 });
