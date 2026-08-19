@@ -927,10 +927,10 @@ describe('Documents (e2e)', () => {
       const events = await auditEventModel.find({ action: 'documents.deleted' });
       expect(events.length).toBeGreaterThan(0);
 
-      // The bug this cascade fixes lived here: `ConflictsService.list()` filters only by
-      // `{ tenantId }` — no status filter — and `toConflictDto` throws a 500 whenever any
-      // `factIds` entry no longer resolves to an `ExtractedFact`. A test that only checks
-      // `conflictModel.findById` never exercises that path; this call to the live endpoint does.
+      // A test that only checks `conflictModel.findById` never exercises `ConflictsService.list`'s
+      // own read of `factIds` against the live `ExtractedFact` collection — this call to the live
+      // endpoint does, proving the pruned `factIds` renders cleanly rather than only existing in
+      // the database.
       const conflictsList = await request(getTestServer(app))
         .get('/api/v1/conflicts')
         .set('Cookie', cookie);
@@ -1017,15 +1017,22 @@ describe('Documents (e2e)', () => {
       );
 
       // Same trap as the 2-fact case above: only the live `GET /conflicts` endpoint exercises
-      // `toConflictDto`'s `values.length < factIds.length` throw and `list()`'s missing status
-      // filter — a still-open conflict with two facts must render, not 500.
+      // `ConflictsService.list`'s own read of `factIds` against the live `ExtractedFact`
+      // collection — a still-open conflict with two surviving facts must render fully, not
+      // degrade.
       const conflictsList = await request(getTestServer(app))
         .get('/api/v1/conflicts')
         .set('Cookie', cookie);
       expect(conflictsList.status).toBe(200);
       const listedConflict = (
         conflictsList.body as {
-          docs: Array<{ id: string; status: string; factIds: string[]; values: unknown[] }>;
+          docs: Array<{
+            id: string;
+            status: string;
+            factIds: string[];
+            values: unknown[];
+            unscorable: boolean;
+          }>;
         }
       ).docs.find((doc) => doc.id === conflict._id.toString());
       expect(listedConflict?.status).toBe('open');
@@ -1033,6 +1040,159 @@ describe('Documents (e2e)', () => {
         [survivingFactA._id.toString(), survivingFactB._id.toString()].sort(),
       );
       expect(listedConflict?.values).toHaveLength(2);
+      expect(listedConflict?.unscorable).toBe(false);
+    });
+
+    // `DocumentsService.remove`'s conflict pull is not scoped to `status: 'open'` — a `resolved`
+    // conflict's `factIds` is kept in sync with the facts the cascade deletes exactly as an
+    // `open` one's is, so its recorded outcome is never left pointing at deleted evidence.
+    it("prunes a 'resolved' conflict's factIds too when one of its facts is deleted by a later document deletion, leaving its recorded outcome untouched", async () => {
+      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, {
+        title: 'Delete Cascade — Resolved Conflict',
+      });
+      const documentBody = uploaded.body as DocumentBody;
+      const documentId = documentBody.id;
+      const versionId = documentBody.currentVersion.id;
+
+      const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-07' };
+      const deletedFact = await extractedFactModel.create({
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        tenantId,
+        value: { amount: 5.25, unit: 'percent' },
+        rawText: 'cap rate of 5.25%',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-xlsx-resolved',
+        documentVersionId: new Types.ObjectId(versionId),
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F4' },
+      });
+      const survivingFact = await extractedFactModel.create({
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        tenantId,
+        value: { amount: 6.1, unit: 'percent' },
+        rawText: 'cap rate of 6.10%',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-prose-resolved',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 3 },
+      });
+      const conflict = await conflictModel.create({
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        tenantId,
+        factIds: [deletedFact._id, survivingFact._id],
+        magnitude: 0.0085,
+        status: 'resolved',
+        resolution: {
+          outcome: 'resolved',
+          winningFactId: survivingFact._id,
+          resolvedAt: new Date(),
+        },
+      });
+
+      const response = await request(getTestServer(app))
+        .delete(`/api/v1/documents/${documentId}`)
+        .set('Cookie', adminCookie);
+      expect(response.status).toBe(204);
+
+      const conflictAfterCascade = await conflictModel.findById(conflict._id);
+      // Status and the recorded outcome — already decided by a human — stay untouched; only the
+      // dangling reference to the deleted fact is pruned.
+      expect(conflictAfterCascade?.status).toBe('resolved');
+      expect(conflictAfterCascade?.resolution?.outcome).toBe('resolved');
+      expect(conflictAfterCascade?.factIds.map((id) => id.toString())).toEqual([
+        survivingFact._id.toString(),
+      ]);
+
+      const conflictsList = await request(getTestServer(app))
+        .get('/api/v1/conflicts?status=resolved')
+        .set('Cookie', cookie);
+      expect(conflictsList.status).toBe(200);
+      const listedConflict = (
+        conflictsList.body as { docs: Array<{ id: string; unscorable: boolean }> }
+      ).docs.find((doc) => doc.id === conflict._id.toString());
+      expect(listedConflict).toBeDefined();
+      // Kept in sync at write time, so the read path never has to degrade it.
+      expect(listedConflict?.unscorable).toBe(false);
+    });
+
+    // A conflict whose `factIds` no longer resolve — from a direct write, a different deletion
+    // path, or any other route than `DocumentsService.remove` — must still render, degraded, not
+    // drop the whole page with a 500. Facts are deleted directly here, bypassing
+    // `DocumentsService.remove` entirely, to reach that state.
+    it("degrades a 'resolved' conflict whose facts no longer resolve to unscorable in both the default and status-filtered list views, rather than 500 the page", async () => {
+      const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-08' };
+      const factLow = await extractedFactModel.create({
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        tenantId,
+        value: { amount: 5.25, unit: 'percent' },
+        rawText: 'cap rate of 5.25%',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-xlsx-orphaned',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F5' },
+      });
+      const factHigh = await extractedFactModel.create({
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        tenantId,
+        value: { amount: 6.1, unit: 'percent' },
+        rawText: 'cap rate of 6.10%',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-prose-orphaned',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 5 },
+      });
+      const conflict = await conflictModel.create({
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        tenantId,
+        factIds: [factLow._id, factHigh._id],
+        magnitude: 0.0085,
+        status: 'resolved',
+        resolution: { outcome: 'resolved', winningFactId: factLow._id, resolvedAt: new Date() },
+      });
+      await extractedFactModel.deleteMany({ _id: { $in: [factLow._id, factHigh._id] } });
+
+      const defaultList = await request(getTestServer(app))
+        .get('/api/v1/conflicts')
+        .set('Cookie', cookie);
+      expect(defaultList.status).toBe(200);
+      const defaultListed = (
+        defaultList.body as {
+          docs: Array<{
+            id: string;
+            unscorable: boolean;
+            unscorableReason?: string;
+            ruleFired?: string;
+            explanation?: string;
+            proposedWinnerFactId?: string;
+          }>;
+        }
+      ).docs.find((doc) => doc.id === conflict._id.toString());
+      expect(defaultListed).toBeDefined();
+      expect(defaultListed?.unscorable).toBe(true);
+      expect(defaultListed?.unscorableReason).toBe(
+        '2 of 2 disagreeing fact(s) no longer resolve to an ExtractedFact.',
+      );
+      expect(defaultListed?.ruleFired).toBeUndefined();
+      expect(defaultListed?.explanation).toBeUndefined();
+      expect(defaultListed?.proposedWinnerFactId).toBeUndefined();
+
+      const resolvedList = await request(getTestServer(app))
+        .get('/api/v1/conflicts?status=resolved')
+        .set('Cookie', cookie);
+      expect(resolvedList.status).toBe(200);
+      const resolvedListed = (
+        resolvedList.body as { docs: Array<{ id: string; unscorable: boolean }> }
+      ).docs.find((doc) => doc.id === conflict._id.toString());
+      expect(resolvedListed?.unscorable).toBe(true);
     });
   });
 });

@@ -175,6 +175,31 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       expect(response.status).toBe(409);
     });
 
+    // Regression: a conflict whose facts no longer resolve (the live 500 `GET /conflicts` used to
+    // hit — see `ConflictsService.toConflictDto`'s `unscorable` branch) must still refuse a
+    // resolution request, not merely degrade for display. `loadConflictForResolution` refuses on
+    // `status !== 'open'` before it ever re-checks the facts, so an already-`resolved` conflict is
+    // refused here for the same reason any already-decided conflict is — this proves the read
+    // path's new fail-OPEN display fallback never leaks into this fail-CLOSED decision path.
+    it('refuses to request resolution for a conflict that is not open, even when its facts no longer resolve', async () => {
+      const { conflict, factLow, factHigh } = await seedConflictWithFacts();
+      await conflictModel.updateOne(
+        { _id: conflict._id },
+        {
+          status: 'resolved',
+          resolution: { outcome: 'resolved', winningFactId: factLow._id, resolvedAt: new Date() },
+        },
+      );
+      await extractedFactModel.deleteMany({ _id: { $in: [factLow._id, factHigh._id] } });
+
+      const response = await request(getTestServer(app))
+        .post(`/api/v1/conflicts/${conflict._id.toString()}/resolution-requests`)
+        .set('Cookie', cookie)
+        .send({ winningFactId: factLow._id.toString() });
+
+      expect(response.status).toBe(409);
+    });
+
     it('starts the resolveConflict workflow and records a WorkflowRun, exposing the exact key set', async () => {
       const { conflict, factLow } = await seedConflictWithFacts();
       const startedBefore = fakeWorkflowEngine.started.length;

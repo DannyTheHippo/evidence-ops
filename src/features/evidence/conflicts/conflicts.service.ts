@@ -758,23 +758,7 @@ export class ConflictsService {
       });
     }
 
-    if (values.length < conflict.factIds.length) {
-      // A `Conflict.factIds` reference that no longer resolves to an `ExtractedFact` is a
-      // data-integrity fault, not a normal degradation path — same reasoning
-      // `findConflictedFactGroupsForChunks` applies to its identical check, and the same shape of
-      // throw: silently presenting fewer values than `factIds` would let a human choose a winner
-      // without seeing the whole disagreement.
-      throw new InternalServerErrorException(
-        `Conflict '${conflict._id.toString()}' references ${conflict.factIds.length} fact(s), but only ${values.length} still resolve to an ExtractedFact`,
-      );
-    }
-
-    // Computed fresh on every read, never persisted: the tenant's resolved `authorityOrder` and a
-    // document's `sourceClass` both change over time, so a stored proposal would silently go stale
-    // and a reviewer could act on a rule that no longer applies.
-    const proposal = this.computeConflictProposal(candidates, conflict.factKey.metric, policies);
-
-    return {
+    const base = {
       id: conflict._id.toString(),
       // Spread rather than pass `conflict.factKey` through by reference: unlike
       // `ExtractedFact.factKey` (which uses an explicit `{ _id: false }` sub-schema), this path's
@@ -790,6 +774,35 @@ export class ConflictsService {
       magnitude: conflict.magnitude,
       status: conflict.status,
       createdAt: conflict.createdAt,
+    };
+
+    if (values.length < conflict.factIds.length) {
+      // FAILS OPEN: this is a display path, not a decision path — rendering a list must never 500
+      // the whole page over one corrupted row. `DocumentsService.remove` keeps every conflict's
+      // `factIds` in sync with the facts it deletes, but a row that arrived some other way (a
+      // direct write, a bug elsewhere) is always possible, and the whole page must still render
+      // around it. The row is still returned, marked `unscorable` — the same vocabulary
+      // `ResolutionBacktestService.scoreConflict` already uses for this exact state — rather than
+      // silently dropped, so a reviewer can see the conflict existed and that its evidence is
+      // gone. Contrast `findConflictedFactGroupsForChunks` and `loadConflictForResolution` below:
+      // both stay fail-CLOSED, because each backs a decision (grounding a live answer, proposing a
+      // resolution winner) that must not proceed on an incomplete fact set.
+      const missing = conflict.factIds.length - values.length;
+      return {
+        ...base,
+        unscorable: true,
+        unscorableReason: `${missing} of ${conflict.factIds.length} disagreeing fact(s) no longer resolve to an ExtractedFact.`,
+      };
+    }
+
+    // Computed fresh on every read, never persisted: the tenant's resolved `authorityOrder` and a
+    // document's `sourceClass` both change over time, so a stored proposal would silently go stale
+    // and a reviewer could act on a rule that no longer applies.
+    const proposal = this.computeConflictProposal(candidates, conflict.factKey.metric, policies);
+
+    return {
+      ...base,
+      unscorable: false,
       proposedWinnerFactId:
         proposal.ruleFired === 'none' ? undefined : proposal.proposedWinnerFactId,
       ruleFired: proposal.ruleFired,

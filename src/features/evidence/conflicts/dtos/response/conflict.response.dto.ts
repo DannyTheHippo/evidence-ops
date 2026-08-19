@@ -10,7 +10,9 @@ import type { ResolveConflictProposal } from '../../resolve-conflict-policy';
  *  builds this object field-for-field from each disagreeing `ExtractedFact` (never spreads it) —
  *  see `ApprovalSubjectShape`'s identical reasoning in `approval.response.dto.ts`. One entry per
  *  `ConflictResponseDto.factIds` element, in the same order, so a human choosing a winner can line
- *  up a `factId` with the value and provenance it produced. */
+ *  up a `factId` with the value and provenance it produced — except when `unscorable` is true,
+ *  where a `factIds` entry with no resolving `ExtractedFact` is simply omitted rather than
+ *  breaking that pairing. */
 export interface ConflictValueShape {
   factId: string;
   value: number;
@@ -82,10 +84,33 @@ export class ConflictResponseDto {
 
   @Expose()
   @ApiProperty({
+    example: false,
+    description:
+      "True when one or more of this conflict's factIds no longer resolve to an ExtractedFact " +
+      "— the document that produced them was deleted after this conflict left 'open' status, so " +
+      "the delete cascade's fact removal was never mirrored back onto this conflict's factIds. " +
+      'The row is still returned rather than dropped from the list: a reviewer must be able to ' +
+      'see that the conflict once existed and that its evidence is now gone. proposedWinnerFactId, ' +
+      'ruleFired and explanation are all absent when this is true — no survivorship policy runs ' +
+      'over a fact set already known to be incomplete.',
+  })
+  unscorable: boolean;
+
+  @Expose()
+  @ApiProperty({
+    example: '1 of 2 disagreeing fact(s) no longer resolve to an ExtractedFact.',
+    description: 'Present only when unscorable is true — why this conflict could not be evaluated.',
+    required: false,
+  })
+  unscorableReason?: string;
+
+  @Expose()
+  @ApiProperty({
     example: '65f1c2e4a1b2c3d4e5f6a7b9',
     description:
       'The ExtractedFact id the survivorship policy proposes as the winner, computed fresh on ' +
-      "every read. Absent when ruleFired is 'none' — the policy has no proposal to make.",
+      "every read. Absent when ruleFired is 'none' (the policy has no proposal to make) or when " +
+      'unscorable is true.',
     required: false,
   })
   proposedWinnerFactId?: string;
@@ -96,16 +121,21 @@ export class ConflictResponseDto {
     enum: ['authority', 'recency', 'none'],
     description:
       "Which survivorship rule produced this proposal, or 'none' if the policy declined to " +
-      'propose a winner. Never decides anything on its own — a human still resolves the conflict.',
+      'propose a winner. Absent when unscorable is true. Never decides anything on its own — a ' +
+      'human still resolves the conflict.',
+    required: false,
   })
-  ruleFired: ResolveConflictProposal['ruleFired'];
+  ruleFired?: ResolveConflictProposal['ruleFired'];
 
   @Expose()
   @ApiProperty({
     example:
       "Fact 65f1c2e4a1b2c3d4e5f6a7b9's source class 'crm-export' outranks 'memo' in the " +
       'configured authorityOrder.',
-    description: "Human-readable justification for ruleFired/proposedWinnerFactId's value.",
+    description:
+      "Human-readable justification for ruleFired/proposedWinnerFactId's value. Absent when " +
+      'unscorable is true.',
+    required: false,
   })
-  explanation: string;
+  explanation?: string;
 }

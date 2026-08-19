@@ -167,10 +167,9 @@ describe('Resolution backtest (e2e)', () => {
 
     // Negative control 2: a resolved conflict whose facts were deleted scores unscorable, and
     // `resolveConflictPolicy` is never called — the spy proves the gate runs BEFORE the policy
-    // call, not merely that the label is right. Reachable, not hypothetical:
-    // `DocumentsService.remove`'s conflict-shrink update is `status: 'open'`-scoped while its fact
-    // `deleteMany` calls are not, so a document deletion can remove facts belonging to an
-    // already-`resolved` conflict while its `factIds` still names them.
+    // call, not merely that the label is right. Facts are deleted directly here, bypassing
+    // `DocumentsService.remove` entirely — that cascade keeps every conflict's `factIds` in sync
+    // with the facts it deletes, but a row written some other way can still end up in this state.
     it("scores a 'resolved' conflict whose facts no longer resolve as unscorable, and never calls resolveConflictPolicy", async () => {
       const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
       const factLow = await seedFact(factKey, { amount: 5.25, unit: 'percent' }, 'chunk-xlsx');

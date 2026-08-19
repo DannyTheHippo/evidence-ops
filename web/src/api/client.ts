@@ -399,9 +399,14 @@ export interface Conflict {
   magnitude: number;
   status: ConflictStatus;
   createdAt: string;
+  // True when one or more factIds no longer resolve to an ExtractedFact — the document that
+  // produced them was deleted. proposedWinnerFactId, ruleFired and explanation are all absent
+  // then: no survivorship policy runs over a fact set already known to be incomplete.
+  unscorable: boolean;
+  unscorableReason?: string;
   proposedWinnerFactId?: string;
-  ruleFired: ConflictRuleFired;
-  explanation: string;
+  ruleFired?: ConflictRuleFired;
+  explanation?: string;
 }
 
 export function listConflicts(params?: {

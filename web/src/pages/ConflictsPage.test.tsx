@@ -46,6 +46,7 @@ const openConflict = {
   magnitude: 0.0085,
   status: 'open',
   createdAt: new Date().toISOString(),
+  unscorable: false,
   proposedWinnerFactId: 'fact-1',
   ruleFired: 'authority',
   explanation: "Source 'chunk-a' outranks the other value's source under the authority policy.",
@@ -83,6 +84,30 @@ const undecidedConflict = {
       sourceChunkId: 'chunk-d',
       documentVersionId: 'docver-1',
       locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 6 },
+    },
+  ],
+};
+
+// A conflict whose evidence was deleted after it was resolved — `ConflictsService.list` degrades
+// this to `unscorable: true` rather than throwing, so the row still renders with the one fact
+// that still resolves, no ruleFired/proposedWinnerFactId/explanation, and a reason string.
+const unscorableConflict = {
+  ...openConflict,
+  id: 'conflict-5',
+  status: 'resolved',
+  unscorable: true,
+  unscorableReason: '1 of 2 disagreeing fact(s) no longer resolve to an ExtractedFact.',
+  proposedWinnerFactId: undefined,
+  ruleFired: undefined,
+  explanation: undefined,
+  values: [
+    {
+      factId: 'fact-5',
+      value: 5.25,
+      unit: 'percent',
+      sourceChunkId: 'chunk-e',
+      documentVersionId: 'docver-1',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 8 },
     },
   ],
 };
@@ -184,6 +209,23 @@ describe('ConflictsPage', () => {
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/^Recommended ·/)).not.toBeInTheDocument();
+  });
+
+  it('shows an unscorable conflict with its reason and remaining evidence, instead of dropping the row', async () => {
+    vi.stubGlobal('fetch', fetchStub(undefined, [unscorableConflict]));
+
+    renderPage();
+
+    expect(await screen.findByText('Northgate Business Park')).toBeInTheDocument();
+    expect(screen.getByText('Unscorable')).toBeInTheDocument();
+    expect(
+      screen.getByText('1 of 2 disagreeing fact(s) no longer resolve to an ExtractedFact.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('5.25 percent')).toBeInTheDocument();
+    expect(screen.queryByText(/^Recommended ·/)).not.toBeInTheDocument();
+    // A resolved conflict never shows the resolve control regardless of unscorable — same gate
+    // as `status === 'open'` for every other conflict.
+    expect(screen.queryByRole('button', { name: 'Request resolution' })).not.toBeInTheDocument();
   });
 
   it('requests a resolution for a value and navigates to the run timeline', async () => {

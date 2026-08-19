@@ -14,6 +14,7 @@ import {
   ConflictResolutionAlreadyPendingException,
   InvalidConflictResolutionException,
 } from '../../../../src/features/evidence/conflicts/exceptions/conflicts.exception';
+import * as resolveConflictPolicyModule from '../../../../src/features/evidence/conflicts/resolve-conflict-policy';
 import { METRIC_ONTOLOGY } from '../../../../src/features/evidence/facts/metric-ontology';
 import { MetricPoliciesService } from '../../../../src/features/evidence/facts/metric-policies.service';
 import { WorkflowRunsService } from '../../../../src/features/evidence/workflow-runs/workflow-runs.service';
@@ -497,6 +498,7 @@ describe('ConflictsService', () => {
             magnitude: 0.0085,
             status: 'open',
             createdAt: conflict.createdAt,
+            unscorable: false,
             ruleFired: 'none',
             explanation: 'No authorityOrder is configured for this metric.',
           },
@@ -751,41 +753,61 @@ describe('ConflictsService', () => {
       });
     });
 
-    it('should throw InternalServerErrorException when a listed conflict references a fact that no longer resolves', async () => {
+    // Regression for the live 500: `DocumentsService.remove`'s conflict-shrink update only ever
+    // touched `status: 'open'` conflicts while its fact deletes were not status-scoped at all, so
+    // a `resolved`/`dismissed` conflict could end up with a `factIds` entry that no longer
+    // resolves. `list` is a display path — it must degrade that one row, not 500 the whole page.
+    it('should mark a listed conflict unscorable, rather than throw, when one of its factIds no longer resolves — and never compute a proposal for it', async () => {
       const actorId = new Types.ObjectId().toString();
       const factIdA = new Types.ObjectId();
       const missingFactId = new Types.ObjectId();
+      const documentVersionIdA = new Types.ObjectId();
       const conflict = {
         _id: new Types.ObjectId(),
         factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
         factIds: [factIdA, missingFactId],
         magnitude: 0.0085,
-        status: 'open',
+        status: 'resolved',
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      };
+      const factA = {
+        _id: factIdA,
+        value: { amount: 5.25, unit: 'percent' },
+        chunkId: 'chunk-xlsx',
+        documentVersionId: documentVersionIdA,
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
       };
       mockConflictModel.find.mockResolvedValueOnce([conflict]);
       mockConflictModel.countDocuments.mockResolvedValueOnce(1);
-      mockExtractedFactModel.find.mockResolvedValueOnce([
-        {
-          _id: factIdA,
-          value: { amount: 5.25, unit: 'percent' },
-          chunkId: 'chunk-xlsx',
-          documentVersionId: new Types.ObjectId(),
-          locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
-        },
-      ]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([factA]);
       mockDocumentVersionModel.find.mockResolvedValueOnce([]);
       mockAuditService.record.mockResolvedValueOnce(undefined);
+      const policySpy = jest.spyOn(resolveConflictPolicyModule, 'resolveConflictPolicy');
 
-      let caught: unknown;
-      try {
-        await service.list({ skip: 0, limit: 20 }, actorId, 'tenant-a');
-      } catch (error) {
-        caught = error;
-      }
+      const result = await service.list({ skip: 0, limit: 20 }, actorId, 'tenant-a');
 
-      expect(caught).toBeInstanceOf(InternalServerErrorException);
-      expect((caught as Error).message).toMatch(/references 2 fact\(s\), but only 1/);
+      expect(result.docs[0]).toEqual({
+        id: conflict._id.toString(),
+        factKey: conflict.factKey,
+        factIds: [factIdA.toString(), missingFactId.toString()],
+        values: [
+          {
+            factId: factIdA.toString(),
+            value: 5.25,
+            unit: 'percent',
+            sourceChunkId: 'chunk-xlsx',
+            documentVersionId: documentVersionIdA.toString(),
+            locator: factA.locator,
+          },
+        ],
+        magnitude: 0.0085,
+        status: 'resolved',
+        createdAt: conflict.createdAt,
+        unscorable: true,
+        unscorableReason: '1 of 2 disagreeing fact(s) no longer resolve to an ExtractedFact.',
+      });
+      expect(policySpy).not.toHaveBeenCalled();
+      policySpy.mockRestore();
     });
   });
 

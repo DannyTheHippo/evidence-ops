@@ -589,25 +589,32 @@ export class DocumentsService {
     // fact ids out of `factIds` first, then only resolve a conflict the pull left with fewer than
     // `MIN_CONFLICTING_FACTS` remaining references. Aggregation-pipeline update (`$setDifference`)
     // because a plain `$pull` cannot subtract a fixed array from `factIds` in one query the way
-    // `$setDifference` can. Both stay tenant-scoped and rides the `conflicts_tenantId_status_
-    // factIds` compound index from migration 0006 (same `{ tenantId, status, factIds }` shape
-    // `findConflictedFactGroupsForChunks` already queries).
+    // `$setDifference` can.
     if (factIds.length > 0) {
-      // `updatePipeline: true` is REQUIRED, not decorative: Mongoose 9 refuses an array update
-      // without it (`Cannot pass an array to query updates unless the 'updatePipeline' option is
-      // set`), which surfaces as a 500 on DELETE, not a type error. A mocked model accepts the
-      // two-argument call happily, so the unit spec below asserts this third argument explicitly —
-      // that assertion is the only thing standing between a passing suite and a broken endpoint.
+      // Every conflict referencing one of this document's facts gets its `factIds` pruned here,
+      // regardless of status: a `resolved`/`dismissed` conflict's `factIds` must keep resolving to
+      // live `ExtractedFact`s exactly as much as an `open` one's, since both are read by the same
+      // `ConflictsService.list`/`ResolutionBacktestService.scoreConflict` paths. Not scoped to
+      // `status: 'open'` — the query can no longer take the `status` segment of the
+      // `conflicts_tenantId_status_factIds` compound index (migration 0006), but this is the
+      // rare document-delete path, not a per-request hot path. `updatePipeline: true` is REQUIRED,
+      // not decorative: Mongoose 9 refuses an array update without it (`Cannot pass an array to
+      // query updates unless the 'updatePipeline' option is set`), which surfaces as a 500 on
+      // DELETE, not a type error. A mocked model accepts the two-argument call happily, so the
+      // unit spec below asserts this third argument explicitly — that assertion is the only thing
+      // standing between a passing suite and a broken endpoint.
       await this.conflictModel.updateMany(
-        { tenantId, status: 'open', factIds: { $in: factIds } },
+        { tenantId, factIds: { $in: factIds } },
         [{ $set: { factIds: { $setDifference: ['$factIds', factIds] } } }],
         { updatePipeline: true },
       );
 
       // Resolved-as-superseded, never deleted, so a reviewer who later opens the conflicts list
-      // still sees why it stopped being open. A conflict the pull above left with
-      // `>= MIN_CONFLICTING_FACTS` references stays `open` — two or more facts still disagree, so
-      // there is still something for a reviewer to decide.
+      // still sees why it stopped being open. Scoped to `status: 'open'` only — a conflict a human
+      // already decided (`resolved`/`dismissed`) keeps its recorded outcome; only the pull above
+      // touches its `factIds`. A conflict the pull left with `>= MIN_CONFLICTING_FACTS` references
+      // stays `open` — two or more facts still disagree, so there is still something for a
+      // reviewer to decide.
       await this.conflictModel.updateMany(
         {
           tenantId,

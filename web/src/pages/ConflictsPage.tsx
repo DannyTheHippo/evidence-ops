@@ -177,6 +177,11 @@ export default function ConflictsPage() {
                     <Badge tone={statusTone(conflict.status)}>{conflict.status}</Badge>
                   </td>
                   <td>
+                    {conflict.unscorable && (
+                      <p className="cell-sub">
+                        <Badge tone="rejected">Unscorable</Badge> {conflict.unscorableReason}
+                      </p>
+                    )}
                     {conflict.ruleFired === 'none' && (
                       <p className="cell-sub">
                         Policy has no recommendation for this conflict — {conflict.explanation}

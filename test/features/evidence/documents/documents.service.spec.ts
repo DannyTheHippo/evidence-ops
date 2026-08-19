@@ -1020,7 +1020,7 @@ describe('DocumentsService', () => {
       expect(mockDocumentStore.delete).toHaveBeenNthCalledWith(2, 'gridfs-id-b');
     });
 
-    it("should $pull the deleted fact ids out of every open conflict's factIds, then resolve as 'superseded' only what that pull left short of MIN_CONFLICTING_FACTS", async () => {
+    it("should $pull the deleted fact ids out of every conflict's factIds regardless of status, then resolve as 'superseded' only what that pull left an open conflict short of MIN_CONFLICTING_FACTS", async () => {
       const mockDocument = buildMockDocument();
       mockDocumentModel.findOne.mockResolvedValueOnce(mockDocument);
       mockDocumentVersionModel.find.mockResolvedValueOnce([buildMockVersion()]);
@@ -1031,8 +1031,9 @@ describe('DocumentsService', () => {
 
       expect(mockConflictModel.updateMany).toHaveBeenCalledTimes(2);
 
-      // Call 1: pulls this document's fact ids out of every open conflict that referenced one —
-      // rides the `{tenantId, status, factIds}` compound index from migration 0006.
+      // Call 1: pulls this document's fact ids out of every conflict that referenced one — not
+      // scoped by status, so a `resolved`/`dismissed` conflict's `factIds` stays in sync too, the
+      // same as an `open` one's.
       const [pullFilter, pullUpdate, pullOptions] = (
         mockConflictModel.updateMany as jest.Mock<
           Promise<unknown>,
@@ -1041,7 +1042,6 @@ describe('DocumentsService', () => {
       ).mock.calls[0];
       expect(pullFilter).toEqual({
         tenantId: 'tenant-a',
-        status: 'open',
         factIds: { $in: [factId] },
       });
       expect(pullUpdate).toEqual([

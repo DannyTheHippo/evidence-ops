@@ -201,12 +201,12 @@ export class ResolutionBacktestService {
     }
 
     // Gate TWO, before any policy call: every one of this conflict's `factIds` must still resolve
-    // to an `ExtractedFact`. Reachable, not hypothetical: `DocumentsService.remove`'s conflict
-    // update is `status: 'open'`-scoped while its fact `deleteMany` calls are not, so a document
-    // deletion can remove facts belonging to an already-`resolved` conflict while that conflict's
-    // `factIds` still names them. A starved candidate set would make `resolveConflictPolicy`
-    // return `'none'`, indistinguishable from a genuine `silent` — the gate keeps the two apart by
-    // never making the call at all.
+    // to an `ExtractedFact`. Reachable, not hypothetical: `DocumentsService.remove` keeps every
+    // conflict's `factIds` in sync with the facts it deletes, but that guarantee only covers facts
+    // deleted through that one path — a row written directly against the collection, or one that
+    // predates the guarantee, can still carry a `factIds` entry with nothing behind it. A starved
+    // candidate set would make `resolveConflictPolicy` return `'none'`, indistinguishable from a
+    // genuine `silent` — the gate keeps the two apart by never making the call at all.
     const conflictFacts: ExtractedFactDocument[] = [];
     for (const id of conflict.factIds) {
       const fact = factById.get(id.toString());
