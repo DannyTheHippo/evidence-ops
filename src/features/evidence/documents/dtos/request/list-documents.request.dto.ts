@@ -11,10 +11,10 @@ export class ListDocumentsRequestDto extends PaginationRequestDto {
     example: 'failed',
     enum: DOCUMENT_VERSION_INGESTION_STATUSES,
     description:
-      "Filter to documents whose CURRENT version has this ingestionStatus — 'failed' is the " +
-      'corpus-health use case. An older failed version superseded by a newer completed one does ' +
-      "not match, the same semantics `HomePage.tsx`'s client-side filter already uses. Omit to " +
-      'list every document regardless of ingestion outcome.',
+      "Filter to documents whose CURRENT version has this ingestionStatus — 'failed' and " +
+      "'needs-ocr' are the corpus-health use cases. An older failed version superseded by a " +
+      "newer completed one does not match, the same semantics `HomePage.tsx`'s client-side " +
+      'filter already uses. Omit to list every document regardless of ingestion outcome.',
     required: false,
   })
   @IsOptional()

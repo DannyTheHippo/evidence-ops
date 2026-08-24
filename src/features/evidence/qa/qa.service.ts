@@ -23,6 +23,10 @@ import type {
   AnswerRunStatus,
   AnswerUsage,
 } from '../../../database/schemas/evidence/answer/answer.schema';
+import {
+  DocumentVersion,
+  DocumentVersionDocument,
+} from '../../../database/schemas/evidence/document-version/document-version.schema';
 import type { WorkflowEngine } from '../../../providers/workflow-engine/workflow-engine.interface';
 import { WORKFLOW_ENGINE } from '../../../providers/workflow-engine/workflow-engine.interface';
 import {
@@ -68,6 +72,14 @@ export interface AnswerEnvelope {
   readonly createdAt: Date;
   readonly usage?: AnswerUsage;
   readonly retrievedChunkCount?: number;
+  /**
+   * Cited document versions that currently carry `withdrawnAt`, resolved fresh against
+   * `DocumentVersion` on every read — never persisted alongside `citations`. Persisted citations
+   * are the durable record of what was cited and must not be rewritten by a later corpus change;
+   * this field layers the corpus's CURRENT state on top, so it can differ between two reads of
+   * the same answer without the answer itself changing at all.
+   */
+  readonly withdrawnCitedDocVersionIds: string[];
 }
 
 /**
@@ -98,6 +110,9 @@ export class QaService {
 
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
+
+    @InjectModel(DocumentVersion.name)
+    private readonly documentVersionModel: Model<DocumentVersionDocument>,
 
     @Inject(WORKFLOW_ENGINE)
     private readonly workflowEngine: WorkflowEngine,
@@ -172,7 +187,16 @@ export class QaService {
       throw new AnswerNotFoundException(`Answer '${id}' not found`);
     }
 
-    return this.toAnswerEnvelope(answer);
+    const citedDocVersionIds = this.citedDocVersionIds(answer);
+    const withdrawnDocVersionIds = await this.resolveWithdrawnDocVersionIds(
+      citedDocVersionIds,
+      tenantId,
+    );
+
+    return this.toAnswerEnvelope(
+      answer,
+      citedDocVersionIds.filter((docVersionId) => withdrawnDocVersionIds.has(docVersionId)),
+    );
   }
 
   /**
@@ -201,7 +225,27 @@ export class QaService {
       this.answerModel.countDocuments(filter),
     ]);
 
-    return { docs: answers.map((answer) => this.toAnswerEnvelope(answer)), count };
+    // Batched once for the whole page, not once per row — same reasoning
+    // `resolveWithdrawnDocVersionIds` documents for `streamAnswer`'s per-tick poll.
+    const pageDocVersionIds = [
+      ...new Set(answers.flatMap((answer) => this.citedDocVersionIds(answer))),
+    ];
+    const withdrawnDocVersionIds = await this.resolveWithdrawnDocVersionIds(
+      pageDocVersionIds,
+      tenantId,
+    );
+
+    return {
+      docs: answers.map((answer) =>
+        this.toAnswerEnvelope(
+          answer,
+          this.citedDocVersionIds(answer).filter((docVersionId) =>
+            withdrawnDocVersionIds.has(docVersionId),
+          ),
+        ),
+      ),
+      count,
+    };
   }
 
   /**
@@ -293,7 +337,58 @@ export class QaService {
     );
   }
 
-  private toAnswerEnvelope(answer: AnswerDocument): AnswerEnvelope {
+  /** Every distinct `docVersionId` this answer's server-verified citations name — the candidate
+   *  set `resolveWithdrawnDocVersionIds` checks against `DocumentVersion`. Reads `answer.claims`
+   *  (the surviving citations), matching `toAnswerEnvelope`'s own `citations` field below, not
+   *  `answer.outcome.claims` (the model's raw, pre-verification output). */
+  private citedDocVersionIds(answer: AnswerDocument): string[] {
+    return [
+      ...new Set(answer.claims.flatMap((claim) => claim.citations.map((c) => c.docVersionId))),
+    ];
+  }
+
+  /**
+   * Batch-resolves which of the given document version ids currently carry `withdrawnAt` — one
+   * query for the whole candidate set, never per-citation. Short-circuits before that query when
+   * `docVersionIds` is empty, which is the ONLY state a queued, running, or failed answer's
+   * citations can be in (`claims`, and therefore citations, populate only on completion — see
+   * `AnswerPersistenceService`). `streamAnswer`'s per-tick poll calls this via `peekAnswer` on
+   * every tick, so this gate is what keeps that poll from paying for a query on every tick of
+   * every open connection: citations first appear on the tick where `runStatus` reaches
+   * 'completed', and `streamAnswer`'s own `takeWhile` ends the stream on that same tick, so this
+   * query runs at most once per connection. Losing this gate silently reintroduces a query per
+   * tick per open SSE connection.
+   *
+   * Filters to valid ObjectIds before querying rather than letting a malformed `docVersionId`
+   * throw: a citation's `docVersionId` is a free-form string on the persisted `Answer.claims`
+   * (`Citation.docVersionId` is `z.string().min(1)`, not an ObjectId format), so a value that
+   * cannot resolve to a real `DocumentVersion` is treated the same as one that doesn't — never
+   * withdrawn — not as a fault worth failing the whole read for.
+   */
+  private async resolveWithdrawnDocVersionIds(
+    docVersionIds: readonly string[],
+    tenantId: string,
+  ): Promise<ReadonlySet<string>> {
+    const validIds = docVersionIds.filter((id) => Types.ObjectId.isValid(id));
+    if (validIds.length === 0) {
+      return new Set();
+    }
+
+    const withdrawnVersions = await this.documentVersionModel.find(
+      {
+        _id: { $in: validIds.map((id) => new Types.ObjectId(id)) },
+        tenantId,
+        withdrawnAt: { $exists: true },
+      },
+      { _id: 1 },
+    );
+    return new Set(withdrawnVersions.map((version) => version._id.toString()));
+  }
+
+  private toAnswerEnvelope(
+    answer: AnswerDocument,
+    withdrawnCitedDocVersionIds: string[],
+  ): AnswerEnvelope {
     return {
       id: answer._id.toString(),
       questionText: answer.questionText,
@@ -323,6 +418,7 @@ export class QaService {
       // here would mask a real absence rather than express one.
       retrievedChunkCount:
         answer.runStatus === 'completed' ? answer.retrievedChunkIds.length : undefined,
+      withdrawnCitedDocVersionIds,
     };
   }
 }

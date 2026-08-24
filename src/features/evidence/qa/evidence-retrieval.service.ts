@@ -13,6 +13,7 @@ import {
 } from '../../../providers/retrieval/retrieval-store.interface';
 import { emptyRetrievalCounter } from '../../../providers/telemetry/domain-metrics';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
+import { RETRIEVAL_OVER_FETCH_MULTIPLIER } from '../retrieval/retrieval.constant';
 import type { RetrievedChunk } from './types/retrieved-chunk.type';
 
 export interface RetrieveEvidenceInput {
@@ -44,10 +45,23 @@ export class EvidenceRetrievalService {
   }
 
   async retrieve(input: RetrieveEvidenceInput): Promise<RetrievedChunk[]> {
+    // Withdrawn-version exclusion happens here, not in `MongoHybridRetrievalStore`: `$search`'s
+    // `compound.filter` takes Atlas Search operators over the indexed collection, with no
+    // cross-collection join to reach `document_versions`; `$vectorSearch`'s `filter` only reaches
+    // paths declared `type: 'filter'` in the vector index, and today that's `tenantId` alone; and
+    // a post-fusion `$match` would land after `$limit`, so a top-k made entirely of withdrawn
+    // chunks would come back as zero results with no signal that anything was dropped. Over-fetch
+    // and filter here instead, where the withdrawn set is already known from the version lookup
+    // below.
     const hits = await this.retrievalStore.search<HybridRetrievalHitMetadata>({
       text: input.questionText,
       filter: { tenantId: input.tenantId },
-      limit: this.config.retrieval.limit,
+      // `RETRIEVAL_OVER_FETCH_MULTIPLIER` widens both the store's candidate pool and the
+      // `$vectorSearch` `numCandidates` it derives from `limit`. ANN search is approximate, so the
+      // top-k prefix of an over-fetched run is not guaranteed identical to a non-over-fetched
+      // one — `recallHitRank` has been observed moving between replays of an identical corpus.
+      // That's accepted here, not compensated for.
+      limit: this.config.retrieval.limit * RETRIEVAL_OVER_FETCH_MULTIPLIER,
     });
 
     if (hits.length === 0) {
@@ -58,6 +72,12 @@ export class EvidenceRetrievalService {
     const versionIds = [...new Set(hits.map((hit) => hit.metadata.documentVersionId))];
     // Explicit predicate is load-bearing here: this runs in worker context (Temporal activity),
     // where the ALS-backed `tenantScopePlugin` never ran, so nothing else scopes this query.
+    //
+    // Deliberately not adding `withdrawnAt: { $exists: false }` to this filter: a version absent
+    // from the result below because it was deleted must still fail the `sha256` lookup and throw
+    // the data-integrity error further down. A withdrawn version is a normal drop, not corruption —
+    // folding it into this filter would make it indistinguishable from a deleted one and silently
+    // swallow the signal that throw exists to catch.
     const versions = await this.documentVersionModel.find({
       _id: { $in: versionIds.map((id) => new Types.ObjectId(id)) },
       tenantId: input.tenantId,
@@ -65,31 +85,44 @@ export class EvidenceRetrievalService {
     const sha256ByVersionId = new Map(
       versions.map((version) => [version._id.toString(), version.sha256]),
     );
+    const withdrawnVersionIds = new Set(
+      versions.filter((version) => version.withdrawnAt).map((version) => version._id.toString()),
+    );
 
     this.logger.debug(
       `Retrieved ${hits.length} chunk(s) across ${versionIds.length} document version(s) for question '${input.questionText}'`,
     );
 
-    return hits.map((hit) => {
-      const sha256 = sha256ByVersionId.get(hit.metadata.documentVersionId);
-      if (!sha256) {
-        // Data-integrity fault, not a normal input-validation branch — mirrors
-        // `IngestionService.ingestVersion`'s `documentStore.get` miss and `DocumentsService
-        // .assertCurrentVersion`: a retrieval hit only ever carries a `documentVersionId` the
-        // hybrid store read straight off a persisted `EvidenceChunk`, so a miss here means the
-        // owning `DocumentVersion` was deleted out from under still-indexed chunks.
-        throw new InternalServerErrorException(
-          `Evidence chunk '${hit.id}' references document version '${hit.metadata.documentVersionId}', which no longer exists`,
-        );
-      }
+    const chunks = hits
+      .filter((hit) => !withdrawnVersionIds.has(hit.metadata.documentVersionId))
+      .map((hit) => {
+        const sha256 = sha256ByVersionId.get(hit.metadata.documentVersionId);
+        if (!sha256) {
+          // Data-integrity fault, not a normal input-validation branch — mirrors
+          // `IngestionService.ingestVersion`'s `documentStore.get` miss and `DocumentsService
+          // .assertCurrentVersion`: a retrieval hit only ever carries a `documentVersionId` the
+          // hybrid store read straight off a persisted `EvidenceChunk`, so a miss here means the
+          // owning `DocumentVersion` was deleted out from under still-indexed chunks.
+          throw new InternalServerErrorException(
+            `Evidence chunk '${hit.id}' references document version '${hit.metadata.documentVersionId}', which no longer exists`,
+          );
+        }
 
-      return {
-        chunkId: hit.id,
-        docVersionId: hit.metadata.documentVersionId,
-        sha256,
-        text: hit.metadata.text,
-        locator: hit.metadata.locator,
-      };
-    });
+        return {
+          chunkId: hit.id,
+          docVersionId: hit.metadata.documentVersionId,
+          sha256,
+          text: hit.metadata.text,
+          locator: hit.metadata.locator,
+        };
+      })
+      // Restores the caller's requested count after the over-fetch above.
+      .slice(0, this.config.retrieval.limit);
+
+    if (chunks.length === 0) {
+      emptyRetrievalCounter.add(1);
+    }
+
+    return chunks;
   }
 }

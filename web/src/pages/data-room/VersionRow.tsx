@@ -14,6 +14,9 @@ import { IconDownload } from '../../components/icons';
 import { truncateSha256 } from '../../lib/identifiers';
 import { formatBytes } from './format-size';
 
+// 'needs-ocr' falls through to the same 'caution' tone as 'pending' — deliberately, not merely by
+// omission: a scanned PDF with no text layer is a gap in the corpus to flag for attention, not the
+// verification-grade failure 'rejected' signals elsewhere in this app.
 function ingestionTone(
   status: DocumentVersionIngestionStatus,
 ): 'verified' | 'caution' | 'rejected' {

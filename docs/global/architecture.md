@@ -268,6 +268,38 @@ embedding request. `SearchPage` is the SPA consumer. MCP's `search_evidence` too
 `EvidenceRetrievalService` through a different path — `ToolExecutorService`, not `RolesGuard` — so
 the two entry points enforce the access floor with different mechanisms over the same read.
 
+## Evidence lifecycle: sync, quarantine and withdrawal
+
+Ingestion's status set is four states: `pending | completed | failed | needs-ocr`
+(`DOCUMENT_VERSION_INGESTION_STATUSES`, `document-version.schema.ts`). `needs-ocr` is a terminal
+quarantine, not a variant of `failed` — `PdfParser` reaches it only for a scanned PDF with at least
+one page and no extractable text on any of them (`EmptyPdfTextLayerException`), a condition that is
+deterministic for the same bytes, so `ingest-document-version.workflow.ts` marks it non-retryable.
+Every other throw during ingestion still resolves to `failed`.
+
+`syncSource`'s recurring loop (`SourcesService.runSync`) diffs each sweep's fresh file listing
+against the source's known `fileStates` and can soft-withdraw a `DocumentVersion` whose file is no
+longer present — `withdrawnAt`/`withdrawnReason` on the version, chunks and facts left untouched.
+Three guards sit between an absent path and an actual withdrawal, and all three fail toward
+retention: an empty listing against known non-empty state suppresses withdrawal outright (an
+unmounted mountpoint's `listFiles` returns `[]` successfully, indistinguishable from a genuinely
+emptied source); more than half of the source's active known paths absent in one sweep suppresses
+it too (a proportional circuit breaker for a partial mount the empty check alone would miss); and a
+path must be absent on two consecutive sweeps, not one, before it withdraws (closing the
+write-temp-then-rename window a single-sweep absence would misread as deletion). `Source` records
+when a guard suppressed withdrawal (`lastWithdrawalSuppressedAt`/`Reason`), so the outcome is
+visible rather than silent. `EvidenceRetrievalService.retrieve` is where the exclusion is actually
+enforced — over-fetching past the store, then filtering out any hit whose owning version carries
+`withdrawnAt` — because none of `$search`'s filter, `$vectorSearch`'s filter (today scoped to
+`tenantId` alone), or a post-fusion `$match` can express "join to `document_versions` and drop
+these" without a candidate pool made entirely of withdrawn hits coming back as zero results with no
+signal why. Withdrawal is retrieval exclusion, not deletion: a withdrawn version's chunks and facts
+stay retained so a past `Answer` can still be explained and `ResolutionBacktestService` can still
+replay a resolution that cited them. The separate, admin-gated hard-delete path
+(`DocumentsController.remove`) exists for an operator who wants the bytes actually gone. See
+[`0024-evidence-lifecycle-and-withdrawal.md`](../adr/0024-evidence-lifecycle-and-withdrawal.md) for
+the full design, including the guard thresholds and the accepted costs.
+
 ## Live updates: Server-Sent Events
 
 Three routes stream over `@Sse()` rather than returning once: `GET /api/v1/answers/:id/events`
@@ -420,3 +452,5 @@ counters gain a `_total` suffix, so `evidence_ops.grounding.claims_dropped` is q
 - `docs/adr/0018-metrics-and-alerting-shape.md` — the six signals and why there are not more.
 - `docs/adr/0019-stream-lifecycle-and-throttle-keying.md` — the three SSE streams' shared controls
   and the one that is not shared.
+- `docs/adr/0024-evidence-lifecycle-and-withdrawal.md` — sync absence guards, soft withdrawal, and
+  the scanned-PDF quarantine state.

@@ -182,7 +182,7 @@ export function getMe(): Promise<Me> {
 // ── Documents ────────────────────────────────────────────────────────────
 
 export type DocumentSourceKind = 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv' | 'tsv' | 'txt' | 'md';
-export type DocumentVersionIngestionStatus = 'pending' | 'completed' | 'failed';
+export type DocumentVersionIngestionStatus = 'pending' | 'completed' | 'failed' | 'needs-ocr';
 
 export interface DocumentVersion {
   id: string;
@@ -190,8 +190,8 @@ export interface DocumentVersion {
   sha256: string;
   sizeBytes: number;
   ingestionStatus: DocumentVersionIngestionStatus;
-  /** Present only when ingestionStatus is 'failed' — the parser exception message from the
-   * attempt that set that status. */
+  /** Present when ingestionStatus is 'failed' or 'needs-ocr' — the parser exception message from
+   * the attempt that set that status. */
   ingestionFailureReason?: string;
   createdAt: string;
 }
@@ -240,8 +240,9 @@ export function uploadDocument(
 export function listDocuments(params?: {
   skip?: number;
   limit?: number;
-  // Filters to documents whose CURRENT version has this ingestionStatus — 'failed' is the
-  // corpus-health use case. An older failed version superseded by a completed one does not match.
+  // Filters to documents whose CURRENT version has this ingestionStatus — 'failed' and
+  // 'needs-ocr' are the corpus-health use cases. An older failed version superseded by a
+  // completed one does not match.
   ingestionStatus?: DocumentVersionIngestionStatus;
 }): Promise<WithCount<EvidenceDocument>> {
   const query = new URLSearchParams();
@@ -386,6 +387,10 @@ export interface Answer {
   // The grounding check's claim-verification outcome. Present only once runStatus is 'completed',
   // same gate as outcome above.
   verificationReport?: VerificationReport;
+  // Cited document versions that currently carry withdrawnAt, resolved fresh on every read —
+  // never persisted alongside citations, so this can change between two reads of the same answer
+  // without the answer itself changing.
+  withdrawnCitedDocVersionIds: string[];
 }
 
 export interface StartQuestionResult {
@@ -454,6 +459,9 @@ export interface ConflictValue {
   sourceChunkId: string;
   documentVersionId: string;
   locator: Locator;
+  // True when documentVersionId currently carries withdrawnAt — the source file behind this side
+  // of the disagreement is no longer at its source. The conflict itself stays open regardless.
+  withdrawn: boolean;
 }
 
 export type ConflictRuleFired = 'authority' | 'recency' | 'none';

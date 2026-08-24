@@ -438,7 +438,7 @@ describe('ConflictsService', () => {
       mockExtractedFactModel.find.mockResolvedValueOnce([factA, factB]);
       // Neither fact's `documentVersionId` resolves — `cap_rate` has no `authorityOrder`
       // regardless, so the proposal is `'none'` either way, but this also exercises
-      // `loadSourceClassByFactId`'s "no matching versions" branch (`documentIds.length === 0`,
+      // `loadFactSourceEnrichment`'s "no matching versions" branch (`documentIds.length === 0`,
       // never calling `documentModel.find`).
       mockDocumentVersionModel.find.mockResolvedValueOnce([]);
       mockAuditService.record.mockResolvedValueOnce(undefined);
@@ -460,7 +460,7 @@ describe('ConflictsService', () => {
       });
       expect(mockDocumentVersionModel.find).toHaveBeenCalledWith(
         { _id: { $in: [documentVersionIdA, documentVersionIdB] }, tenantId: 'tenant-a' },
-        { documentId: 1 },
+        { documentId: 1, withdrawnAt: 1 },
       );
       expect(mockDocumentModel.find).not.toHaveBeenCalled();
       expect(mockMetricPoliciesService.resolveForTenant).toHaveBeenCalledTimes(1);
@@ -485,6 +485,7 @@ describe('ConflictsService', () => {
                 sourceChunkId: 'chunk-xlsx',
                 documentVersionId: documentVersionIdA.toString(),
                 locator: factA.locator,
+                withdrawn: false,
               },
               {
                 factId: factIdB.toString(),
@@ -493,6 +494,7 @@ describe('ConflictsService', () => {
                 sourceChunkId: 'chunk-prose',
                 documentVersionId: documentVersionIdB.toString(),
                 locator: factB.locator,
+                withdrawn: false,
               },
             ],
             magnitude: 0.0085,
@@ -610,6 +612,61 @@ describe('ConflictsService', () => {
         ruleFired: 'authority',
       });
       expect(result.docs[0].explanation).toContain(factIdPm.toString());
+    });
+
+    it('should mark a value withdrawn when its documentVersionId carries withdrawnAt, and leave the other value in the pair untouched', async () => {
+      const actorId = new Types.ObjectId().toString();
+      const factIdWithdrawn = new Types.ObjectId();
+      const factIdLive = new Types.ObjectId();
+      const conflict = {
+        _id: new Types.ObjectId(),
+        factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+        factIds: [factIdWithdrawn, factIdLive],
+        magnitude: 0.0085,
+        status: 'open',
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      };
+      const documentVersionIdWithdrawn = new Types.ObjectId();
+      const documentVersionIdLive = new Types.ObjectId();
+      const factWithdrawn = {
+        _id: factIdWithdrawn,
+        value: { amount: 5.25, unit: 'percent' },
+        chunkId: 'chunk-withdrawn',
+        documentVersionId: documentVersionIdWithdrawn,
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
+      };
+      const factLive = {
+        _id: factIdLive,
+        value: { amount: 6.1, unit: 'percent' },
+        chunkId: 'chunk-live',
+        documentVersionId: documentVersionIdLive,
+        locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+      };
+      const documentIdWithdrawn = new Types.ObjectId();
+      const documentIdLive = new Types.ObjectId();
+      mockConflictModel.find.mockResolvedValueOnce([conflict]);
+      mockConflictModel.countDocuments.mockResolvedValueOnce(1);
+      mockExtractedFactModel.find.mockResolvedValueOnce([factWithdrawn, factLive]);
+      mockDocumentVersionModel.find.mockResolvedValueOnce([
+        {
+          _id: documentVersionIdWithdrawn,
+          documentId: documentIdWithdrawn,
+          withdrawnAt: new Date('2026-07-15T00:00:00.000Z'),
+        },
+        { _id: documentVersionIdLive, documentId: documentIdLive },
+      ]);
+      mockDocumentModel.find.mockResolvedValueOnce([]);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      const result = await service.list({ skip: 0, limit: 20 }, actorId, 'tenant-a');
+
+      expect(result.docs[0].values).toEqual([
+        expect.objectContaining({ factId: factIdWithdrawn.toString(), withdrawn: true }),
+        expect.objectContaining({ factId: factIdLive.toString(), withdrawn: false }),
+      ]);
+      // Withdrawal is display-only — the conflict stays open and untouched by it.
+      expect(result.docs[0].status).toBe('open');
+      expect(result.docs[0].factIds).toEqual([factIdWithdrawn.toString(), factIdLive.toString()]);
     });
 
     it("should default a fact's sourceClass to unclassified when its document version, or that version's document, cannot be resolved", async () => {
@@ -798,6 +855,7 @@ describe('ConflictsService', () => {
             sourceChunkId: 'chunk-xlsx',
             documentVersionId: documentVersionIdA.toString(),
             locator: factA.locator,
+            withdrawn: false,
           },
         ],
         magnitude: 0.0085,

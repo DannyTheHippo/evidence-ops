@@ -6,6 +6,7 @@ import { Types } from 'mongoose';
 import { TypedConfigService } from '../../../../src/config/environment/typed-config.service';
 import { DocumentVersion } from '../../../../src/database/schemas/evidence/document-version/document-version.schema';
 import { EvidenceRetrievalService } from '../../../../src/features/evidence/qa/evidence-retrieval.service';
+import { RETRIEVAL_OVER_FETCH_MULTIPLIER } from '../../../../src/features/evidence/retrieval/retrieval.constant';
 import type { HybridRetrievalHitMetadata } from '../../../../src/providers/retrieval/mongo-hybrid.store';
 import { FakeRetrievalStore } from '../../../../src/providers/retrieval/fake-retrieval.store';
 import type { RetrievalHit } from '../../../../src/providers/retrieval/retrieval-store.interface';
@@ -101,12 +102,12 @@ describe('EvidenceRetrievalService', () => {
     expect(fakeRetrievalStore.queries[0].filter).toEqual({ tenantId: 'acme' });
   });
 
-  it("should pass config.retrieval.limit as the store query's limit", async () => {
+  it("should over-fetch config.retrieval.limit by RETRIEVAL_OVER_FETCH_MULTIPLIER for the store query's limit", async () => {
     fakeRetrievalStore.setHits([]);
 
     await service.retrieve({ questionText: 'What is the cap rate?', tenantId: 'default' });
 
-    expect(fakeRetrievalStore.queries[0].limit).toBe(12);
+    expect(fakeRetrievalStore.queries[0].limit).toBe(12 * RETRIEVAL_OVER_FETCH_MULTIPLIER);
   });
 
   it('should drive the store query limit from config instead of a fixed value', async () => {
@@ -115,7 +116,7 @@ describe('EvidenceRetrievalService', () => {
 
     await service.retrieve({ questionText: 'What is the cap rate?', tenantId: 'default' });
 
-    expect(fakeRetrievalStore.queries[0].limit).toBe(5);
+    expect(fakeRetrievalStore.queries[0].limit).toBe(5 * RETRIEVAL_OVER_FETCH_MULTIPLIER);
   });
 
   it("should join a retrieval hit back to its document version's sha256", async () => {
@@ -168,5 +169,71 @@ describe('EvidenceRetrievalService', () => {
     await expect(
       service.retrieve({ questionText: 'What is the cap rate?', tenantId: 'default' }),
     ).rejects.toBeInstanceOf(InternalServerErrorException);
+  });
+
+  it("should exclude a withdrawn version's chunk from the retrieval results", async () => {
+    const liveVersionId = new Types.ObjectId();
+    const withdrawnVersionId = new Types.ObjectId();
+    const liveHit = buildHit({ documentVersionId: liveVersionId.toString() });
+    const withdrawnHit = buildHit({ documentVersionId: withdrawnVersionId.toString() });
+    fakeRetrievalStore.setHits([liveHit, withdrawnHit]);
+    mockDocumentVersionModel.find.mockResolvedValueOnce([
+      { _id: liveVersionId, sha256: 'a'.repeat(64) },
+      { _id: withdrawnVersionId, sha256: 'b'.repeat(64), withdrawnAt: new Date() },
+    ]);
+
+    const result = await service.retrieve({
+      questionText: 'What is the cap rate?',
+      tenantId: 'default',
+    });
+
+    expect(result).toEqual([
+      {
+        chunkId: liveHit.id,
+        docVersionId: liveVersionId.toString(),
+        sha256: 'a'.repeat(64),
+        text: liveHit.metadata.text,
+        locator: liveHit.metadata.locator,
+      },
+    ]);
+  });
+
+  it('should still return config.retrieval.limit results when enough live chunks remain after withdrawn ones are dropped', async () => {
+    service = await buildService({ limit: 2 });
+    const withdrawnVersionId = new Types.ObjectId();
+    const liveVersionIds = [new Types.ObjectId(), new Types.ObjectId(), new Types.ObjectId()];
+    fakeRetrievalStore.setHits([
+      buildHit({ documentVersionId: withdrawnVersionId.toString() }),
+      ...liveVersionIds.map((versionId) => buildHit({ documentVersionId: versionId.toString() })),
+    ]);
+    mockDocumentVersionModel.find.mockResolvedValueOnce([
+      { _id: withdrawnVersionId, sha256: 'a'.repeat(64), withdrawnAt: new Date() },
+      ...liveVersionIds.map((versionId) => ({ _id: versionId, sha256: 'b'.repeat(64) })),
+    ]);
+
+    const result = await service.retrieve({
+      questionText: 'What is the cap rate?',
+      tenantId: 'default',
+    });
+
+    expect(fakeRetrievalStore.queries[0].limit).toBe(2 * RETRIEVAL_OVER_FETCH_MULTIPLIER);
+    expect(result).toHaveLength(2);
+  });
+
+  it('should record an empty retrieval and return no results when every hit in the top-k is withdrawn', async () => {
+    const emptyRetrievalSpy = jest.spyOn(emptyRetrievalCounter, 'add');
+    const withdrawnVersionId = new Types.ObjectId();
+    fakeRetrievalStore.setHits([buildHit({ documentVersionId: withdrawnVersionId.toString() })]);
+    mockDocumentVersionModel.find.mockResolvedValueOnce([
+      { _id: withdrawnVersionId, sha256: 'a'.repeat(64), withdrawnAt: new Date() },
+    ]);
+
+    const result = await service.retrieve({
+      questionText: 'What is the cap rate?',
+      tenantId: 'default',
+    });
+
+    expect(result).toEqual([]);
+    expect(emptyRetrievalSpy).toHaveBeenCalledWith(1);
   });
 });

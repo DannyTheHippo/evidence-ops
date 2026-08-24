@@ -76,6 +76,11 @@ export class MalformedPdfException extends BaseException {
 export class EmptyPdfTextLayerException extends BaseException {
   constructor(message: string, cause?: unknown) {
     super(message, HttpStatus.BAD_REQUEST, cause);
+    // Named explicitly, matching `VoyageApiKeyMissingError`'s pattern: Temporal's
+    // `nonRetryableErrorTypes` (`ingest-document-version.workflow.ts`) classifies an activity
+    // failure by `error.name`, which a class extending `Error`/`HttpException` never sets on its
+    // own — every instance would otherwise report `'Error'` regardless of subclass.
+    this.name = 'EmptyPdfTextLayerException';
   }
 }
 

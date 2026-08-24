@@ -5,6 +5,7 @@ import { Test } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { User } from '../../../../src/database/schemas/administration/user/user.schema';
 import { Answer } from '../../../../src/database/schemas/evidence/answer/answer.schema';
+import { DocumentVersion } from '../../../../src/database/schemas/evidence/document-version/document-version.schema';
 import { AnswerNotFoundException } from '../../../../src/features/evidence/qa/exceptions/qa.exception';
 import { ANSWER_STREAM_INTERVAL_MS } from '../../../../src/features/evidence/qa/qa.constant';
 import { QaService } from '../../../../src/features/evidence/qa/qa.service';
@@ -25,6 +26,7 @@ describe('QaService', () => {
   let service: QaService;
   const mockAnswerModel = getMockModel();
   const mockUserModel = getMockModel();
+  const mockDocumentVersionModel = getMockModel();
   const mockWorkflowEngine = { start: jest.fn(), status: jest.fn() };
   const mockAuditService = { record: jest.fn() };
   const mockLogger = getMockLogger();
@@ -35,6 +37,7 @@ describe('QaService', () => {
         QaService,
         { provide: getModelToken(Answer.name), useValue: mockAnswerModel },
         { provide: getModelToken(User.name), useValue: mockUserModel },
+        { provide: getModelToken(DocumentVersion.name), useValue: mockDocumentVersionModel },
         { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
         { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: mockLogger },
@@ -166,7 +169,11 @@ describe('QaService', () => {
         conflictIds: [conflictId.toString()],
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
         retrievedChunkCount: 2,
+        withdrawnCitedDocVersionIds: [],
       });
+      // `citation.docVersionId` ('v1') is not a valid ObjectId — `resolveWithdrawnDocVersionIds`
+      // filters it out and short-circuits before ever querying DocumentVersion.
+      expect(mockDocumentVersionModel.find).not.toHaveBeenCalled();
     });
 
     it('should omit outcome and verificationReport for a non-completed answer even when both are present on the document', async () => {
@@ -203,6 +210,59 @@ describe('QaService', () => {
       expect(result.citations).toEqual([]);
       expect(result.conflictIds).toEqual([]);
       expect(result.retrievedChunkCount).toBeUndefined();
+      expect(result.withdrawnCitedDocVersionIds).toEqual([]);
+    });
+
+    it('should report a cited document version as withdrawn, and leave a live one out', async () => {
+      const answerId = new Types.ObjectId();
+      const withdrawnVersionId = new Types.ObjectId();
+      const liveVersionId = new Types.ObjectId();
+      const withdrawnCitation = {
+        docVersionId: withdrawnVersionId.toString(),
+        sha256: 'a'.repeat(64),
+        chunkId: 'chunk-1',
+        locator: { kind: 'pdf-page' as const, page: 1, extractorVersion: 'v1' },
+        quote: 'the cap rate is 6.10%',
+      };
+      const liveCitation = {
+        docVersionId: liveVersionId.toString(),
+        sha256: 'b'.repeat(64),
+        chunkId: 'chunk-2',
+        locator: { kind: 'pdf-page' as const, page: 2, extractorVersion: 'v1' },
+        quote: 'occupancy was 94%',
+      };
+      mockAnswerModel.findOne.mockResolvedValueOnce({
+        _id: answerId,
+        questionText: 'What is the cap rate?',
+        runStatus: 'completed',
+        outcome: { kind: 'answered' as const, claims: [] },
+        claimCoverage: 1,
+        verificationReport: { verifiedClaimCount: 2, totalClaimCount: 2, droppedClaims: [] },
+        claims: [
+          { statement: 's1', citations: [withdrawnCitation] },
+          { statement: 's2', citations: [liveCitation] },
+        ],
+        conflictIds: [],
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        retrievedChunkIds: ['chunk-1', 'chunk-2'],
+      });
+      // Only the withdrawn version comes back — the query's own `withdrawnAt: { $exists: true }`
+      // predicate means a live version is simply absent from the result, never returned with a
+      // falsy flag.
+      mockDocumentVersionModel.find.mockResolvedValueOnce([{ _id: withdrawnVersionId }]);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      const result = await service.getAnswerById(answerId.toString(), 'actor', 'tenant-a');
+
+      expect(mockDocumentVersionModel.find).toHaveBeenCalledWith(
+        {
+          _id: { $in: [withdrawnVersionId, liveVersionId] },
+          tenantId: 'tenant-a',
+          withdrawnAt: { $exists: true },
+        },
+        { _id: 1 },
+      );
+      expect(result.withdrawnCitedDocVersionIds).toEqual([withdrawnVersionId.toString()]);
     });
   });
 
@@ -276,8 +336,12 @@ describe('QaService', () => {
           createdAt: answer.createdAt,
           usage: undefined,
           retrievedChunkCount: 1,
+          withdrawnCitedDocVersionIds: [],
         },
       ]);
+      // No citations on this page — the batched withdrawal lookup short-circuits before ever
+      // querying DocumentVersion.
+      expect(mockDocumentVersionModel.find).not.toHaveBeenCalled();
     });
 
     it('should scope the lookup to the given tenantId', async () => {
@@ -323,6 +387,39 @@ describe('QaService', () => {
 
       expect(result.docs[0].outcome).toBeUndefined();
       expect(result.docs[0].verificationReport).toBeUndefined();
+    });
+
+    it('should batch the withdrawal lookup once for the whole page, not once per row, and tag only the withdrawn citation', async () => {
+      const withdrawnVersionId = new Types.ObjectId();
+      const liveVersionId = new Types.ObjectId();
+      const answerOne = buildAnswerDoc({
+        claims: [
+          {
+            statement: 's1',
+            citations: [{ docVersionId: withdrawnVersionId.toString() }],
+          },
+        ],
+      });
+      const answerTwo = buildAnswerDoc({
+        claims: [{ statement: 's2', citations: [{ docVersionId: liveVersionId.toString() }] }],
+      });
+      mockAnswerModel.find.mockResolvedValueOnce([answerOne, answerTwo]);
+      mockAnswerModel.countDocuments.mockResolvedValueOnce(2);
+      mockDocumentVersionModel.find.mockResolvedValueOnce([{ _id: withdrawnVersionId }]);
+
+      const result = await service.listByTenant({ skip: 0, limit: 20 }, 'actor', 'tenant-a');
+
+      expect(mockDocumentVersionModel.find).toHaveBeenCalledTimes(1);
+      expect(mockDocumentVersionModel.find).toHaveBeenCalledWith(
+        {
+          _id: { $in: [withdrawnVersionId, liveVersionId] },
+          tenantId: 'tenant-a',
+          withdrawnAt: { $exists: true },
+        },
+        { _id: 1 },
+      );
+      expect(result.docs[0].withdrawnCitedDocVersionIds).toEqual([withdrawnVersionId.toString()]);
+      expect(result.docs[1].withdrawnCitedDocVersionIds).toEqual([]);
     });
   });
 
@@ -466,6 +563,37 @@ describe('QaService', () => {
       // The stream closed well before the 15s heartbeat interval elapsed (two 1.5s ticks) — no
       // heartbeat should have made it through before completion.
       expect(events.some((event) => event.type === 'heartbeat')).toBe(false);
+    });
+
+    // Regression for the "query per tick per open connection" trap: `resolveWithdrawnDocVersionIds`
+    // must be gated on the answer actually carrying citations, which is only true once completed —
+    // otherwise every 1.5s tick of every open SSE connection would pay for a DocumentVersion query.
+    it('should query DocumentVersion for withdrawal at most once, on the terminal tick where citations first appear', async () => {
+      const versionId = new Types.ObjectId();
+      const answer = buildAnswerDoc();
+      const completedAnswer = buildAnswerDoc({
+        _id: answer._id,
+        runStatus: 'completed',
+        claims: [{ statement: 's', citations: [{ docVersionId: versionId.toString() }] }],
+      });
+      mockAnswerModel.findOne.mockResolvedValueOnce(answer); // opened$'s existence-gating peek
+      mockAnswerModel.findOne.mockResolvedValueOnce(answer); // first tick, still running, no citations
+      mockAnswerModel.findOne.mockResolvedValueOnce(completedAnswer); // second tick, terminal, cited
+      mockDocumentVersionModel.find.mockResolvedValueOnce([{ _id: versionId }]);
+      mockAuditService.record.mockResolvedValue(undefined);
+      const events: MessageEvent[] = [];
+
+      service
+        .streamAnswer(answer._id.toString(), 'actor-1', 'tenant-a')
+        .subscribe((event) => events.push(event));
+      await jest.advanceTimersByTimeAsync(0);
+      await jest.advanceTimersByTimeAsync(ANSWER_STREAM_INTERVAL_MS);
+
+      expect(mockDocumentVersionModel.find).toHaveBeenCalledTimes(1);
+      const lastEvent = events[events.length - 1];
+      expect(lastEvent.data).toEqual(
+        expect.objectContaining({ withdrawnCitedDocVersionIds: [versionId.toString()] }),
+      );
     });
 
     it('should emit a terminal error event carrying a fixed client-facing message, never the raw internal error, and log the real error server-side, recording no audit row', async () => {

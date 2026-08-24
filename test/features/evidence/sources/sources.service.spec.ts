@@ -40,6 +40,8 @@ interface FinalizeUpdatePayload {
     lastSyncAt: Date;
     lastSyncStatus: string;
     lastSyncError?: string;
+    lastWithdrawalSuppressedAt?: Date;
+    lastWithdrawalSuppressedReason?: string;
   };
   $unset?: { lastSyncError: string };
 }
@@ -62,6 +64,8 @@ describe('SourcesService', () => {
     upload: jest.fn(),
     countBySourceAndClass: jest.fn(),
     applySourceClassToDrifted: jest.fn(),
+    withdrawVersions: jest.fn(),
+    reinstateVersions: jest.fn(),
   };
   const mockAuditService = { record: jest.fn() };
   const mockLogger = getMockLogger();
@@ -94,6 +98,32 @@ describe('SourcesService', () => {
     save: jest.fn().mockResolvedValue(undefined),
     ...overrides,
   });
+
+  /**
+   * Builds a `fileStates` entry shaped like a real Mongoose embedded subdocument rather than a
+   * plain object literal: every field lives on the returned object's PROTOTYPE as a getter, not as
+   * an own enumerable property, exactly like `SourceFileStateSchema`'s compiled subdocuments do at
+   * runtime. `getMockModel`'s `findOneAndUpdate` is a bare `jest.fn()` that hands back whatever a
+   * test resolves it to, so every other `fileStates` fixture here is a plain literal — spreading a
+   * plain literal (`{ ...state }`) copies every field, silently passing even where
+   * `SourcesService.cloneFileState`'s real target (a subdocument) would have every field but the
+   * override dropped. A test that must catch a regression back to `{ ...state }` needs a fixture
+   * this shape reproduces the drop on; `state.path` etc. still read correctly through the
+   * prototype, matching how the production code accesses the real subdocument.
+   */
+  const asSubdocumentLikeFileState = (state: SourceFileState): SourceFileState => {
+    const proto: SourceFileState = {
+      path: state.path,
+      sha256: state.sha256,
+      sizeBytes: state.sizeBytes,
+      mtimeMs: state.mtimeMs,
+      documentId: state.documentId,
+      lastError: state.lastError,
+      absentSweeps: state.absentSweeps,
+      withdrawnAt: state.withdrawnAt,
+    };
+    return Object.create(proto) as SourceFileState;
+  };
 
   /** Extracts the update document from the Nth `findOneAndUpdate` call (0-indexed) — every
    *  `runSync` test that inspects what `finalizeSync` persisted reads through this rather than
@@ -861,13 +891,17 @@ describe('SourcesService', () => {
     });
 
     it('should stringify a non-Error rejection when fetching an existing file fails', async () => {
-      const existingState = {
+      // Subdocument-shaped so the failure branch's `cloneFileState(existing, { lastError })` is
+      // exercised against the same field-access pattern a real `SourceFileState` subdocument uses
+      // — a regression to spreading `existing` directly would drop `sha256`/`documentId` here too,
+      // not only leave `lastError` unset.
+      const existingState = asSubdocumentLikeFileState({
         path: 'flaky.pdf',
         sha256: 'g'.repeat(64),
         sizeBytes: 1000,
         mtimeMs: 1000,
         documentId: documentIdA,
-      };
+      });
       const source = buildMockSource({ fileStates: [existingState] });
       mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(source).mockResolvedValueOnce(source);
       mockSourceConnector.listFiles.mockResolvedValueOnce([
@@ -880,8 +914,10 @@ describe('SourcesService', () => {
       const persisted = getFinalizeUpdate(1).$set.fileStates;
       expect(persisted[0]).toMatchObject({
         path: 'flaky.pdf',
+        sha256: 'g'.repeat(64),
         sizeBytes: 1000,
         mtimeMs: 1000,
+        documentId: documentIdA,
         lastError: 'disk unavailable',
       });
     });
@@ -1006,6 +1042,334 @@ describe('SourcesService', () => {
       expect(byPath.get('new.pdf')).toMatchObject({ documentId: newDocumentId });
       expect(byPath.get('huge.pdf')).toBeUndefined();
       expect(byPath.get('mystery.exe')).toBeUndefined();
+    });
+
+    it('should not withdraw a document version on the first absent sweep, only on the second consecutive one', async () => {
+      const staysDocumentId = new Types.ObjectId();
+      const goneDocumentId = new Types.ObjectId();
+      const staysState = {
+        path: 'stays.pdf',
+        sha256: 'a'.repeat(64),
+        sizeBytes: 100,
+        mtimeMs: 1000,
+        documentId: staysDocumentId,
+      };
+      const goneState = asSubdocumentLikeFileState({
+        path: 'gone.pdf',
+        sha256: 'b'.repeat(64),
+        sizeBytes: 200,
+        mtimeMs: 1000,
+        documentId: goneDocumentId,
+      });
+
+      let source = buildMockSource({ fileStates: [staysState, goneState] });
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(source).mockResolvedValueOnce(source);
+      mockSourceConnector.listFiles.mockResolvedValueOnce([
+        { relativePath: 'stays.pdf', sizeBytes: 100, mtimeMs: 1000 },
+      ]);
+
+      await service.runSync(sourceId.toString(), leaseToken);
+
+      expect(mockDocumentsService.withdrawVersions).not.toHaveBeenCalled();
+      const sweep1FileStates = getFinalizeUpdate(1).$set.fileStates;
+      const sweep1Gone = sweep1FileStates.find((state) => state.path === 'gone.pdf');
+      // Every watermark field, not only `absentSweeps` — a regression to spreading the
+      // (subdocument-shaped) source entry directly drops `path`/`sha256`/`documentId`/etc. rather
+      // than merely failing to advance the counter, and `toMatchObject({ absentSweeps: 1 })` alone
+      // would not catch that.
+      expect(sweep1Gone).toMatchObject({
+        path: 'gone.pdf',
+        sha256: 'b'.repeat(64),
+        sizeBytes: 200,
+        mtimeMs: 1000,
+        documentId: goneDocumentId,
+        absentSweeps: 1,
+      });
+      expect(sweep1Gone?.withdrawnAt).toBeUndefined();
+
+      // The next sweep reads these entries back off a fresh `buildMockSource`, so they are plain
+      // objects again here — mirroring a real second sync pass, which always re-hydrates
+      // subdocuments from what the previous pass actually persisted.
+      source = buildMockSource({ fileStates: sweep1FileStates });
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(source).mockResolvedValueOnce(source);
+      mockSourceConnector.listFiles.mockResolvedValueOnce([
+        { relativePath: 'stays.pdf', sizeBytes: 100, mtimeMs: 1000 },
+      ]);
+
+      await service.runSync(sourceId.toString(), leaseToken);
+
+      // `withdrawVersions` receiving the correct `documentId` is the assertion the earlier bug
+      // failed silently: a corrupted `gone.pdf` entry loses `documentId` on the first sweep, so
+      // this call either never fires or fires with `undefined` in the array.
+      expect(mockDocumentsService.withdrawVersions).toHaveBeenCalledWith(
+        [goneDocumentId],
+        'source-file-absent',
+        DEFAULT_TENANT_ID,
+      );
+      const sweep2FileStates = getFinalizeUpdate(3).$set.fileStates;
+      const sweep2Gone = sweep2FileStates.find((state) => state.path === 'gone.pdf');
+      expect(sweep2Gone).toMatchObject({
+        path: 'gone.pdf',
+        sha256: 'b'.repeat(64),
+        sizeBytes: 200,
+        mtimeMs: 1000,
+        documentId: goneDocumentId,
+        absentSweeps: 2,
+      });
+      expect(sweep2Gone?.withdrawnAt).toBeInstanceOf(Date);
+    });
+
+    it('should reset absentSweeps when a path reappears via the cheap watermark match, so a later unrelated absence restarts the two-strike count', async () => {
+      const staysDocumentId = new Types.ObjectId();
+      const flickerDocumentId = new Types.ObjectId();
+      const staysState = {
+        path: 'stays.pdf',
+        sha256: 'a'.repeat(64),
+        sizeBytes: 100,
+        mtimeMs: 1000,
+        documentId: staysDocumentId,
+      };
+      const flickerState = {
+        path: 'flicker.pdf',
+        sha256: 'b'.repeat(64),
+        sizeBytes: 200,
+        mtimeMs: 2000,
+        documentId: flickerDocumentId,
+      };
+
+      // Sweep 1: flicker.pdf absent, stays.pdf present — first strike.
+      let source = buildMockSource({ fileStates: [staysState, flickerState] });
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(source).mockResolvedValueOnce(source);
+      mockSourceConnector.listFiles.mockResolvedValueOnce([
+        { relativePath: 'stays.pdf', sizeBytes: 100, mtimeMs: 1000 },
+      ]);
+      await service.runSync(sourceId.toString(), leaseToken);
+      let fileStates = getFinalizeUpdate(1).$set.fileStates;
+      expect(fileStates.find((state) => state.path === 'flicker.pdf')).toMatchObject({
+        absentSweeps: 1,
+      });
+
+      // Sweep 2: flicker.pdf reappears with its ORIGINAL, unchanged watermark — the cheap
+      // early-return must clear the strike rather than let it compound with a later, unrelated
+      // absence.
+      source = buildMockSource({ fileStates });
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(source).mockResolvedValueOnce(source);
+      mockSourceConnector.listFiles.mockResolvedValueOnce([
+        { relativePath: 'stays.pdf', sizeBytes: 100, mtimeMs: 1000 },
+        { relativePath: 'flicker.pdf', sizeBytes: 200, mtimeMs: 2000 },
+      ]);
+      await service.runSync(sourceId.toString(), leaseToken);
+      expect(mockSourceConnector.fetchFile).not.toHaveBeenCalledWith('flicker.pdf');
+      fileStates = getFinalizeUpdate(3).$set.fileStates;
+      expect(
+        fileStates.find((state) => state.path === 'flicker.pdf')?.absentSweeps,
+      ).toBeUndefined();
+
+      // Sweep 3: flicker.pdf absent again — a fresh first strike, not a second, so no withdrawal.
+      source = buildMockSource({ fileStates });
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(source).mockResolvedValueOnce(source);
+      mockSourceConnector.listFiles.mockResolvedValueOnce([
+        { relativePath: 'stays.pdf', sizeBytes: 100, mtimeMs: 1000 },
+      ]);
+      await service.runSync(sourceId.toString(), leaseToken);
+      expect(mockDocumentsService.withdrawVersions).not.toHaveBeenCalled();
+      fileStates = getFinalizeUpdate(5).$set.fileStates;
+      expect(fileStates.find((state) => state.path === 'flicker.pdf')).toMatchObject({
+        absentSweeps: 1,
+      });
+    });
+
+    it('should clear a stale absentSweeps count without dropping the rest of the watermark on a live Mongoose-subdocument-shaped entry', async () => {
+      // Isolates `syncOneFile`'s cheap-watermark-match reset branch (the one other paths in this
+      // file reach only after the entry has already round-tripped through a prior sweep's plain
+      // `cloneFileState` output, which would mask a regression to spreading `existing` directly).
+      const staleDocumentId = new Types.ObjectId();
+      const staleState = asSubdocumentLikeFileState({
+        path: 'stale-strike.pdf',
+        sha256: 'e'.repeat(64),
+        sizeBytes: 300,
+        mtimeMs: 5000,
+        documentId: staleDocumentId,
+        absentSweeps: 1,
+      });
+      const source = buildMockSource({ fileStates: [staleState] });
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(source).mockResolvedValueOnce(source);
+      mockSourceConnector.listFiles.mockResolvedValueOnce([
+        { relativePath: 'stale-strike.pdf', sizeBytes: 300, mtimeMs: 5000 },
+      ]);
+
+      await service.runSync(sourceId.toString(), leaseToken);
+
+      expect(mockSourceConnector.fetchFile).not.toHaveBeenCalled();
+      const persisted = getFinalizeUpdate(1).$set.fileStates.find(
+        (state) => state.path === 'stale-strike.pdf',
+      );
+      expect(persisted).toMatchObject({
+        path: 'stale-strike.pdf',
+        sha256: 'e'.repeat(64),
+        sizeBytes: 300,
+        mtimeMs: 5000,
+        documentId: staleDocumentId,
+      });
+      expect(persisted?.absentSweeps).toBeUndefined();
+    });
+
+    it('should suppress withdrawal, record it, and leave absentSweeps untouched when the fresh listing is empty but known files exist', async () => {
+      const knownState = {
+        path: 'exists.pdf',
+        sha256: 'c'.repeat(64),
+        sizeBytes: 100,
+        mtimeMs: 1000,
+        documentId: documentIdA,
+      };
+      const source = buildMockSource({ fileStates: [knownState] });
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(source).mockResolvedValueOnce(source);
+      mockSourceConnector.listFiles.mockResolvedValueOnce([]);
+
+      await service.runSync(sourceId.toString(), leaseToken);
+
+      expect(mockDocumentsService.withdrawVersions).not.toHaveBeenCalled();
+      const update = getFinalizeUpdate(1);
+      expect(update.$set.lastWithdrawalSuppressedReason).toBe('empty-listing');
+      expect(update.$set.lastWithdrawalSuppressedAt).toBeInstanceOf(Date);
+      expect(update.$set.fileStates.find((state) => state.path === 'exists.pdf')).toEqual(
+        knownState,
+      );
+    });
+
+    it('should suppress withdrawal, record it, and leave absentSweeps untouched when more than half of known files are absent', async () => {
+      const presentState = {
+        path: 'present.pdf',
+        sha256: 'd'.repeat(64),
+        sizeBytes: 10,
+        mtimeMs: 1000,
+        documentId: documentIdA,
+      };
+      const absentState1 = {
+        path: 'absent1.pdf',
+        sha256: 'e'.repeat(64),
+        sizeBytes: 20,
+        mtimeMs: 1000,
+        documentId: documentIdB,
+      };
+      const absentState2 = {
+        path: 'absent2.pdf',
+        sha256: 'f'.repeat(64),
+        sizeBytes: 30,
+        mtimeMs: 1000,
+        documentId: new Types.ObjectId(),
+      };
+      const source = buildMockSource({
+        fileStates: [presentState, absentState1, absentState2],
+      });
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(source).mockResolvedValueOnce(source);
+      mockSourceConnector.listFiles.mockResolvedValueOnce([
+        { relativePath: 'present.pdf', sizeBytes: 10, mtimeMs: 1000 },
+      ]);
+
+      await service.runSync(sourceId.toString(), leaseToken);
+
+      expect(mockDocumentsService.withdrawVersions).not.toHaveBeenCalled();
+      const update = getFinalizeUpdate(1);
+      expect(update.$set.lastWithdrawalSuppressedReason).toBe('absence-threshold-exceeded');
+      expect(
+        update.$set.fileStates.find((state) => state.path === 'absent1.pdf')?.absentSweeps,
+      ).toBeUndefined();
+      expect(
+        update.$set.fileStates.find((state) => state.path === 'absent2.pdf')?.absentSweeps,
+      ).toBeUndefined();
+    });
+
+    it('should not call withdrawVersions when listing files fails', async () => {
+      mockSourceModel.findOneAndUpdate
+        .mockResolvedValueOnce(buildMockSource())
+        .mockResolvedValueOnce(buildMockSource());
+      mockSourceConnector.listFiles.mockRejectedValueOnce(new Error('ENOENT'));
+
+      await service.runSync(sourceId.toString(), leaseToken);
+
+      expect(mockDocumentsService.withdrawVersions).not.toHaveBeenCalled();
+    });
+
+    it('should force a hash check and reinstate a withdrawn version when a path reappears with a byte-identical watermark', async () => {
+      const restoredBytes = Buffer.from('restored-bytes-unchanged');
+      const restoredSha256 = createHash('sha256').update(restoredBytes).digest('hex');
+      const withdrawnDocumentId = new Types.ObjectId();
+      // Subdocument-shaped so the dedupe branch's `cloneFileState(existing, { ... })` reads through
+      // the same getter pattern the real `SourceFileStateSchema` subdocument uses — a regression to
+      // spreading `existing` directly drops `path` from the persisted entry, which would make the
+      // `.find(state => state.path === 'restored.pdf')` below silently return `undefined` and the
+      // two `toBeUndefined()` checks pass for the wrong reason.
+      const withdrawnState = asSubdocumentLikeFileState({
+        path: 'restored.pdf',
+        sha256: restoredSha256,
+        sizeBytes: 500,
+        mtimeMs: 4000,
+        documentId: withdrawnDocumentId,
+        absentSweeps: 2,
+        withdrawnAt: new Date('2026-08-01T00:00:00.000Z'),
+      });
+      const source = buildMockSource({ fileStates: [withdrawnState] });
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(source).mockResolvedValueOnce(source);
+      mockSourceConnector.listFiles.mockResolvedValueOnce([
+        { relativePath: 'restored.pdf', sizeBytes: 500, mtimeMs: 4000 },
+      ]);
+      mockSourceConnector.fetchFile.mockResolvedValueOnce(restoredBytes);
+
+      await service.runSync(sourceId.toString(), leaseToken);
+
+      expect(mockSourceConnector.fetchFile).toHaveBeenCalledWith('restored.pdf');
+      expect(mockDocumentsService.reinstateVersions).toHaveBeenCalledWith(
+        [withdrawnDocumentId],
+        DEFAULT_TENANT_ID,
+      );
+      const persisted = getFinalizeUpdate(1).$set.fileStates.find(
+        (state) => state.path === 'restored.pdf',
+      );
+      // `find` returning a match at all is itself part of the regression coverage — an
+      // optional-chained assertion on a `find` miss reads as a pass either way.
+      expect(persisted).toBeDefined();
+      expect(persisted).toMatchObject({
+        path: 'restored.pdf',
+        sha256: restoredSha256,
+        sizeBytes: 500,
+        mtimeMs: 4000,
+        documentId: withdrawnDocumentId,
+      });
+      expect(persisted?.withdrawnAt).toBeUndefined();
+      expect(persisted?.absentSweeps).toBeUndefined();
+    });
+
+    it('should reinstate the whole document when a withdrawn path reappears with genuinely different bytes', async () => {
+      const withdrawnDocumentId = new Types.ObjectId();
+      const withdrawnState = {
+        path: 'changed-after-withdrawal.pdf',
+        sha256: 'c'.repeat(64),
+        sizeBytes: 100,
+        mtimeMs: 1000,
+        documentId: withdrawnDocumentId,
+        absentSweeps: 2,
+        withdrawnAt: new Date('2026-08-01T00:00:00.000Z'),
+      };
+      const source = buildMockSource({ fileStates: [withdrawnState] });
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(source).mockResolvedValueOnce(source);
+      mockSourceConnector.listFiles.mockResolvedValueOnce([
+        { relativePath: 'changed-after-withdrawal.pdf', sizeBytes: 150, mtimeMs: 2000 },
+      ]);
+      mockSourceConnector.fetchFile.mockResolvedValueOnce(Buffer.from('genuinely-new-bytes'));
+      mockDocumentsService.upload.mockResolvedValueOnce({ id: withdrawnDocumentId.toString() });
+
+      await service.runSync(sourceId.toString(), leaseToken);
+
+      expect(mockDocumentsService.upload).toHaveBeenCalledWith(
+        expect.objectContaining({ originalname: 'changed-after-withdrawal.pdf' }),
+        { documentId: withdrawnDocumentId.toString() },
+        DEFAULT_TENANT_ID,
+      );
+      expect(mockDocumentsService.reinstateVersions).toHaveBeenCalledWith(
+        [withdrawnDocumentId],
+        DEFAULT_TENANT_ID,
+      );
     });
   });
 

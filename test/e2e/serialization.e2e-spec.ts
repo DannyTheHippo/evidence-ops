@@ -7,6 +7,12 @@ import {
   AuditEvent,
   AuditEventDocument,
 } from '../../src/database/schemas/audit/audit-event/audit-event.schema';
+import { Answer, AnswerDocument } from '../../src/database/schemas/evidence/answer/answer.schema';
+import {
+  DocumentVersion,
+  DocumentVersionDocument,
+} from '../../src/database/schemas/evidence/document-version/document-version.schema';
+import type { Citation } from '../../src/features/evidence/qa/contracts/answer.contract';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
 import { registerTestUser } from '../utils/register-test-user';
 
@@ -146,5 +152,81 @@ describe('Serialization (e2e)', () => {
     expect(response.status).toBe(200);
     expect(body.docs).toHaveLength(1);
     expect(body.docs[0].modifiedCount).toBe(400);
+  });
+
+  // Regression for the same class of gap: `withdrawnCitedDocVersionIds` is computed at read time
+  // (never persisted), so it is easy for a response DTO field of this shape to lose its @Expose()
+  // without a failing type-check anywhere. Also proves the join tags only the cited version that
+  // actually carries `withdrawnAt`, not every citation on the answer.
+  it('exposes withdrawnCitedDocVersionIds on the answer response, naming only the citation whose version carries withdrawnAt', async () => {
+    const { cookie, tenantId } = await registerTestUser(app, {
+      email: 'serialization-withdrawn-citation-e2e@example.com',
+      password: 'correct-horse-battery',
+    });
+
+    const documentVersionModel = app.get<Model<DocumentVersionDocument>>(
+      getModelToken(DocumentVersion.name),
+    );
+    const answerModel = app.get<Model<AnswerDocument>>(getModelToken(Answer.name));
+
+    const withdrawnVersion = await documentVersionModel.create({
+      tenantId,
+      documentId: new Types.ObjectId(),
+      versionNumber: 1,
+      sha256: 'a'.repeat(64),
+      sizeBytes: 100,
+      storageKey: 'serialization-withdrawn-citation-e2e',
+      withdrawnAt: new Date(),
+      withdrawnReason: 'source-file-absent',
+    });
+    const liveVersion = await documentVersionModel.create({
+      tenantId,
+      documentId: new Types.ObjectId(),
+      versionNumber: 1,
+      sha256: 'b'.repeat(64),
+      sizeBytes: 100,
+      storageKey: 'serialization-live-citation-e2e',
+    });
+
+    const withdrawnCitation: Citation = {
+      docVersionId: withdrawnVersion._id.toString(),
+      sha256: 'a'.repeat(64),
+      chunkId: 'chunk-withdrawn',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 1 },
+      quote: 'evidence from a since-withdrawn source',
+    };
+    const liveCitation: Citation = {
+      docVersionId: liveVersion._id.toString(),
+      sha256: 'b'.repeat(64),
+      chunkId: 'chunk-live',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+      quote: 'evidence from a source still in the corpus',
+    };
+    const seeded = await answerModel.create({
+      tenantId,
+      questionText: 'What is the cap rate?',
+      runStatus: 'completed',
+      outcome: {
+        kind: 'answered',
+        claims: [
+          { statement: 'Statement one.', citations: [withdrawnCitation] },
+          { statement: 'Statement two.', citations: [liveCitation] },
+        ],
+      },
+      claims: [
+        { statement: 'Statement one.', citations: [withdrawnCitation] },
+        { statement: 'Statement two.', citations: [liveCitation] },
+      ],
+      claimCoverage: 1,
+    });
+
+    const response = await request(getTestServer(app))
+      .get(`/api/v1/answers/${seeded._id.toString()}`)
+      .set('Cookie', cookie);
+    const body = response.body as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(Object.keys(body)).toContain('withdrawnCitedDocVersionIds');
+    expect(body.withdrawnCitedDocVersionIds).toEqual([withdrawnVersion._id.toString()]);
   });
 });

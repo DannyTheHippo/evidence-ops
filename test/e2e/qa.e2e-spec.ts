@@ -51,6 +51,7 @@ interface AnswerBody {
   conflictIds?: string[];
   createdAt?: string;
   usage?: AnswerUsageBody;
+  withdrawnCitedDocVersionIds?: string[];
 }
 
 interface ConflictValueBody {
@@ -60,6 +61,7 @@ interface ConflictValueBody {
   sourceChunkId: string;
   documentVersionId: string;
   locator: unknown;
+  withdrawn: boolean;
 }
 
 interface ConflictBody {
@@ -194,7 +196,15 @@ describe('QA and Conflicts (e2e)', () => {
       // `outcome` and `claimCoverage` must be entirely absent (not present-but-null/undefined) —
       // a non-completed run must never present an outcome as if it were final.
       expect(Object.keys(body).sort()).toEqual(
-        ['id', 'questionText', 'runStatus', 'citations', 'conflictIds', 'createdAt'].sort(),
+        [
+          'id',
+          'questionText',
+          'runStatus',
+          'citations',
+          'conflictIds',
+          'createdAt',
+          'withdrawnCitedDocVersionIds',
+        ].sort(),
       );
 
       const events = await auditEventModel.find({
@@ -248,6 +258,9 @@ describe('QA and Conflicts (e2e)', () => {
         claims: [{ statement: 'The cap rate is approximately 6.10%.', citations: [citation] }],
       });
       expect(body.citations).toEqual([citation]);
+      // `citation.docVersionId` ('version-1') is not a real DocumentVersion, so it can never
+      // resolve as withdrawn — this stays an empty array rather than throwing.
+      expect(body.withdrawnCitedDocVersionIds).toEqual([]);
       expect(Object.keys(body).sort()).toEqual(
         [
           'id',
@@ -261,6 +274,7 @@ describe('QA and Conflicts (e2e)', () => {
           'conflictIds',
           'createdAt',
           'usage',
+          'withdrawnCitedDocVersionIds',
         ].sort(),
       );
       // Nested exact key set — the trap this field is most likely to hit is a missing @Type() on
@@ -518,11 +532,88 @@ describe('QA and Conflicts (e2e)', () => {
       expect(body.docs[0].ruleFired).toBe('none');
       expect(body.docs[0].values.length).toBeGreaterThan(0);
       expect(Object.keys(body.docs[0].values[0]).sort()).toEqual(
-        ['factId', 'value', 'unit', 'sourceChunkId', 'documentVersionId', 'locator'].sort(),
+        [
+          'factId',
+          'value',
+          'unit',
+          'sourceChunkId',
+          'documentVersionId',
+          'locator',
+          'withdrawn',
+        ].sort(),
       );
+      // Neither fact's fabricated `documentVersionId` resolves to a real DocumentVersion, so
+      // withdrawal fails open to false rather than throwing.
+      expect(body.docs[0].values.every((value) => value.withdrawn === false)).toBe(true);
 
       const events = await auditEventModel.find({ action: 'conflicts.listed' });
       expect(events.length).toBeGreaterThan(0);
+    });
+
+    it('marks a value withdrawn when its documentVersionId carries withdrawnAt, while the conflict itself stays open', async () => {
+      const factKey = {
+        entity: 'Fenwick Logistics Center',
+        metric: 'cap_rate',
+        period: '2025-06',
+      };
+      const withdrawnVersion = await documentVersionModel.create({
+        tenantId,
+        documentId: new Types.ObjectId(),
+        versionNumber: 1,
+        sha256: 'c'.repeat(64),
+        sizeBytes: 100,
+        storageKey: 'qa-e2e-withdrawn-conflict-value',
+        withdrawnAt: new Date(),
+        withdrawnReason: 'source-file-absent',
+      });
+      const factWithdrawn = await extractedFactModel.create({
+        tenantId,
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        value: { amount: 5.25, unit: 'percent' },
+        rawText: 'cap rate of 5.25%',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-withdrawn-conflict',
+        documentVersionId: withdrawnVersion._id,
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
+      });
+      const factLive = await extractedFactModel.create({
+        tenantId,
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        value: { amount: 6.1, unit: 'percent' },
+        rawText: 'cap rate of 6.10%',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-live-conflict',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+      });
+      const conflict = await conflictModel.create({
+        tenantId,
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        factIds: [factWithdrawn._id, factLive._id],
+        magnitude: 0.0085,
+        status: 'open',
+      });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/conflicts')
+        .set('Cookie', cookie);
+      const body = response.body as { docs: ConflictBody[]; count: number };
+      const listed = body.docs.find((doc) => doc.id === conflict._id.toString());
+
+      expect(response.status).toBe(200);
+      expect(listed).toBeDefined();
+      expect(listed?.status).toBe('open');
+      const withdrawnValue = listed?.values.find(
+        (value) => value.factId === factWithdrawn._id.toString(),
+      );
+      const liveValue = listed?.values.find((value) => value.factId === factLive._id.toString());
+      expect(withdrawnValue?.withdrawn).toBe(true);
+      expect(liveValue?.withdrawn).toBe(false);
     });
 
     it("lists a proposedWinnerFactId for a metric with an authorityOrder, keyed by each fact document's sourceClass", async () => {

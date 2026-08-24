@@ -215,12 +215,13 @@ describe('proxyActivities retry configuration', () => {
   // Guards each group's `nonRetryableErrorTypes` against a silent rename of the error class it
   // names — Temporal matches these as plain strings (see the workflow file's own group comments),
   // so a rename that isn't mirrored here would disable the classification without failing tsc.
-  it("should mark a missing tenantId and Voyage's deterministic failures non-retryable for ingestDocumentVersion", () => {
+  it("should mark a missing tenantId, Voyage's deterministic failures, and a scanned PDF's missing text layer non-retryable for ingestDocumentVersion", () => {
     const [ingestOptions] = proxyActivitiesCalls[0];
     expect(ingestOptions.retry?.nonRetryableErrorTypes).toEqual([
       'MissingTenantId',
       'VoyageApiKeyMissingError',
       'VoyageInvalidResponseError',
+      'EmptyPdfTextLayerException',
     ]);
   });
 

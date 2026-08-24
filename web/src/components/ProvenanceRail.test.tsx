@@ -18,10 +18,18 @@ function citation(overrides: Partial<Citation> = {}): Citation {
   };
 }
 
-function renderRail(outcome: AnswerOutcome, documentIndex = new Map<string, ResolvedVersion>()) {
+function renderRail(
+  outcome: AnswerOutcome,
+  documentIndex = new Map<string, ResolvedVersion>(),
+  withdrawnDocVersionIds?: ReadonlySet<string>,
+) {
   return render(
     <MemoryRouter>
-      <ProvenanceRail outcome={outcome} documentIndex={documentIndex} />
+      <ProvenanceRail
+        outcome={outcome}
+        documentIndex={documentIndex}
+        withdrawnDocVersionIds={withdrawnDocVersionIds}
+      />
     </MemoryRouter>,
   );
 }
@@ -118,5 +126,27 @@ describe('ProvenanceRail', () => {
 
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
     expect(screen.getByText('a1b2c3d4…789a · c6d1cd73…c3db')).toBeInTheDocument();
+  });
+
+  it('marks a citation whose docVersionId is in withdrawnDocVersionIds', () => {
+    const c = citation();
+    renderRail(
+      { kind: 'answered', claims: [{ statement: 'Statement.', citations: [c] }] },
+      new Map(),
+      new Set([c.docVersionId]),
+    );
+
+    expect(screen.getByText('source withdrawn')).toBeInTheDocument();
+  });
+
+  it('does not mark a citation whose docVersionId is not in withdrawnDocVersionIds', () => {
+    const c = citation();
+    renderRail(
+      { kind: 'answered', claims: [{ statement: 'Statement.', citations: [c] }] },
+      new Map(),
+      new Set(['some-other-version']),
+    );
+
+    expect(screen.queryByText('source withdrawn')).not.toBeInTheDocument();
   });
 });

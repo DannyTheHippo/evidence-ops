@@ -3,6 +3,7 @@ import type { AnswerOutcome, Citation } from '../api/client';
 import { truncateSha256 } from '../lib/identifiers';
 import { formatLocator } from '../lib/locator';
 import type { ResolvedVersion } from '../lib/document-index';
+import Badge from './ui/Badge';
 
 export type RailNodeState = 'verified' | 'degraded' | 'neutral';
 
@@ -85,9 +86,17 @@ function TraceChip({ citation, resolved }: TraceChipProps) {
   );
 }
 
+// A stable module-level default rather than a fresh `new Set()` per render — most callers of
+// `ProvenanceRail` carry no withdrawn citations at all, and `withdrawnDocVersionIds` is never
+// mutated, so there is nothing a shared instance could leak between renders or callers.
+const NO_WITHDRAWN_DOC_VERSION_IDS: ReadonlySet<string> = new Set();
+
 interface ProvenanceRailProps {
   outcome: AnswerOutcome;
   documentIndex: Map<string, ResolvedVersion>;
+  // `AnswerEnvelope.withdrawnCitedDocVersionIds`, resolved by the caller into a set for an O(1)
+  // per-citation lookup — optional because most answers cite nothing withdrawn.
+  withdrawnDocVersionIds?: ReadonlySet<string>;
 }
 
 /**
@@ -103,10 +112,19 @@ interface ProvenanceRailProps {
  * | `insufficient_evidence` with no `reasonCode` (the grounding gate's own path) | degraded | dashed |
  * | Everything else — a model-authored `insufficient_evidence`, `conflicting_evidence`, or a claim with no citations | neutral | solid |
  *
+ * Independently of node state, a citation whose `docVersionId` is in `withdrawnDocVersionIds`
+ * carries a `caution`-toned badge: the source file is gone from its origin, but the citation
+ * itself is still genuine and still checkable against the retained bytes — a corpus gap to flag,
+ * not the verification-grade failure a `rejected` tone would signal.
+ *
  * Purely presentational: no fetching, no effects. The caller owns data loading and passes the
  * `documentIndex` resolved by `buildDocumentVersionIndex()`.
  */
-export default function ProvenanceRail({ outcome, documentIndex }: ProvenanceRailProps) {
+export default function ProvenanceRail({
+  outcome,
+  documentIndex,
+  withdrawnDocVersionIds = NO_WITHDRAWN_DOC_VERSION_IDS,
+}: ProvenanceRailProps) {
   const nodes = buildRailNodes(outcome);
 
   return (
@@ -126,6 +144,9 @@ export default function ProvenanceRail({ outcome, documentIndex }: ProvenanceRai
                       citation={citation}
                       resolved={documentIndex.get(citation.docVersionId)}
                     />
+                    {withdrawnDocVersionIds.has(citation.docVersionId) && (
+                      <Badge tone="caution">source withdrawn</Badge>
+                    )}
                   </div>
                 </li>
               ))}

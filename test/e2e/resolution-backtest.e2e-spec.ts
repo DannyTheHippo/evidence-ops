@@ -366,5 +366,110 @@ describe('Resolution backtest (e2e)', () => {
         agreementRate: null,
       });
     });
+
+    // The payoff of soft withdrawal (ADR-0024) over hard deletion: a past resolution stays
+    // replayable exactly as it was decided, even after every document behind it leaves the
+    // corpus. `ResolutionBacktestService` reads `ExtractedFact` and `sourceClass` only — never
+    // `withdrawnAt` — so this report must come back byte-identical whether or not the facts'
+    // documents are currently withdrawn. That is deliberate, not an oversight: adding a
+    // `withdrawnAt` predicate to this service's lookups "for consistency" would make a past
+    // decision stop replaying the same way once its evidence is later withdrawn, defeating the
+    // reason soft withdrawal was chosen over hard deletion in the first place.
+    it('returns an identical report before and after withdrawing every document behind a resolved conflict', async () => {
+      const isolatedTenant = await registerTestUser(app, {
+        email: 'resolution-backtest-withdrawal-invariance-e2e@example.com',
+        password: 'correct-horse-battery',
+      });
+
+      const factKey = {
+        entity: 'Northgate Business Park',
+        metric: 'net_operating_income',
+        period: '2025-03',
+      };
+      const documentPm = await documentModel.create({
+        title: 'PM Export',
+        sourceKind: 'xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        tenantId: isolatedTenant.tenantId,
+        sourceClass: 'pm-export',
+      });
+      const documentSpreadsheet = await documentModel.create({
+        title: 'Comps Spreadsheet',
+        sourceKind: 'xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        tenantId: isolatedTenant.tenantId,
+        sourceClass: 'spreadsheet',
+      });
+      const versionPm = await documentVersionModel.create({
+        documentId: documentPm._id,
+        versionNumber: 1,
+        sha256: 'a'.repeat(64),
+        sizeBytes: 1,
+        storageKey: 'withdrawal-invariance-pm-export',
+        tenantId: isolatedTenant.tenantId,
+      });
+      const versionSpreadsheet = await documentVersionModel.create({
+        documentId: documentSpreadsheet._id,
+        versionNumber: 1,
+        sha256: 'b'.repeat(64),
+        sizeBytes: 1,
+        storageKey: 'withdrawal-invariance-spreadsheet',
+        tenantId: isolatedTenant.tenantId,
+      });
+      const factPm = await extractedFactModel.create({
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        tenantId: isolatedTenant.tenantId,
+        value: { amount: 500000, unit: 'usd' },
+        rawText: 'NOI 500000',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-pm',
+        documentVersionId: versionPm._id,
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Rent Roll', cell: 'B2' },
+      });
+      const factSpreadsheet = await extractedFactModel.create({
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        tenantId: isolatedTenant.tenantId,
+        value: { amount: 550000, unit: 'usd' },
+        rawText: 'NOI 550000',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        chunkId: 'chunk-comps',
+        documentVersionId: versionSpreadsheet._id,
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'C4' },
+      });
+      await conflictModel.create({
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        tenantId: isolatedTenant.tenantId,
+        factIds: [factPm._id, factSpreadsheet._id],
+        magnitude: 50000,
+        status: 'resolved',
+        resolution: { outcome: 'resolved', winningFactId: factPm._id, resolvedAt: new Date() },
+      });
+
+      const beforeResponse = await request(getTestServer(app))
+        .get('/api/v1/conflicts/resolution-backtest')
+        .set('Cookie', isolatedTenant.cookie);
+      const before = beforeResponse.body as ResolutionBacktestBody;
+
+      // Not a trivially-empty report — proves the invariance below is protecting a real, scored
+      // decision rather than comparing two empty reports.
+      expect(before.agreed).toBe(1);
+
+      await documentVersionModel.updateMany(
+        { _id: { $in: [versionPm._id, versionSpreadsheet._id] } },
+        { $set: { withdrawnAt: new Date(), withdrawnReason: 'source-file-absent' } },
+      );
+
+      const afterResponse = await request(getTestServer(app))
+        .get('/api/v1/conflicts/resolution-backtest')
+        .set('Cookie', isolatedTenant.cookie);
+      const after = afterResponse.body as ResolutionBacktestBody;
+
+      expect(after).toEqual(before);
+    });
   });
 });

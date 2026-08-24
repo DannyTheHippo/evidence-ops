@@ -4,12 +4,33 @@ import { AuditableDocument } from '../../../global/auditable-document/auditable-
 
 export type DocumentVersionDocument = HydratedDocument<WithTimestamps<DocumentVersion>>;
 
-export type DocumentVersionIngestionStatus = 'pending' | 'completed' | 'failed';
+// 'needs-ocr' is a terminal quarantine state, not a variant of 'failed': it is only ever reached
+// from `EmptyPdfTextLayerException` (a scanned PDF with no embedded text layer), a condition that
+// is deterministic for the same bytes and never resolves by itself — see
+// `IngestionService.recordIngestionFailure` for where it is chosen over 'failed', and
+// `ingest-document-version.workflow.ts`'s `nonRetryableErrorTypes` for why the underlying activity
+// never retries it either.
+export type DocumentVersionIngestionStatus = 'pending' | 'completed' | 'failed' | 'needs-ocr';
 
+// Adding 'needs-ocr' needs no migration: `enum` on a `@Prop` is a Mongoose-side validator, not a
+// database index, so a deployed collection already accepts the new value the moment this file
+// ships. The one existing query pattern over this field — `document_versions_tenantId_ingestionStatus`
+// below, backing `DocumentsService.list`'s filter — indexes the whole field regardless of which
+// values it holds, so it already covers 'needs-ocr' without a migration touching it either.
 export const DOCUMENT_VERSION_INGESTION_STATUSES: readonly DocumentVersionIngestionStatus[] = [
   'pending',
   'completed',
   'failed',
+  'needs-ocr',
+];
+
+/** Why a version was soft-withdrawn (`withdrawnAt` set). A narrow union rather than a free string
+ *  because a withdrawal always has a specific, known cause; `'source-file-absent'` is the only
+ *  cause today — `SourcesService.runSync`'s two-strike absence guard. */
+export type DocumentVersionWithdrawnReason = 'source-file-absent';
+
+export const DOCUMENT_VERSION_WITHDRAWN_REASONS: readonly DocumentVersionWithdrawnReason[] = [
+  'source-file-absent',
 ];
 
 @Schema({ timestamps: true, collection: 'document_versions' })
@@ -56,14 +77,29 @@ export class DocumentVersion extends AuditableDocument {
   ingestionLeaseToken?: Types.ObjectId;
 
   /**
-   * Populated only when `ingestionStatus` is `'failed'` — the parser exception message, verbatim,
-   * from the attempt that set that status (`IngestionService.ingestVersion`). Optional and
-   * unindexed: a version predating this field has no failure to record and there is no query
-   * pattern over this field, so no migration accompanies its addition (`.claude/rules/mongoose.md`
-   * requires one only for an index or a backfill).
+   * Populated when `ingestionStatus` is `'failed'` or `'needs-ocr'` — the parser exception
+   * message, verbatim, from the attempt that set that status (`IngestionService.ingestVersion`).
+   * Optional and unindexed: a version predating this field has no failure to record and there is
+   * no query pattern over this field, so no migration accompanies its addition
+   * (`.claude/rules/mongoose.md` requires one only for an index or a backfill).
    */
   @Prop({ type: String })
   ingestionFailureReason?: string;
+
+  /**
+   * Soft-withdrawal marker: unset for every retrievable version. Set (never unset by `remove`'s
+   * hard delete, which removes the row instead) when `SourcesService.runSync` decides the
+   * originating source file is gone. Chunks and facts under this version are deliberately
+   * retained — a past `Answer` still cites them and `ResolutionBacktestService` still replays them
+   * — only retrieval exclusion (a later step) and `withdrawnReason` read this field.
+   */
+  @Prop({ type: Date })
+  withdrawnAt?: Date;
+
+  /** Populated only alongside `withdrawnAt`, mirroring `ingestionFailureReason`'s pairing with
+   *  `ingestionStatus`. */
+  @Prop({ type: String, enum: DOCUMENT_VERSION_WITHDRAWN_REASONS })
+  withdrawnReason?: DocumentVersionWithdrawnReason;
 
   @Prop({ type: String, required: true })
   tenantId: string;
@@ -81,4 +117,18 @@ export const DocumentVersionSchema = SchemaFactory.createForClass(DocumentVersio
 DocumentVersionSchema.index(
   { tenantId: 1, ingestionStatus: 1 },
   { name: 'document_versions_tenantId_ingestionStatus' },
+);
+
+/**
+ * Declared here as well as in `migrations/0029-document-version-withdrawal.ts`, with the same
+ * keys, name and options — same reasoning as the index above. Partial: `withdrawnAt` is absent on
+ * the overwhelming majority of versions (every one never withdrawn), so an unfiltered index would
+ * carry every row for a predicate that only ever matches a small minority.
+ */
+DocumentVersionSchema.index(
+  { tenantId: 1, withdrawnAt: 1 },
+  {
+    name: 'document_versions_tenantId_withdrawnAt',
+    partialFilterExpression: { withdrawnAt: { $exists: true } },
+  },
 );

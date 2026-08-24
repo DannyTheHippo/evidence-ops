@@ -29,11 +29,15 @@ const ingestActivities = proxyActivities<Pick<Activities, 'ingestDocumentVersion
     maximumAttempts: 3,
     // A missing tenantId never appears by retrying (`requireTenantId` in `activities.ts`), and
     // Voyage's own errors here are deterministic for a given input: no configured API key and a
-    // malformed embeddings response shape both recur unchanged on the next attempt.
+    // malformed embeddings response shape both recur unchanged on the next attempt. A scanned
+    // PDF's missing text layer (`EmptyPdfTextLayerException`, `pdf.parser.ts`) is exactly as
+    // deterministic — the same bytes parse to the same empty result every time — so retrying only
+    // delays reaching `IngestionService`'s `'needs-ocr'` terminal state, never changes the outcome.
     nonRetryableErrorTypes: [
       'MissingTenantId',
       'VoyageApiKeyMissingError',
       'VoyageInvalidResponseError',
+      'EmptyPdfTextLayerException',
     ],
   },
 });

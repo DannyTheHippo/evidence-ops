@@ -34,6 +34,17 @@ const SOURCE_CLASS_OPTIONS: { value: string; label: string }[] = [
   { value: 'report', label: 'Report' },
 ];
 
+const INGESTION_STATUS_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: 'All statuses' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'failed', label: 'Failed' },
+  { value: 'needs-ocr', label: 'Needs OCR' },
+];
+
+// 'needs-ocr' falls through to the same 'caution' tone as 'pending' — deliberately, not merely by
+// omission: a scanned PDF with no text layer is a gap in the corpus to flag for attention, not the
+// verification-grade failure 'rejected' signals elsewhere in this app.
 function ingestionTone(
   status: DocumentVersionIngestionStatus,
 ): 'verified' | 'caution' | 'rejected' {
@@ -47,6 +58,15 @@ export default function DocumentList() {
   const [count, setCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [skip, setSkip] = useState(0);
+  const [ingestionStatusFilter, setIngestionStatusFilter] = useState<
+    DocumentVersionIngestionStatus | ''
+  >('');
+  // Only this, not `ingestionStatusFilter` itself, drives the fetch — the filter applies on
+  // submit, not on every selection change, matching `AnswersPage`'s input-state/applied-state
+  // split.
+  const [appliedIngestionStatus, setAppliedIngestionStatus] = useState<
+    DocumentVersionIngestionStatus | ''
+  >('');
   const [title, setTitle] = useState('');
   const [sourceClass, setSourceClass] = useState<DocumentSourceClass | ''>('');
   const [files, setFiles] = useState<File[]>([]);
@@ -58,7 +78,11 @@ export default function DocumentList() {
   const uploadInFlightRef = useRef(false);
 
   const refetch = useCallback(() => {
-    listDocuments({ skip, limit: PAGE_SIZE })
+    listDocuments({
+      skip,
+      limit: PAGE_SIZE,
+      ingestionStatus: appliedIngestionStatus === '' ? undefined : appliedIngestionStatus,
+    })
       .then(({ docs, count: total }) => {
         setDocuments(docs);
         setCount(total);
@@ -67,14 +91,16 @@ export default function DocumentList() {
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'Failed to load documents');
       });
-  }, [skip]);
+  }, [skip, appliedIngestionStatus]);
 
-  // The SSE stream (`documents.service.ts`'s `streamList`) follows whichever page `skip` names, so
-  // it stays live on every page, not only the first — the URL changing re-triggers
-  // `useEventStream`'s connection effect (keyed on `options.url`), closing the old `EventSource`
-  // and opening a fresh one scoped to the new page.
+  // The SSE stream (`documents.service.ts`'s `streamList`) has no `ingestionStatus` parameter of
+  // its own — `DocumentsController.streamEvents` only takes `skip`/`limit` — so a filter in effect
+  // disables the stream (`url: null`, per `useEventStream`'s own doc comment) rather than let an
+  // unfiltered tick silently overwrite the filtered list. The effect below covers the fetch the
+  // stream would otherwise have driven. Unfiltered, the URL still follows whichever page `skip`
+  // names, so it stays live on every page, not only the first.
   const streamState = useEventStream<{ docs: EvidenceDocument[]; count: number }>({
-    url: documentEventsUrl({ skip, limit: PAGE_SIZE }),
+    url: appliedIngestionStatus === '' ? documentEventsUrl({ skip, limit: PAGE_SIZE }) : null,
     events: ['documents', 'heartbeat'],
     onEvent: (name, data) => {
       // Heartbeat only keeps the connection's liveness fresh; only a `documents` frame carries a
@@ -86,6 +112,13 @@ export default function DocumentList() {
     },
     onFallback: refetch,
   });
+
+  // Plain fetch-on-change while a filter is applied — the stream above is disabled for exactly
+  // this case, so nothing else drives the initial load or a page/filter change.
+  useEffect(() => {
+    if (appliedIngestionStatus === '') return;
+    refetch();
+  }, [appliedIngestionStatus, skip, refetch]);
 
   const hasPending =
     documents?.some((doc) => doc.currentVersion.ingestionStatus === 'pending') ?? false;
@@ -134,6 +167,14 @@ export default function DocumentList() {
     }
     if (errors.length > 0) setUploadError(errors.join('; '));
   }
+
+  function handleFilter(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setSkip(0);
+    setAppliedIngestionStatus(ingestionStatusFilter);
+  }
+
+  const hasFilter = appliedIngestionStatus !== '';
 
   return (
     <div className="view">
@@ -198,6 +239,20 @@ export default function DocumentList() {
         )}
       </section>
 
+      <form onSubmit={handleFilter} className="control-row">
+        <Select
+          label="Ingestion status"
+          options={INGESTION_STATUS_OPTIONS}
+          value={ingestionStatusFilter}
+          onChange={(value) =>
+            setIngestionStatusFilter(value as DocumentVersionIngestionStatus | '')
+          }
+        />
+        <Button type="submit" variant="primary">
+          Apply filters
+        </Button>
+      </form>
+
       {error && (
         <p className="error error--page" role="alert">
           {error}
@@ -206,7 +261,15 @@ export default function DocumentList() {
 
       {documents === null && !error && <Skeleton label="Loading documents…" />}
 
-      {documents && documents.length === 0 && (
+      {documents && documents.length === 0 && hasFilter && (
+        <EmptyState
+          icon={<IconFolder size={24} />}
+          title="No documents match this filter"
+          description="Clear or adjust the ingestion status filter above."
+        />
+      )}
+
+      {documents && documents.length === 0 && !hasFilter && (
         <EmptyState
           icon={<IconFolder size={24} />}
           title="No documents yet"

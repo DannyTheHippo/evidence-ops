@@ -20,6 +20,11 @@ export interface ConflictValueShape {
   sourceChunkId: string;
   documentVersionId: string;
   locator: EvidenceLocator;
+  // True when `documentVersionId` currently carries `withdrawnAt` — the source file behind this
+  // side of the disagreement is no longer at its source, though the fact itself (and this
+  // conflict) is untouched: a reviewer weighing the two sides should know one is withdrawn, but
+  // the conflict still needs a human resolution the same as any other open one.
+  withdrawn: boolean;
 }
 
 export class ConflictResponseDto {
@@ -51,6 +56,7 @@ export class ConflictResponseDto {
         sourceChunkId: 'chunk-xlsx',
         documentVersionId: '65f1c2e4a1b2c3d4e5f6a7c0',
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
+        withdrawn: false,
       },
       {
         factId: '65f1c2e4a1b2c3d4e5f6a7ba',
@@ -59,6 +65,7 @@ export class ConflictResponseDto {
         sourceChunkId: 'chunk-prose',
         documentVersionId: '65f1c2e4a1b2c3d4e5f6a7c1',
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+        withdrawn: false,
       },
     ],
     description:

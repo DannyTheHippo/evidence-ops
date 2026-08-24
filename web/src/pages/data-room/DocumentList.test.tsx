@@ -385,6 +385,124 @@ describe('DocumentList', () => {
       });
     });
 
+    it('shows a filter-specific empty state when the ingestion status filter matches nothing', async () => {
+      const completedDoc = {
+        id: 'doc-1',
+        title: 'Q3 Rent Roll',
+        sourceKind: 'xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        currentVersion: {
+          id: 'v-1',
+          versionNumber: 1,
+          sha256: 'a'.repeat(64),
+          sizeBytes: 100,
+          ingestionStatus: 'completed',
+          createdAt: new Date().toISOString(),
+        },
+        createdAt: new Date().toISOString(),
+      };
+
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/api/v1/documents?skip=0&limit=20') {
+          return Promise.resolve(jsonResponse({ docs: [completedDoc], count: 1 }));
+        }
+        if (url === '/api/v1/documents?skip=0&limit=20&ingestionStatus=needs-ocr') {
+          return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+        }
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      renderList();
+      await screen.findByText('Q3 Rent Roll');
+
+      fireEvent.change(screen.getByLabelText('Ingestion status'), {
+        target: { value: 'needs-ocr' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+
+      expect(await screen.findByText('No documents match this filter')).toBeInTheDocument();
+      expect(screen.queryByText('Q3 Rent Roll')).not.toBeInTheDocument();
+    });
+
+    it('applies the ingestion status filter as a server-side query parameter and resets to page 1', async () => {
+      const needsOcrDoc = {
+        id: 'doc-2',
+        title: 'Scanned Rent Roll',
+        sourceKind: 'pdf',
+        mimeType: 'application/pdf',
+        currentVersion: {
+          id: 'v-2',
+          versionNumber: 1,
+          sha256: 'b'.repeat(64),
+          sizeBytes: 200,
+          ingestionStatus: 'needs-ocr',
+          ingestionFailureReason:
+            'Document has 3 page(s) but no extractable text on any of them ' +
+            '(likely a scanned image with no embedded text layer); OCR is out of scope for this parser',
+          createdAt: new Date().toISOString(),
+        },
+        createdAt: new Date().toISOString(),
+      };
+      const pageOneDoc = {
+        id: 'doc-page-1',
+        title: 'Page One Doc',
+        sourceKind: 'pdf',
+        mimeType: 'application/pdf',
+        currentVersion: {
+          id: 'v-page-1',
+          versionNumber: 1,
+          sha256: 'c'.repeat(64),
+          sizeBytes: 100,
+          ingestionStatus: 'completed',
+          createdAt: new Date().toISOString(),
+        },
+        createdAt: new Date().toISOString(),
+      };
+
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/api/v1/documents?skip=0&limit=20') {
+          return Promise.resolve(jsonResponse({ docs: [pageOneDoc], count: 25 }));
+        }
+        if (url === '/api/v1/documents?skip=20&limit=20') {
+          return Promise.resolve(jsonResponse({ docs: [pageOneDoc], count: 25 }));
+        }
+        if (url === '/api/v1/documents?skip=0&limit=20&ingestionStatus=needs-ocr') {
+          return Promise.resolve(jsonResponse({ docs: [needsOcrDoc], count: 1 }));
+        }
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      renderList();
+      await screen.findByText('Page One Doc');
+
+      // Move off page 1 first, so applying the filter can prove it resets `skip` rather than
+      // filtering whatever page happened to be open.
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+      await vi.waitFor(() =>
+        expect(
+          fetchMock.mock.calls.some(
+            ([calledUrl]) => calledUrl === '/api/v1/documents?skip=20&limit=20',
+          ),
+        ).toBe(true),
+      );
+
+      fireEvent.change(screen.getByLabelText('Ingestion status'), {
+        target: { value: 'needs-ocr' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+
+      expect(await screen.findByText('Scanned Rent Roll')).toBeInTheDocument();
+      expect(screen.getByText('needs-ocr')).toBeInTheDocument();
+      expect(
+        fetchMock.mock.calls.some(
+          ([calledUrl]) =>
+            calledUrl === '/api/v1/documents?skip=0&limit=20&ingestionStatus=needs-ocr',
+        ),
+      ).toBe(true);
+    });
+
     it('keeps polling while any version is pending, and stops once none is', async () => {
       vi.useFakeTimers();
       const pendingDoc = {

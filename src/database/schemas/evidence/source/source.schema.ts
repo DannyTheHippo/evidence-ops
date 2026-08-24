@@ -43,6 +43,12 @@ export type SourceDocument = HydratedDocument<WithTimestamps<Source>>;
  * filesystem with coarse mtime resolution). `documentId` links the file to the `Document` its
  * bytes were ingested as, so a later sync pass can diff against the version already on record
  * instead of re-deriving that link from scratch.
+ *
+ * `absentSweeps` and `withdrawnAt` track `SourcesService.runSync`'s two-strike absence guard: a
+ * path missing from one sweep's fresh listing increments `absentSweeps` rather than withdrawing
+ * immediately, and only a second consecutive absent sweep sets `withdrawnAt`. Both stay populated
+ * on a withdrawn entry — every other field keeps its last-known value (`sha256`/`sizeBytes`/
+ * `mtimeMs`/`documentId`) so the tombstone still records what the file was before it vanished.
  */
 export interface SourceFileState {
   path: string;
@@ -51,6 +57,8 @@ export interface SourceFileState {
   mtimeMs: number;
   documentId: Types.ObjectId;
   lastError?: string;
+  absentSweeps?: number;
+  withdrawnAt?: Date;
 }
 
 /**
@@ -67,6 +75,8 @@ const SourceFileStateSchema = new MongooseSchema<SourceFileState>(
     mtimeMs: { type: Number, required: true, min: 0 },
     documentId: { type: Types.ObjectId, ref: 'Document', required: true },
     lastError: { type: String },
+    absentSweeps: { type: Number, min: 0 },
+    withdrawnAt: { type: Date },
   },
   { _id: false },
 );
@@ -182,6 +192,22 @@ export class Source extends AuditableDocument {
    */
   @Prop({ type: String, enum: DOCUMENT_SOURCE_CLASSES })
   previousSourceClass?: DocumentSourceClass;
+
+  /**
+   * When `runSync`'s absence guards (G1 empty listing, G2 proportional circuit breaker) most
+   * recently suppressed a withdrawal that would otherwise have fired — visible evidence that a
+   * sync which reported `lastSyncStatus: 'ok'` still had something worth an operator's attention,
+   * since neither guard is itself a sync failure. Deliberately NOT folded into `lastSyncStatus`:
+   * `SourcesService.list` filters on that field, and a third value would read every such source as
+   * not-ok to every existing consumer, which is false — the file sync itself succeeded.
+   */
+  @Prop({ type: Date })
+  lastWithdrawalSuppressedAt?: Date;
+
+  /** Populated only alongside `lastWithdrawalSuppressedAt` — a short stable token, not prose; see
+   *  the guard constants in `sources.service.ts` for what each one means. */
+  @Prop({ type: String })
+  lastWithdrawalSuppressedReason?: string;
 }
 
 export const SourceSchema = SchemaFactory.createForClass(Source);

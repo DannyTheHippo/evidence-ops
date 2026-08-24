@@ -116,13 +116,21 @@ interface CorpusHealthItem {
  * Room shows `ingestionStatus` per row, but only to someone already browsing it — and
  * `lastSyncError` is otherwise visible only on the Sources pages. Reads the server's own
  * failed-only filters rather than scanning a fixed-size page client-side, so a failure older than
- * any window is still visible here. */
+ * any window is still visible here.
+ *
+ * `needsOcrDocuments` surfaces as a count only, in the card head, not as itemized rows in the
+ * queue below — a scanned PDF is a gap in the corpus to flag for attention, not the kind of
+ * broken-ingest item the queue otherwise lists, and a tenant with a hundred scans should not push
+ * every one of them into this list one row at a time. The full, browsable set is the Data Room's
+ * own `ingestionStatus` filter (`DocumentList.tsx`). */
 function CorpusHealthSection({
   failedDocuments,
   failedSources,
+  needsOcrDocuments,
 }: {
   failedDocuments: FetchState<EvidenceDocument>;
   failedSources: FetchState<Source>;
+  needsOcrDocuments: FetchState<EvidenceDocument>;
 }) {
   const items: CorpusHealthItem[] = [
     ...(failedDocuments.docs ?? []).map((doc) => ({
@@ -141,12 +149,23 @@ function CorpusHealthSection({
     })),
   ];
 
-  const loading = !failedDocuments.docs && !failedSources.docs;
+  const loading = !failedDocuments.docs && !failedSources.docs && !needsOcrDocuments.docs;
 
   return (
     <section className="card">
       <div className="card-head">
         <h2 className="card-title">Corpus health</h2>
+        {!failedDocuments.error &&
+          !failedSources.error &&
+          !needsOcrDocuments.error &&
+          (failedDocuments.count !== null ||
+            failedSources.count !== null ||
+            needsOcrDocuments.count !== null) && (
+            <span className="card-meta card-meta--end">
+              {failedDocuments.count ?? 0} ingestion failures · {failedSources.count ?? 0} sync
+              failures · {needsOcrDocuments.count ?? 0} need OCR
+            </span>
+          )}
       </div>
       {failedDocuments.error && (
         <p className="error" role="alert">
@@ -158,7 +177,12 @@ function CorpusHealthSection({
           {failedSources.error}
         </p>
       )}
-      {loading && !failedDocuments.error && !failedSources.error && (
+      {needsOcrDocuments.error && (
+        <p className="error" role="alert">
+          {needsOcrDocuments.error}
+        </p>
+      )}
+      {loading && !failedDocuments.error && !failedSources.error && !needsOcrDocuments.error && (
         <Skeleton label="Loading corpus health…" />
       )}
       {!loading && items.length === 0 && (
@@ -283,6 +307,11 @@ export default function HomePage() {
     count: null,
     error: null,
   });
+  const [needsOcrDocuments, setNeedsOcrDocuments] = useState<FetchState<EvidenceDocument>>({
+    docs: null,
+    count: null,
+    error: null,
+  });
   const [answers, setAnswers] = useState<FetchState<Answer>>({
     docs: null,
     count: null,
@@ -368,6 +397,20 @@ export default function HomePage() {
       });
   }, []);
 
+  // Same server-side-filter reasoning as the failed-only fetch above — a count that never falls
+  // out of view behind a fixed-size window.
+  useEffect(() => {
+    listDocuments({ ingestionStatus: 'needs-ocr', limit: 100 })
+      .then(({ docs, count }) => setNeedsOcrDocuments({ docs, count, error: null }))
+      .catch((err: unknown) => {
+        setNeedsOcrDocuments({
+          docs: null,
+          count: null,
+          error: err instanceof Error ? err.message : 'Failed to load documents',
+        });
+      });
+  }, []);
+
   useEffect(() => {
     listAnswers({ limit: 5 })
       .then(({ docs, count }) => setAnswers({ docs, count, error: null }))
@@ -432,7 +475,11 @@ export default function HomePage() {
       ) : (
         <>
           <WorkQueueSection approvals={approvals} conflicts={conflicts} />
-          <CorpusHealthSection failedDocuments={failedDocuments} failedSources={failedSources} />
+          <CorpusHealthSection
+            failedDocuments={failedDocuments}
+            failedSources={failedSources}
+            needsOcrDocuments={needsOcrDocuments}
+          />
           <RecentAnswersSection answers={answers} />
           {funnelLoaded && !funnelComplete && <FirstRunChecklist steps={steps} />}
         </>

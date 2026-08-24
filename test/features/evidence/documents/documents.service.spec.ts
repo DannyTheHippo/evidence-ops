@@ -575,6 +575,49 @@ describe('DocumentsService', () => {
     });
   });
 
+  describe('withdrawVersions', () => {
+    it('should $set withdrawnAt/withdrawnReason scoped to not-yet-withdrawn versions of the given documents', async () => {
+      const documentIdA = new Types.ObjectId();
+      const documentIdB = new Types.ObjectId();
+      mockDocumentVersionModel.updateMany.mockResolvedValueOnce({ modifiedCount: 2 });
+
+      const result = await service.withdrawVersions(
+        [documentIdA, documentIdB],
+        'source-file-absent',
+        'tenant-a',
+      );
+
+      expect(mockDocumentVersionModel.updateMany).toHaveBeenCalledWith(
+        {
+          documentId: { $in: [documentIdA, documentIdB] },
+          tenantId: 'tenant-a',
+          withdrawnAt: { $exists: false },
+        },
+        { $set: { withdrawnAt: expect.any(Date) as Date, withdrawnReason: 'source-file-absent' } },
+      );
+      expect(result).toBe(2);
+    });
+  });
+
+  describe('reinstateVersions', () => {
+    it('should $unset withdrawnAt/withdrawnReason scoped to currently-withdrawn versions of the given documents', async () => {
+      const documentIdA = new Types.ObjectId();
+      mockDocumentVersionModel.updateMany.mockResolvedValueOnce({ modifiedCount: 1 });
+
+      const result = await service.reinstateVersions([documentIdA], 'tenant-a');
+
+      expect(mockDocumentVersionModel.updateMany).toHaveBeenCalledWith(
+        {
+          documentId: { $in: [documentIdA] },
+          tenantId: 'tenant-a',
+          withdrawnAt: { $exists: true },
+        },
+        { $unset: { withdrawnAt: '', withdrawnReason: '' } },
+      );
+      expect(result).toBe(1);
+    });
+  });
+
   describe('getById', () => {
     it('should throw DocumentNotFoundException for a malformed id', async () => {
       await expect(service.getById('not-an-object-id', 'tenant-a')).rejects.toBeInstanceOf(

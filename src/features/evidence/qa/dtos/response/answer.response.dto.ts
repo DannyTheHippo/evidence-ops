@@ -89,6 +89,16 @@ export class AnswerResponseDto {
   @ApiProperty({ example: '2026-07-01T00:00:00.000Z', description: 'Answer creation timestamp.' })
   createdAt: Date;
 
+  @Expose()
+  @ApiProperty({
+    type: [String],
+    description:
+      'Cited document versions that currently carry withdrawnAt, resolved fresh on every read — ' +
+      'never persisted alongside citations, so this can change between two reads of the same ' +
+      'answer without the answer itself changing.',
+  })
+  withdrawnCitedDocVersionIds: string[];
+
   // Same conditional-presence rule as `outcome` above — usage is recorded on completion, so a
   // queued, running, or failed answer must not expose a stale or absent value under this key.
   @Expose()

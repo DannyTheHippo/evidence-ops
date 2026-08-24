@@ -1,14 +1,26 @@
 import type { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { Model } from 'mongoose';
 import request from 'supertest';
 import { Types } from 'mongoose';
+import { TypedConfigService } from '../../src/config/environment/typed-config.service';
 import {
   Document,
   DocumentDocument,
   type DocumentSourceClass,
 } from '../../src/database/schemas/evidence/document/document.schema';
+import {
+  DocumentVersion,
+  DocumentVersionDocument,
+} from '../../src/database/schemas/evidence/document-version/document-version.schema';
+import {
+  EvidenceChunk,
+  EvidenceChunkDocument,
+} from '../../src/database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
 import { Source, SourceDocument } from '../../src/database/schemas/evidence/source/source.schema';
+import { SourcesService } from '../../src/features/evidence/sources/sources.service';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
 import { registerTestUser } from '../utils/register-test-user';
 
@@ -109,6 +121,13 @@ describe('Sources (e2e)', () => {
   let tenantId: string;
   let sourceModel: Model<SourceDocument>;
   let documentModel: Model<DocumentDocument>;
+  let documentVersionModel: Model<DocumentVersionDocument>;
+  let evidenceChunkModel: Model<EvidenceChunkDocument>;
+  let sourcesService: SourcesService;
+  /** Subdirectory name relative to the configured inbox root — what `Source.path` must carry, since
+   *  `LocalFolderSourceConnector` resolves `relativePath` against its own root internally. */
+  let withdrawalFixtureSubdir: string;
+  let withdrawalFixtureDir: string;
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -128,9 +147,26 @@ describe('Sources (e2e)', () => {
 
     sourceModel = app.get<Model<SourceDocument>>(getModelToken(Source.name));
     documentModel = app.get<Model<DocumentDocument>>(getModelToken(Document.name));
+    documentVersionModel = app.get<Model<DocumentVersionDocument>>(
+      getModelToken(DocumentVersion.name),
+    );
+    evidenceChunkModel = app.get<Model<EvidenceChunkDocument>>(getModelToken(EvidenceChunk.name));
+    sourcesService = app.get<SourcesService>(SourcesService);
+
+    // `runSync`'s withdrawal guard matrix needs the REAL `LocalFolderSourceConnector` (never
+    // overridden for e2e, unlike `WORKFLOW_ENGINE`/`RETRIEVAL_STORE`), so this block exercises it
+    // against real files under a unique subdirectory of the configured inbox root — cleaned up in
+    // `afterAll` per the file-hygiene rule against leftover fixtures.
+    withdrawalFixtureSubdir = `e2e-withdrawal-${Date.now()}`;
+    withdrawalFixtureDir = join(
+      app.get(TypedConfigService).sources.inboxDir,
+      withdrawalFixtureSubdir,
+    );
+    await mkdir(withdrawalFixtureDir, { recursive: true });
   });
 
   afterAll(async () => {
+    await rm(withdrawalFixtureDir, { recursive: true, force: true });
     await closeTestApp(app);
   });
 
@@ -736,6 +772,106 @@ describe('Sources (e2e)', () => {
 
       expect(getResponse.status).toBe(404);
       expect(applyResponse.status).toBe(404);
+    });
+  });
+
+  describe('runSync — withdrawal (real LocalFolderSourceConnector)', () => {
+    it('withdraws a document version after two consecutive absent sweeps, retaining its chunks', async () => {
+      await writeFile(join(withdrawalFixtureDir, 'keep.txt'), 'keep-me');
+      await writeFile(join(withdrawalFixtureDir, 'target.txt'), 'withdraw-me');
+
+      const created = await sourceModel.create({
+        name: `Withdrawal Source ${Date.now()}`,
+        kind: 'local-folder',
+        path: withdrawalFixtureSubdir,
+        tenantId,
+      });
+
+      // Sweep 1: both files present — both get ingested as new documents.
+      await sourcesService.runSync(created._id.toString(), new Types.ObjectId());
+
+      const synced = await sourceModel.findById(created._id);
+      // `LocalFolderSourceConnector.listFiles` reports `relativePath` against ITS OWN root
+      // (`config.sources.inboxDir`), not against `source.path` — so a source rooted at a
+      // subdirectory still records the full subdirectory-prefixed path.
+      const targetRelativePath = join(withdrawalFixtureSubdir, 'target.txt');
+      const targetState = synced?.fileStates.find((state) => state.path === targetRelativePath);
+      expect(targetState).toBeDefined();
+      const targetDocument = await documentModel.findById(targetState?.documentId);
+      expect(targetDocument).not.toBeNull();
+      const targetVersion = await documentVersionModel.findById(targetDocument?.currentVersionId);
+      expect(targetVersion).not.toBeNull();
+      expect(targetVersion?.withdrawnAt).toBeUndefined();
+
+      // Ingestion never runs under `FakeWorkflowEngine`, so seed the chunk this test verifies
+      // survives withdrawal directly, following `documents.e2e-spec.ts`'s `seedChunk` pattern.
+      await evidenceChunkModel.create({
+        _id: `chunk-${targetVersion?._id.toString()}-1`,
+        documentId: targetDocument?._id,
+        documentVersionId: targetVersion?._id,
+        tenantId,
+        text: 'chunk text',
+        tokenCount: 10,
+        embedding: [0.1, 0.2, 0.3],
+        locator: { kind: 'text-block', extractorVersion: 'v1', blockIndex: 0 },
+        ingestionAttemptToken: new Types.ObjectId(),
+      });
+
+      await rm(join(withdrawalFixtureDir, 'target.txt'));
+
+      // Sweep 2: target.txt absent for the first time — first strike only, not withdrawn yet.
+      await sourcesService.runSync(created._id.toString(), new Types.ObjectId());
+      const afterFirstAbsence = await documentVersionModel.findById(targetVersion?._id);
+      expect(afterFirstAbsence?.withdrawnAt).toBeUndefined();
+
+      // Sweep 3: second consecutive absent sweep — withdrawn now.
+      await sourcesService.runSync(created._id.toString(), new Types.ObjectId());
+      const afterSecondAbsence = await documentVersionModel.findById(targetVersion?._id);
+      expect(afterSecondAbsence?.withdrawnAt).toBeInstanceOf(Date);
+      expect(afterSecondAbsence?.withdrawnReason).toBe('source-file-absent');
+
+      const chunk = await evidenceChunkModel.findOne({ documentVersionId: targetVersion?._id });
+      expect(chunk).not.toBeNull();
+    });
+
+    it('suppresses withdrawal and records it when the listing is empty but known files exist', async () => {
+      const emptyListingSubdir = `${withdrawalFixtureSubdir}-empty-listing`;
+      const emptyListingDir = join(
+        app.get(TypedConfigService).sources.inboxDir,
+        emptyListingSubdir,
+      );
+      await mkdir(emptyListingDir, { recursive: true });
+      await writeFile(join(emptyListingDir, 'only.txt'), 'only-file');
+
+      const created = await sourceModel.create({
+        name: `Empty Listing Source ${Date.now()}`,
+        kind: 'local-folder',
+        path: emptyListingSubdir,
+        tenantId,
+      });
+
+      await sourcesService.runSync(created._id.toString(), new Types.ObjectId());
+      const synced = await sourceModel.findById(created._id);
+      const onlyRelativePath = join(emptyListingSubdir, 'only.txt');
+      const onlyState = synced?.fileStates.find((state) => state.path === onlyRelativePath);
+      expect(onlyState).toBeDefined();
+      const onlyDocument = await documentModel.findById(onlyState?.documentId);
+      expect(onlyDocument).not.toBeNull();
+      const onlyVersion = await documentVersionModel.findById(onlyDocument?.currentVersionId);
+      expect(onlyVersion).not.toBeNull();
+
+      await rm(join(emptyListingDir, 'only.txt'));
+
+      await sourcesService.runSync(created._id.toString(), new Types.ObjectId());
+
+      const suppressed = await sourceModel.findById(created._id);
+      expect(suppressed?.lastWithdrawalSuppressedReason).toBe('empty-listing');
+      expect(suppressed?.lastWithdrawalSuppressedAt).toBeInstanceOf(Date);
+
+      const stillLiveVersion = await documentVersionModel.findById(onlyVersion?._id);
+      expect(stillLiveVersion?.withdrawnAt).toBeUndefined();
+
+      await rm(emptyListingDir, { recursive: true, force: true });
     });
   });
 });

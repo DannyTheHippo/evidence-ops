@@ -51,6 +51,7 @@ export default function AskPage({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: A
         citations: [],
         conflictIds: [],
         createdAt: new Date().toISOString(),
+        withdrawnCitedDocVersionIds: [],
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to ask question';

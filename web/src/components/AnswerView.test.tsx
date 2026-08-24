@@ -13,6 +13,7 @@ function baseAnswer(overrides: Partial<Answer> = {}): Answer {
     citations: [],
     conflictIds: [],
     createdAt: new Date().toISOString(),
+    withdrawnCitedDocVersionIds: [],
     ...overrides,
   };
 }
@@ -74,6 +75,33 @@ describe('AnswerView', () => {
     expect(screen.getByText('The cap rate is 6.1%.')).toBeInTheDocument();
     expect(screen.getByText('Cap rate: 6.1%')).toBeInTheDocument();
     expect(screen.getByText('p.2')).toBeInTheDocument();
+  });
+
+  it('marks a citation whose docVersionId is withdrawn, resolved from the answer envelope', () => {
+    renderView(
+      baseAnswer({
+        withdrawnCitedDocVersionIds: ['docver-1'],
+        outcome: {
+          kind: 'answered',
+          claims: [
+            {
+              statement: 'The cap rate is 6.1%.',
+              citations: [
+                {
+                  docVersionId: 'docver-1',
+                  sha256: 'a'.repeat(64),
+                  chunkId: 'chunk-a',
+                  locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+                  quote: 'Cap rate: 6.1%',
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(screen.getByText('source withdrawn')).toBeInTheDocument();
   });
 
   it('renders an insufficient_evidence outcome via the provenance rail, not the value-compare markup', () => {

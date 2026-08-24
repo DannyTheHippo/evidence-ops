@@ -38,6 +38,20 @@ const documentFailed = {
   },
 };
 
+const documentNeedsOcr = {
+  ...documentOk,
+  id: 'doc-3',
+  title: 'Scanned Site Plan.pdf',
+  currentVersion: {
+    ...documentOk.currentVersion,
+    id: 'version-3',
+    ingestionStatus: 'needs-ocr',
+    ingestionFailureReason:
+      'Document has 2 page(s) but no extractable text on any of them (likely a scanned image ' +
+      'with no embedded text layer); OCR is out of scope for this parser',
+  },
+};
+
 const sourceOk = {
   id: 'source-1',
   name: 'Deal Room Inbox',
@@ -126,14 +140,15 @@ interface RouteOverrides {
   sources?: () => Response;
   failedDocuments?: () => Response;
   failedSources?: () => Response;
+  needsOcrDocuments?: () => Response;
   answers?: () => Response;
 }
 
 // Every list route is keyed by its exact URL, query string included — a stub that only
 // matched by path would silently accept a response from the wrong call. `documents`/`sources`
-// feed only the first-run checklist and empty-tenant check; `failedDocuments`/`failedSources`
-// feed corpus health, through the server's own failed-only filters rather than a client-side
-// scan of the unfiltered page.
+// feed only the first-run checklist and empty-tenant check; `failedDocuments`/`failedSources`/
+// `needsOcrDocuments` feed corpus health, through the server's own status-filtered queries rather
+// than a client-side scan of the unfiltered page.
 function stubFetch(overrides: RouteOverrides = {}): ReturnType<typeof vi.fn> {
   const routes: Record<string, () => Response> = {
     '/api/v1/approvals?limit=5&state=pending':
@@ -148,6 +163,8 @@ function stubFetch(overrides: RouteOverrides = {}): ReturnType<typeof vi.fn> {
       overrides.failedDocuments ?? (() => jsonResponse({ docs: [], count: 0 })),
     '/api/v1/sources?limit=100&lastSyncStatus=failed':
       overrides.failedSources ?? (() => jsonResponse({ docs: [], count: 0 })),
+    '/api/v1/documents?limit=100&ingestionStatus=needs-ocr':
+      overrides.needsOcrDocuments ?? (() => jsonResponse({ docs: [], count: 0 })),
     '/api/v1/answers?limit=5':
       overrides.answers ?? (() => jsonResponse({ docs: [answered], count: 1 })),
   };
@@ -225,6 +242,23 @@ describe('HomePage', () => {
     // documentOk and sourceOk both ingested/synced cleanly and must not appear as failures.
     expect(screen.queryByText('Lease Agreement.pdf')).not.toBeInTheDocument();
     expect(screen.queryByText('Deal Room Inbox')).not.toBeInTheDocument();
+  });
+
+  it('surfaces the needs-OCR count in corpus health alongside the failure counts, without listing it as an item', async () => {
+    stubFetch({
+      failedDocuments: () => jsonResponse({ docs: [documentFailed], count: 1 }),
+      failedSources: () => jsonResponse({ docs: [failingSource], count: 1 }),
+      needsOcrDocuments: () => jsonResponse({ docs: [documentNeedsOcr], count: 5 }),
+    });
+
+    renderPage();
+
+    expect(
+      await screen.findByText('1 ingestion failures · 1 sync failures · 5 need OCR'),
+    ).toBeInTheDocument();
+    // The count in the card head is the whole surface for this status — no itemized row, unlike
+    // an actual ingestion failure.
+    expect(screen.queryByText('Scanned Site Plan.pdf')).not.toBeInTheDocument();
   });
 
   it('surfaces a failure older than the newest-100 window, invisible to the unfiltered fetch that only feeds the checklist', async () => {

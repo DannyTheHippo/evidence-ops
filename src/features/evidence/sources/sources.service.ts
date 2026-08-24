@@ -129,6 +129,33 @@ export interface RunSyncResult {
  */
 const SYNC_SOURCE_WORKFLOW_TYPE = 'syncSource';
 
+/**
+ * `runSync`'s absence-withdrawal guards, all failing toward retention — never environment
+ * variables, since a wrong value here risks silently unretrievable evidence rather than a
+ * misconfigured feature flag.
+ *
+ * G1 (empty listing): an unmounted mountpoint's `listFiles` returns `[]` *successfully* — only a
+ * missing directory throws — so an empty fresh listing against known, non-empty state is
+ * structurally indistinguishable from a genuinely emptied source. Accepted cost: an operator who
+ * truly empties a source uses the admin delete path (`DocumentsService.remove`) instead.
+ *
+ * G2 (proportional circuit breaker): catches a partial mount G1 misses. More than this fraction of
+ * the source's still-active (not yet withdrawn) known paths absent in one sweep suppresses
+ * withdrawal for the whole sweep, rather than trusting a listing that is plausibly non-empty but
+ * still wrong.
+ *
+ * G3 (two-strike): a path absent on a single sweep only increments `SourceFileState.absentSweeps`;
+ * withdrawal fires once a path has been absent on this many consecutive sweeps. Closes the
+ * write-temp-then-rename window a single-sweep absence would otherwise misread as deletion.
+ *
+ * When G1 or G2 fires, `absentSweeps` is left untouched on every entry — a distrusted listing must
+ * not advance the counter, or the breaker merely delays the false positive by one sweep.
+ */
+const EMPTY_LISTING_SUPPRESSION_REASON = 'empty-listing';
+const PROPORTIONAL_ABSENCE_THRESHOLD = 0.5;
+const PROPORTIONAL_ABSENCE_SUPPRESSION_REASON = 'absence-threshold-exceeded';
+const ABSENT_SWEEPS_BEFORE_WITHDRAWAL = 2;
+
 @Injectable()
 export class SourcesService {
   constructor(
@@ -468,12 +495,62 @@ export class SourcesService {
       await this.syncOneFile(file, fileStates, source.tenantId, source.sourceClass, source._id);
     }
 
-    const finalized = await this.finalizeSync(source._id, leaseToken, fileStates, 'ok');
+    // Absence diff, computed against the entries the per-file loop above never touched —
+    // `syncOneFile` only mutates a `fileStates` entry for a path present in `files`, so anything
+    // still absent here genuinely wasn't in this sweep's fresh listing. Deliberately asymmetric
+    // with `syncOneFile`'s uploads, which run before `finalizeSync`'s compare-and-set below: a
+    // lost-lease attempt writing a duplicate version is harmless (content-addressed dedupe absorbs
+    // it), whereas a lost-lease attempt making evidence unretrievable is not, and there is no
+    // transaction to fall back on — so `DocumentsService.withdrawVersions` runs only after
+    // `finalizeSync` confirms this attempt still owns the lease, never before.
+    const freshPaths = new Set(files.map((file) => file.relativePath));
+    const activeKnown = fileStates.filter((state) => state.withdrawnAt === undefined);
+    const absentActive = activeKnown.filter((state) => !freshPaths.has(state.path));
+
+    let withdrawalSuppressedReason: string | undefined;
+    const documentIdsToWithdraw: Types.ObjectId[] = [];
+
+    if (files.length === 0 && activeKnown.length > 0) {
+      withdrawalSuppressedReason = EMPTY_LISTING_SUPPRESSION_REASON;
+    } else if (
+      activeKnown.length > 0 &&
+      absentActive.length / activeKnown.length > PROPORTIONAL_ABSENCE_THRESHOLD
+    ) {
+      withdrawalSuppressedReason = PROPORTIONAL_ABSENCE_SUPPRESSION_REASON;
+    } else {
+      for (const entry of absentActive) {
+        const index = fileStates.findIndex((state) => state.path === entry.path);
+        const absentSweeps = (entry.absentSweeps ?? 0) + 1;
+        if (absentSweeps >= ABSENT_SWEEPS_BEFORE_WITHDRAWAL) {
+          fileStates[index] = this.cloneFileState(entry, { absentSweeps, withdrawnAt: new Date() });
+          documentIdsToWithdraw.push(entry.documentId);
+        } else {
+          fileStates[index] = this.cloneFileState(entry, { absentSweeps });
+        }
+      }
+    }
+
+    const finalized = await this.finalizeSync(
+      source._id,
+      leaseToken,
+      fileStates,
+      'ok',
+      undefined,
+      withdrawalSuppressedReason,
+    );
     if (!finalized) {
       this.logger.debug(
         `Source '${sourceId}' sync superseded by a newer attempt; discarding results`,
       );
       return { disabled: false, intervalMs: null };
+    }
+
+    if (documentIdsToWithdraw.length > 0) {
+      await this.documentsService.withdrawVersions(
+        documentIdsToWithdraw,
+        'source-file-absent',
+        source.tenantId,
+      );
     }
 
     return { disabled: false, intervalMs };
@@ -517,6 +594,14 @@ export class SourcesService {
    * entry that fails keeps its previous watermark (`sizeBytes`/`mtimeMs`/`sha256`/`documentId`)
    * unchanged alongside the new `lastError` — advancing the watermark on a failed attempt would make
    * the cheap watermark check above skip the file forever without it ever having synced.
+   *
+   * The cheap watermark early-return REQUIRES `!existing.withdrawnAt` — a withdrawn path that
+   * reappears with byte-identical `sizeBytes`/`mtimeMs` (`cp -p`, `rsync -a`, and `git checkout`
+   * all preserve both by default) would otherwise never re-enter this method, leaving the document
+   * withdrawn forever while the source's own file state shows nothing wrong. Falling through to the
+   * hash check below is what lets the dedupe branch reinstate it. An absent-but-not-yet-withdrawn
+   * path that simply reappears also clears `absentSweeps` here — a stale count left over from one
+   * absent sweep must not survive into a later, unrelated absence and withdraw on its first strike.
    */
   private async syncOneFile(
     file: SourceConnectorFile,
@@ -528,7 +613,15 @@ export class SourcesService {
     const index = fileStates.findIndex((state) => state.path === file.relativePath);
     const existing = index === -1 ? undefined : fileStates[index];
 
-    if (existing && existing.sizeBytes === file.sizeBytes && existing.mtimeMs === file.mtimeMs) {
+    if (
+      existing &&
+      existing.sizeBytes === file.sizeBytes &&
+      existing.mtimeMs === file.mtimeMs &&
+      !existing.withdrawnAt
+    ) {
+      if (existing.absentSweeps !== undefined) {
+        fileStates[index] = this.cloneFileState(existing, { absentSweeps: undefined });
+      }
       return;
     }
 
@@ -558,12 +651,16 @@ export class SourcesService {
       const sha256 = createHash('sha256').update(content).digest('hex');
 
       if (existing && existing.sha256 === sha256) {
-        fileStates[index] = {
-          ...existing,
+        fileStates[index] = this.cloneFileState(existing, {
           sizeBytes: file.sizeBytes,
           mtimeMs: file.mtimeMs,
           lastError: undefined,
-        };
+          absentSweeps: undefined,
+          withdrawnAt: undefined,
+        });
+        if (existing.withdrawnAt !== undefined) {
+          await this.documentsService.reinstateVersions([existing.documentId], tenantId);
+        }
         return;
       }
 
@@ -600,14 +697,47 @@ export class SourcesService {
       } else {
         fileStates.push(newState);
       }
+      // The genuinely-changed-bytes path above created a fresh version that is never itself
+      // withdrawn, but an EARLIER version of the same document can still carry `withdrawnAt` from a
+      // prior sweep; this reconciles the whole document, not just this new version.
+      if (existing && existing.withdrawnAt !== undefined) {
+        await this.documentsService.reinstateVersions([existing.documentId], tenantId);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (existing) {
-        fileStates[index] = { ...existing, lastError: message };
+        fileStates[index] = this.cloneFileState(existing, { lastError: message });
       } else {
         this.logger.warn(`Sync error for new file '${file.relativePath}': ${message}`);
       }
     }
+  }
+
+  /**
+   * Builds a plain-object replacement for one `fileStates` entry. `state` is a live Mongoose
+   * subdocument at runtime (the array element comes straight from `source.fileStates`, only typed
+   * as the plain `SourceFileState` interface) — its schema-defined fields are getters on the
+   * subdocument's prototype, not the instance's own enumerable properties, so `{ ...state, ... }`
+   * silently drops every field it does not explicitly override (`path`, `sha256`, `documentId`,
+   * everything) and keeps only Mongoose's internal bookkeeping properties instead. Reading each
+   * field through its getter here, rather than spreading, works identically whether `state` is a
+   * real subdocument or the plain object a unit test's mocked model hands back.
+   */
+  private cloneFileState(
+    state: SourceFileState,
+    overrides: Partial<SourceFileState>,
+  ): SourceFileState {
+    return {
+      path: state.path,
+      sha256: state.sha256,
+      sizeBytes: state.sizeBytes,
+      mtimeMs: state.mtimeMs,
+      documentId: state.documentId,
+      lastError: state.lastError,
+      absentSweeps: state.absentSweeps,
+      withdrawnAt: state.withdrawnAt,
+      ...overrides,
+    };
   }
 
   private async isWorkflowRunning(workflowId: string): Promise<boolean> {
@@ -631,19 +761,35 @@ export class SourcesService {
 
   /** Fails CLOSED: only succeeds while `leaseToken` is still the current one, mirroring
    *  `IngestionService.finalizeCompletion`/`finalizeFailure` exactly — see `runSync`'s own doc
-   *  comment for why the loss check lives here rather than at `claimAttempt`. */
+   *  comment for why the loss check lives here rather than at `claimAttempt`.
+   *
+   *  `withdrawalSuppressedReason`, populated only on the `'ok'` branch, is what makes a G1/G2 guard
+   *  firing visible (`runSync`'s own doc comment) — the same write that persists `fileStates`
+   *  stamps `lastWithdrawalSuppressedAt`/`Reason` rather than a separate call, so there is no window
+   *  in which one succeeds and the other is lost to a lease race. */
   private async finalizeSync(
     sourceId: Types.ObjectId,
     leaseToken: Types.ObjectId,
     fileStates: SourceFileState[],
     status: 'ok' | 'failed',
     errorMessage?: string,
+    withdrawalSuppressedReason?: string,
   ): Promise<boolean> {
     const finalized = await this.sourceModel.findOneAndUpdate(
       { _id: sourceId, syncLeaseToken: leaseToken },
       status === 'ok'
         ? {
-            $set: { fileStates, lastSyncAt: new Date(), lastSyncStatus: status },
+            $set: {
+              fileStates,
+              lastSyncAt: new Date(),
+              lastSyncStatus: status,
+              ...(withdrawalSuppressedReason
+                ? {
+                    lastWithdrawalSuppressedAt: new Date(),
+                    lastWithdrawalSuppressedReason: withdrawalSuppressedReason,
+                  }
+                : {}),
+            },
             $unset: { lastSyncError: '' },
           }
         : {

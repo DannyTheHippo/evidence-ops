@@ -72,6 +72,8 @@ function DroppedClaimsBand({ droppedClaims, isAbstention }: DroppedClaimsBandPro
 export default function AnswerView({ answer, documentIndex, conflictChunkIndex }: AnswerViewProps) {
   if (answer.runStatus !== 'completed' || !answer.outcome) return null;
 
+  const withdrawnDocVersionIds = new Set(answer.withdrawnCitedDocVersionIds);
+
   return (
     <div className="answer-outcome">
       <VerificationLedger
@@ -81,7 +83,11 @@ export default function AnswerView({ answer, documentIndex, conflictChunkIndex }
       />
 
       {answer.outcome.kind !== 'conflicting_evidence' && (
-        <ProvenanceRail outcome={answer.outcome} documentIndex={documentIndex} />
+        <ProvenanceRail
+          outcome={answer.outcome}
+          documentIndex={documentIndex}
+          withdrawnDocVersionIds={withdrawnDocVersionIds}
+        />
       )}
 
       {answer.outcome.kind === 'conflicting_evidence' && (

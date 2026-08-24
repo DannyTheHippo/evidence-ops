@@ -51,7 +51,11 @@ import {
   ConflictResolutionAlreadyPendingException,
   InvalidConflictResolutionException,
 } from './exceptions/conflicts.exception';
-import { loadSourceClassByFactId } from './load-source-class-by-fact-id';
+import {
+  loadFactSourceEnrichment,
+  loadSourceClassByFactId,
+  type FactSourceEnrichment,
+} from './load-source-class-by-fact-id';
 import {
   resolveConflictPolicy,
   type ConflictingFactForResolution,
@@ -215,7 +219,7 @@ export class ConflictsService {
     ]);
 
     let factById = new Map<string, ExtractedFactDocument>();
-    let sourceClassByFactId = new Map<string, DocumentSourceClass>();
+    let factEnrichmentByFactId = new Map<string, FactSourceEnrichment>();
     // Resolved once for the whole page, not once per conflict: `MetricPoliciesService
     // .resolveForTenant` is a query, and a page of N conflicts sharing (as most do) only a
     // handful of distinct metrics must not turn into N policy reads.
@@ -226,7 +230,10 @@ export class ConflictsService {
       ].map((id) => new Types.ObjectId(id));
       const facts = await this.extractedFactModel.find({ _id: { $in: everyFactId }, tenantId });
       factById = new Map(facts.map((fact) => [fact._id.toString(), fact]));
-      sourceClassByFactId = await loadSourceClassByFactId(
+      // `loadFactSourceEnrichment`, not `loadSourceClassByFactId` — a listed conflict's
+      // `ConflictValueShape.withdrawn` needs the same join's withdrawal signal alongside
+      // sourceClass, and this is the one call that already pays for the join's two queries.
+      factEnrichmentByFactId = await loadFactSourceEnrichment(
         this.documentVersionModel,
         this.documentModel,
         facts,
@@ -244,7 +251,7 @@ export class ConflictsService {
 
     return {
       docs: conflicts.map((conflict) =>
-        this.toConflictDto(conflict, factById, sourceClassByFactId, policies),
+        this.toConflictDto(conflict, factById, factEnrichmentByFactId, policies),
       ),
       count,
     };
@@ -730,7 +737,7 @@ export class ConflictsService {
   private toConflictDto(
     conflict: ConflictDocument,
     factById: Map<string, ExtractedFactDocument>,
-    sourceClassByFactId: Map<string, DocumentSourceClass>,
+    factEnrichmentByFactId: Map<string, FactSourceEnrichment>,
     policies: ReadonlyMap<MetricId, SurvivorshipPolicy>,
   ): ConflictResponseDto {
     const values: ConflictValueShape[] = [];
@@ -740,6 +747,12 @@ export class ConflictsService {
       if (!fact) {
         continue;
       }
+      // Same guarantee `computeProposalForConflict`'s identical lookup documents:
+      // `factEnrichmentByFactId` is built (in `list`) from the same batch of facts `factById` was,
+      // so a fact resolving above always has an entry here too. Withdrawal is display-only — this
+      // never changes `status`, `factIds`, or which fact the survivorship policy proposes; see
+      // `ResolutionBacktestService`'s own invariance test for why.
+      const enrichment = factEnrichmentByFactId.get(fact._id.toString()) as FactSourceEnrichment;
       values.push({
         factId: fact._id.toString(),
         value: fact.value.amount,
@@ -747,13 +760,11 @@ export class ConflictsService {
         sourceChunkId: fact.chunkId,
         documentVersionId: fact.documentVersionId.toString(),
         locator: fact.locator,
+        withdrawn: enrichment.withdrawn,
       });
-      // Same guarantee as `computeProposalForConflict`'s identical lookup: `sourceClassByFactId`
-      // is built (in `list`) from the same batch of facts `factById` was, so a fact resolving
-      // above always has an entry here too.
       candidates.push({
         id: fact._id.toString(),
-        sourceClass: sourceClassByFactId.get(fact._id.toString()) as DocumentSourceClass,
+        sourceClass: enrichment.sourceClass,
         observedAt: fact.observedAt,
       });
     }

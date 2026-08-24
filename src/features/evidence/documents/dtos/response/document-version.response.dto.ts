@@ -39,7 +39,7 @@ export class DocumentVersionResponseDto {
       'Document has 3 page(s) but no extractable text on any of them (likely a scanned image ' +
       'with no embedded text layer); OCR is out of scope for this parser',
     description:
-      'Present only when ingestionStatus is "failed" — the parser exception message ' +
+      'Present when ingestionStatus is "failed" or "needs-ocr" — the parser exception message ' +
       'from the attempt that set that status.',
     required: false,
   })

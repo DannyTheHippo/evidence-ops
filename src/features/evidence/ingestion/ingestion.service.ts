@@ -4,6 +4,7 @@ import { Connection, mongo, Model, Types } from 'mongoose';
 import {
   DocumentVersion,
   DocumentVersionDocument,
+  type DocumentVersionIngestionStatus,
 } from '../../../database/schemas/evidence/document-version/document-version.schema';
 import {
   EvidenceChunk,
@@ -33,6 +34,7 @@ import { chunkElements } from './chunker';
 import { computeChunkId } from './compute-chunk-id';
 import { DocumentVersionNotFoundException } from './exceptions/ingestion.exception';
 import { ParserRegistry } from './parser.registry';
+import { EmptyPdfTextLayerException } from './parsers/pdf.parser';
 import { screenInstructionInjection } from './screen-instruction-injection';
 
 // Each `waitForIndexConvergence` call below spends up to this budget *twice* — once polling
@@ -397,11 +399,12 @@ export class IngestionService {
    * `completed` — a concurrent attempt that already finished this version leaves nothing to
    * claim, so the recovery `deleteMany` below never runs against a version another attempt owns.
    *
-   * `{ $ne: 'completed' }` also re-claims a `'failed'` version, so a retried attempt (a new
-   * Temporal run, not the automatic in-workflow retries `maximumAttempts` already exhausted) can
-   * ingest it again. That retry only ever comes from new bytes: `DocumentsService.addVersion`
-   * dedupes a byte-identical re-upload onto the existing version by sha256 without starting a new
-   * ingestion workflow, so a `'failed'` version stays `'failed'` until different bytes arrive.
+   * `{ $ne: 'completed' }` also re-claims a `'failed'` or `'needs-ocr'` version, so a retried
+   * attempt (a new Temporal run, not the automatic in-workflow retries `maximumAttempts` already
+   * exhausted) can ingest it again. That retry only ever comes from new bytes:
+   * `DocumentsService.addVersion` dedupes a byte-identical re-upload onto the existing version by
+   * sha256 without starting a new ingestion workflow, so a `'failed'`/`'needs-ocr'` version stays
+   * that way until different bytes arrive.
    */
   private async claimAttempt(
     versionId: Types.ObjectId,
@@ -432,17 +435,20 @@ export class IngestionService {
    * Mirrors `finalizeCompletion`'s compare-and-set exactly, so a parse failure is recorded under
    * the same lease guard as a success: only while `leaseToken` is still the current one, or a
    * stale attempt's failure write could overwrite a newer attempt's in-progress or already-
-   * completed state.
+   * completed state. `status` is `'failed'` for every other throw and `'needs-ocr'` only for
+   * `EmptyPdfTextLayerException` — see `recordIngestionFailure`'s own doc comment for why that
+   * split exists.
    */
   private async finalizeFailure(
     versionId: Types.ObjectId,
     leaseToken: Types.ObjectId,
+    status: Extract<DocumentVersionIngestionStatus, 'failed' | 'needs-ocr'>,
     reason: string,
   ): Promise<boolean> {
     const finalized = await this.documentVersionModel.findOneAndUpdate(
       { _id: versionId, ingestionLeaseToken: leaseToken },
       {
-        $set: { ingestionStatus: 'failed', ingestionFailureReason: reason },
+        $set: { ingestionStatus: status, ingestionFailureReason: reason },
         $unset: { ingestionLeaseToken: '' },
       },
     );
@@ -455,6 +461,11 @@ export class IngestionService {
    * failure, or a Mongo write failure all leave the version as diagnosable as a caught parser
    * exception, rather than stuck at `'pending'` with a live lease token and a dedupe path that
    * silently swallows any byte-identical retry.
+   *
+   * `EmptyPdfTextLayerException` (`pdf.parser.ts`) is the one exception routed to `'needs-ocr'`
+   * instead: a scanned PDF with no embedded text layer is a gap in the corpus, not a broken
+   * ingest, and quarantining it under its own status is what lets `DocumentsService.list`'s filter
+   * and the Data Room UI tell the two apart rather than presenting both as the same failure.
    *
    * FAILURE DIRECTION: fails OPEN. This is bookkeeping around the real failure, not the failure
    * itself — if the write here throws, or `finalizeFailure` reports itself superseded by a newer
@@ -471,8 +482,14 @@ export class IngestionService {
     // method's own FAIL OPEN direction: the run genuinely failed regardless of whether recording
     // that fact in Mongo also succeeds.
     workflowRunFailedCounter.add(1);
+    const status = error instanceof EmptyPdfTextLayerException ? 'needs-ocr' : 'failed';
     try {
-      const recorded = await this.finalizeFailure(versionId, leaseToken, describeError(error));
+      const recorded = await this.finalizeFailure(
+        versionId,
+        leaseToken,
+        status,
+        describeError(error),
+      );
       if (!recorded) {
         this.logger.debug(
           `Document version '${documentVersionId}' failure recording superseded by a newer attempt`,

@@ -12,7 +12,10 @@ import type {
   DocumentParser,
   ParsedDocument,
 } from '../../../../src/features/evidence/ingestion/parsers/parsed-element.type';
-import { MalformedPdfException } from '../../../../src/features/evidence/ingestion/parsers/pdf.parser';
+import {
+  EmptyPdfTextLayerException,
+  MalformedPdfException,
+} from '../../../../src/features/evidence/ingestion/parsers/pdf.parser';
 import { EMBEDDING_PROVIDER } from '../../../../src/providers/embedding/embedding-provider.interface';
 import { FakeEmbeddingProvider } from '../../../../src/providers/embedding/fake-embedding.provider';
 import { DOCUMENT_STORE } from '../../../../src/providers/storage/document-store.interface';
@@ -771,6 +774,34 @@ describe('IngestionService', () => {
         $unset: { ingestionLeaseToken: '' },
       });
       expect(workflowRunFailedSpy).toHaveBeenCalledWith(1);
+    });
+
+    it("should record 'needs-ocr', not 'failed', when the parser rejects a scanned PDF with no extractable text layer", async () => {
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('%PDF-1.4 scanned image, no text layer'),
+        contentType: PDF_MIME,
+        metadata: {},
+      });
+      const version = buildVersion({ storageKey: stored.id });
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(version);
+      const emptyTextLayer = new EmptyPdfTextLayerException(
+        'Document has 1 page(s) but no extractable text on any of them (likely a scanned image ' +
+          'with no embedded text layer); OCR is out of scope for this parser',
+      );
+      mockParserRegistry.resolve.mockReturnValueOnce(buildFailingParser(emptyTextLayer));
+
+      await expect(service.ingestVersion(versionId.toString(), 'tenant-a')).rejects.toBe(
+        emptyTextLayer,
+      );
+
+      expect(mockEvidenceChunkModel.insertMany).not.toHaveBeenCalled();
+      const [failureFilter, failureUpdate] = getFindOneAndUpdateCall(2);
+      expect(failureFilter._id).toBe(versionId);
+      expect(failureFilter.ingestionLeaseToken).toBeInstanceOf(Types.ObjectId);
+      expect(failureUpdate).toEqual({
+        $set: { ingestionStatus: 'needs-ocr', ingestionFailureReason: emptyTextLayer.message },
+        $unset: { ingestionLeaseToken: '' },
+      });
     });
 
     // Regression: `ingestVersion` used to record a failure only for a `BaseException` thrown by

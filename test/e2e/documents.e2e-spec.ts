@@ -592,6 +592,28 @@ describe('Documents (e2e)', () => {
       expect(ids).not.toContain(supersededDoc._id.toString());
     });
 
+    it('returns a needs-ocr current version and excludes a completed document', async () => {
+      const needsOcrDoc = await seedDocumentWithVersion(
+        `Needs OCR Fixture ${new Types.ObjectId().toString()}`,
+        { ingestionStatus: 'needs-ocr' },
+      );
+      const completedDoc = await seedDocumentWithVersion(
+        `Completed Fixture ${new Types.ObjectId().toString()}`,
+        { ingestionStatus: 'completed' },
+      );
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/documents')
+        .query({ ingestionStatus: 'needs-ocr' })
+        .set('Cookie', cookie);
+      const body = response.body as { docs: DocumentBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      const ids = body.docs.map((doc) => doc.id);
+      expect(ids).toContain(needsOcrDoc._id.toString());
+      expect(ids).not.toContain(completedDoc._id.toString());
+    });
+
     it('returns 400 for an ingestionStatus outside the declared enum', async () => {
       const response = await request(getTestServer(app))
         .get('/api/v1/documents')

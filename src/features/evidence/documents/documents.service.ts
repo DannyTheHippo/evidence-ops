@@ -37,6 +37,7 @@ import {
 import {
   DocumentVersion,
   DocumentVersionDocument,
+  type DocumentVersionWithdrawnReason,
 } from '../../../database/schemas/evidence/document-version/document-version.schema';
 import {
   EvidenceChunk,
@@ -329,6 +330,42 @@ export class DocumentsService {
     const result = await this.documentModel.updateMany(
       { tenantId, sourceId, sourceClass: fromClass },
       { $set: { sourceClass: toClass } },
+    );
+    return result.modifiedCount;
+  }
+
+  /**
+   * Soft-withdraws every not-yet-withdrawn version of each document in `documentIds` —
+   * `SourcesService.runSync`'s two-strike absence guard, called only after `finalizeSync` confirms
+   * the sync attempt still owns its lease (see that method's own doc comment for why). Chunks and
+   * facts are untouched: this is retrieval-exclusion metadata, not `remove`'s hard delete. Plain
+   * `$set`, not an aggregation pipeline — `updatePipeline: true` (`.claude/rules/mongoose.md`) does
+   * not apply. Idempotent via `withdrawnAt: { $exists: false }`, so a version already withdrawn by
+   * an earlier call keeps its original `withdrawnAt` rather than being restamped to a later time.
+   */
+  async withdrawVersions(
+    documentIds: Types.ObjectId[],
+    reason: DocumentVersionWithdrawnReason,
+    tenantId: string,
+  ): Promise<number> {
+    const result = await this.documentVersionModel.updateMany(
+      { documentId: { $in: documentIds }, tenantId, withdrawnAt: { $exists: false } },
+      { $set: { withdrawnAt: new Date(), withdrawnReason: reason } },
+    );
+    return result.modifiedCount;
+  }
+
+  /**
+   * Reverses `withdrawVersions` for each document in `documentIds` — `SourcesService.syncOneFile`
+   * calls this when a previously-absent path resolves again, never as a side effect of `upload`: a
+   * restored file with unchanged bytes hits the content-addressed dedupe branch there, which
+   * returns the existing version untouched and reaches no write path of its own. Idempotent the
+   * same way as `withdrawVersions`, scoped by `withdrawnAt: { $exists: true }`.
+   */
+  async reinstateVersions(documentIds: Types.ObjectId[], tenantId: string): Promise<number> {
+    const result = await this.documentVersionModel.updateMany(
+      { documentId: { $in: documentIds }, tenantId, withdrawnAt: { $exists: true } },
+      { $unset: { withdrawnAt: '', withdrawnReason: '' } },
     );
     return result.modifiedCount;
   }
