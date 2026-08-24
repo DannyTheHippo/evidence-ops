@@ -23,6 +23,14 @@ const STEP_MINIMUM_ROLE: Readonly<Record<string, UserRole>> = {
   // reachable from a non-interactive credential needs a higher bar than a read the caller could
   // already perform by asking the question.
   'mcp-mutate': UserRole.Admin,
+  // `ask_evidence` over MCP — starts the same gated Temporal pipeline `POST /questions` does,
+  // bounded by the per-actor rate limiter and the daily spend ceiling rather than by role: floored
+  // at Member, matching the bar a caller already clears to ask a question through the SPA.
+  'mcp-ask': UserRole.Member,
+  // `verify_claims` over MCP — grades caller-drafted claim text against the tenant's corpus,
+  // bounded by the same rate limiter and spend ceiling `mcp-ask` is. Floored at Member: a read of
+  // this tenant's own evidence, gated on spend rather than on write risk.
+  'mcp-verify': UserRole.Member,
 };
 
 /** Ranks `UserRole` for a "does the caller's role meet the minimum" comparison; higher outranks

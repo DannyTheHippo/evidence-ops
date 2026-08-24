@@ -39,8 +39,8 @@ export function factKeysMatch(a: FactKey, b: FactKey): boolean {
  * attached, because this is the one check standing between a hallucinated citation and a persisted
  * `Answer` a user reads as trustworthy.
  *
- * Runs the three checks (retrieval containment, quote containment, numeric-claim support) per claim
- * via `verifyClaim`, then applies outcome-level degradation:
+ * Runs the four checks (retrieval containment, quote containment, quote alignment, numeric-claim
+ * support) per claim via `verifyClaim`, then applies outcome-level degradation:
  * - every claim survives → `answered`, full coverage.
  * - some survive → `answered`, reduced coverage, drops recorded.
  * - none survive → `insufficient_evidence` — a valid, correct success state, never an error.

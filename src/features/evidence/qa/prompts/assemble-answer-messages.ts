@@ -2,6 +2,7 @@ import {
   EVIDENCE_DELIMITER_TAG,
   sanitizeEvidenceText,
 } from '../../ingestion/sanitize-evidence-text';
+import { formatPromptLabel } from '../../../../shared/utils/format-prompt-label.util';
 import type { ModelMessage } from '../../../../providers/model/model-provider.interface';
 import type { RetrievedChunk } from '../types/retrieved-chunk.type';
 import { formatLocator } from './format-locator';
@@ -50,31 +51,9 @@ function buildSystemPrompt(): string {
   ].join('\n');
 }
 
-/**
- * Collapses a label field (chunk id, locator) to one line and escapes the evidence tag pattern.
- * Used only for the two header fields, never for `chunk.text` — see this module's doc comment for
- * why chunk text must not be escaped a second time.
- *
- * Both inputs are attacker-controlled: a spreadsheet's own sheet name
- * (`XlsxRegionLocator`/`XlsxCellLocator.sheetName`, taken verbatim from `worksheet.name` in
- * `xlsx.parser.ts`) is never sanitized upstream, and a DOCX heading (`docx.parser.ts:132`) is
- * tag-escaped but not length- or newline-bounded — a heading can carry a soft line break. Header
- * fields are deliberately placed on their own line rather than as an `id="..."` /
- * `locator="..."` attribute specifically to remove the quote character as a structural delimiter:
- * there is no attribute-value boundary here for a label to escape out of. The remaining risk with
- * a bare-line format is a label injecting its own fake newline-delimited header line (e.g. a
- * second `chunkId: ...` line impersonating another chunk) — collapsing embedded newlines to a
- * single space closes that, so each field is provably confined to the one line it was placed on.
- */
-function formatLabel(value: string): string {
-  return sanitizeEvidenceText(value)
-    .replace(/\s*\r?\n\s*/g, ' ')
-    .trim();
-}
-
 function formatEvidenceBlock(chunk: RetrievedChunk): string {
-  const chunkId = formatLabel(chunk.chunkId);
-  const locator = formatLabel(formatLocator(chunk.locator));
+  const chunkId = formatPromptLabel(chunk.chunkId);
+  const locator = formatPromptLabel(formatLocator(chunk.locator));
   return [
     `<${EVIDENCE_DELIMITER_TAG}>`,
     `chunkId: ${chunkId}`,

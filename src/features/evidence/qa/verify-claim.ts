@@ -4,6 +4,7 @@ import type {
   FactValue,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import { locateQuote } from '../../../shared/utils/locate-quote.util';
+import { checkQuoteAlignment } from './check-quote-alignment';
 import type { Citation, Claim, DroppedClaim } from './contracts/answer.contract';
 import { extractNumericTokens } from './extract-numeric-tokens';
 import type { RetrievedChunk } from './types/retrieved-chunk.type';
@@ -24,7 +25,7 @@ export interface GroundingCellFact {
 }
 
 /** Fact keys of every `cellFacts` entry the claim actually rests on — the same value-matched
- * facts check 3 finds while verifying numeric support, not every fact sharing a cited chunk.
+ * facts check 4 finds while verifying numeric support, not every fact sharing a cited chunk.
  * Chunk-grain touching (bound 3, `docs/adr/0004-grounding-gate-and-citation-contract.md`) forced
  * `conflicting_evidence` on any claim citing a chunk that merely *contained* a conflicted cell
  * anywhere in it — a comps-sheet claim about one property inherited every other property's
@@ -38,7 +39,7 @@ type TouchedFactKeys = readonly FactKey[];
 export type ClaimVerificationResult =
   | {
       readonly kind: 'survived';
-      /** The claim with any citation locator upgraded per check 3. */
+      /** The claim with any citation locator upgraded per check 4. */
       readonly claim: Claim;
       readonly violations: readonly GroundingViolation[];
       readonly touchedFactKeys: TouchedFactKeys;
@@ -51,11 +52,12 @@ export type ClaimVerificationResult =
     };
 
 /**
- * Verifies one claim's citations against what was actually retrieved, in the three-check order the
- * grounding gate documents: retrieval containment, then quote containment, then numeric support.
- * Fails CLOSED at claim granularity — a single failing citation drops the *whole* claim (a model
- * that pads one fabricated citation onto an otherwise-grounded claim does not get partial credit),
- * and a single unsupported number in an otherwise-grounded claim drops it the same way.
+ * Verifies one claim's citations against what was actually retrieved, in the four-check order the
+ * grounding gate documents: retrieval containment, then quote containment, then quote alignment,
+ * then numeric support. Fails CLOSED at claim granularity — a single failing citation drops the
+ * *whole* claim (a model that pads one fabricated citation onto an otherwise-grounded claim does
+ * not get partial credit), and a single unsupported number in an otherwise-grounded claim drops it
+ * the same way.
  */
 export function verifyClaim(params: {
   readonly claim: Claim;
@@ -125,12 +127,51 @@ export function verifyClaim(params: {
     };
   }
 
-  // Check 3: every citation is retrieval-contained and quote-verified. Every number in the
-  // statement must still be supported — one unsupported number drops the whole claim, the same
-  // fail-closed granularity as check 1/2's per-citation failures above. The same value match that
-  // proves support is also what `touchedFactKeys` (below) is built from — a fact only counts as
-  // "touched" by this claim when the claim actually states its value, not merely when it lives in
-  // a cited chunk (see `TouchedFactKeys`'s doc comment).
+  // Check 3: every citation is retrieval-contained and quote-verified, but neither of those checks
+  // relates a quote to the *statement* it is cited for — a quote can match its chunk verbatim while
+  // being either too thin to support anything (`"the"`) or a real sentence about something else
+  // entirely. `checkQuoteAlignment` closes that gap over the whole claim at once, not per citation,
+  // because the floor is about the claim's total evidence, not any single quote in isolation. Only a
+  // cell fact on a chunk this claim actually cited counts as corroboration — a fact on some other
+  // retrieved-but-uncited chunk says nothing about whether *this* claim's number is genuine.
+  const corroboratedNumericTokens = new Set(
+    cellFacts
+      .filter((fact) => citedChunks.some((chunk) => chunk.chunkId === fact.chunkId))
+      .map((fact) => fact.value.amount),
+  );
+  const alignment = checkQuoteAlignment({
+    statement: claim.statement,
+    quotes: claim.citations.map((citation) => citation.quote),
+    corroboratedNumericTokens,
+  });
+  if (alignment.kind !== 'aligned') {
+    const alignmentViolation: GroundingViolation =
+      alignment.kind === 'quote-not-substantive'
+        ? {
+            kind: 'quote-not-substantive',
+            claimStatement: claim.statement,
+            detail: `quote for chunk '${claim.citations[alignment.quoteIndex].chunkId}' does not carry enough content to support any claim`,
+          }
+        : {
+            kind: 'quote-unrelated-to-statement',
+            claimStatement: claim.statement,
+            detail:
+              'the cited quotes share too little content with the claim statement to support it',
+          };
+    return {
+      kind: 'dropped',
+      dropped: { statement: claim.statement, reason: alignmentViolation.detail },
+      violations: [alignmentViolation],
+      touchedFactKeys: [],
+    };
+  }
+
+  // Check 4: every citation is retrieval-contained, quote-verified, and alignment-verified. Every
+  // number in the statement must still be supported — one unsupported number drops the whole claim,
+  // the same fail-closed granularity as check 1/2's per-citation failures above. The same value
+  // match that proves support is also what `touchedFactKeys` (below) is built from — a fact only
+  // counts as "touched" by this claim when the claim actually states its value, not merely when it
+  // lives in a cited chunk (see `TouchedFactKeys`'s doc comment).
   const numericViolations: GroundingViolation[] = [];
   const locatorUpgradeByChunkId = new Map<string, EvidenceLocator>();
   const touchedFacts: GroundingCellFact[] = [];

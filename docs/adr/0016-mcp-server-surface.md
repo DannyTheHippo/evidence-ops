@@ -1,8 +1,13 @@
 # ADR-0016 — An MCP server surface, PAT-authenticated, delegating to the existing chokepoint
 
 - **Status:** Accepted — `McpModule` implemented as a third process (`src/mcp/main.ts`, run via
-  `npm run mcp:dev`), advertising `search_evidence`, `get_answer`, and `request_resolution`, and
-  deployed as an `mcp` service in `docker-compose.yml`'s `full` profile alongside the API and worker
+  `npm run mcp:dev`), advertising `search_evidence`, `get_answer`, and `request_resolution` as
+  originally shipped, and deployed as an `mcp` service in `docker-compose.yml`'s `full` profile
+  alongside the API and worker. **Amended by ADR-0023** (2026-08-24), which adds `ask_evidence` and
+  `verify_claims` to this surface — every statement below counting "three" advertised tools, three
+  `ToolDefinition`s, or two `STEP_MINIMUM_ROLE` entries describes the surface as it shipped at this
+  ADR's own Accepted date, not as it stands now; the amendment notes inline mark exactly what
+  changed.
 - **Date:** 2026-08-17
 - **Supersedes:** —
 
@@ -51,6 +56,13 @@ and `'mcp-mutate'`; any step absent from it is refused by `authorize`'s fail-clo
 than granted. `'mcp-mutate'` is gated at `UserRole.Admin` — starting a workflow that writes an
 `Approval` row is a step above asking a question, even though the write itself only ever proposes
 (see § A proposing write is permitted; deciding one never will be, below).
+
+> **Amended by ADR-0023.** The map now holds four entries, not two: `'mcp-ask'` (for `ask_evidence`)
+> and `'mcp-verify'` (for `verify_claims`) join `'mcp-read'` and `'mcp-mutate'`, both floored at the
+> same `UserRole.Member` as `'mcp-read'`. `mcp-tools.ts` now declares five `ToolDefinition`s, not
+> three: `buildAskEvidenceTool` and `buildVerifyClaimsTool` join the three named above. The
+> fail-closed default for a step absent from the map is unchanged — a step this codebase adds a
+> tool for without an explicit `STEP_MINIMUM_ROLE` entry is still refused, not granted.
 
 `execute()` builds the tool's execution context entirely from the token this process itself
 verified (`context: ToolExecutionContext`, threaded in from `authenticate`) — never from anything
@@ -113,7 +125,10 @@ across replicas).
 
 ### A proposing write is permitted; deciding one never will be
 
-`ADVERTISED_TOOLS` is three entries: `search_evidence`, `get_answer`, `request_resolution`.
+`ADVERTISED_TOOLS` is three entries: `search_evidence`, `get_answer`, `request_resolution`. (**Amended
+by ADR-0023:** `ADVERTISED_TOOLS` now also includes `ask_evidence` and `verify_claims`, advertised
+whenever `config.spend.dailyLimitUsd > 0` — neither is a write in the sense this section means;
+both call a model but change no persisted state of their own the way `request_resolution` does.)
 `request_resolution` writes — it starts a `resolveConflict` workflow execution and the `Approval`
 row that gates it (`MCP_MUTATE_STEP`, `stepId: 'mcp-mutate'`, gated at `UserRole.Admin` — a
 strictly higher floor than `MCP_READ_STEP`'s `Member`, so proposing a resolution is not reachable
@@ -155,8 +170,9 @@ authz-related now — so `McpModule` avoids the same structural trap on its own 
 one another module currently exhibits. `McpModule` declares both `ToolExecutorService` and `{ provide:
 TOOL_AUTHZ_HOOK, useClass: StepPolicyAuthzHook }` directly in its own `providers`, giving this
 process a second, independent `ToolExecutorService` instance with its own tool registry
-(`search_evidence`, `get_answer`, `request_resolution`), constructed once in `McpServerService`'s
-own constructor. `AuthzModule`'s default-deny binding, and every other module that resolves through
+(`search_evidence`, `get_answer`, `request_resolution` as originally shipped; `ask_evidence` and
+`verify_claims` joined it per ADR-0023), constructed once in `McpServerService`'s own constructor.
+`AuthzModule`'s default-deny binding, and every other module that resolves through
 it, is untouched by this.
 
 ## Known bounds
@@ -182,7 +198,9 @@ built per client. The same chokepoint, the same grounding gate, and the same ten
 codebase already built for its own served answers cover this surface too, because it delegates to
 them rather than re-implementing anything — an MCP-specific security review is mostly a review of
 `authenticate`/`checkRateLimit` plus three thin `ToolDefinition`s, not of a parallel access-control
-system.
+system. (**Amended by ADR-0023:** now five `ToolDefinition`s, plus the spend gate that withholds two
+of them when the tenant's daily ceiling is disabled — still a review of the same chokepoint, not a
+parallel system, but a wider one than "three thin `ToolDefinition`s" states today.)
 
 **Costs.** A third process to build, deploy, and operate, with its own PAT-issuance UI/flow burden
 on `ApiKeysService`'s existing surface, and a protocol (Streamable HTTP, stateless mode) still young
@@ -198,8 +216,8 @@ one never will be, above — but every other kind of extension, read-only (a doc
 source-status tool) or a further proposing write behind its own durable approval wait, is a
 plausible next increment not designed here.
 
-Two of those extensions are load-bearing rather than optional, because of what the shipped surface
-leaves unreachable. Of the three advertised tools, only `search_evidence` is invocable by a client
+Two of those extensions were load-bearing rather than optional, because of what the shipped surface
+left unreachable. Of the three advertised tools, only `search_evidence` was invocable by a client
 holding nothing but a PAT:
 
 - **Starting a question is not on this surface, and a PAT cannot start one elsewhere.** An
@@ -216,13 +234,24 @@ holding nothing but a PAT:
   hand-off is required before the one write tool can be called at all. A conflict-listing read tool
   is the extension that closes this.
 
-The honest consequence: an MCP client alone can exercise retrieval — evidence search over its
-tenant's corpus, ahead of the grounding gate, which runs in the answer path this surface does not
-start — and little else. `get_answer` does return gate-verified answers with citations, and
-`request_resolution` does start a real durable approval; both are reachable only in a
-human-plus-client workflow where a person supplies the id. That is a narrower "AI-searchable" claim
-than three advertised tools suggests, and it is the claim this ADR stands behind until one of the
-two extensions above ships.
+> **Amended by ADR-0023.** The first of those two extensions has shipped: `ask_evidence` mints an
+> `answerId` directly from a PAT (`QaService.startQuestion`, the same method the REST route calls),
+> so a client holding nothing but a PAT can now start a question and poll `get_answer` for it
+> without a human in the loop. `get_answer`'s own description no longer ends "this surface has no
+> tool for that" — it now reads "use `ask_evidence` for that, then pass the `answerId` it returns
+> here." The second extension — a conflict-listing read tool closing the fact-id gap — has not
+> shipped; `request_resolution` still needs a `winningFactId` obtained out of band, exactly as
+> described above.
+
+The honest consequence, as it stood at this ADR's own Accepted date: an MCP client alone could
+exercise retrieval — evidence search over its tenant's corpus, ahead of the grounding gate, which
+runs in the answer path this surface did not yet start — and little else. `get_answer` did return
+gate-verified answers with citations, and `request_resolution` did start a real durable approval,
+but both were reachable only in a human-plus-client workflow where a person supplied the id. That
+was a narrower "AI-searchable" claim than three advertised tools suggested. **This is no longer
+current** (ADR-0023): a client holding only a PAT can now start a question, poll it to completion,
+and separately have its own drafted claims checked against the corpus — the fact-id gap is the one
+piece of the original honest-consequence paragraph still true today.
 
 Also absent by omission rather than by design: `fetch_chunks`, the agentic loop's companion to
 `search_evidence` (ADR-0015), is neither registered on this process's `ToolExecutorService` nor
@@ -262,3 +291,7 @@ itself. That is what the tool's MCP-facing description states.
 - `docs/adr/0015-agentic-retrieval-mode.md` — the sibling module that hits, and independently fixes,
   the same `ToolExecutorService`/`TOOL_AUTHZ_HOOK` re-provide requirement this ADR's own section
   describes.
+- `docs/adr/0023-attestation-surface.md` — **amends this ADR.** Adds `ask_evidence` and
+  `verify_claims`, closing the question-starting gap this ADR's Consequences section originally
+  named as load-bearing, and records the new `mcp-ask`/`mcp-verify` steps, tool count, and spend
+  gate the inline amendment notes above point back to.

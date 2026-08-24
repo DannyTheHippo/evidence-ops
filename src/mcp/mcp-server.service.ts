@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { toJSONSchema } from 'zod/v4';
 import { TypedConfigService } from '../config/environment/typed-config.service';
+import { ClaimVerificationService } from '../features/evidence/qa/claim-verification.service';
 import { ConflictsService } from '../features/evidence/conflicts/conflicts.service';
 import { EvidenceRetrievalService } from '../features/evidence/qa/evidence-retrieval.service';
 import { QaService } from '../features/evidence/qa/qa.service';
@@ -21,14 +22,22 @@ import { AlsContext } from '../shared/types/als-context.type';
 import { AuditService } from '../shared/services/audit/audit.service';
 import { AppLogger } from '../shared/services/logger/logger.service';
 import {
+  askEvidenceToolDefinition,
+  ASK_EVIDENCE_TOOL_NAME,
+  buildAskEvidenceTool,
   buildGetAnswerTool,
   buildRequestResolutionTool,
+  buildVerifyClaimsTool,
   getAnswerToolDefinition,
+  MCP_ASK_STEP,
   MCP_MUTATE_STEP,
   MCP_READ_STEP,
+  MCP_VERIFY_STEP,
   mcpSearchEvidenceToolDefinition,
   REQUEST_RESOLUTION_TOOL_NAME,
   requestResolutionToolDefinition,
+  VERIFY_CLAIMS_TOOL_NAME,
+  verifyClaimsToolDefinition,
 } from './mcp-tools';
 import {
   MCP_RATE_LIMIT_WINDOW_MS,
@@ -39,18 +48,51 @@ import {
 } from './mcp.constant';
 import { PatTokenVerifier } from './pat-token.verifier';
 
-const ADVERTISED_TOOLS: readonly ModelToolDefinition[] = [
+/** Tools whose handler spends model or embedding-provider budget — either by calling a model
+ *  directly, like `verify_claims` (`ClaimVerificationService.verifyClaims`, one model call per
+ *  submitted claim), by billing a paid embedding call, like `search_evidence`
+ *  (`EvidenceRetrievalService.retrieve` → `MongoHybridRetrievalStore.search` → `embedQuery`, which
+ *  calls `SpendGuardEmbeddingProvider.embed` and bills Voyage), or by starting a workflow that
+ *  will, like `ask_evidence` (`QaService.startQuestion` → the Temporal answer pipeline →
+ *  `SynthesisService`). This is the whole extension point for a further spend-metered tool: add
+ *  its `ModelToolDefinition` here, and its `registerTool` call joins the others inside the
+ *  `spendGateOpen` branch in the constructor below. Every tool NOT in this array is gate-exempt
+ *  because it never reaches a model or a paid embedding call. */
+const SPEND_GATED_TOOL_DEFINITIONS: readonly ModelToolDefinition[] = [
   mcpSearchEvidenceToolDefinition,
+  askEvidenceToolDefinition,
+  verifyClaimsToolDefinition,
+];
+
+const SPEND_GATED_TOOL_NAMES: readonly string[] = SPEND_GATED_TOOL_DEFINITIONS.map(
+  (definition) => definition.name,
+);
+
+const ADVERTISED_TOOLS_BASE: readonly ModelToolDefinition[] = [
   getAnswerToolDefinition,
   requestResolutionToolDefinition,
 ];
 
+const ADVERTISED_TOOLS: readonly ModelToolDefinition[] = [
+  ...ADVERTISED_TOOLS_BASE,
+  ...SPEND_GATED_TOOL_DEFINITIONS,
+];
+
 /** Picks the step to present to `ToolExecutorService.execute` by the tool name the caller asked
  *  for, defaulting to `MCP_READ_STEP` — an unrecognized name still fails closed downstream
- *  (`tool-not-registered`), but the default direction here must never widen to the mutating step
- *  for a name this function does not explicitly recognize. */
+ *  (`tool-not-registered`), but the default direction here must never widen to the mutating or
+ *  ask step for a name this function does not explicitly recognize. */
 function stepForTool(toolName: string): ToolExecutionStep {
-  return toolName === REQUEST_RESOLUTION_TOOL_NAME ? MCP_MUTATE_STEP : MCP_READ_STEP;
+  if (toolName === REQUEST_RESOLUTION_TOOL_NAME) {
+    return MCP_MUTATE_STEP;
+  }
+  if (toolName === ASK_EVIDENCE_TOOL_NAME) {
+    return MCP_ASK_STEP;
+  }
+  if (toolName === VERIFY_CLAIMS_TOOL_NAME) {
+    return MCP_VERIFY_STEP;
+  }
+  return MCP_READ_STEP;
 }
 
 function toMcpTool(definition: ModelToolDefinition): Tool {
@@ -83,13 +125,42 @@ function toCallToolResult(result: ToolExecutionResult): CallToolResult {
 
 /**
  * The MCP protocol layer: builds one low-level `Server` per verified caller, advertises
- * `search_evidence`/`get_answer`/`request_resolution` via `tools/list` from the same zod schemas
- * `ToolExecutorService` validates against (`ADVERTISED_TOOLS`, `toMcpTool`), and routes
+ * `get_answer`/`request_resolution` unconditionally, plus every spend-gated tool
+ * (`SPEND_GATED_TOOL_DEFINITIONS`: `search_evidence`, `ask_evidence`, `verify_claims`) while
+ * `config.spend.dailyLimitUsd > 0`, via `tools/list` from the same zod schemas
+ * `ToolExecutorService` validates against (`this.advertisedTools`, `toMcpTool`), and routes
  * `tools/call` through `ToolExecutorService.execute` — the single chokepoint every tool call in
  * this codebase must route through (see that class's own doc comment). Never re-implements
  * validation or authorization itself. `stepForTool` presents `MCP_MUTATE_STEP` for
- * `request_resolution` and `MCP_READ_STEP` for everything else, so the two tool kinds are policed
- * under different `STEP_MINIMUM_ROLE` floors even though both route through the same call.
+ * `request_resolution`, `MCP_ASK_STEP` for `ask_evidence`, `MCP_VERIFY_STEP` for `verify_claims`,
+ * and `MCP_READ_STEP` for everything else (`search_evidence` and `get_answer`), so each tool kind
+ * is policed under its own `STEP_MINIMUM_ROLE` floor even though all route through the same call.
+ *
+ * The spend gate fails CLOSED: an unmeasurable spend ceiling (`dailyLimitUsd <= 0`, the same
+ * disable convention `SpendGuardModelProvider`/`SpendGuardEmbeddingProvider` read) withdraws every
+ * tool whose handler can bill a vendor from both `tools/list` and the registry, rather than
+ * leaving it reachable unmetered. A long-lived headless PAT under a ceiling meant only to be "off
+ * in dev" would otherwise carry an unmetered budget the moment `search_evidence` reaches
+ * `SpendGuardEmbeddingProvider` — `EvidenceRetrievalService.retrieve` →
+ * `MongoHybridRetrievalStore.search` → `embedQuery` calls `SpendGuardEmbeddingProvider.embed`,
+ * which itself fails OPEN at the same `dailyLimitUsd <= 0` value this gate closes on, so this gate
+ * is what stops that combination from billing Voyage with no ceiling — or the moment
+ * `ask_evidence`/`verify_claims` reach `SynthesisService`/`ClaimVerificationService`. `get_answer`
+ * stays gate-exempt because its whole path is a Mongo read plus an audit write
+ * (`QaService.getAnswerById` → `peekAnswer`, `answerModel.findOne`), never a model or embedding
+ * call. `request_resolution` stays gate-exempt because it spends nothing at request time:
+ * `ConflictsService.requestResolution` only reads Mongo (the conflict, `MetricPoliciesService
+ * .resolveForTenant`) and calls `workflowEngine.start`, which enqueues the `resolveConflict`
+ * workflow without waiting for it — any model spend that workflow's own activities might later
+ * incur happens on a Temporal worker process, outside this call and outside this gate's reach.
+ *
+ * With the ceiling disabled, the surface that remains is deliberately narrower than three tools —
+ * only `get_answer`/`request_resolution` stay reachable, so a client that starts a question or
+ * proposes a resolution can still be told how it turned out, but nothing on this surface can
+ * search the corpus or spend further budget. That is the intended fail-closed posture, not a gap:
+ * the constructor's `logger.warn` below names exactly which tools were withheld
+ * (`SPEND_GATED_TOOL_NAMES`), so an operator watching a client's `tools/list` shrink has a
+ * corresponding server-side line explaining why.
  *
  * `registerTool` runs once, in the constructor, against the single `ToolExecutorService`
  * instance `McpModule` constructs for this process (bound to `StepPolicyAuthzHook` — see that
@@ -120,6 +191,11 @@ export class McpServerService {
     { windowStart: number; count: number }
   >();
 
+  /** `ADVERTISED_TOOLS`, minus the spend-gated tools when `config.spend.dailyLimitUsd <= 0` — set
+   *  once in the constructor and reused by every `buildServer` call, the same way the tool
+   *  registry itself is. */
+  private readonly advertisedTools: readonly ModelToolDefinition[];
+
   constructor(
     private readonly toolExecutor: ToolExecutorService,
     private readonly patTokenVerifier: PatTokenVerifier,
@@ -133,11 +209,27 @@ export class McpServerService {
     evidenceRetrievalService: EvidenceRetrievalService,
     qaService: QaService,
     conflictsService: ConflictsService,
+    claimVerificationService: ClaimVerificationService,
   ) {
     this.logger.init(McpServerService.name);
-    this.toolExecutor.registerTool(buildSearchEvidenceTool(evidenceRetrievalService));
     this.toolExecutor.registerTool(buildGetAnswerTool(qaService));
     this.toolExecutor.registerTool(buildRequestResolutionTool(conflictsService));
+
+    const spendGateOpen = this.config.spend.dailyLimitUsd > 0;
+    if (spendGateOpen) {
+      // Extend this branch, alongside `SPEND_GATED_TOOL_DEFINITIONS` above, when a further
+      // spend-metered tool lands.
+      this.toolExecutor.registerTool(buildSearchEvidenceTool(evidenceRetrievalService));
+      this.toolExecutor.registerTool(buildAskEvidenceTool(qaService));
+      this.toolExecutor.registerTool(buildVerifyClaimsTool(claimVerificationService));
+      this.advertisedTools = ADVERTISED_TOOLS;
+    } else {
+      this.logger.warn(
+        `MODEL_SPEND_DAILY_LIMIT_USD is <= 0; withholding spend-gated MCP tools ` +
+          `(${SPEND_GATED_TOOL_NAMES.join(', ')}) from this surface`,
+      );
+      this.advertisedTools = ADVERTISED_TOOLS_BASE;
+    }
   }
 
   /** Resolves the `Authorization` header to a server-derived `ToolExecutionContext` by
@@ -257,7 +349,7 @@ export class McpServerService {
     const server = new Server(MCP_SERVER_INFO, { capabilities: { tools: {} } });
 
     server.setRequestHandler(ListToolsRequestSchema, () => ({
-      tools: ADVERTISED_TOOLS.map(toMcpTool),
+      tools: this.advertisedTools.map(toMcpTool),
     }));
 
     server.setRequestHandler(CallToolRequestSchema, async (request) => {

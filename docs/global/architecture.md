@@ -36,7 +36,7 @@ flowchart TB
 
   subgraph Mcp["MCP process — src/mcp/main.ts"]
     Pat["PatTokenVerifier + fixed-window rate limit — both fail closed"]
-    Chokepoint["ToolExecutorService (own registry)<br/>steps: mcp-read · mcp-mutate"]
+    Chokepoint["ToolExecutorService (own registry)<br/>steps: mcp-read · mcp-mutate · mcp-ask · mcp-verify"]
     Pat --> Chokepoint
   end
 
@@ -315,21 +315,28 @@ mode and both answer 405.
    an arbitrary number of tool executions for one unit of budget. Counters are in-memory and
    per-process: correct for a single replica, wrong for horizontal scale-out.
 
-**Three tools, two steps.** `tools/list` advertises `search_evidence`, `get_answer`, and
-`request_resolution`, each from the same zod schema `ToolExecutorService` validates against, so the
-advertised JSON Schema cannot drift from what is enforced. `tools/call` routes through this
-process's own `ToolExecutorService` instance under one of two disjoint steps:
+**Five tools, four steps.** `tools/list` advertises `search_evidence`, `get_answer`,
+`request_resolution`, `ask_evidence`, and `verify_claims` (the last three withheld when the
+tenant's daily spend ceiling is disabled — see `SPEND_GATED_TOOL_DEFINITIONS`,
+`src/mcp/mcp-server.service.ts`), each from the same zod schema `ToolExecutorService` validates
+against, so the advertised JSON Schema cannot drift from what is enforced. `tools/call` routes
+through this process's own `ToolExecutorService` instance under one of four disjoint steps,
+`stepForTool` picking the step by tool name:
 
 | Step         | Tools                                | Minimum role |
 | ------------ | ------------------------------------ | ------------ |
 | `mcp-read`   | `search_evidence`, `get_answer`      | Member       |
 | `mcp-mutate` | `request_resolution`                 | Admin        |
+| `mcp-ask`    | `ask_evidence`                       | Member       |
+| `mcp-verify` | `verify_claims`                      | Member       |
 
-The steps are kept disjoint so a read-capable token and a mutating one stay distinguishable in
-policy. An unrecognized tool name defaults to the read step and is then refused downstream as
-unregistered — the default direction never widens toward the mutating step. A chokepoint refusal
-comes back as an ordinary tool result carrying the refusal reason (`isError: true`), not a thrown
-protocol error a caller cannot tell from a transport failure.
+The steps are kept disjoint so a read-capable token, a mutating one, and the two spend-metered ones
+stay distinguishable in policy — `mcp-ask` and `mcp-verify` share `mcp-read`'s Member floor today,
+but each is policed by its own map entry, so either can move independently later. An unrecognized
+tool name defaults to the read step and is then refused downstream as unregistered — the default
+direction never widens toward the mutating, ask, or verify step. A chokepoint refusal comes back as
+an ordinary tool result carrying the refusal reason (`isError: true`), not a thrown protocol error a
+caller cannot tell from a transport failure.
 
 **Approvals are deliberately absent.** There is no tool that approves, rejects, or resolves
 anything. `request_resolution` starts the same `resolveConflict` workflow the SPA's button starts,
@@ -344,8 +351,9 @@ for a request that came through `JwtAuthGuard` — even though nothing here runs
 This is a deployable process, not a development script. `npm run mcp:dev` runs it on the host loop;
 `docker-compose.yml` carries an `mcp` service under the `full` profile that runs the same compiled
 entrypoint, binds container port 3002, publishes `${MCP_HOST_PORT:-3002}`, and waits on `mongo`,
-`temporal` and `migrate` exactly as `api` and `worker` do — `request_resolution` starts a workflow,
-so this surface is unusable without Temporal even though it runs no worker itself. Its port is
+`temporal` and `migrate` exactly as `api` and `worker` do — `request_resolution` and `ask_evidence`
+both start a workflow, so this surface is unusable without Temporal even though it runs no worker
+itself. Its port is
 published because an MCP client is by definition outside the compose network; the PAT check is the
 only thing gating who reaches it.
 
@@ -405,8 +413,9 @@ counters gain a `_total` suffix, so `evidence_ops.grounding.claims_dropped` is q
 - `docs/adr/0012-source-connector-seam.md` — the connector seam behind `SOURCE_CONNECTOR`.
 - `docs/adr/0015-agentic-retrieval-mode.md` — superseded; the removed multi-turn retrieval loop's
   design rationale, kept as a historical record.
-- `docs/adr/0016-mcp-server-surface.md` — the MCP surface, its two steps, and why approvals are not
-  reachable from it.
+- `docs/adr/0016-mcp-server-surface.md` — the MCP surface, its four steps (amended by ADR-0023,
+  which added `mcp-ask`/`mcp-verify` to the original two), and why approvals are not reachable from
+  it.
 - `docs/adr/0017-survivorship-policy.md` — the deterministic rules that propose a conflict winner.
 - `docs/adr/0018-metrics-and-alerting-shape.md` — the six signals and why there are not more.
 - `docs/adr/0019-stream-lifecycle-and-throttle-keying.md` — the three SSE streams' shared controls

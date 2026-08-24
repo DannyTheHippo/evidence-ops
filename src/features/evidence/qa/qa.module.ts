@@ -7,7 +7,10 @@ import {
   DocumentVersionSchema,
 } from '../../../database/schemas/evidence/document-version/document-version.schema';
 import { ProvidersModule } from '../../../providers/providers.module';
+import { ConflictsModule } from '../conflicts/conflicts.module';
+import { FactsModule } from '../facts/facts.module';
 import { AnswerPersistenceService } from './answer-persistence.service';
+import { ClaimVerificationService } from './claim-verification.service';
 import { EvidenceRetrievalService } from './evidence-retrieval.service';
 import { GroundingGateService } from './grounding-gate.service';
 import { QaController } from './qa.controller';
@@ -20,6 +23,10 @@ import { SynthesisService } from './synthesis.service';
 // the same `Answer` model registration and `ProvidersModule` import for `WORKFLOW_ENGINE`. `User`
 // is registered so `QaService.streamAnswer` can re-read the connecting user's tenant on each
 // `reauthTicks$` tick — see `ApiKeysModule`'s identical `User` registration for the same reason.
+// `FactsModule`/`ConflictsModule` are for claim verification's cell-fact and conflict lookups
+// (`FactsService.findCellFacts`, `ConflictsService.findConflictedFactGroupsForChunks`) — passing
+// an empty `cellFacts` array is not a safe default, since `verify-claim.ts` only falls back to
+// raw-chunk-text numeric matching when a cited chunk has zero cell facts.
 @Module({
   imports: [
     MongooseModule.forFeature([
@@ -28,6 +35,8 @@ import { SynthesisService } from './synthesis.service';
       { name: User.name, schema: UserSchema },
     ]),
     ProvidersModule,
+    FactsModule,
+    ConflictsModule,
   ],
   controllers: [QaController],
   providers: [
@@ -35,6 +44,7 @@ import { SynthesisService } from './synthesis.service';
     GroundingGateService,
     EvidenceRetrievalService,
     AnswerPersistenceService,
+    ClaimVerificationService,
     QaService,
   ],
   exports: [
@@ -42,6 +52,7 @@ import { SynthesisService } from './synthesis.service';
     GroundingGateService,
     EvidenceRetrievalService,
     AnswerPersistenceService,
+    ClaimVerificationService,
     QaService,
   ],
 })

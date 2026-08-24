@@ -4,6 +4,7 @@ import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { TypedConfigService } from '../../src/config/environment/typed-config.service';
+import { ClaimVerificationService } from '../../src/features/evidence/qa/claim-verification.service';
 import { ConflictsService } from '../../src/features/evidence/conflicts/conflicts.service';
 import { EvidenceRetrievalService } from '../../src/features/evidence/qa/evidence-retrieval.service';
 import { QaService } from '../../src/features/evidence/qa/qa.service';
@@ -22,10 +23,17 @@ import type { ToolExecutionStep } from '../../src/features/platform/authz/types/
 import { AnswerNotFoundException } from '../../src/features/evidence/qa/exceptions/qa.exception';
 import { McpServerService } from '../../src/mcp/mcp-server.service';
 import {
+  ASK_EVIDENCE_QUESTION_MAX_LENGTH,
+  ASK_EVIDENCE_TOOL_NAME,
   GET_ANSWER_TOOL_NAME,
+  MCP_ASK_STEP,
   MCP_MUTATE_STEP,
   MCP_READ_STEP,
+  MCP_VERIFY_STEP,
   REQUEST_RESOLUTION_TOOL_NAME,
+  VERIFY_CLAIMS_CLAIM_MAX_LENGTH,
+  VERIFY_CLAIMS_MAX_CLAIMS,
+  VERIFY_CLAIMS_TOOL_NAME,
 } from '../../src/mcp/mcp-tools';
 import { PatTokenVerifier } from '../../src/mcp/pat-token.verifier';
 import {
@@ -37,6 +45,7 @@ import { UserRole } from '../../src/shared/enums/user-role.enum';
 import { AuditService } from '../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../src/shared/services/logger/logger.service';
 import type { AlsContext } from '../../src/shared/types/als-context.type';
+import type { MockLogger } from '../utils/get-mock-logger';
 import { getMockLogger } from '../utils/get-mock-logger';
 import { getMockTypedConfig } from '../utils/get-mock-typed-config';
 
@@ -63,6 +72,17 @@ function buildChunk() {
     sha256: 'a'.repeat(64),
     text: 'Northgate Business Park traded at a cap rate of approximately 6.10%.',
     locator: { kind: 'pdf-page' as const, page: 3, extractorVersion: 'v1' },
+  };
+}
+
+function buildStartQuestionResult() {
+  return { id: 'answer-2', runStatus: 'queued' as const };
+}
+
+function buildVerifyClaimsResult() {
+  return {
+    advisory: 'A "grounded" verdict means an independent verifier located supporting evidence.',
+    results: [{ claimIndex: 0, verdict: 'grounded' as const }],
   };
 }
 
@@ -108,23 +128,33 @@ interface Harness {
   readonly toolExecutor: ToolExecutorService;
   readonly tokenVerifier: jest.Mocked<TokenVerifier>;
   readonly evidenceRetrievalService: { retrieve: jest.Mock };
-  readonly qaService: { getAnswerById: jest.Mock };
+  readonly qaService: { getAnswerById: jest.Mock; startQuestion: jest.Mock };
   readonly conflictsService: { requestResolution: jest.Mock };
+  readonly claimVerificationService: { verifyClaims: jest.Mock };
   readonly auditService: { record: jest.Mock };
   readonly als: AsyncLocalStorage<AlsContext>;
+  readonly logger: MockLogger;
 }
 
 async function buildHarness(
   rateLimitPerMinute = 60,
   preAuthIpRateLimitMaxRequests = 20,
   preAuthIpRateLimitWindowMs = 60000,
+  dailyLimitUsd = 50,
 ): Promise<Harness> {
   const tokenVerifier: jest.Mocked<TokenVerifier> = { verify: jest.fn() };
   const evidenceRetrievalService = { retrieve: jest.fn().mockResolvedValue([buildChunk()]) };
-  const qaService = { getAnswerById: jest.fn().mockResolvedValue(buildAnswerEnvelope()) };
+  const qaService = {
+    getAnswerById: jest.fn().mockResolvedValue(buildAnswerEnvelope()),
+    startQuestion: jest.fn().mockResolvedValue(buildStartQuestionResult()),
+  };
   const conflictsService = { requestResolution: jest.fn().mockResolvedValue(buildRunResult()) };
+  const claimVerificationService = {
+    verifyClaims: jest.fn().mockResolvedValue(buildVerifyClaimsResult()),
+  };
   const auditService = { record: jest.fn().mockResolvedValue(undefined) };
   const als = new AsyncLocalStorage<AlsContext>();
+  const logger = getMockLogger();
   const config = getMockTypedConfig({
     mcp: {
       port: 3002,
@@ -132,6 +162,7 @@ async function buildHarness(
       preAuthIpRateLimitWindowMs,
       preAuthIpRateLimitMaxRequests,
     },
+    spend: { dailyLimitUsd },
   });
 
   const module: TestingModule = await Test.createTestingModule({
@@ -142,10 +173,11 @@ async function buildHarness(
       { provide: TOKEN_VERIFIER, useValue: tokenVerifier },
       { provide: AsyncLocalStorage, useValue: als },
       { provide: TypedConfigService, useValue: config },
-      { provide: AppLogger, useValue: getMockLogger() },
+      { provide: AppLogger, useValue: logger },
       { provide: EvidenceRetrievalService, useValue: evidenceRetrievalService },
       { provide: QaService, useValue: qaService },
       { provide: ConflictsService, useValue: conflictsService },
+      { provide: ClaimVerificationService, useValue: claimVerificationService },
       { provide: AuditService, useValue: auditService },
       McpServerService,
     ],
@@ -158,8 +190,10 @@ async function buildHarness(
     evidenceRetrievalService,
     qaService,
     conflictsService,
+    claimVerificationService,
     auditService,
     als,
+    logger,
   };
 }
 
@@ -178,14 +212,20 @@ describe('McpServerService', () => {
   });
 
   describe('tools/list', () => {
-    it('should advertise search_evidence, get_answer, and request_resolution with strict, object-rooted schemas', async () => {
+    it('should advertise search_evidence, get_answer, request_resolution, ask_evidence, and verify_claims with strict, object-rooted schemas', async () => {
       const { service } = await buildHarness();
       const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
 
       const { tools } = await client.listTools();
 
       expect(tools.map((tool) => tool.name).sort()).toEqual(
-        [SEARCH_EVIDENCE_TOOL_NAME, GET_ANSWER_TOOL_NAME, REQUEST_RESOLUTION_TOOL_NAME].sort(),
+        [
+          SEARCH_EVIDENCE_TOOL_NAME,
+          GET_ANSWER_TOOL_NAME,
+          REQUEST_RESOLUTION_TOOL_NAME,
+          ASK_EVIDENCE_TOOL_NAME,
+          VERIFY_CLAIMS_TOOL_NAME,
+        ].sort(),
       );
 
       // Cast, not `expect.any(Object)` inside the object literal below — its `any`-typed return
@@ -231,6 +271,34 @@ describe('McpServerService', () => {
       expect(Object.keys(requestResolutionSchema.properties ?? {}).sort()).toEqual(
         ['conflictId', 'winningFactId'].sort(),
       );
+
+      const askEvidence = tools.find((tool) => tool.name === ASK_EVIDENCE_TOOL_NAME);
+      const askEvidenceSchema = askEvidence?.inputSchema as {
+        type: string;
+        properties?: Record<string, unknown>;
+        required?: string[];
+        additionalProperties?: boolean;
+      };
+      expect(askEvidenceSchema).toMatchObject({
+        type: 'object',
+        required: ['question'],
+        additionalProperties: false,
+      });
+      expect(Object.keys(askEvidenceSchema.properties ?? {})).toEqual(['question']);
+
+      const verifyClaims = tools.find((tool) => tool.name === VERIFY_CLAIMS_TOOL_NAME);
+      const verifyClaimsSchema = verifyClaims?.inputSchema as {
+        type: string;
+        properties?: Record<string, unknown>;
+        required?: string[];
+        additionalProperties?: boolean;
+      };
+      expect(verifyClaimsSchema).toMatchObject({
+        type: 'object',
+        required: ['claims'],
+        additionalProperties: false,
+      });
+      expect(Object.keys(verifyClaimsSchema.properties ?? {})).toEqual(['claims']);
     });
 
     // ADR-0016's whole point for this surface: the tool that *proposes* a conflict resolution
@@ -245,17 +313,25 @@ describe('McpServerService', () => {
     // a future `finalize_resolution`, `settle_conflict`, or `commit_outcome` would sail through a
     // pattern check untouched. Pinning the arrays instead means *any* addition to either step
     // breaks this test by construction, forcing a human to consciously re-examine and update it.
-    it('should expose exactly the frozen tool set on each MCP step, with no approval-deciding tool on either', async () => {
+    it('should expose exactly the frozen tool set on each MCP step, with no approval-deciding tool on any of them', async () => {
       const { service } = await buildHarness();
       const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
 
       const { tools } = await client.listTools();
 
       expect(tools.map((tool) => tool.name).sort()).toEqual(
-        [SEARCH_EVIDENCE_TOOL_NAME, GET_ANSWER_TOOL_NAME, REQUEST_RESOLUTION_TOOL_NAME].sort(),
+        [
+          SEARCH_EVIDENCE_TOOL_NAME,
+          GET_ANSWER_TOOL_NAME,
+          REQUEST_RESOLUTION_TOOL_NAME,
+          ASK_EVIDENCE_TOOL_NAME,
+          VERIFY_CLAIMS_TOOL_NAME,
+        ].sort(),
       );
       expect(MCP_READ_STEP.allowedTools).toEqual([SEARCH_EVIDENCE_TOOL_NAME, GET_ANSWER_TOOL_NAME]);
       expect(MCP_MUTATE_STEP.allowedTools).toEqual([REQUEST_RESOLUTION_TOOL_NAME]);
+      expect(MCP_ASK_STEP.allowedTools).toEqual([ASK_EVIDENCE_TOOL_NAME]);
+      expect(MCP_VERIFY_STEP.allowedTools).toEqual([VERIFY_CLAIMS_TOOL_NAME]);
     });
 
     // A tool description is the only instruction an MCP client gets about what a call returns, and
@@ -456,6 +532,292 @@ describe('McpServerService', () => {
       const content = result.content as Array<{ type: string; text: string }>;
       expect(content[0].text).toContain('invalid-arguments');
       expect(conflictsService.requestResolution).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('tools/call — ask_evidence', () => {
+    it('should start a question and return a handle, using the tenant/actor/role derived from the token, not any tool argument', async () => {
+      const { service, qaService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: ASK_EVIDENCE_TOOL_NAME,
+        arguments: { question: 'What was the cap rate?' },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(qaService.startQuestion).toHaveBeenCalledWith({
+        questionText: 'What was the cap rate?',
+        actorId: 'actor-a',
+        role: UserRole.Member,
+        tenantId: 'tenant-a',
+      });
+      const content = result.content as Array<{ type: string; text: string }>;
+      // `StartQuestionResult.id` renamed to `answerId` on the wire — see `buildAskEvidenceTool`'s
+      // doc comment for why, and `get_answer`'s `answerId` argument for the name it matches.
+      expect(JSON.parse(content[0].text)).toEqual({
+        answerId: buildStartQuestionResult().id,
+        runStatus: buildStartQuestionResult().runStatus,
+      });
+    });
+
+    it('should refuse a question over ASK_EVIDENCE_QUESTION_MAX_LENGTH at the schema chokepoint, never starting a workflow', async () => {
+      const { service, qaService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: ASK_EVIDENCE_TOOL_NAME,
+        arguments: { question: 'a'.repeat(ASK_EVIDENCE_QUESTION_MAX_LENGTH + 1) },
+      });
+
+      expect(result.isError).toBe(true);
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0].text).toContain('invalid-arguments');
+      expect(qaService.startQuestion).not.toHaveBeenCalled();
+    });
+
+    it('should refuse an unknown extra argument key rather than silently stripping it', async () => {
+      const { service, qaService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: ASK_EVIDENCE_TOOL_NAME,
+        arguments: { question: 'What was the cap rate?', tenantId: 'tenant-evil' },
+      });
+
+      expect(result.isError).toBe(true);
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0].text).toContain('invalid-arguments');
+      expect(qaService.startQuestion).not.toHaveBeenCalled();
+    });
+
+    // `mcp-ask` floors at `UserRole.Member` — the lowest rank `ROLE_RANK` defines — so no
+    // *recognized* role sits below it. `StepPolicyAuthzHook.authorize`'s other fail-closed branch
+    // (an unrecognized `context.role`) is the only way to exercise a refusal on this exact step,
+    // and it proves the same thing a below-floor role would: a caller who does not clear `mcp-ask`'s
+    // minimum is refused before `QaService.startQuestion` ever runs.
+    it("should refuse a caller whose role does not meet mcp-ask's Member minimum, without starting any workflow", async () => {
+      const { service, qaService } = await buildHarness();
+      const unrecognizedRoleContext = {
+        actorId: 'actor-x',
+        tenantId: 'tenant-a',
+        role: 'guest' as UserRole,
+      };
+      const client = await connectClient(service.buildServer(unrecognizedRoleContext));
+
+      const result = await client.callTool({
+        name: ASK_EVIDENCE_TOOL_NAME,
+        arguments: { question: 'What was the cap rate?' },
+      });
+
+      expect(result.isError).toBe(true);
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0].text).toContain('authz-denied');
+      expect(qaService.startQuestion).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('tools/call — verify_claims', () => {
+    it('should delegate to ClaimVerificationService using the tenant derived from the token, not any tool argument', async () => {
+      const { service, claimVerificationService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: VERIFY_CLAIMS_TOOL_NAME,
+        arguments: { claims: ['The cap rate was approximately 6.10%.'] },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(claimVerificationService.verifyClaims).toHaveBeenCalledWith({
+        claims: ['The cap rate was approximately 6.10%.'],
+        tenantId: 'tenant-a',
+      });
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(JSON.parse(content[0].text)).toEqual(buildVerifyClaimsResult());
+    });
+
+    it('should refuse a claim over VERIFY_CLAIMS_CLAIM_MAX_LENGTH at the schema chokepoint, never calling the service', async () => {
+      const { service, claimVerificationService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: VERIFY_CLAIMS_TOOL_NAME,
+        arguments: { claims: ['a'.repeat(VERIFY_CLAIMS_CLAIM_MAX_LENGTH + 1)] },
+      });
+
+      expect(result.isError).toBe(true);
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0].text).toContain('invalid-arguments');
+      expect(claimVerificationService.verifyClaims).not.toHaveBeenCalled();
+    });
+
+    it('should refuse more than VERIFY_CLAIMS_MAX_CLAIMS claims at the schema chokepoint, never calling the service', async () => {
+      const { service, claimVerificationService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: VERIFY_CLAIMS_TOOL_NAME,
+        arguments: {
+          claims: Array.from(
+            { length: VERIFY_CLAIMS_MAX_CLAIMS + 1 },
+            (_, index) => `claim ${index}`,
+          ),
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0].text).toContain('invalid-arguments');
+      expect(claimVerificationService.verifyClaims).not.toHaveBeenCalled();
+    });
+
+    it('should refuse an empty claims array at the schema chokepoint, never calling the service', async () => {
+      const { service, claimVerificationService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: VERIFY_CLAIMS_TOOL_NAME,
+        arguments: { claims: [] },
+      });
+
+      expect(result.isError).toBe(true);
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0].text).toContain('invalid-arguments');
+      expect(claimVerificationService.verifyClaims).not.toHaveBeenCalled();
+    });
+
+    it('should refuse an unknown extra argument key rather than silently stripping it', async () => {
+      const { service, claimVerificationService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: VERIFY_CLAIMS_TOOL_NAME,
+        arguments: { claims: ['The cap rate was approximately 6.10%.'], tenantId: 'tenant-evil' },
+      });
+
+      expect(result.isError).toBe(true);
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0].text).toContain('invalid-arguments');
+      expect(claimVerificationService.verifyClaims).not.toHaveBeenCalled();
+    });
+
+    // `mcp-verify` floors at `UserRole.Member` — the lowest rank `ROLE_RANK` defines — so no
+    // *recognized* role sits below it, the same reasoning `MCP_ASK_STEP`'s equivalent test above
+    // documents. An unrecognized `context.role` exercises `StepPolicyAuthzHook`'s other fail-closed
+    // branch, proving a caller whose role does not resolve is refused before the service ever runs.
+    it('should refuse a caller whose role does not resolve, without calling ClaimVerificationService', async () => {
+      const { service, claimVerificationService } = await buildHarness();
+      const unrecognizedRoleContext = {
+        actorId: 'actor-x',
+        tenantId: 'tenant-a',
+        role: 'guest' as UserRole,
+      };
+      const client = await connectClient(service.buildServer(unrecognizedRoleContext));
+
+      const result = await client.callTool({
+        name: VERIFY_CLAIMS_TOOL_NAME,
+        arguments: { claims: ['The cap rate was approximately 6.10%.'] },
+      });
+
+      expect(result.isError).toBe(true);
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0].text).toContain('authz-denied');
+      expect(claimVerificationService.verifyClaims).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('spend gate', () => {
+    it('should advertise and register search_evidence, ask_evidence, and verify_claims when the daily spend ceiling is positive', async () => {
+      const { service, evidenceRetrievalService, claimVerificationService } = await buildHarness(
+        60,
+        20,
+        60000,
+        50,
+      );
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const { tools } = await client.listTools();
+      expect(tools.map((tool) => tool.name)).toEqual(
+        expect.arrayContaining([
+          SEARCH_EVIDENCE_TOOL_NAME,
+          ASK_EVIDENCE_TOOL_NAME,
+          VERIFY_CLAIMS_TOOL_NAME,
+        ]),
+      );
+
+      const searchResult = await client.callTool({
+        name: SEARCH_EVIDENCE_TOOL_NAME,
+        arguments: { query: 'cap rate' },
+      });
+      expect(searchResult.isError).toBeUndefined();
+      expect(evidenceRetrievalService.retrieve).toHaveBeenCalledWith({
+        questionText: 'cap rate',
+        tenantId: 'tenant-a',
+      });
+
+      const askResult = await client.callTool({
+        name: ASK_EVIDENCE_TOOL_NAME,
+        arguments: { question: 'What was the cap rate?' },
+      });
+      expect(askResult.isError).toBeUndefined();
+
+      const verifyResult = await client.callTool({
+        name: VERIFY_CLAIMS_TOOL_NAME,
+        arguments: { claims: ['The cap rate was approximately 6.10%.'] },
+      });
+      expect(verifyResult.isError).toBeUndefined();
+      expect(claimVerificationService.verifyClaims).toHaveBeenCalledWith({
+        claims: ['The cap rate was approximately 6.10%.'],
+        tenantId: 'tenant-a',
+      });
+    });
+
+    // Regression for the finding that `search_evidence` billed Voyage (via
+    // `EvidenceRetrievalService.retrieve` → `MongoHybridRetrievalStore.search` → `embedQuery` →
+    // `SpendGuardEmbeddingProvider`, which fails OPEN at this same `dailyLimitUsd <= 0` value) even
+    // though the MCP gate closed on it — `search_evidence` must be withheld exactly like
+    // `ask_evidence`/`verify_claims`, leaving only the two tools that genuinely spend nothing.
+    it('should withhold search_evidence, ask_evidence, and verify_claims from tools/list and refuse calling any of them when the daily spend ceiling is 0', async () => {
+      const { service, evidenceRetrievalService, qaService, claimVerificationService, logger } =
+        await buildHarness(60, 20, 60000, 0);
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const { tools } = await client.listTools();
+      expect(tools.map((tool) => tool.name).sort()).toEqual(
+        [GET_ANSWER_TOOL_NAME, REQUEST_RESOLUTION_TOOL_NAME].sort(),
+      );
+
+      const searchResult = await client.callTool({
+        name: SEARCH_EVIDENCE_TOOL_NAME,
+        arguments: { query: 'cap rate' },
+      });
+      expect(searchResult.isError).toBe(true);
+      const searchContent = searchResult.content as Array<{ type: string; text: string }>;
+      expect(searchContent[0].text).toContain('tool-not-registered');
+      expect(evidenceRetrievalService.retrieve).not.toHaveBeenCalled();
+
+      const askResult = await client.callTool({
+        name: ASK_EVIDENCE_TOOL_NAME,
+        arguments: { question: 'What was the cap rate?' },
+      });
+      expect(askResult.isError).toBe(true);
+      const askContent = askResult.content as Array<{ type: string; text: string }>;
+      expect(askContent[0].text).toContain('tool-not-registered');
+      expect(qaService.startQuestion).not.toHaveBeenCalled();
+
+      const verifyResult = await client.callTool({
+        name: VERIFY_CLAIMS_TOOL_NAME,
+        arguments: { claims: ['The cap rate was approximately 6.10%.'] },
+      });
+      expect(verifyResult.isError).toBe(true);
+      const verifyContent = verifyResult.content as Array<{ type: string; text: string }>;
+      expect(verifyContent[0].text).toContain('tool-not-registered');
+      expect(claimVerificationService.verifyClaims).not.toHaveBeenCalled();
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('MODEL_SPEND_DAILY_LIMIT_USD'),
+      );
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(SEARCH_EVIDENCE_TOOL_NAME));
     });
   });
 

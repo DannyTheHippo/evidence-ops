@@ -12,7 +12,7 @@ import type { z } from 'zod/v4';
  * `cache-key.util.ts` both require a v4 `ZodType`, and v3/v4 schema instances are not
  * interchangeable at runtime.
  */
-export type TaskClass = 'qa_answer' | 'fact_extraction';
+export type TaskClass = 'qa_answer' | 'fact_extraction' | 'claim_verification';
 
 /**
  * A tool advertised to an MCP client, not to a model — no `ModelProvider.generate` call in this

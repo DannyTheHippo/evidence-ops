@@ -127,14 +127,17 @@ Operators mint a PAT from the SPA's **API keys** page (`/api-keys`), signed in a
 tenant the token should act for. The token carries that user's tenant and identity; there is no
 separate MCP account to provision.
 
-The surface advertises three tools: `search_evidence` and `get_answer` read, and
-`request_resolution` proposes a conflict resolution for a human to decide. Starting a question is
-not among them — `get_answer` fetches a question someone already started through the API or SPA, by
-its `answerId`.
+The surface advertises up to five tools. `search_evidence` and `get_answer` read; `request_resolution`
+proposes a conflict resolution for a human to decide; `ask_evidence` starts a new question directly
+from a PAT, without going through the API or SPA first; `verify_claims` grades caller-supplied claim
+text against the tenant's corpus. `get_answer` is the poll for a question `ask_evidence` started — it
+does not start one itself. `ask_evidence` and `verify_claims`, along with `search_evidence`, are
+withheld from `tools/list` when the tenant's daily spend ceiling (`MODEL_SPEND_DAILY_LIMIT_USD`) is
+disabled, since all three can reach a paid model or embedding call.
 
 `mcp` depends on `mongo`, `temporal` and a successful `migrate`, the same as `api` and `worker` —
-`request_resolution` starts a workflow, so this surface needs Temporal even though it runs no
-worker itself. The read tools do not.
+`request_resolution` and `ask_evidence` both start a workflow, so this surface needs Temporal even
+though it runs no worker itself. `get_answer` and `verify_claims` do not.
 
 ## Migrations
 

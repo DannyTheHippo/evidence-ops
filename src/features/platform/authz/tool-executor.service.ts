@@ -38,7 +38,17 @@ function applyStrictRecursively(schema: z.ZodType): z.ZodType {
   // for an unparameterized `ZodArray`/`ZodOptional`/`ZodNullable`), not the public `z.ZodType` this
   // function takes — the cast bridges that, not a widening to `any`.
   if (schema instanceof z.ZodArray) {
-    return z.array(applyStrictRecursively(schema.element as z.ZodType));
+    const strictArray = z.array(applyStrictRecursively(schema.element as z.ZodType));
+    // `z.array(...)` starts with no length bound — an original schema's own `.min()`/`.max()`/
+    // `.length()` live on `schema.def.checks`, not on `.element`, so without reapplying them here
+    // a tool author's array-length bound would validate at the type layer only and never actually
+    // refuse an out-of-bounds array at this chokepoint. `schema.def.checks` is typed
+    // `$ZodCheck<never>[]` — `$ZodTypeDef`'s generic placeholder for "whatever type this schema
+    // validates" — so the cast bridges that to the array-typed check `.check()` expects here, the
+    // same kind of internal-type bridge the `.element`/`.unwrap()` casts above already document.
+    return schema.def.checks
+      ? strictArray.check(...(schema.def.checks as z.core.$ZodCheck<unknown[]>[]))
+      : strictArray;
   }
   if (schema instanceof z.ZodOptional) {
     return z.optional(applyStrictRecursively(schema.unwrap() as z.ZodType));

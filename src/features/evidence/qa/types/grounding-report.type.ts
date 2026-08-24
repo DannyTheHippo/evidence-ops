@@ -8,10 +8,17 @@ import type { Claim, DroppedClaim } from '../contracts/answer.contract';
  * model-supplied fields to compare); `quote-not-found` and `quote-fuzzy-match` are check 2 (quote
  * containment) — kept as two kinds rather than one so a near-miss is diagnostically distinct from a
  * citation with no relationship to the chunk at all, even though both drop the claim identically;
- * `numeric-claim-unsupported` is check 3.
+ * `quote-not-substantive` and `quote-unrelated-to-statement` are check 3 (quote alignment,
+ * `check-quote-alignment.ts`) — a quote can pass check 2 by matching its chunk verbatim while
+ * having nothing to do with the claim it is cited for; `numeric-claim-unsupported` is check 4.
  */
 export type GroundingViolationKind =
-  'chunk-not-retrieved' | 'quote-not-found' | 'quote-fuzzy-match' | 'numeric-claim-unsupported';
+  | 'chunk-not-retrieved'
+  | 'quote-not-found'
+  | 'quote-fuzzy-match'
+  | 'quote-not-substantive'
+  | 'quote-unrelated-to-statement'
+  | 'numeric-claim-unsupported';
 
 export interface GroundingViolation {
   readonly kind: GroundingViolationKind;
@@ -39,7 +46,7 @@ export type GroundingOutcomeKind = 'answered' | 'insufficient_evidence' | 'confl
 export interface GroundingReport {
   readonly outcomeKind: GroundingOutcomeKind;
   /** Surviving claims, with any citation locator upgraded to a supporting cell-level fact
-   * (check 3). Empty when `outcomeKind` is `insufficient_evidence`. */
+   * (check 4). Empty when `outcomeKind` is `insufficient_evidence`. */
   readonly claims: readonly Claim[];
   readonly droppedClaims: readonly DroppedClaim[];
   readonly violations: readonly GroundingViolation[];

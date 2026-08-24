@@ -41,6 +41,14 @@ const XLSX_CHUNK: RetrievedChunk = {
   locator: XLSX_REGION_LOCATOR,
 };
 
+const LEASE_CHUNK: RetrievedChunk = {
+  chunkId: 'chunk-lease',
+  docVersionId: 'doc-v1',
+  sha256: SHA256_A,
+  text: 'Tenant shall have the right to extend the Term for two (2) successive periods of five (5) years each.',
+  locator: PDF_LOCATOR,
+};
+
 function buildCitation(overrides: Partial<Citation> = {}): Citation {
   return {
     docVersionId: 'doc-v1',
@@ -116,6 +124,112 @@ describe('verifyClaim', () => {
     if (result.kind !== 'dropped') throw new Error('unreachable');
     expect(result.violations[0].kind).toBe('quote-fuzzy-match');
     expect(result.dropped.reason).toContain('similarity');
+  });
+
+  it('should drop a claim citing a quote too thin to carry any content, even quoted verbatim', () => {
+    // Regression for the missing alignment check: a citation quoting a single stopword passes
+    // retrieval containment and verbatim quote containment trivially, and the statement here has no
+    // digits for check 4 to catch either — quote alignment is the only check that can reject it.
+    const thinQuote = 'the';
+    const claim = buildClaim({
+      statement: 'Northgate Business Park was renovated last year.',
+      citations: [
+        buildCitation({ chunkId: LEASE_CHUNK.chunkId, quote: thinQuote, locator: PDF_LOCATOR }),
+      ],
+    });
+
+    const result = verifyClaim({ claim, retrievedChunks: [LEASE_CHUNK], cellFacts: [] });
+
+    expect(result.kind).toBe('dropped');
+    if (result.kind !== 'dropped') throw new Error('unreachable');
+    expect(result.violations[0].kind).toBe('quote-not-substantive');
+    // The detail names the cited chunk, not the quote text — a violation detail travels all the way
+    // to the `get_answer` MCP tool response, and corpus bytes must never reach it.
+    expect(result.dropped.reason).toContain(LEASE_CHUNK.chunkId);
+    expect(result.dropped.reason).not.toContain(thinQuote);
+  });
+
+  it('should drop a claim whose quote is substantive but shares no content with the statement', () => {
+    const claim = buildClaim({
+      statement: 'Northgate Business Park traded in March 2025.',
+      citations: [
+        buildCitation({
+          chunkId: LEASE_CHUNK.chunkId,
+          quote: LEASE_CHUNK.text,
+          locator: PDF_LOCATOR,
+        }),
+      ],
+    });
+
+    const result = verifyClaim({ claim, retrievedChunks: [LEASE_CHUNK], cellFacts: [] });
+
+    expect(result.kind).toBe('dropped');
+    if (result.kind !== 'dropped') throw new Error('unreachable');
+    expect(result.violations[0].kind).toBe('quote-unrelated-to-statement');
+  });
+
+  it('should drop a claim whose only overlap with its quote is an uncorroborated shared number', () => {
+    // Regression for the numeric-bypass laundering defect: a claim about an unrelated entity and
+    // event shares nothing with its cited quote except a coincidental year, and no cell fact backs
+    // that year on the cited chunk, so `checkQuoteAlignment` must not treat it as aligned.
+    const claim = buildClaim({
+      statement: 'Vantage Holdings was indicted for securities fraud in 2025.',
+      citations: [
+        buildCitation({
+          chunkId: PROSE_CHUNK.chunkId,
+          quote: 'Northgate Business Park traded in March 2025',
+          locator: PDF_LOCATOR,
+        }),
+      ],
+    });
+
+    const result = verifyClaim({ claim, retrievedChunks: [PROSE_CHUNK], cellFacts: [] });
+
+    expect(result.kind).toBe('dropped');
+    if (result.kind !== 'dropped') throw new Error('unreachable');
+    expect(result.violations[0].kind).toBe('quote-unrelated-to-statement');
+  });
+
+  it('should survive a claim whose only overlap with its quote is a cell-fact-corroborated shared number', () => {
+    const cellFact: GroundingCellFact = {
+      chunkId: XLSX_CHUNK.chunkId,
+      factKey: { entity: 'Northgate Business Park', metric: 'sale_price', period: '2025-03' },
+      value: { amount: 41_000_000, unit: 'usd' },
+      locator: XLSX_CELL_LOCATOR,
+    };
+    const claim = buildClaim({
+      statement: 'Northgate Business Park sold for $41,000,000.',
+      citations: [
+        buildCitation({
+          chunkId: XLSX_CHUNK.chunkId,
+          quote: 'Sale Price (USD): 41000000',
+          locator: XLSX_REGION_LOCATOR,
+        }),
+      ],
+    });
+
+    const result = verifyClaim({ claim, retrievedChunks: [XLSX_CHUNK], cellFacts: [cellFact] });
+
+    expect(result.kind).toBe('survived');
+  });
+
+  it('should survive a claim whose quote is a legitimate heavy paraphrase of its statement', () => {
+    // Guards against the alignment floors being too aggressive: this statement and quote share
+    // almost no surface tokens despite the quote clearly supporting the statement.
+    const claim = buildClaim({
+      statement: 'The lease includes two successive five-year renewal options.',
+      citations: [
+        buildCitation({
+          chunkId: LEASE_CHUNK.chunkId,
+          quote: LEASE_CHUNK.text,
+          locator: PDF_LOCATOR,
+        }),
+      ],
+    });
+
+    const result = verifyClaim({ claim, retrievedChunks: [LEASE_CHUNK], cellFacts: [] });
+
+    expect(result.kind).toBe('survived');
   });
 
   it('should drop the whole claim when one of several citations fails, even if the rest verify', () => {
@@ -196,26 +310,31 @@ describe('verifyClaim', () => {
   it('should reject a claim whose number appears in the chunk text but is not backed by any cell fact on a chunk that has cell facts', () => {
     // Regression for the grounding-gate wiring defect: a cited chunk that carries *any* cell-level
     // fact is authoritative for numbers, so an unmatched value is rejected rather than accepted on
-    // a coincidental digit substring elsewhere in the chunk's raw text — proves check 3 no longer
-    // silently degrades to digit-substring matching once cell facts are actually supplied.
+    // a coincidental digit substring elsewhere in the chunk's raw text — proves check 4 no longer
+    // silently degrades to digit-substring matching once cell facts are actually supplied. The quote
+    // shares real words with the statement so check 3 (quote alignment) passes on word overlap alone,
+    // isolating this as a check 4 failure rather than the number-corroboration check 3 also performs.
+    const chunk: RetrievedChunk = {
+      chunkId: 'chunk-value-mismatch',
+      docVersionId: 'doc-v1',
+      sha256: SHA256_A,
+      text: 'Northgate Business Park recorded a Sale Price (USD) of 41000000.',
+      locator: XLSX_REGION_LOCATOR,
+    };
     const cellFact: GroundingCellFact = {
-      chunkId: XLSX_CHUNK.chunkId,
+      chunkId: chunk.chunkId,
       factKey: { entity: 'Northgate Business Park', metric: 'sale_price', period: '2025-03' },
       value: { amount: 99_000_000, unit: 'usd' }, // does not match the claimed number
       locator: XLSX_CELL_LOCATOR,
     };
     const claim = buildClaim({
-      statement: 'The property sold for $41,000,000.',
+      statement: 'Northgate Business Park sold for $41,000,000.',
       citations: [
-        buildCitation({
-          chunkId: XLSX_CHUNK.chunkId,
-          quote: 'Sale Price (USD): 41000000',
-          locator: XLSX_REGION_LOCATOR,
-        }),
+        buildCitation({ chunkId: chunk.chunkId, quote: chunk.text, locator: XLSX_REGION_LOCATOR }),
       ],
     });
 
-    const result = verifyClaim({ claim, retrievedChunks: [XLSX_CHUNK], cellFacts: [cellFact] });
+    const result = verifyClaim({ claim, retrievedChunks: [chunk], cellFacts: [cellFact] });
 
     expect(result.kind).toBe('dropped');
     if (result.kind !== 'dropped') throw new Error('unreachable');

@@ -235,7 +235,7 @@ export class FactsService {
   /**
    * Cell-level facts among a request's retrieved evidence, scoped to `chunkIds` and `tenantId` so
    * a request can only ever draw on facts extracted from chunks it actually retrieved — never the
-   * tenant's whole `extracted_facts` collection. Only `xlsx-cell` locators qualify: check 3 in
+   * tenant's whole `extracted_facts` collection. Only `xlsx-cell` locators qualify: check 4 in
    * `verifyClaim` only ever upgrades a citation using a fact narrower than the chunk it was
    * extracted from, and `xlsx-region`/`pdf-page`/`docx-paragraph` facts carry no narrower position
    * to upgrade to. Returns the raw documents, not `GroundingCellFact` — the caller (`activities.ts`,
@@ -253,6 +253,29 @@ export class FactsService {
       chunkId: { $in: [...chunkIds] },
       tenantId,
       'locator.kind': 'xlsx-cell',
+    });
+  }
+
+  /**
+   * Every fact extracted from `chunkIds`, regardless of locator kind — unlike {@link findCellFacts},
+   * which is `xlsx-cell`-only because it exists to find a fact narrower than its chunk for citation
+   * upgrade. A prose fact (`pdf-page`, `docx-paragraph`, `xlsx-region`) carries no narrower locator
+   * to upgrade to, but still carries a value worth comparing against an open conflict —
+   * `ClaimVerificationService` is this method's caller, for exactly that comparison. Scoped to
+   * `chunkIds` and `tenantId` for the same reason `findCellFacts` is: a request can only ever draw
+   * on facts extracted from chunks it actually retrieved.
+   */
+  async findFactsForChunks(
+    chunkIds: readonly string[],
+    tenantId: string,
+  ): Promise<ExtractedFactDocument[]> {
+    if (chunkIds.length === 0) {
+      return [];
+    }
+
+    return this.extractedFactModel.find({
+      chunkId: { $in: [...chunkIds] },
+      tenantId,
     });
   }
 

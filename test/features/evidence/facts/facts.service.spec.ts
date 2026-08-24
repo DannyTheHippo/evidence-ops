@@ -912,6 +912,45 @@ describe('FactsService', () => {
     });
   });
 
+  describe('findFactsForChunks', () => {
+    it('should return an empty array without querying the model when chunkIds is empty', async () => {
+      const result = await service.findFactsForChunks([], 'acme-corp');
+
+      expect(result).toEqual([]);
+      expect(mockExtractedFactModel.find).not.toHaveBeenCalled();
+    });
+
+    it('should query every given chunk id verbatim, scoped to tenant, with no locator-kind filter', async () => {
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+
+      const result = await service.findFactsForChunks(['chunk-a', 'chunk-b'], 'acme-corp');
+
+      expect(mockExtractedFactModel.find).toHaveBeenCalledWith({
+        chunkId: { $in: ['chunk-a', 'chunk-b'] },
+        tenantId: 'acme-corp',
+      });
+      expect(result).toEqual([]);
+    });
+
+    it('should return facts of any locator kind scoped to the given chunks and tenant', async () => {
+      const chunkId = 'chunk-prose-1';
+      const facts = [
+        {
+          _id: new Types.ObjectId(),
+          chunkId,
+          factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+          value: { amount: 6.1, unit: 'percent' },
+          locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+        },
+      ];
+      mockExtractedFactModel.find.mockResolvedValueOnce(facts);
+
+      const result = await service.findFactsForChunks([chunkId], 'acme-corp');
+
+      expect(result).toEqual(facts);
+    });
+  });
+
   it('should roll back and rethrow when the fact insert fails partway', async () => {
     const stored = await fakeDocumentStore.put({
       content: Buffer.from('workbook-bytes'),
