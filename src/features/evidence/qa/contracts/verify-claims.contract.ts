@@ -26,8 +26,6 @@ export const modelVerifyClaimCitationSchema = z
   })
   .strict();
 
-export type ModelVerifyClaimCitation = z.infer<typeof modelVerifyClaimCitationSchema>;
-
 /**
  * `supported: false` — the claim is not supported by the candidates shown. No verdict, no reason
  * code, no confidence, no score field: the model is never asked to grade the claim, only to point
@@ -61,8 +59,6 @@ export const modelVerifyClaimContractSchema = z.discriminatedUnion('supported', 
   notSupportedOutcomeSchema,
   supportedOutcomeSchema,
 ]);
-
-export type ModelVerifyClaimContract = z.infer<typeof modelVerifyClaimContractSchema>;
 
 /**
  * The server-resolved verdict for one verified claim, closed set: `grounded` — a citation the

@@ -1,12 +1,30 @@
 # Evidence Ops
 
 The estate has no warehouse. Evidence lives as fragmented Office documents plus system classes
-reachable only as recurring spreadsheet exports. Evidence Ops is an agentic access layer over
-those fragments in place: you connect the locations they already live, ask a question, and get
-back **claims with citations re-checked against the retrieved bytes by deterministic code**, not
-by the model that produced them. Abstention and "the sources disagree" are success states, not
-errors. Provenance is the product — with no central store, the citation is the only path back to
-the source.
+reachable only as recurring spreadsheet exports. Evidence Ops is an attestation layer over those
+fragments in place: connect the locations they already live, ask a question, and get back
+**claims with citations re-checked against the retrieved bytes by deterministic code**, not by the
+model that produced them. Abstention and "the sources disagree" are success states, not errors.
+Provenance is the product — with no central store, the citation is the only path back to the
+source.
+
+It does not compete with the AI assistant a person already uses — it checks it. `verify_claims`
+takes claims another assistant drafted, over MCP, and runs the same deterministic citation check
+this system runs on its own synthesized answers: a claim is graded `grounded` only when a span in
+a specific document version backs its citation, checked by code, never restated by a second model
+call. What that check establishes, and what it deliberately does not — a coverage-versus-overlap
+gap the design does not paper over — is bounded in
+[ADR-0023](docs/adr/0023-attestation-surface.md); read that ADR, not this summary, before trusting
+the word "verified."
+
+Each deployment is single-tenant per engagement: one instance in the client's own VPC or on-prem,
+calling out with the client's own model and embedding keys, never a shared service holding several
+clients' evidence in one place. Several engagements can still share one deployment — `tenantId` is
+the isolation mechanism, and "tenant" in this codebase names an engagement, not a paying customer.
+Mongo stays the only store — no second datastore, no sharding — a deliberate scope decision that
+keeps a single-host deployment auditable and cheap to operate. It targets roughly 50,000 documents
+per engagement; that is a stated design boundary, not a measured ceiling, and a corpus that
+outgrows it is a reason to revisit the decision, not evidence the decision was already wrong.
 
 A model is a function from a token sequence to a token sequence. It is not deterministic, it is
 stateless, and a prompt has no type system — nothing marks instructions from data. Every guarantee
@@ -94,12 +112,60 @@ about_. Absent stays absent: recency cannot fire without that split. The proposa
 provenance; the durable human gate still decides. A timeout is its own terminal branch, not an
 approval.
 
-The gate runs three checks per citation: retrieval containment (chunk, version, hash), quote
-containment (verbatim under normalisation), numeric support. One failing citation drops the whole
-claim. If every claim fails, the gate itself returns `insufficient_evidence`. Its only power is to
-drop — it calls no model and never adds a claim. Bound, stated: it verifies citations, not
-reasoning. A verbatim quote of injected text still passes, because the sentence really is in the
-chunk.
+The gate runs four checks per citation: retrieval containment (chunk, version, hash), quote
+containment (verbatim under normalisation), quote alignment (the quote shares enough content with
+the claim's statement to plausibly support it), and numeric support. One failing citation drops the
+whole claim. If every claim fails, the gate itself returns `insufficient_evidence`. Its only power
+is to drop — it calls no model and never adds a claim. Bound, stated: it verifies citations, not
+reasoning, and alignment is lexical overlap, not entailment — it has no notion of negation. A
+verbatim quote of injected text still passes, because the sentence really is in the chunk.
+
+## The admission contract
+
+There is no connector fleet. What ships is one filesystem/drop-zone connector
+(`LocalFolderSourceConnector`, `kind: 'local-folder'`) and a published contract any other connector
+can be written against — a deliberate scope choice, not an unfinished roadmap. Reaching a source
+this connector cannot read means either writing a connector against the contract below, or having
+an AI client consume this system's own MCP surface directly (see "Outside the browser"); neither
+needs this codebase to grow a plugin registry.
+
+For a document to become admissible evidence, four things get asserted about it, all recorded on
+`DocumentVersion`
+(`src/database/schemas/evidence/document-version/document-version.schema.ts`):
+
+- **Stable identity** — a `Document` row that persists across re-uploads, plus a `versionNumber`
+  that increments on each new one. A citation always names a specific version, never "the document"
+  in the abstract.
+- **A version hash** — `sha256`, computed over the bytes. Identical content is a no-op; changed
+  bytes become the next version of the document they belong to, never a silent overwrite of the
+  version an existing citation already points at.
+- **An immutable locator** — `storageKey`, unique per version. A citation resolved against an old
+  version reads the exact bytes that version was, even after the document moves on to a newer one.
+- **When it was retrieved** — the version's own `createdAt`, stamped the moment this system
+  captured it, independent of whatever timestamp the source file itself carries.
+
+`sourceKind`/`mimeType` on `Document` route which extractor pipeline parses the file and correlate
+1:1 with the locator kind a citation carries (`pdf-page`, `docx-paragraph`, `xlsx-region`/
+`xlsx-cell`, `pptx-slide`, `text-block` — see "From a file to a claim" above). None of this is
+negotiable per connector: a connector that cannot produce these four facts about a file has nothing
+admissible to hand this system.
+
+## Evidence lifecycle
+
+A source file that disappears is noticed, not silently forgotten. When a sync sweep can no longer
+find it — confirmed on two consecutive sweeps, not one, so a single flaky or partial listing cannot
+misread as deletion — its `DocumentVersion` is **withdrawn**: excluded from new retrieval, never
+deleted. A past answer that already cited it keeps citing real, readable text, and a resolution
+backtest can still replay a decision made against it. Withdrawal is a retrieval control, not a
+data-removal control; an operator who wants the underlying bytes actually gone uses the admin
+delete path instead. The full mechanism — including the guards that keep an unmounted or partially
+mounted source from withdrawing evidence it shouldn't — is in
+[ADR-0024](docs/adr/0024-evidence-lifecycle-and-withdrawal.md).
+
+A scanned, image-only PDF — no embedded text layer — is quarantined as needing OCR rather than
+failing ingestion the same way a genuinely malformed file does, so an operator can tell "needs OCR,
+we don't do that" apart from "something is actually broken." OCR itself is deliberately out of
+scope; a quarantined version stays that way until different bytes replace it.
 
 ## In the browser
 
@@ -122,16 +188,27 @@ chunk.
 ## Outside the browser
 
 The same evidence is reachable from an AI client over MCP, so the platform can be used from
-tooling a person already trusts rather than being one more destination app. The MCP server is its
-own process — `npm run mcp:dev` on the host loop, the `mcp` service under the `full` profile in a
-containerized stack. It authenticates with the personal access tokens the API Keys page mints, and
-exposes three tools: search evidence, fetch a started answer, and propose a conflict resolution. Every tool call goes through `ToolExecutorService`, the same deterministic chokepoint every tool
-call in this codebase is required to route through, and each handler then calls the very service
-method the REST surface calls. Nothing here re-implements validation, authorization, or the work
-itself.
+tooling a person already trusts rather than being one more destination app — and so another
+assistant's own drafted claims can be checked against this corpus without that assistant ever
+needing to trust this system's synthesis path. The MCP server is its own process — `npm run
+mcp:dev` on the host loop, the `mcp` service under the `full` profile in a containerized stack. It
+authenticates with the personal access tokens the API Keys page mints, and exposes five tools:
+`search_evidence`, `ask_evidence` (starts a question without waiting on it), `get_answer` (polls a
+started question), `verify_claims` (checks claims an assistant drafted itself against the corpus),
+and `request_resolution` (proposes a conflict resolution). Every tool call goes through
+`ToolExecutorService`, the same deterministic chokepoint every tool call in this codebase is
+required to route through, and each handler then calls the very service method the REST surface
+calls. Nothing here re-implements validation, authorization, or the work itself.
 
-There is deliberately no tool that approves anything. The mutating tool can only start a workflow
-that parks on a human's approval, and the approval itself has no AI-reachable surface at all.
+The three tools that spend model or embedding budget — `search_evidence`, `ask_evidence`,
+`verify_claims` — are withheld from `tools/list` entirely while the tenant's daily spend ceiling
+(`MODEL_SPEND_DAILY_LIMIT_USD`) is disabled; only `get_answer` and `request_resolution` stay
+reachable in that state. `.env.example` ships that ceiling on, so a fresh deployment advertises all
+five tools by default.
+
+There is deliberately no tool that approves anything. The one mutating tool can only start a
+workflow that parks on a human's approval, and the approval itself has no AI-reachable surface at
+all.
 
 ## Each mechanism is one layer
 
@@ -145,7 +222,10 @@ that parks on a human's approval, and the approval itself has no AI-reachable su
   answered" cannot blur into whatever a stale record happens to say.
 - Tenant isolation is explicit `tenantId` on every scoped query, plus a structural backstop that
   _intersects_ the authenticated tenant into the filter — it never overwrites. Cross-tenant reads
-  return 404, not 403.
+  return 404, not 403. In a single-tenant-per-engagement deployment, a "tenant" is what lets one
+  firm run several engagements on one instance — the mechanism is the same isolation boundary a
+  multi-tenant SaaS product would use, but the story it tells is engagement isolation, not shared
+  hosting of unrelated customers.
 - Spend has two independent bounds. Each call declares its own maximum cost; on top of that, a
   tenant's model spend is reserved before the call and settled after it against an aggregate daily
   ceiling (`MODEL_SPEND_DAILY_LIMIT_USD`), so concurrent calls cannot each pass a check the sum of
@@ -342,9 +422,10 @@ cp .env.example .env
 ```
 
 `.env.example` is short by design — four credentials (`JWT_SECRET`, `ANTHROPIC_API_KEY`,
-`OPENAI_API_KEY`, `VOYAGE_API_KEY`) and two spend ceilings. Filling it in is not configuring the
-application; every other knob has a default that already works. Set `VOYAGE_API_KEY` and the key
-for whichever `MODEL_PROVIDER` is selected — `ANTHROPIC_API_KEY` by default.
+`OPENAI_API_KEY`, `VOYAGE_API_KEY`), one provider switch (`MODEL_PROVIDER`), and one spend ceiling
+(`MODEL_SPEND_DAILY_LIMIT_USD`). Filling it in is not configuring the application; every other knob
+has a default that already works. Set `VOYAGE_API_KEY` and the key for whichever `MODEL_PROVIDER`
+is selected — `ANTHROPIC_API_KEY` by default.
 
 `JWT_SECRET` can stay empty **for this host-loop walkthrough**: it dev-defaults below prod-like
 environments. It is _required_ under `NODE_ENV=production|staging`, which is what the containerized
