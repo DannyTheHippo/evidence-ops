@@ -25,6 +25,7 @@ import { FactsModule } from '../facts/facts.module';
 import { WorkflowRunsModule } from '../workflow-runs/workflow-runs.module';
 import { ConflictsController } from './conflicts.controller';
 import { ConflictsService } from './conflicts.service';
+import { MetricPackPreviewController } from './metric-pack-preview.controller';
 import { ResolutionBacktestService } from './resolution-backtest.service';
 
 // `ProvidersModule` import is for `WORKFLOW_ENGINE`, `WorkflowRunsModule` for
@@ -37,6 +38,10 @@ import { ResolutionBacktestService } from './resolution-backtest.service';
 // resolving each disagreeing fact's `sourceClass` for `resolveConflictPolicy`. `Approval` is for
 // `requestResolution`'s own pending-duplicate guard — a read-only check against the same
 // collection `MongoApprovalChannel` writes, not a second writer of it.
+// `MetricPackPreviewController` is registered here rather than on `FactsModule` — its route lives
+// under `/metric-packs`, but `previewPackActivation` belongs on `ConflictsService`, and
+// `FactsModule` cannot import this module back without a cycle (see that controller's own doc
+// comment).
 @Module({
   imports: [
     MongooseModule.forFeature([
@@ -50,7 +55,7 @@ import { ResolutionBacktestService } from './resolution-backtest.service';
     FactsModule,
     WorkflowRunsModule,
   ],
-  controllers: [ConflictsController],
+  controllers: [ConflictsController, MetricPackPreviewController],
   providers: [ConflictsService, ResolutionBacktestService],
   exports: [ConflictsService],
 })

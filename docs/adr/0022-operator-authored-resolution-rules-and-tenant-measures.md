@@ -1,6 +1,11 @@
 # ADR-0022 — Operator-authored resolution rules, tenant-renamed measures, and the hindsight check that scores both
 
-- **Status:** Accepted
+- **Status:** Accepted. **Amended by ADR-0025** (2026-08-24), which reverses this ADR's
+  `tenant_metrics` claim that detection cannot be tenant-owned — a pack-authored metric now can be —
+  and extends the `unscorable`/`silent` split below with a third `unscorable` gate for a metric a
+  pack version has dropped. The amendment note inline below marks exactly what changed;
+  `tenant_metrics` itself is unmodified and un-migrated by ADR-0025 (see that ADR's own § What this
+  supersedes).
 - **Date:** 2026-08-19
 - **Supersedes:** —
 
@@ -60,6 +65,17 @@ resolution against them would retroactively describe a different question than t
 answered. A label is presentation; a tolerance is a claim about the world. This ADR keeps the first
 editable and the second fixed for that reason, not because loosening it was technically harder.
 
+> **Amended by ADR-0025.** This section's central claim — that fact extraction and conflict
+> detection read `METRIC_ONTOLOGY` directly, so a tenant can never own detection — no longer holds
+> for a metric defined through a versioned `MetricPack` (`metric-pack.schema.ts`). Extraction and
+> `detectConflicts` now read a tenant's *resolved active pack* (`MetricPacksService.resolveActive`),
+> and a pack-authored metric carries its own `tolerance`, `canonicalUnit`, and `units` — a tenant can
+> author detection for a metric of its own, through the versioned draft → publish → activate
+> lifecycle ADR-0025 describes, never a direct field edit. `tenant_metrics` itself is unchanged by
+> this: it remains a label-only surface, un-migrated and still wired exactly as this section
+> originally described. See ADR-0025 § What this supersedes for the full reversal and why
+> `tenant_metrics` and `metric_packs` remain two unreconciled surfaces.
+
 ### The hindsight check: `unscorable` has to be its own gate, not a `silent` result
 
 `ResolutionBacktestService.run(tenantId)` replays the tenant's **current** survivorship rules over
@@ -68,6 +84,13 @@ three outcomes a human decision can produce; `superseded` — `DocumentsService.
 machine bookkeeping when a deletion leaves a conflict too small to stay open — is excluded outright
 rather than scored, since no human ever decided a winner there). Each conflict scores `agreed`,
 `disagreed`, `silent`, or `unscorable`.
+
+> **Amended by ADR-0025.** A third `unscorable` gate joins the two below: a conflict whose
+> `factKey.metric` the tenant's currently resolved active pack no longer defines. There is no rule
+> to author for a metric that no longer exists, so scoring that state `silent` (which reads as "your
+> rule has no opinion, consider adding one") would misrepresent it as an actionable gap. See
+> ADR-0025 § A metric dropped from the active pack scores `unscorable`, not `silent` for the full
+> reasoning; the gate-before-any-policy-call shape below is extended, not replaced.
 
 The `unscorable` gate runs **before** `resolveConflictPolicy` is ever called, for a reason that is
 not cosmetic: a starved candidate set — no recorded winner, or a fact deleted since resolution —
@@ -180,3 +203,6 @@ code ontology for metrics nobody has overridden.
   left untouched by this milestone.
 - `docs/adr/0021-repository-inventory-beyond-synced-sources.md` — the two-flag admin pattern and
   the `pages/data-room/` split precedent this milestone reuses for `RuleEditorDialog`.
+- `docs/adr/0025-versioned-metric-packs.md` — amends this ADR: reverses the `tenant_metrics`
+  section's "detection is not tenant-owned" claim for a pack-authored metric, and extends the
+  `unscorable`/`silent` split with a third gate for a metric a pack version has dropped.

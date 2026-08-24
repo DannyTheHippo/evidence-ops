@@ -492,3 +492,21 @@ export function IconTag({ size = 16, className }: IconProps) {
     </svg>
   );
 }
+
+export function IconLayers({ size = 16, className }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      focusable="false"
+      className={className}
+      {...strokeProps}
+    >
+      <path d="M8 2 1.5 5.5 8 9 14.5 5.5Z" />
+      <path d="M1.5 8 8 11.5 14.5 8" />
+      <path d="M1.5 10.5 8 14 14.5 10.5" />
+    </svg>
+  );
+}

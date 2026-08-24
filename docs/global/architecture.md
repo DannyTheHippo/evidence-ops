@@ -29,8 +29,8 @@ flowchart TB
 
   subgraph API["API process — src/main.ts"]
     Guards["PreAuthThrottlerGuard (global APP_GUARD, IP-keyed, ahead of auth)<br/>JwtAuthGuard (global APP_GUARD, deny-by-default)<br/>UserThrottlerGuard (global APP_GUARD, user-keyed)<br/>ValidationPipe (whitelist + forbidNonWhitelisted)"]
-    Ctrls["DocumentsController / SourcesController / QaController /<br/>ConflictsController / ApiKeysController / AuthController /<br/>MeasuresController / CanonicalEntitiesController /<br/>RetrievalController / WorkflowRunsController"]
-    ApiSvc["DocumentsService · SourcesService · QaService ·<br/>ConflictsService · ApiKeysService · MeasuresService · CanonicalEntityService ·<br/>RetrievalService · WorkflowRunsService"]
+    Ctrls["DocumentsController / SourcesController / QaController /<br/>ConflictsController / ApiKeysController / AuthController /<br/>MeasuresController / CanonicalEntitiesController /<br/>RetrievalController / WorkflowRunsController /<br/>MetricPacksController / MetricPackPreviewController /<br/>MetricPoliciesController / TenantMetricsController"]
+    ApiSvc["DocumentsService · SourcesService · QaService ·<br/>ConflictsService · ApiKeysService · MeasuresService · CanonicalEntityService ·<br/>RetrievalService · WorkflowRunsService · MetricPacksService ·<br/>MetricPoliciesService · TenantMetricsService"]
     Guards --> Ctrls --> ApiSvc
   end
 
@@ -50,12 +50,14 @@ flowchart TB
       WF2["answerQuestion:<br/>retrieve → synthesize → groundingCheck → persist"]
       WF3["resolveConflict:<br/>loadConflict → requestApproval → await signal → record"]
       WF4["syncSource:<br/>runSourceSync → sleep → continueAsNew"]
+      WF5["rescanConflicts:<br/>scanForConflictsByMetrics → retractConflicts"]
     end
     Acts["activities.ts — every side effect lives here"]
     WF1 -. "proxyActivities (type-only import)" .-> Acts
     WF2 -. "proxyActivities (type-only import)" .-> Acts
     WF3 -. "proxyActivities (type-only import)" .-> Acts
     WF4 -. "proxyActivities (type-only import)" .-> Acts
+    WF5 -. "proxyActivities (type-only import)" .-> Acts
   end
 
   subgraph Services["Nest services (shared by the API, worker and MCP DI graphs)"]
@@ -300,6 +302,29 @@ replay a resolution that cited them. The separate, admin-gated hard-delete path
 [`0024-evidence-lifecycle-and-withdrawal.md`](../adr/0024-evidence-lifecycle-and-withdrawal.md) for
 the full design, including the guard thresholds and the accepted costs.
 
+## Metric packs: versioned detection config
+
+Conflict detection and survivorship no longer read a single hardcoded ontology. Every tenant
+resolves a `MetricPackData` (`MetricPacksService.resolveActive`) — either its own authored, activated
+`MetricPack` row, or the code default `CRE_PACK_V1`, which re-exports `metric-ontology.ts`'s
+`METRIC_ONTOLOGY` byte-identically under the pack shape. Both extraction (`FactsService.extractFacts`)
+and detection (`ConflictsService.scanForConflicts`/`scanForConflictsByMetrics`) resolve the active
+pack once per call and stamp the resulting `packId`/`packVersion` onto every `ExtractedFact`/`Conflict`
+they write, so a row always says which pack's tolerance and units judged it.
+
+Authoring is a three-step admin lifecycle — `MetricPacksController`'s `createDraft` → `publish` →
+`activate` — not a direct field edit. `publish` refuses a draft that would silently drop a parent
+metric without acknowledgement, or that changes a surviving metric's canonical unit or any unit's
+conversion factor: a tolerance edit only governs the *next* scan and is safe to version, but a unit
+factor is re-applied to every historical fact on every scan, so an edit there would silently
+reinterpret history rather than just steer the future. `activate` scopes its rescan to exactly the
+metric ids `diffDetectionRelevantMetrics` reports changed — a labels-or-aliases-only version starts no
+rescan at all — and `MetricPackPreviewController` (`ConflictsModule`, routed under the same
+`/metric-packs` prefix as `MetricPacksController` to avoid a module cycle) exposes the identical diff
+as a preview before any version is ever activated. See
+[`0025-versioned-metric-packs.md`](../adr/0025-versioned-metric-packs.md) for the full design,
+including why tolerance and unit arithmetic are versioned asymmetrically.
+
 ## Live updates: Server-Sent Events
 
 Three routes stream over `@Sse()` rather than returning once: `GET /api/v1/answers/:id/events`
@@ -454,3 +479,5 @@ counters gain a `_total` suffix, so `evidence_ops.grounding.claims_dropped` is q
   and the one that is not shared.
 - `docs/adr/0024-evidence-lifecycle-and-withdrawal.md` — sync absence guards, soft withdrawal, and
   the scanned-PDF quarantine state.
+- `docs/adr/0025-versioned-metric-packs.md` — versioned metric packs, the `rescanConflicts` workflow,
+  and why tolerance is editable but unit arithmetic is not.

@@ -30,6 +30,7 @@ import {
 } from '../../../database/schemas/evidence/tenant-metric/tenant-metric.schema';
 import { ProvidersModule } from '../../../providers/providers.module';
 import { IngestionModule } from '../ingestion/ingestion.module';
+import { WorkflowRunsModule } from '../workflow-runs/workflow-runs.module';
 import { CanonicalEntitiesController } from './canonical-entities.controller';
 import { CanonicalEntityService } from './canonical-entity.service';
 import { FactsService } from './facts.service';
@@ -56,6 +57,11 @@ import { TenantMetricsService } from './tenant-metrics.service';
     // rather than depending on `IngestionService`, since it needs the raw `ParsedElement`s (for
     // deterministic xlsx facts, and for narrowing a prose fact's locator past its chunk's anchor).
     IngestionModule,
+    // For `WorkflowRunsService` — `MetricPacksService.activate` records the `rescan-conflicts`
+    // `WorkflowRun` projection the same way `SourcesService.requestSync` does for its own workflow.
+    // No cycle back: `WorkflowRunsModule` imports only `ProvidersModule` and `ApprovalsModule`,
+    // neither of which imports `FactsModule`.
+    WorkflowRunsModule,
   ],
   controllers: [
     CanonicalEntitiesController,

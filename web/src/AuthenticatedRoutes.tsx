@@ -15,6 +15,7 @@ import DataRoomPage from './pages/DataRoomPage';
 import HomePage from './pages/HomePage';
 import InvitationsPage from './pages/InvitationsPage';
 import MeasuresPage from './pages/MeasuresPage';
+import MetricPacksPage from './pages/MetricPacksPage';
 import ResolutionRulesPage from './pages/ResolutionRulesPage';
 import RunsPage from './pages/RunsPage';
 import SearchPage from './pages/SearchPage';
@@ -218,6 +219,22 @@ export default function AuthenticatedRoutes() {
         element={
           <RequireAdmin>
             <CanonicalEntitiesPage />
+          </RequireAdmin>
+        }
+      />
+      <Route
+        path="/metric-packs"
+        element={
+          <RequireAdmin>
+            <MetricPacksPage />
+          </RequireAdmin>
+        }
+      />
+      <Route
+        path="/metric-packs/:packId/:version"
+        element={
+          <RequireAdmin>
+            <MetricPacksPage />
           </RequireAdmin>
         }
       />

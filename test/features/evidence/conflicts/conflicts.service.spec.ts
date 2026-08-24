@@ -7,6 +7,10 @@ import { Conflict } from '../../../../src/database/schemas/evidence/conflict/con
 import { DocumentVersion } from '../../../../src/database/schemas/evidence/document-version/document-version.schema';
 import { Document } from '../../../../src/database/schemas/evidence/document/document.schema';
 import { ExtractedFact } from '../../../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import type {
+  MetricDefinition,
+  MetricPackData,
+} from '../../../../src/database/schemas/evidence/metric-pack/metric-pack.schema';
 import { Approval } from '../../../../src/database/schemas/workflow/approval/approval.schema';
 import { ConflictsService } from '../../../../src/features/evidence/conflicts/conflicts.service';
 import {
@@ -40,7 +44,8 @@ describe('ConflictsService', () => {
   const mockMetricPoliciesService = { resolveForTenant: jest.fn() };
   const mockMetricPacksService = {
     resolveActive: jest.fn(),
-  } satisfies Record<keyof Pick<MetricPacksService, 'resolveActive'>, jest.Mock>;
+    findVersion: jest.fn(),
+  } satisfies Record<keyof Pick<MetricPacksService, 'resolveActive' | 'findVersion'>, jest.Mock>;
   const mockAuditService = { record: jest.fn() };
   const mockLogger = getMockLogger();
 
@@ -523,6 +528,174 @@ describe('ConflictsService', () => {
 
       expect(mockConflictModel.updateMany).not.toHaveBeenCalled();
       expect(result).toEqual({ conflictsRetracted: 0 });
+    });
+  });
+
+  describe('previewPackActivation', () => {
+    const tenantId = 'acme-corp';
+
+    const capRateMetric: MetricDefinition = {
+      id: 'cap_rate',
+      label: 'Cap Rate',
+      aliases: ['Cap Rate'],
+      valueType: 'percentage',
+      canonicalUnit: 'ratio',
+      units: [
+        { id: 'ratio', toCanonicalFactor: 1 },
+        { id: 'percent', toCanonicalFactor: 0.01 },
+      ],
+      toleranceKind: 'absolute',
+      tolerance: 0.0025,
+    };
+    const salePriceMetric: MetricDefinition = {
+      id: 'sale_price',
+      label: 'Sale Price',
+      aliases: ['Sale Price'],
+      valueType: 'currency',
+      canonicalUnit: 'usd',
+      units: [
+        { id: 'usd', toCanonicalFactor: 1 },
+        { id: 'usd_thousands', toCanonicalFactor: 1_000 },
+      ],
+      toleranceKind: 'relative',
+      tolerance: 0.01,
+    };
+    const activePack: MetricPackData = {
+      packId: 'cre',
+      version: 1,
+      label: 'CRE Default',
+      metrics: [capRateMetric, salePriceMetric],
+    };
+
+    it('should preview an empty metric set, querying nothing further, when the draft only relabels a metric', async () => {
+      const draftPack: MetricPackData = {
+        packId: 'cre-fork',
+        version: 2,
+        label: 'CRE Fork',
+        metrics: [{ ...capRateMetric, label: 'Capitalization Rate' }, salePriceMetric],
+      };
+      mockMetricPacksService.findVersion.mockResolvedValueOnce(draftPack);
+      mockMetricPacksService.resolveActive.mockResolvedValueOnce(activePack);
+
+      const result = await service.previewPackActivation(tenantId, 'cre-fork', 2);
+
+      expect(result).toEqual({ metrics: [] });
+      expect(mockExtractedFactModel.distinct).not.toHaveBeenCalled();
+      expect(mockConflictModel.find).not.toHaveBeenCalled();
+    });
+
+    it('should skip the existing-conflicts query when no candidate conflicts under the draft pack at all', async () => {
+      const draftPack: MetricPackData = {
+        packId: 'cre-fork',
+        version: 2,
+        label: 'CRE Fork',
+        metrics: [{ ...capRateMetric, tolerance: 0.5 }, salePriceMetric],
+      };
+      mockMetricPacksService.findVersion.mockResolvedValueOnce(draftPack);
+      mockMetricPacksService.resolveActive.mockResolvedValueOnce(activePack);
+      mockExtractedFactModel.distinct.mockResolvedValueOnce([]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+      mockConflictModel.find.mockResolvedValueOnce([]); // would-retract's own openConflicts query
+
+      const result = await service.previewPackActivation(tenantId, 'cre-fork', 2);
+
+      expect(result).toEqual({ metrics: [] });
+      // The would-create half bails out before ever reading existing conflicts — the only
+      // `conflictModel.find` call below is would-retract's `openConflicts` query.
+      expect(mockConflictModel.find).toHaveBeenCalledTimes(1);
+      expect(mockConflictModel.find).toHaveBeenCalledWith({
+        tenantId,
+        status: 'open',
+        'factKey.metric': { $in: ['cap_rate'] },
+      });
+    });
+
+    it('should report per-metric would-create/would-retract counts without writing anything to Mongo', async () => {
+      const capRateFactKey = {
+        entity: 'Northgate Business Park',
+        metric: 'cap_rate',
+        period: '2025-03',
+      };
+      const capRateGroupKeyNormalized = 'northgate business park::cap_rate::2025-03';
+      const salePriceFactKey = {
+        entity: 'Fenwick Logistics Center',
+        metric: 'sale_price',
+        period: '2025-02',
+      };
+      const salePriceGroupKeyNormalized = 'fenwick logistics center::sale_price::2025-02';
+
+      const draftPack: MetricPackData = {
+        packId: 'cre-fork',
+        version: 2,
+        label: 'CRE Fork',
+        metrics: [
+          // Loosened: the tenant's existing open cap_rate conflict would no longer disagree.
+          { ...capRateMetric, tolerance: 0.5 },
+          // Tightened: facts that agree under the active pack's 1% relative tolerance would newly
+          // disagree under the draft's 0.1%.
+          { ...salePriceMetric, tolerance: 0.001 },
+        ],
+      };
+      mockMetricPacksService.findVersion.mockResolvedValueOnce(draftPack);
+      mockMetricPacksService.resolveActive.mockResolvedValueOnce(activePack);
+
+      const capRateFactLow = buildFact(capRateFactKey, { amount: 5.25, unit: 'percent' });
+      const capRateFactHigh = buildFact(capRateFactKey, { amount: 6.1, unit: 'percent' });
+      const salePriceFactA = buildFact(salePriceFactKey, { amount: 1_000_000, unit: 'usd' });
+      const salePriceFactB = buildFact(salePriceFactKey, { amount: 1_005_000, unit: 'usd' });
+
+      // would-create half: `previewWouldCreate`'s own query shape.
+      mockExtractedFactModel.distinct.mockResolvedValueOnce([
+        capRateGroupKeyNormalized,
+        salePriceGroupKeyNormalized,
+      ]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([
+        capRateFactLow,
+        capRateFactHigh,
+        salePriceFactA,
+        salePriceFactB,
+      ]);
+      mockConflictModel.find.mockResolvedValueOnce([]); // no existing conflict for either group
+
+      // would-retract half: `findRetractableConflicts`'s own query shape.
+      const openCapRateConflictId = new Types.ObjectId();
+      mockConflictModel.find.mockResolvedValueOnce([
+        {
+          _id: openCapRateConflictId,
+          factKey: capRateFactKey,
+          groupKeyNormalized: capRateGroupKeyNormalized,
+          status: 'open',
+        },
+      ]);
+      mockApprovalModel.find.mockResolvedValueOnce([]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([capRateFactLow, capRateFactHigh]);
+
+      const result = await service.previewPackActivation(tenantId, 'cre-fork', 2);
+
+      expect(mockExtractedFactModel.distinct).toHaveBeenCalledWith('groupKeyNormalized', {
+        tenantId,
+        'factKey.metric': { $in: ['cap_rate', 'sale_price'] },
+      });
+      expect(mockConflictModel.find).toHaveBeenNthCalledWith(1, {
+        tenantId,
+        groupKeyNormalized: { $in: [capRateGroupKeyNormalized, salePriceGroupKeyNormalized] },
+      });
+      expect(mockConflictModel.find).toHaveBeenNthCalledWith(2, {
+        tenantId,
+        status: 'open',
+        'factKey.metric': { $in: ['cap_rate', 'sale_price'] },
+      });
+      expect(result).toEqual({
+        metrics: [
+          { metricId: 'cap_rate', wouldCreate: 0, wouldRetract: 1 },
+          { metricId: 'sale_price', wouldCreate: 1, wouldRetract: 0 },
+        ],
+      });
+      // The whole point of a preview: it computes the same thing an activation's rescan would, but
+      // commits none of it.
+      expect(mockConflictModel.insertMany).not.toHaveBeenCalled();
+      expect(mockConflictModel.updateMany).not.toHaveBeenCalled();
+      expect(mockExtractedFactModel.updateMany).not.toHaveBeenCalled();
     });
   });
 

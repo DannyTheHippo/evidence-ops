@@ -8,6 +8,7 @@ import {
   ConflictsService,
   type ConflictedFactGroup,
   type ConflictResolutionCandidate,
+  type ConflictRetractionResult,
   type ConflictScanResult,
   type RecordConflictResolutionInput,
   type RecordConflictResolutionResult,
@@ -158,6 +159,18 @@ export interface Activities {
   ): Promise<IngestDocumentVersionResult>;
   extractFacts(documentVersionId: string, tenantId: string): Promise<FactsExtractionResult>;
   scanForConflicts(tenantId: string, factKeys?: readonly FactKey[]): Promise<ConflictScanResult>;
+  /** `rescan-conflicts.workflow.ts`'s scan half — see `ConflictsService.scanForConflictsByMetrics`'s
+   *  own doc comment for why this is metric-scoped rather than sharing `scanForConflicts` above. */
+  scanForConflictsByMetrics(
+    tenantId: string,
+    metricIds: readonly string[],
+  ): Promise<ConflictScanResult>;
+  /** `rescan-conflicts.workflow.ts`'s retract half — the complement of `scanForConflictsByMetrics`
+   *  (`ConflictsService.retractConflicts`'s own doc comment). */
+  retractConflicts(
+    tenantId: string,
+    metricIds: readonly string[],
+  ): Promise<ConflictRetractionResult>;
   retrieveEvidence(input: RetrieveEvidenceInput): Promise<RetrievedChunk[]>;
   synthesizeAnswer(input: SynthesizeAnswerActivityInput): Promise<SynthesizeAnswerResult>;
   groundingCheck(input: GroundingCheckActivityInput): Promise<GroundingCheckActivityResult>;
@@ -258,6 +271,14 @@ export function createActivities(app: INestApplicationContext): Activities {
 
     scanForConflicts: (tenantId, factKeys) =>
       withTenantScope(als, tenantId, () => conflictsService.scanForConflicts(tenantId, factKeys)),
+
+    scanForConflictsByMetrics: (tenantId, metricIds) =>
+      withTenantScope(als, tenantId, () =>
+        conflictsService.scanForConflictsByMetrics(tenantId, metricIds),
+      ),
+
+    retractConflicts: (tenantId, metricIds) =>
+      withTenantScope(als, tenantId, () => conflictsService.retractConflicts(tenantId, metricIds)),
 
     retrieveEvidence: (input) =>
       withTenantScope(als, input.tenantId, () => evidenceRetrievalService.retrieve(input)),

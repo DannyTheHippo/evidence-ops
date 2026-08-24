@@ -37,6 +37,7 @@ import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
 import type { ResolveConflictWorkflowInput } from '../../../workflows/types';
+import { diffDetectionRelevantMetrics } from '../facts/diff-metric-packs';
 import { MetricPacksService } from '../facts/metric-packs.service';
 import { MetricPoliciesService } from '../facts/metric-policies.service';
 import {
@@ -46,7 +47,12 @@ import {
 import type { ListConflictsRequestDto } from './dtos/request/list-conflicts.request.dto';
 import type { ConflictValueShape } from './dtos/response/conflict.response.dto';
 import { ConflictResponseDto } from './dtos/response/conflict.response.dto';
-import { detectConflicts, groupKey, type FactForConflictScan } from './detect-conflicts';
+import {
+  detectConflicts,
+  groupKey,
+  type ConflictCandidate,
+  type FactForConflictScan,
+} from './detect-conflicts';
 import {
   ConflictNotFoundException,
   ConflictResolutionAlreadyPendingException,
@@ -75,6 +81,21 @@ export interface ConflictScanResult {
 
 export interface ConflictRetractionResult {
   readonly conflictsRetracted: number;
+}
+
+/** One metric's counts from `previewPackActivation` — how many `Conflict` rows a real activation
+ *  of the previewed version would create or retract for this metric, computed without writing
+ *  either. */
+export interface PackActivationPreviewMetricResult {
+  readonly metricId: string;
+  readonly wouldCreate: number;
+  readonly wouldRetract: number;
+}
+
+/** Only the metrics `diffDetectionRelevantMetrics` reports changed appear here — see
+ *  `previewPackActivation`'s own doc comment for why a labels-only draft previews as `{ metrics: [] }`. */
+export interface PackActivationPreviewResult {
+  readonly metrics: readonly PackActivationPreviewMetricResult[];
 }
 
 /** One side of an open `Conflict`, projected for `GroundingGateService.verify`'s
@@ -406,34 +427,7 @@ export class ConflictsService {
     // `resolved`/`dismissed` conflict whose `factIds` differ from a candidate's does not count as
     // a match for that candidate — see this method's own idempotency comment on `scanForConflicts`.
     const existingConflicts = await this.conflictModel.find(existingConflictScope);
-    const openGroupKeys = new Set<string>();
-    const closedFactIdSetsByGroupKey = new Map<string, Set<string>[]>();
-    for (const conflict of existingConflicts) {
-      const key = groupKey(conflict.factKey);
-      if (conflict.status === 'open') {
-        openGroupKeys.add(key);
-        continue;
-      }
-      const sets = closedFactIdSetsByGroupKey.get(key) ?? [];
-      sets.push(new Set(conflict.factIds.map((id) => id.toString())));
-      closedFactIdSetsByGroupKey.set(key, sets);
-    }
-
-    const newCandidates = candidates.filter((candidate) => {
-      const key = groupKey(candidate.factKey);
-      if (openGroupKeys.has(key)) {
-        return false;
-      }
-      const closedFactIdSets = closedFactIdSetsByGroupKey.get(key);
-      if (!closedFactIdSets) {
-        return true;
-      }
-      return !closedFactIdSets.some(
-        (factIdSet) =>
-          factIdSet.size === candidate.factIds.length &&
-          candidate.factIds.every((factId) => factIdSet.has(factId)),
-      );
-    });
+    const newCandidates = this.filterNewCandidates(candidates, existingConflicts);
 
     if (newCandidates.length === 0) {
       this.logger.debug(`All detected conflicts for tenant '${tenantId}' are already handled`);
@@ -457,6 +451,46 @@ export class ConflictsService {
     this.logger.debug(`Created ${newCandidates.length} conflicts for tenant '${tenantId}'`);
 
     return { conflictsCreated: newCandidates.length, skippedFactCount: skipped.length };
+  }
+
+  /** Shared by `detectAndPersist` and `previewPackActivation`'s would-create half: which of
+   *  `candidates` are genuinely new against `existingConflicts` — not covered by an `open` conflict
+   *  for the same group, nor by a `resolved`/`dismissed` one whose `factIds` exactly match. See
+   *  `scanForConflicts`'s own idempotency comment for why a closed conflict only counts as a match
+   *  on an exact `factIds` tie. Pure: reads nothing, writes nothing, so it is safe for a
+   *  preview-only caller to reuse unchanged. */
+  private filterNewCandidates(
+    candidates: readonly ConflictCandidate[],
+    existingConflicts: readonly ConflictDocument[],
+  ): ConflictCandidate[] {
+    const openGroupKeys = new Set<string>();
+    const closedFactIdSetsByGroupKey = new Map<string, Set<string>[]>();
+    for (const conflict of existingConflicts) {
+      const key = groupKey(conflict.factKey);
+      if (conflict.status === 'open') {
+        openGroupKeys.add(key);
+        continue;
+      }
+      const sets = closedFactIdSetsByGroupKey.get(key) ?? [];
+      sets.push(new Set(conflict.factIds.map((id) => id.toString())));
+      closedFactIdSetsByGroupKey.set(key, sets);
+    }
+
+    return candidates.filter((candidate) => {
+      const key = groupKey(candidate.factKey);
+      if (openGroupKeys.has(key)) {
+        return false;
+      }
+      const closedFactIdSets = closedFactIdSetsByGroupKey.get(key);
+      if (!closedFactIdSets) {
+        return true;
+      }
+      return !closedFactIdSets.some(
+        (factIdSet) =>
+          factIdSet.size === candidate.factIds.length &&
+          candidate.factIds.every((factId) => factIdSet.has(factId)),
+      );
+    });
   }
 
   /**
@@ -486,14 +520,53 @@ export class ConflictsService {
     }
 
     const pack = await this.metricPacksService.resolveActive(tenantId);
+    const toRetract = await this.findRetractableConflicts(tenantId, metricIds, pack);
+    if (toRetract.length === 0) {
+      return { conflictsRetracted: 0 };
+    }
 
+    await this.conflictModel.updateMany(
+      { _id: { $in: toRetract.map((conflict) => conflict._id) } },
+      {
+        status: 'dismissed',
+        resolution: {
+          outcome: 'retracted',
+          resolvedAt: new Date(),
+          packId: pack.packId,
+          packVersion: pack.version,
+        },
+      },
+    );
+
+    this.logger.debug(
+      `Retracted ${toRetract.length} conflict(s) for tenant '${tenantId}' under pack '${pack.packId}' v${pack.version}`,
+    );
+
+    return { conflictsRetracted: toRetract.length };
+  }
+
+  /**
+   * Which currently-`open` conflicts, scoped to `metricIds`, no longer disagree when their CURRENT
+   * facts are re-evaluated against `pack` — the shared computation behind `retractConflicts` (which
+   * writes `status: 'dismissed'` for every row this returns) and `previewPackActivation`'s
+   * would-retract half (which only counts them, against the draft pack instead of the active one).
+   * Excludes a conflict carrying a pending resolution `Approval` on every caller — see
+   * `retractConflicts`'s own doc comment for why that guard must never be skipped, including in a
+   * preview: a preview promising a retraction a real activation would actually refuse would be
+   * dishonest about what commit will do.
+   */
+  private async findRetractableConflicts(
+    tenantId: string,
+    metricIds: readonly string[],
+    pack: MetricPackData,
+  ): Promise<ConflictDocument[]> {
     const openConflicts = await this.conflictModel.find({
       tenantId,
       status: 'open',
       'factKey.metric': { $in: [...metricIds] },
     });
     if (openConflicts.length === 0) {
-      return { conflictsRetracted: 0 };
+      return [];
     }
 
     const pendingApprovals = await this.approvalModel.find(
@@ -522,33 +595,111 @@ export class ConflictsService {
       stillConflicting.map((candidate) => groupKey(candidate.factKey)),
     );
 
-    const toRetract = openConflicts.filter(
+    return openConflicts.filter(
       (conflict) =>
         !stillConflictingGroupKeys.has(conflict.groupKeyNormalized) &&
         !pendingConflictIds.has(conflict._id.toString()),
     );
-    if (toRetract.length === 0) {
-      return { conflictsRetracted: 0 };
+  }
+
+  /**
+   * The honest analogue of `ResolutionBacktestService`'s hindsight table, run BEFORE a version is
+   * ever activated rather than after: detects what `scanForConflictsByMetrics`/`retractConflicts`
+   * would do if `packId` v`version` were promoted right now, against the tenant's existing facts —
+   * without ever writing a `Conflict` row. Scoped to `diffDetectionRelevantMetrics(activePack,
+   * draftPack)`, the identical set `MetricPacksService.activate` would name to `rescanConflicts`, so
+   * a labels-only draft previews as `{ metrics: [] }`, the same "nothing would change" answer
+   * activating it would produce.
+   */
+  async previewPackActivation(
+    tenantId: string,
+    packId: string,
+    version: number,
+  ): Promise<PackActivationPreviewResult> {
+    const draftPack = await this.metricPacksService.findVersion(tenantId, packId, version);
+    const activePack = await this.metricPacksService.resolveActive(tenantId);
+    const changedMetricIds = diffDetectionRelevantMetrics(activePack, draftPack);
+
+    if (changedMetricIds.length === 0) {
+      return { metrics: [] };
     }
 
-    await this.conflictModel.updateMany(
-      { _id: { $in: toRetract.map((conflict) => conflict._id) } },
-      {
-        status: 'dismissed',
-        resolution: {
-          outcome: 'retracted',
-          resolvedAt: new Date(),
-          packId: pack.packId,
-          packVersion: pack.version,
-        },
-      },
+    const wouldCreateByMetric = await this.previewWouldCreate(
+      tenantId,
+      changedMetricIds,
+      draftPack,
+    );
+    const wouldRetractByMetric = await this.previewWouldRetract(
+      tenantId,
+      changedMetricIds,
+      draftPack,
     );
 
-    this.logger.debug(
-      `Retracted ${toRetract.length} conflict(s) for tenant '${tenantId}' under pack '${pack.packId}' v${pack.version}`,
-    );
+    const metricIds = [
+      ...new Set([...wouldCreateByMetric.keys(), ...wouldRetractByMetric.keys()]),
+    ].sort();
 
-    return { conflictsRetracted: toRetract.length };
+    return {
+      metrics: metricIds.map((metricId) => ({
+        metricId,
+        wouldCreate: wouldCreateByMetric.get(metricId) ?? 0,
+        wouldRetract: wouldRetractByMetric.get(metricId) ?? 0,
+      })),
+    };
+  }
+
+  /** The would-create half of `previewPackActivation`: which of the candidates `detectConflicts`
+   *  finds under `draftPack`, scoped to `metricIds`, are genuinely new — mirrors
+   *  `scanForConflictsByMetrics`'s own query shape exactly, stopping short of `insertMany`. */
+  private async previewWouldCreate(
+    tenantId: string,
+    metricIds: readonly string[],
+    draftPack: MetricPackData,
+  ): Promise<Map<string, number>> {
+    const groupKeys = await this.extractedFactModel.distinct('groupKeyNormalized', {
+      tenantId,
+      'factKey.metric': { $in: [...metricIds] },
+    });
+    const facts = await this.extractedFactModel.find(
+      { tenantId, groupKeyNormalized: { $in: groupKeys } },
+      { factKey: 1, value: 1 },
+    );
+    const { conflicts: candidates } = detectConflicts(
+      facts.map((fact) => this.toFactForScan(fact)),
+      draftPack.metrics,
+    );
+    if (candidates.length === 0) {
+      return new Map();
+    }
+
+    const existingConflicts = await this.conflictModel.find({
+      tenantId,
+      groupKeyNormalized: { $in: groupKeys },
+    });
+    const newCandidates = this.filterNewCandidates(candidates, existingConflicts);
+
+    const counts = new Map<string, number>();
+    for (const candidate of newCandidates) {
+      const metricId = candidate.factKey.metric;
+      counts.set(metricId, (counts.get(metricId) ?? 0) + 1);
+    }
+    return counts;
+  }
+
+  /** The would-retract half of `previewPackActivation`: `findRetractableConflicts` evaluated
+   *  against `draftPack` instead of the tenant's currently active pack. */
+  private async previewWouldRetract(
+    tenantId: string,
+    metricIds: readonly string[],
+    draftPack: MetricPackData,
+  ): Promise<Map<string, number>> {
+    const toRetract = await this.findRetractableConflicts(tenantId, metricIds, draftPack);
+    const counts = new Map<string, number>();
+    for (const conflict of toRetract) {
+      const metricId = conflict.factKey.metric;
+      counts.set(metricId, (counts.get(metricId) ?? 0) + 1);
+    }
+    return counts;
   }
 
   /**

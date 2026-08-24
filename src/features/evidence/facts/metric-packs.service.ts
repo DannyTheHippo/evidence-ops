@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import {
@@ -9,8 +9,15 @@ import {
   type MetricPackData,
   type MetricPackStatus,
 } from '../../../database/schemas/evidence/metric-pack/metric-pack.schema';
+import {
+  WORKFLOW_ENGINE,
+  type WorkflowEngine,
+} from '../../../providers/workflow-engine/workflow-engine.interface';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
+import type { RescanConflictsWorkflowInput } from '../../../workflows/types';
+import { WorkflowRunsService } from '../workflow-runs/workflow-runs.service';
+import { diffDetectionRelevantMetrics } from './diff-metric-packs';
 import {
   MetricPackFrozenArithmeticException,
   MetricPackMetricRemovalException,
@@ -20,6 +27,14 @@ import {
   MetricPackVersionConflictException,
 } from './exceptions/facts.exception';
 import { CRE_PACK_V1 } from './packs/cre.pack';
+
+/**
+ * `rescanConflicts` — the Temporal workflow type name in `src/workflows/rescan-conflicts.workflow.ts`
+ * — is not exported as a runtime value from `src/workflows/**` (types only, across the determinism
+ * fence). Duplicated here rather than imported, the same reasoning `ConflictsService`'s own
+ * `RESOLVE_CONFLICT_WORKFLOW_TYPE` documents.
+ */
+const RESCAN_CONFLICTS_WORKFLOW_TYPE = 'rescanConflicts';
 
 function toMetricPackData(pack: MetricPackDocument): MetricPackData {
   return {
@@ -71,6 +86,11 @@ export class MetricPacksService {
   constructor(
     @InjectModel(MetricPack.name)
     private readonly metricPackModel: Model<MetricPackDocument>,
+
+    @Inject(WORKFLOW_ENGINE)
+    private readonly workflowEngine: WorkflowEngine,
+
+    private readonly workflowRunsService: WorkflowRunsService,
 
     private readonly auditService: AuditService,
     private readonly logger: AppLogger,
@@ -264,7 +284,43 @@ export class MetricPacksService {
 
     this.logger.debug(`Activated pack '${packId}' v${version} for tenant '${tenantId}'`);
 
+    // The seam `diff-metric-packs.ts`'s own doc comment names: rescans only the metrics whose
+    // detection-relevant configuration actually changed against whatever pack was active before
+    // this promote, never the tenant's whole metric set. `currentActive` is the pre-demote row read
+    // above; a tenant with none falls back to the code default, matching `resolveActive`'s own
+    // fallback so a first-ever activation diffs against exactly what extraction already read.
+    const previous = currentActive ? toMetricPackData(currentActive) : CRE_PACK_V1;
+    const changedMetricIds = diffDetectionRelevantMetrics(previous, toMetricPackData(activated));
+
+    if (changedMetricIds.length > 0) {
+      const handle = await this.workflowEngine.start(RESCAN_CONFLICTS_WORKFLOW_TYPE, {
+        tenantId,
+        metricIds: changedMetricIds,
+      } satisfies RescanConflictsWorkflowInput);
+
+      await this.workflowRunsService.create({
+        workflowId: handle.id,
+        workflowType: 'rescan-conflicts',
+        status: handle.status,
+        tenantId,
+      });
+
+      this.logger.debug(
+        `Started rescanConflicts workflow '${handle.id}' for pack '${packId}' v${version}, ` +
+          `metrics: ${changedMetricIds.join(', ')}`,
+      );
+    }
+
     return toMetricPackResult(activated);
+  }
+
+  /** Public wrapper of `findVersionOrThrow`, returning the plain `MetricPackData` shape rather
+   *  than the Mongoose document — `ConflictsService.previewPackActivation` (`conflicts.service.ts`)
+   *  is the caller, resolving the draft/published version an operator wants to preview before it is
+   *  ever activated. Reachable across the module boundary because `ConflictsModule` imports
+   *  `FactsModule`, never the reverse (see `ConflictsModule`'s own doc comment). */
+  async findVersion(tenantId: string, packId: string, version: number): Promise<MetricPackData> {
+    return toMetricPackData(await this.findVersionOrThrow(tenantId, packId, version));
   }
 
   private async findVersionOrThrow(

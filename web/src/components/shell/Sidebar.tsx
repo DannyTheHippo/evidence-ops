@@ -11,6 +11,7 @@ import {
   IconFolder,
   IconHome,
   IconKey,
+  IconLayers,
   IconMessageCircle,
   IconPanelLeft,
   IconSearch,
@@ -53,6 +54,7 @@ export const NAV_LABELS: { to: string; label: string }[] = [
   { to: '/invitations', label: 'Invitations' },
   { to: '/resolution-rules', label: 'Resolution Rules' },
   { to: '/canonical-entities', label: 'Canonical Entities' },
+  { to: '/metric-packs', label: 'Metric Packs' },
 ];
 
 function buildNavGroups(isAdmin: boolean): NavGroup[] {
@@ -96,6 +98,7 @@ function buildNavGroups(isAdmin: boolean): NavGroup[] {
               { to: '/invitations', label: 'Invitations', icon: <IconUserPlus /> },
               { to: '/resolution-rules', label: 'Resolution Rules', icon: <IconAlertTriangle /> },
               { to: '/canonical-entities', label: 'Canonical Entities', icon: <IconTag /> },
+              { to: '/metric-packs', label: 'Metric Packs', icon: <IconLayers /> },
             ]
           : []),
       ],

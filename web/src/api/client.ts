@@ -973,3 +973,82 @@ export function updateCanonicalEntity(
 export async function deleteCanonicalEntity(id: string): Promise<void> {
   await request<void>(`/canonical-entities/${id}`, { method: 'DELETE' });
 }
+
+// ── Metric packs ─────────────────────────────────────────────────────────
+
+export type MetricPackStatus = 'draft' | 'published' | 'active' | 'retired';
+export type FactValueType = 'currency' | 'percentage' | 'area' | 'duration';
+export type ToleranceKind = 'absolute' | 'relative';
+
+export interface MetricUnitDefinition {
+  id: string;
+  toCanonicalFactor: number;
+}
+
+export interface MetricDefinition {
+  id: string;
+  label: string;
+  aliases: string[];
+  valueType: FactValueType;
+  canonicalUnit: string;
+  units: MetricUnitDefinition[];
+  toleranceKind: ToleranceKind;
+  tolerance: number;
+  authorityOrder?: DocumentSourceClass[];
+  stalenessWindowMs?: number;
+}
+
+export interface MetricPack {
+  id: string;
+  packId: string;
+  version: number;
+  status: MetricPackStatus;
+  label: string;
+  metrics: MetricDefinition[];
+  parentPackId?: string;
+  parentVersion?: number;
+  createdAt: string;
+}
+
+export function listMetricPacks(): Promise<WithCount<MetricPack>> {
+  return request<WithCount<MetricPack>>('/metric-packs');
+}
+
+// Omitting acknowledgeRemovedMetricIds is the safe default: the server refuses a publish that
+// would silently drop a metric present in the parent version, so a caller only ever sends this
+// once an operator has explicitly confirmed which removals are deliberate.
+export function publishMetricPackVersion(
+  packId: string,
+  version: number,
+  acknowledgeRemovedMetricIds?: string[],
+): Promise<MetricPack> {
+  return request<MetricPack>(`/metric-packs/${packId}/versions/${version}/publish`, {
+    method: 'POST',
+    ...jsonBody(acknowledgeRemovedMetricIds ? { acknowledgeRemovedMetricIds } : {}),
+  });
+}
+
+export function activateMetricPackVersion(packId: string, version: number): Promise<MetricPack> {
+  return request<MetricPack>(`/metric-packs/${packId}/versions/${version}/activate`, {
+    method: 'POST',
+  });
+}
+
+export interface PackActivationPreviewMetric {
+  metricId: string;
+  wouldCreate: number;
+  wouldRetract: number;
+}
+
+export interface PackActivationPreview {
+  metrics: PackActivationPreviewMetric[];
+}
+
+export function previewMetricPackActivation(
+  packId: string,
+  version: number,
+): Promise<PackActivationPreview> {
+  return request<PackActivationPreview>(`/metric-packs/${packId}/versions/${version}/preview`, {
+    method: 'POST',
+  });
+}

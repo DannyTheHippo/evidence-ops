@@ -17,6 +17,8 @@ import {
 } from '../../../../src/features/evidence/facts/exceptions/facts.exception';
 import { MetricPacksService } from '../../../../src/features/evidence/facts/metric-packs.service';
 import { CRE_PACK_V1 } from '../../../../src/features/evidence/facts/packs/cre.pack';
+import { WorkflowRunsService } from '../../../../src/features/evidence/workflow-runs/workflow-runs.service';
+import { WORKFLOW_ENGINE } from '../../../../src/providers/workflow-engine/workflow-engine.interface';
 import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
@@ -30,6 +32,8 @@ describe('MetricPacksService', () => {
   const mockMetricPackModel = getMockModel();
   const mockLogger = getMockLogger();
   const mockAuditService = { record: jest.fn() };
+  const mockWorkflowEngine = { start: jest.fn(), status: jest.fn(), signal: jest.fn() };
+  const mockWorkflowRunsService = { create: jest.fn() };
 
   const capRate: MetricDefinition = {
     id: 'cap_rate',
@@ -64,6 +68,8 @@ describe('MetricPacksService', () => {
       providers: [
         MetricPacksService,
         { provide: getModelToken(MetricPack.name), useValue: mockMetricPackModel },
+        { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
+        { provide: WorkflowRunsService, useValue: mockWorkflowRunsService },
         { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: mockLogger },
       ],
@@ -640,6 +646,9 @@ describe('MetricPacksService', () => {
       );
     });
 
+    // Diffed against `CRE_PACK_V1` (the fallback baseline for a tenant with no active row) using
+    // its own identical metrics, so this exercises the "no active pack" promote flow without also
+    // exercising the rescan trigger — that gets its own dedicated tests below.
     it('should activate directly when the tenant has no currently active pack', async () => {
       mockMetricPackModel.findOne
         .mockResolvedValueOnce({ packId: 'cre-fork', version: 2, status: 'published' })
@@ -650,7 +659,7 @@ describe('MetricPacksService', () => {
         version: 2,
         status: 'active',
         label: 'Fork v2',
-        metrics: [],
+        metrics: CRE_PACK_V1.metrics,
         createdAt: EPOCH,
       });
 
@@ -658,12 +667,25 @@ describe('MetricPacksService', () => {
 
       expect(result.status).toBe('active');
       expect(mockMetricPackModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+      expect(mockWorkflowEngine.start).not.toHaveBeenCalled();
     });
 
+    // `metrics: []` on both sides keeps the diff empty, isolating this test to the
+    // demote-then-promote database flow — the rescan trigger has its own dedicated tests below.
     it('should demote the previously active pack before promoting the target', async () => {
       mockMetricPackModel.findOne
-        .mockResolvedValueOnce({ packId: 'cre-fork', version: 2, status: 'published' })
-        .mockResolvedValueOnce({ _id: 'old-active', packId: 'cre', version: 1, status: 'active' });
+        .mockResolvedValueOnce({
+          packId: 'cre-fork',
+          version: 2,
+          status: 'published',
+        })
+        .mockResolvedValueOnce({
+          _id: 'old-active',
+          packId: 'cre',
+          version: 1,
+          status: 'active',
+          metrics: [],
+        });
       mockMetricPackModel.findOneAndUpdate.mockResolvedValueOnce({}).mockResolvedValueOnce({
         _id: { toString: () => 'draft-row' },
         packId: 'cre-fork',
@@ -688,6 +710,7 @@ describe('MetricPacksService', () => {
         { $set: { status: 'active' } },
         { new: true },
       );
+      expect(mockWorkflowEngine.start).not.toHaveBeenCalled();
     });
 
     it('should throw MetricPackNotFoundException when the target row disappears before the promote commits', async () => {
@@ -711,7 +734,7 @@ describe('MetricPacksService', () => {
         version: 2,
         status: 'active',
         label: 'Fork v2',
-        metrics: [],
+        metrics: CRE_PACK_V1.metrics,
         createdAt: EPOCH,
       });
 
@@ -723,6 +746,103 @@ describe('MetricPacksService', () => {
         subject: { entityType: 'MetricPack', entityId: 'draft-row' },
         tenantId: DEFAULT_TENANT_ID,
       });
+    });
+
+    it('should start a rescanConflicts workflow scoped to the metrics whose detection-relevant configuration changed', async () => {
+      mockMetricPackModel.findOne
+        .mockResolvedValueOnce({ packId: 'cre-fork', version: 2, status: 'published' })
+        .mockResolvedValueOnce({
+          _id: 'old-active',
+          packId: 'cre-fork',
+          version: 1,
+          status: 'active',
+          metrics: [capRate, salePrice],
+        });
+      mockMetricPackModel.findOneAndUpdate.mockResolvedValueOnce({}).mockResolvedValueOnce({
+        _id: { toString: () => 'draft-row' },
+        packId: 'cre-fork',
+        version: 2,
+        status: 'active',
+        label: 'Fork v2',
+        // Only `cap_rate`'s tolerance changed — `sale_price` is untouched, so it must not appear
+        // in the started workflow's `metricIds`.
+        metrics: [{ ...capRate, tolerance: 0.05 }, salePrice],
+        createdAt: EPOCH,
+      });
+      mockWorkflowEngine.start.mockResolvedValueOnce({ id: 'wf-rescan-1', status: 'running' });
+      mockWorkflowRunsService.create.mockResolvedValueOnce({
+        id: 'run-1',
+        workflowId: 'wf-rescan-1',
+        workflowType: 'rescan-conflicts',
+        status: 'running',
+        createdAt: EPOCH,
+      });
+
+      await service.activate(DEFAULT_TENANT_ID, 'cre-fork', 2, actorId);
+
+      expect(mockWorkflowEngine.start).toHaveBeenCalledWith('rescanConflicts', {
+        tenantId: DEFAULT_TENANT_ID,
+        metricIds: ['cap_rate'],
+      });
+      expect(mockWorkflowRunsService.create).toHaveBeenCalledWith({
+        workflowId: 'wf-rescan-1',
+        workflowType: 'rescan-conflicts',
+        status: 'running',
+        tenantId: DEFAULT_TENANT_ID,
+      });
+    });
+
+    // The entire point of diffing rather than rescanning the world: a version that only relabels a
+    // metric or adds an alias must start no rescan at all.
+    it('should start no rescan workflow when the activated version only relabels a metric', async () => {
+      mockMetricPackModel.findOne
+        .mockResolvedValueOnce({ packId: 'cre-fork', version: 2, status: 'published' })
+        .mockResolvedValueOnce({
+          _id: 'old-active',
+          packId: 'cre-fork',
+          version: 1,
+          status: 'active',
+          metrics: [capRate],
+        });
+      mockMetricPackModel.findOneAndUpdate.mockResolvedValueOnce({}).mockResolvedValueOnce({
+        _id: { toString: () => 'draft-row' },
+        packId: 'cre-fork',
+        version: 2,
+        status: 'active',
+        label: 'Fork v2',
+        metrics: [
+          { ...capRate, label: 'Capitalization Rate', aliases: [...capRate.aliases, 'cap'] },
+        ],
+        createdAt: EPOCH,
+      });
+
+      await service.activate(DEFAULT_TENANT_ID, 'cre-fork', 2, actorId);
+
+      expect(mockWorkflowEngine.start).not.toHaveBeenCalled();
+      expect(mockWorkflowRunsService.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('findVersion', () => {
+    it('should map the named version to a plain MetricPackData', async () => {
+      mockMetricPackModel.findOne.mockResolvedValueOnce({
+        packId: 'cre-fork',
+        version: 1,
+        label: 'Fork',
+        metrics: [capRate],
+      });
+
+      const result = await service.findVersion(DEFAULT_TENANT_ID, 'cre-fork', 1);
+
+      expect(result).toEqual({ packId: 'cre-fork', version: 1, label: 'Fork', metrics: [capRate] });
+    });
+
+    it('should throw MetricPackNotFoundException when the named version does not exist', async () => {
+      mockMetricPackModel.findOne.mockResolvedValueOnce(null);
+
+      await expect(service.findVersion(DEFAULT_TENANT_ID, 'cre-fork', 9)).rejects.toThrow(
+        MetricPackNotFoundException,
+      );
     });
   });
 });

@@ -192,9 +192,21 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
       auditService,
       logger,
     );
+    // This pipeline never activates a pack — it only reads the code default via `resolveActive` —
+    // so a real WorkflowEngine/WorkflowRunsService is unneeded for `MetricPacksService` either; the
+    // fake and a minimal stub satisfy the constructor without pulling Temporal or another Mongo
+    // model into this integration lane. Built once, here, and reused below by `ConflictsService`.
+    const workflowEngine = new FakeWorkflowEngine();
+    const workflowRunsService = { create: jest.fn() } as unknown as WorkflowRunsService;
     // No `MetricPack` row is seeded for this tenant, so extraction resolves to the code default
     // `CRE_PACK_V1` — the same ontology this pipeline exercised before packs existed.
-    const metricPacksService = new MetricPacksService(metricPackModel, auditService, logger);
+    const metricPacksService = new MetricPacksService(
+      metricPackModel,
+      workflowEngine,
+      workflowRunsService,
+      auditService,
+      logger,
+    );
     const factsService = new FactsService(
       documentVersionModel,
       evidenceChunkModel,
@@ -207,13 +219,10 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
       getMockTypedConfig(),
       logger,
     );
-    // This pipeline never resolves a conflict — it only detects one — so a real
-    // WorkflowEngine/WorkflowRunsService is unneeded; the fake and a minimal stub satisfy the
-    // constructor without pulling Temporal or another Mongo model into this integration lane.
-    // `requestResolution`'s pending-approval guard is likewise never exercised, so `approvalModel`
-    // is the same kind of unused-but-required stub.
-    const workflowEngine = new FakeWorkflowEngine();
-    const workflowRunsService = { create: jest.fn() } as unknown as WorkflowRunsService;
+    // This pipeline never resolves a conflict — it only detects one — so the same
+    // `workflowEngine`/`workflowRunsService` fakes built above for `MetricPacksService` satisfy
+    // `ConflictsService`'s constructor too. `requestResolution`'s pending-approval guard is likewise
+    // never exercised, so `approvalModel` is the same kind of unused-but-required stub.
     const approvalModel = { exists: jest.fn() } as unknown as Model<ApprovalDocument>;
     // No tenant rows are seeded in `metric_policies` either, and no `MetricPack` row is seeded for
     // this tenant either (same `metricPacksService` above), so this resolves to the code default

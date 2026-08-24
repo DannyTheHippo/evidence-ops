@@ -1,12 +1,24 @@
 import type { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import type { Model } from 'mongoose';
+import { Types } from 'mongoose';
 import request from 'supertest';
+import {
+  Conflict,
+  ConflictDocument,
+} from '../../src/database/schemas/evidence/conflict/conflict.schema';
+import {
+  ExtractedFact,
+  ExtractedFactDocument,
+  type FactKey,
+  type FactValue,
+} from '../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import {
   MetricPack,
   MetricPackDocument,
   type MetricDefinition,
 } from '../../src/database/schemas/evidence/metric-pack/metric-pack.schema';
+import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts';
 import { CRE_PACK_V1 } from '../../src/features/evidence/facts/packs/cre.pack';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
 import { registerTestUser } from '../utils/register-test-user';
@@ -21,6 +33,10 @@ interface MetricPackBody {
   parentPackId?: string;
   parentVersion?: number;
   createdAt: string;
+}
+
+interface PreviewBody {
+  metrics: { metricId: string; wouldCreate: number; wouldRetract: number }[];
 }
 
 const METRIC_PACK_KEYS = [
@@ -49,11 +65,26 @@ function cloneCreMetrics(): MetricDefinition[] {
   }));
 }
 
+/** A clone identical to `cloneCreMetrics()` except `cap_rate` gains one new unit id — a
+ *  publish-safe change (adding a unit never trips `assertFrozenArithmetic`) that is still
+ *  detection-relevant (`diffDetectionRelevantMetrics` reads `units` into its signature), so
+ *  activating or previewing a version built from this names exactly `cap_rate` as changed. */
+function cloneWithExtraCapRateUnit(): MetricDefinition[] {
+  return cloneCreMetrics().map((metric) =>
+    metric.id === 'cap_rate'
+      ? { ...metric, units: [...metric.units, { id: 'bps', toCanonicalFactor: 0.0001 }] }
+      : metric,
+  );
+}
+
 describe('Metric Packs (e2e)', () => {
   let app: INestApplication;
   let cookie: string;
   let memberCookie: string;
+  let adminTenantId: string;
   let metricPackModel: Model<MetricPackDocument>;
+  let conflictModel: Model<ConflictDocument>;
+  let extractedFactModel: Model<ExtractedFactDocument>;
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -63,6 +94,7 @@ describe('Metric Packs (e2e)', () => {
       password: 'correct-horse-battery',
     });
     cookie = admin.cookie;
+    adminTenantId = admin.tenantId;
 
     // Co-tenanting the member the same way `metric-policies.e2e-spec.ts` does — both callers see
     // the same seeded rows, so only the role (admin vs. member) is the variable under test.
@@ -74,11 +106,32 @@ describe('Metric Packs (e2e)', () => {
     memberCookie = member.cookie;
 
     metricPackModel = app.get<Model<MetricPackDocument>>(getModelToken(MetricPack.name));
+    conflictModel = app.get<Model<ConflictDocument>>(getModelToken(Conflict.name));
+    extractedFactModel = app.get<Model<ExtractedFactDocument>>(getModelToken(ExtractedFact.name));
   });
 
   afterAll(async () => {
     await closeTestApp(app);
   });
+
+  // Same direct-seeding pattern `resolution-backtest.e2e-spec.ts`'s own `seedFact` uses — a plain
+  // `ExtractedFact` row, bypassing the extraction pipeline, so seeding it alone never triggers a
+  // scan and never creates a `Conflict` row on its own.
+  const seedFact = (factKey: FactKey, value: FactValue, chunkId: string, forTenantId: string) =>
+    extractedFactModel.create({
+      factKey,
+      groupKeyNormalized: groupKey(factKey),
+      tenantId: forTenantId,
+      value,
+      rawText: `${value.amount}${value.unit}`,
+      confidence: 0.9,
+      extractionMethod: 'llm',
+      packId: 'cre',
+      packVersion: 1,
+      chunkId,
+      documentVersionId: new Types.ObjectId(),
+      locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'A1' },
+    });
 
   describe('GET /metric-packs', () => {
     it('rejects an unauthenticated request', async () => {
@@ -127,6 +180,15 @@ describe('Metric Packs (e2e)', () => {
     it('returns 403 for a Member activating a version', async () => {
       const response = await request(getTestServer(app))
         .post('/api/v1/metric-packs/member-guard/versions/1/activate')
+        .set('Cookie', memberCookie)
+        .send();
+
+      expect(response.status).toBe(403);
+    });
+
+    it('returns 403 for a Member previewing a version', async () => {
+      const response = await request(getTestServer(app))
+        .post('/api/v1/metric-packs/member-guard/versions/1/preview')
         .set('Cookie', memberCookie)
         .send();
 
@@ -248,6 +310,87 @@ describe('Metric Packs (e2e)', () => {
 
       const stored = await metricPackModel.findOne({ packId: 'cre-fork-factor', version: 1 });
       expect(stored?.status).toBe('draft');
+    });
+  });
+
+  describe('POST /metric-packs/:packId/versions/:version/preview', () => {
+    it('previews per-metric would-create/would-retract counts without writing anything, exposing the exact key set', async () => {
+      const createResponse = await request(getTestServer(app))
+        .post('/api/v1/metric-packs/cre-fork-preview/versions')
+        .set('Cookie', cookie)
+        .send({ label: 'Adds a cap_rate unit', metrics: cloneWithExtraCapRateUnit() });
+      expect(createResponse.status).toBe(201);
+
+      const publishResponse = await request(getTestServer(app))
+        .post('/api/v1/metric-packs/cre-fork-preview/versions/1/publish')
+        .set('Cookie', cookie)
+        .send({});
+      expect(publishResponse.status).toBe(200);
+
+      // No `MetricPack` row is active for this tenant, so `resolveActive` falls back to
+      // `CRE_PACK_V1` — under its default cap_rate tolerance (25bp absolute) these two facts
+      // plainly disagree, and no `Conflict` row exists for them (direct seeding never scans).
+      const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+      await seedFact(factKey, { amount: 5.25, unit: 'percent' }, 'chunk-low', adminTenantId);
+      await seedFact(factKey, { amount: 6.1, unit: 'percent' }, 'chunk-high', adminTenantId);
+
+      const previewResponse = await request(getTestServer(app))
+        .post('/api/v1/metric-packs/cre-fork-preview/versions/1/preview')
+        .set('Cookie', cookie)
+        .send();
+      const body = previewResponse.body as PreviewBody;
+
+      expect(previewResponse.status).toBe(200);
+      // Asserting the exact key set is the only gate that catches a response-DTO field missing
+      // @Expose() — such a field is silently dropped from the payload with no error anywhere.
+      expect(Object.keys(body).sort()).toEqual(['metrics']);
+      expect(body.metrics).toHaveLength(1);
+      expect(Object.keys(body.metrics[0]).sort()).toEqual(
+        ['metricId', 'wouldCreate', 'wouldRetract'].sort(),
+      );
+      expect(body.metrics[0]).toEqual({ metricId: 'cap_rate', wouldCreate: 1, wouldRetract: 0 });
+
+      // The whole point of a preview: nothing was actually written.
+      expect(await conflictModel.countDocuments({ tenantId: adminTenantId })).toBe(0);
+      expect(await extractedFactModel.countDocuments({ tenantId: adminTenantId })).toBe(2);
+      const stored = await metricPackModel.findOne({
+        tenantId: adminTenantId,
+        packId: 'cre-fork-preview',
+        version: 1,
+      });
+      expect(stored?.status).toBe('published');
+    });
+
+    it('previews an empty metric set when the version changes nothing detection-relevant', async () => {
+      const createResponse = await request(getTestServer(app))
+        .post('/api/v1/metric-packs/cre-fork-preview-noop/versions')
+        .set('Cookie', cookie)
+        .send({ label: 'Byte-identical to the active default', metrics: cloneCreMetrics() });
+      expect(createResponse.status).toBe(201);
+
+      const publishResponse = await request(getTestServer(app))
+        .post('/api/v1/metric-packs/cre-fork-preview-noop/versions/1/publish')
+        .set('Cookie', cookie)
+        .send({});
+      expect(publishResponse.status).toBe(200);
+
+      const previewResponse = await request(getTestServer(app))
+        .post('/api/v1/metric-packs/cre-fork-preview-noop/versions/1/preview')
+        .set('Cookie', cookie)
+        .send();
+      const body = previewResponse.body as PreviewBody;
+
+      expect(previewResponse.status).toBe(200);
+      expect(body).toEqual({ metrics: [] });
+    });
+
+    it('returns 404 for an unknown version', async () => {
+      const response = await request(getTestServer(app))
+        .post('/api/v1/metric-packs/cre-fork-preview/versions/99/preview')
+        .set('Cookie', cookie)
+        .send();
+
+      expect(response.status).toBe(404);
     });
   });
 });
