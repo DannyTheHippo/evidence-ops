@@ -11,10 +11,13 @@ import {
  * already refuses to rank it (`resolve-conflict-policy.ts`), so a row naming it would pass write
  * time and then fail closed silently, with no proposal, the first time it mattered. Excluding it
  * here rejects that row at the moment an operator can still see why.
+ *
+ * Exported so `MetricDefinitionRequestDto` (`create-metric-pack-version.request.dto.ts`) enforces
+ * the identical `authorityOrder` rule for a pack-authored metric rather than a second copy — the
+ * same silent-refusal failure mode applies there too.
  */
-const RANKABLE_SOURCE_CLASSES: readonly DocumentSourceClass[] = DOCUMENT_SOURCE_CLASSES.filter(
-  (sourceClass) => sourceClass !== 'unclassified',
-);
+export const RANKABLE_SOURCE_CLASSES: readonly DocumentSourceClass[] =
+  DOCUMENT_SOURCE_CLASSES.filter((sourceClass) => sourceClass !== 'unclassified');
 
 /**
  * Both fields optional and independently settable — either replaces this metric's whole row

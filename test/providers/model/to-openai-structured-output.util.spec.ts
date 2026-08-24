@@ -1,6 +1,7 @@
 import { z } from 'zod/v4';
 import { modelAnswerContractSchema } from '../../../src/features/evidence/qa/contracts/answer.contract';
-import { factExtractionResultSchema } from '../../../src/features/evidence/facts/contracts/fact-extraction.contract';
+import { buildFactExtractionResultSchema } from '../../../src/features/evidence/facts/contracts/fact-extraction.contract';
+import { METRIC_IDS } from '../../../src/features/evidence/facts/metric-ontology';
 import { toOpenAiStructuredOutputFormat } from '../../../src/providers/model/to-openai-structured-output.util';
 
 /** Recursively asserts the two strict-mode invariants OpenAI requires throughout a schema: every
@@ -49,9 +50,12 @@ describe('toOpenAiStructuredOutputFormat', () => {
   });
 
   it('should NOT wrap the plain-object-rooted fact-extraction contract', () => {
-    // `factExtractionResultSchema` is a plain `z.object` — its root is already `type: 'object'`,
-    // so no wrapping is needed for OpenAI's strict-mode root requirement.
-    const format = toOpenAiStructuredOutputFormat(factExtractionResultSchema, 'fact_extraction');
+    // `buildFactExtractionResultSchema`'s return is a plain `z.object` — its root is already
+    // `type: 'object'`, so no wrapping is needed for OpenAI's strict-mode root requirement.
+    const format = toOpenAiStructuredOutputFormat(
+      buildFactExtractionResultSchema(METRIC_IDS),
+      'fact_extraction',
+    );
 
     expect(format.wrapped).toBe(false);
     expect(format.json_schema.schema.type).toBe('object');
@@ -66,7 +70,10 @@ describe('toOpenAiStructuredOutputFormat', () => {
   });
 
   it('should hold the strict-mode invariants throughout the fact-extraction contract schema', () => {
-    const format = toOpenAiStructuredOutputFormat(factExtractionResultSchema, 'fact_extraction');
+    const format = toOpenAiStructuredOutputFormat(
+      buildFactExtractionResultSchema(METRIC_IDS),
+      'fact_extraction',
+    );
 
     assertStrictModeInvariants(format.json_schema.schema);
   });

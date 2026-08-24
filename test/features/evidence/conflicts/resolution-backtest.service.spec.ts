@@ -139,7 +139,7 @@ describe('ResolutionBacktestService', () => {
     policySpy.mockRestore();
   });
 
-  it("scores 'silent' when the metric has no configured authorityOrder, also exercising the unconfigured-metric policy fallback", async () => {
+  it("scores 'silent' when the metric has an entry in the resolved map but no configured authorityOrder", async () => {
     const conflictId = new Types.ObjectId();
     const factIdA = new Types.ObjectId();
     const factIdB = new Types.ObjectId();
@@ -162,9 +162,12 @@ describe('ResolutionBacktestService', () => {
       observedAt: undefined,
     };
     mockConflictModel.find.mockResolvedValueOnce([conflict]);
-    // `cap_rate` has no entry in this tenant's resolved map — exercises the `policies.get() ??`
-    // fallback default, distinct from METRIC_ONTOLOGY's own byte-identical default.
-    mockMetricPoliciesService.resolveForTenant.mockResolvedValueOnce(new Map());
+    // `cap_rate` has an entry in this tenant's resolved map (Gate THREE's `policies.has` passes)
+    // but no `authorityOrder` — the policy genuinely has no opinion, distinct from the metric
+    // being absent from the tenant's active pack entirely (see the `unscorable` test below).
+    mockMetricPoliciesService.resolveForTenant.mockResolvedValueOnce(
+      new Map([['cap_rate', { authorityOrder: undefined, stalenessWindowMs: Infinity }]]),
+    );
     mockExtractedFactModel.find.mockResolvedValueOnce([factA, factB]);
     mockDocumentVersionModel.find.mockResolvedValueOnce([]);
     const policySpy = jest.spyOn(resolveConflictPolicyModule, 'resolveConflictPolicy');
@@ -184,6 +187,62 @@ describe('ResolutionBacktestService', () => {
       },
     ]);
     expect(result.silent).toBe(1);
+    expect(result.agreementRate).toBeNull();
+    policySpy.mockRestore();
+  });
+
+  // Gate THREE: a metric absent from the tenant's currently resolved active pack (dropped by a
+  // pack revision since this conflict was detected) has no policy row to look up at all — this
+  // must score `unscorable`, not `silent`, because there is no rule to author for a metric the
+  // pack no longer contains. The spy proves the gate runs BEFORE the policy call.
+  it("scores a conflict whose metric is absent from the tenant's active pack as unscorable, without calling resolveConflictPolicy", async () => {
+    const conflictId = new Types.ObjectId();
+    const factIdA = new Types.ObjectId();
+    const factIdB = new Types.ObjectId();
+    const conflict = {
+      _id: conflictId,
+      factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+      factIds: [factIdA, factIdB],
+      resolution: { outcome: 'resolved', winningFactId: factIdA, resolvedAt: new Date() },
+    };
+    const factA = {
+      _id: factIdA,
+      value: { amount: 5.25, unit: 'percent' },
+      documentVersionId: new Types.ObjectId(),
+      observedAt: undefined,
+    };
+    const factB = {
+      _id: factIdB,
+      value: { amount: 6.1, unit: 'percent' },
+      documentVersionId: new Types.ObjectId(),
+      observedAt: undefined,
+    };
+    mockConflictModel.find.mockResolvedValueOnce([conflict]);
+    // `cap_rate` has no entry at all in this tenant's resolved map — the active pack has dropped
+    // it, distinct from an entry with no `authorityOrder` (the `silent` test above).
+    mockMetricPoliciesService.resolveForTenant.mockResolvedValueOnce(new Map());
+    mockExtractedFactModel.find.mockResolvedValueOnce([factA, factB]);
+    // `run`'s batched `loadSourceClassByFactId` call runs before `scoreConflict` for any conflict
+    // — it is not gated by Gate THREE, so it still queries here; resolving no versions makes the
+    // downstream `documentModel.find` short-circuit, mirroring the `silent` test's own arrangement.
+    mockDocumentVersionModel.find.mockResolvedValueOnce([]);
+    const policySpy = jest.spyOn(resolveConflictPolicyModule, 'resolveConflictPolicy');
+
+    const result = await service.run('tenant-a');
+
+    expect(policySpy).not.toHaveBeenCalled();
+    expect(mockDocumentModel.find).not.toHaveBeenCalled();
+    expect(result.results).toEqual([
+      {
+        conflictId: conflictId.toString(),
+        factKey: conflict.factKey,
+        verdict: 'unscorable',
+        recordedOutcome: 'resolved',
+        recordedWinningFactId: factIdA.toString(),
+        unscorableReason: "Metric 'cap_rate' is not defined by the tenant's active metric pack.",
+      },
+    ]);
+    expect(result.unscorable).toBe(1);
     expect(result.agreementRate).toBeNull();
     policySpy.mockRestore();
   });
@@ -402,6 +461,10 @@ describe('ResolutionBacktestService', () => {
           'net_operating_income',
           { authorityOrder: ['pm-export', 'spreadsheet'], stalenessWindowMs: Infinity },
         ],
+        // `cap_rate` has an entry (Gate THREE passes) but no `authorityOrder` — the silent
+        // conflict's policy genuinely has no opinion, distinct from the metric being absent from
+        // the active pack.
+        ['cap_rate', { authorityOrder: undefined, stalenessWindowMs: Infinity }],
       ]),
     );
     mockExtractedFactModel.find.mockResolvedValueOnce([

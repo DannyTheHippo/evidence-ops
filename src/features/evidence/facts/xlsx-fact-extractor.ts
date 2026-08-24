@@ -7,8 +7,12 @@ import type {
   FactKey,
   FactValue,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
+// The pack schema's `MetricDefinition` (`id: string`), not `metric-ontology.ts`'s own
+// (`id: MetricId`) — a caller passes a resolved `MetricPackData`'s metrics here, per-tenant, not
+// necessarily the closed CRE ontology. Mirrors `prose-fact-extractor.ts`'s identical import.
+import type { MetricDefinition } from '../../../database/schemas/evidence/metric-pack/metric-pack.schema';
 import { derivePeriodFromDateText } from './derive-period';
-import { findMetricByAlias, type MetricDefinition } from './metric-ontology';
+import { findMetricByAlias } from './metric-ontology';
 import { parseCalendarDate } from './parse-calendar-date';
 import type { ParsedElement } from '../ingestion/parsers/parsed-element.type';
 import { detectHeaderRow } from '../ingestion/sheet-header';

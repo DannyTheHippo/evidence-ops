@@ -1,5 +1,4 @@
 import { z } from 'zod/v4';
-import { METRIC_IDS } from '../metric-ontology';
 
 // `zod/v4` specifically, matching `model-provider.interface.ts` — the schema here is passed
 // straight through to `ModelProvider.generate`'s `outputSchema`, which is typed against `zod/v4`'s
@@ -9,39 +8,48 @@ import { METRIC_IDS } from '../metric-ontology';
 
 /**
  * One fact the model proposes from a chunk of document text. Everything here is untrusted until
- * the application verifies it: `metric` is the only field zod itself constrains to the ontology
- * (via `z.enum(METRIC_IDS)`); `unit` and `quote` are verified against the ontology and the source
+ * the application verifies it: `metric` is the only field zod itself constrains to the allowlist
+ * `metricIds` passes in — `unit` and `quote` are verified against the resolved pack and the source
  * chunk respectively by `prose-fact-extractor.ts` after the call returns — a schema can shape the
  * JSON, but only application code can check a quote is real.
+ *
+ * Built from `metricIds` rather than a module-level constant because the allowlist is per-tenant
+ * pack data (`MetricPacksService.resolveActive`), not a fixed ontology — `prose-fact-extractor.ts`
+ * calls this once per extraction with the resolved pack's metric ids, in the pack's own order, so
+ * two tenants resolving to the same pack get byte-identical schemas.
  */
-export const factCandidateSchema = z.object({
-  entity: z.string().min(1),
-  metric: z.enum(METRIC_IDS),
-  /** The literal date/time phrase the source states for this fact (e.g. "March 2025",
-   * "2025-03-14"), or an empty string when the source states no period at all. Left as raw text,
-   * not a pre-formatted period, because coarsening it to the shared `entity/metric/period`
-   * granularity is `derivePeriodFromDateText`'s job (`derive-period.ts`) — the one place that
-   * logic lives, rather than trusting the model to reproduce it. */
-  periodText: z.string(),
-  /** An ISO `YYYY-MM-DD` date the source text explicitly states as when this value was observed
-   * or recorded, or an empty string when the source states no observation date. Never inferred,
-   * guessed, or derived from surrounding context — an invented observation date is worse than
-   * none, because a recency rule would then fire on evidence that never actually carried one.
-   * Parsed and calendar-validated by `prose-fact-extractor.ts`, never trusted as-is: an empty or
-   * malformed string, or one that names a date the calendar has no such day for, leaves the fact's
-   * observation date absent rather than defaulted to anything. */
-  observedAtText: z.string(),
-  amount: z.number(),
-  unit: z.string().min(1),
-  /** Verbatim substring of the chunk the value comes from — the grounding gate rejects any
-   * candidate whose quote does not literally appear in the chunk text (`prose-fact-extractor.ts`).
-   * Capped at 300 characters to match `answer.contract.ts`'s citation quote limit. */
-  quote: z.string().min(1).max(300),
-  confidence: z.number().min(0).max(1),
-});
+export function buildFactCandidateSchema(metricIds: readonly string[]) {
+  return z.object({
+    entity: z.string().min(1),
+    metric: z.enum(metricIds),
+    /** The literal date/time phrase the source states for this fact (e.g. "March 2025",
+     * "2025-03-14"), or an empty string when the source states no period at all. Left as raw text,
+     * not a pre-formatted period, because coarsening it to the shared `entity/metric/period`
+     * granularity is `derivePeriodFromDateText`'s job (`derive-period.ts`) — the one place that
+     * logic lives, rather than trusting the model to reproduce it. */
+    periodText: z.string(),
+    /** An ISO `YYYY-MM-DD` date the source text explicitly states as when this value was observed
+     * or recorded, or an empty string when the source states no observation date. Never inferred,
+     * guessed, or derived from surrounding context — an invented observation date is worse than
+     * none, because a recency rule would then fire on evidence that never actually carried one.
+     * Parsed and calendar-validated by `prose-fact-extractor.ts`, never trusted as-is: an empty or
+     * malformed string, or one that names a date the calendar has no such day for, leaves the fact's
+     * observation date absent rather than defaulted to anything. */
+    observedAtText: z.string(),
+    amount: z.number(),
+    unit: z.string().min(1),
+    /** Verbatim substring of the chunk the value comes from — the grounding gate rejects any
+     * candidate whose quote does not literally appear in the chunk text (`prose-fact-extractor.ts`).
+     * Capped at 300 characters to match `answer.contract.ts`'s citation quote limit. */
+    quote: z.string().min(1).max(300),
+    confidence: z.number().min(0).max(1),
+  });
+}
 
-export type FactCandidateOutput = z.infer<typeof factCandidateSchema>;
+export type FactCandidateOutput = z.infer<ReturnType<typeof buildFactCandidateSchema>>;
 
-export const factExtractionResultSchema = z.object({
-  facts: z.array(factCandidateSchema),
-});
+export function buildFactExtractionResultSchema(metricIds: readonly string[]) {
+  return z.object({
+    facts: z.array(buildFactCandidateSchema(metricIds)),
+  });
+}

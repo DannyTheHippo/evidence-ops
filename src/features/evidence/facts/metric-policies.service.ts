@@ -10,7 +10,8 @@ import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { SurvivorshipPolicy } from '../conflicts/resolve-conflict-policy';
 import { UnknownMetricException } from './exceptions/facts.exception';
-import { findMetricById, METRIC_ONTOLOGY, type MetricId } from './metric-ontology';
+import { findMetricById } from './metric-ontology';
+import { MetricPacksService } from './metric-packs.service';
 
 /**
  * One authored row as the API returns it. `id` is a plain string rather than the document's
@@ -21,7 +22,7 @@ import { findMetricById, METRIC_ONTOLOGY, type MetricId } from './metric-ontolog
  */
 export interface MetricPolicyResult {
   readonly id: string;
-  readonly metric: MetricId;
+  readonly metric: string;
   readonly authorityOrder?: DocumentSourceClass[];
   readonly stalenessWindowMs?: number;
   readonly createdAt: Date;
@@ -38,14 +39,16 @@ function toMetricPolicyResult(row: MetricPolicyDocument): MetricPolicyResult {
 }
 
 /**
- * Folds a tenant's authored `MetricPolicy` rows (`metric-policy.schema.ts`) over
- * `METRIC_ONTOLOGY`'s built-in survivorship defaults, one entry per metric the ontology defines.
- * A tenant row for a metric replaces that metric's whole policy — `authorityOrder` and
- * `stalenessWindowMs` together — rather than merging field by field, so an operator who clears a
- * staleness window stays distinguishable from one who never authored a row at all. A metric with
- * no authored row resolves to exactly what a manual `metric?.field ?? default` lookup against
- * `METRIC_ONTOLOGY` already produces, so a tenant that has never authored a policy sees the same
- * survivorship behaviour this collection did not change.
+ * Folds a tenant's authored `MetricPolicy` rows (`metric-policy.schema.ts`) over the tenant's
+ * resolved active metric pack's (`MetricPacksService.resolveActive`) built-in survivorship
+ * defaults, one entry per metric the resolved pack defines. A tenant row for a metric replaces
+ * that metric's whole policy — `authorityOrder` and `stalenessWindowMs` together — rather than
+ * merging field by field, so an operator who clears a staleness window stays distinguishable from
+ * one who never authored a row at all. A metric with no authored row resolves to exactly what a
+ * manual `metric?.field ?? default` lookup against the resolved pack already produces, so a
+ * tenant that has never authored a policy — and has never authored a pack either, resolving to
+ * the code default `CRE_PACK_V1` — sees the same survivorship behaviour this collection did not
+ * change.
  */
 @Injectable()
 export class MetricPoliciesService {
@@ -53,6 +56,7 @@ export class MetricPoliciesService {
     @InjectModel(MetricPolicy.name)
     private readonly metricPolicyModel: Model<MetricPolicyDocument>,
 
+    private readonly metricPacksService: MetricPacksService,
     private readonly auditService: AuditService,
     private readonly logger: AppLogger,
   ) {
@@ -63,12 +67,15 @@ export class MetricPoliciesService {
    *  same reasoning `CanonicalEntityService.resolve`'s identical explicit `tenantId` filter
    *  documents: a survivorship policy is exactly the kind of result that must never silently
    *  widen to another tenant's overrides. */
-  async resolveForTenant(tenantId: string): Promise<Map<MetricId, SurvivorshipPolicy>> {
-    const rows = await this.metricPolicyModel.find({ tenantId });
+  async resolveForTenant(tenantId: string): Promise<Map<string, SurvivorshipPolicy>> {
+    const [rows, pack] = await Promise.all([
+      this.metricPolicyModel.find({ tenantId }),
+      this.metricPacksService.resolveActive(tenantId),
+    ]);
     const rowByMetric = new Map(rows.map((row) => [row.metric, row]));
 
-    const policies = new Map<MetricId, SurvivorshipPolicy>();
-    for (const metric of METRIC_ONTOLOGY) {
+    const policies = new Map<string, SurvivorshipPolicy>();
+    for (const metric of pack.metrics) {
       const override = rowByMetric.get(metric.id);
       policies.set(metric.id, {
         authorityOrder: override ? override.authorityOrder : metric.authorityOrder,
@@ -85,10 +92,10 @@ export class MetricPoliciesService {
     return policies;
   }
 
-  /** The tenant's stored rows, exactly as authored — not `resolveForTenant`'s ontology-folded
-   *  map. Sorted by metric for a deterministic listing. Mapped to {@link MetricPolicyResult}
-   *  rather than returned as documents: see that interface's own comment for why a document
-   *  reaching the response DTO loses its `id`. */
+  /** The tenant's stored rows, exactly as authored — not `resolveForTenant`'s pack-folded map.
+   *  Sorted by metric for a deterministic listing. Mapped to {@link MetricPolicyResult} rather
+   *  than returned as documents: see that interface's own comment for why a document reaching the
+   *  response DTO loses its `id`. */
   async listForTenant(tenantId: string): Promise<MetricPolicyResult[]> {
     const rows = await this.metricPolicyModel.find({ tenantId }, null, { sort: { metric: 1 } });
     return rows.map((row) => toMetricPolicyResult(row));
@@ -96,19 +103,24 @@ export class MetricPoliciesService {
 
   /**
    * Upserts one metric's whole row. `authorityOrder`/`stalenessWindowMs` duplicate-rank and
-   * `'unclassified'`/`>= 1` rejection happens on the request DTO before this runs — this method's
-   * job is only the whole-row replace: a field omitted from `updates` is `$unset`, not left at
-   * whatever an earlier `PUT` stored, so a repeated call can never leave a stale field behind.
-   * Uses `findOneAndUpdate` rather than `findOneAndReplace` because `auditablePlugin` only hooks
-   * the former — a replace would silently skip the `createdBy`/`updatedBy` stamp.
+   * `'unclassified'`/`>= 1` rejection happens on the request DTO before this runs; `metric` itself
+   * is checked here, against the tenant's resolved active pack, rather than by a schema-level
+   * `enum` — which metric ids are valid is a per-tenant runtime fact, not a fixed compile-time
+   * list, so this check fails CLOSED against exactly the allowlist that would otherwise reject the
+   * row at write time. This method's remaining job is the whole-row replace: a field omitted from
+   * `updates` is `$unset`, not left at whatever an earlier `PUT` stored, so a repeated call can
+   * never leave a stale field behind. Uses `findOneAndUpdate` rather than `findOneAndReplace`
+   * because `auditablePlugin` only hooks the former — a replace would silently skip the
+   * `createdBy`/`updatedBy` stamp.
    */
   async upsert(
     tenantId: string,
-    metric: MetricId,
+    metric: string,
     updates: { authorityOrder?: DocumentSourceClass[]; stalenessWindowMs?: number },
     actorId: string,
   ): Promise<MetricPolicyResult> {
-    if (!findMetricById(METRIC_ONTOLOGY, metric)) {
+    const pack = await this.metricPacksService.resolveActive(tenantId);
+    if (!findMetricById(pack.metrics, metric)) {
       throw new UnknownMetricException(`'${metric}' is not a recognized metric`);
     }
 
@@ -151,12 +163,14 @@ export class MetricPoliciesService {
     return toMetricPolicyResult(policy);
   }
 
-  /** Reverts a metric to the code ontology default by deleting its authored row. Idempotent: a
-   *  metric with no authored row is already at the default, so a second call is a no-op rather
+  /** Reverts a metric to the tenant's active pack default by deleting its authored row. Idempotent:
+   *  a metric with no authored row is already at the default, so a second call is a no-op rather
    *  than an error — and, having deleted nothing, records no audit row either, since there is no
-   *  surviving document to name as the subject. */
-  async remove(tenantId: string, metric: MetricId, actorId: string): Promise<void> {
-    if (!findMetricById(METRIC_ONTOLOGY, metric)) {
+   *  surviving document to name as the subject. `metric` is checked against the tenant's resolved
+   *  active pack for the same reason `upsert` checks it there rather than via a schema `enum`. */
+  async remove(tenantId: string, metric: string, actorId: string): Promise<void> {
+    const pack = await this.metricPacksService.resolveActive(tenantId);
+    if (!findMetricById(pack.metrics, metric)) {
       throw new UnknownMetricException(`'${metric}' is not a recognized metric`);
     }
 

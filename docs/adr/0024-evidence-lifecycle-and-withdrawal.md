@@ -123,10 +123,9 @@ decision made against those facts stays exactly as legible after the source file
 them disappears as it was before.
 
 The invariance property this preserves: **a `ResolutionBacktestService` report is identical before
-and after withdrawing every document behind a resolved conflict.** Nothing currently exercises
-this property as a regression test (see Known bounds) — it holds today purely because neither
-lookup carries the predicate, verified by reading both call sites, not by a test that would fail if
-someone added one.
+and after withdrawing every document behind a resolved conflict.** `test/e2e/resolution-backtest.e2e-spec.ts`
+exercises this property as a regression test (see Known bounds) — it would fail if either lookup
+gained a `withdrawnAt` predicate "for consistency" with the retrieval path.
 
 ### Scanned PDFs quarantine rather than fail
 
@@ -159,11 +158,15 @@ field for it exists today, and OCR itself is explicitly out of scope for this ch
 2. **An operator who genuinely empties a source gets no automatic withdrawal.** All three guards
    (G1/G2/G3) fail toward retention by design (§ Three guards). The admin delete path is the
    deliberate escape hatch, not an oversight.
-3. **The conflicts/backtest invariance has no regression test today.** `ResolutionBacktestService.run`
-   and `loadSourceClassByFactId` provably carry no `withdrawnAt` predicate as of this ADR, but nothing
-   asserts that a future change adding one — "for consistency" with the retrieval path — would be
-   caught before it silently changed what every existing backtest report means. This is a real gap:
-   the invariance is currently guaranteed by inspection, not by CI.
+3. **The conflicts/backtest invariance is pinned by one e2e, not by every call site.**
+   `test/e2e/resolution-backtest.e2e-spec.ts`'s `'returns an identical report before and after
+   withdrawing every document behind a resolved conflict'` asserts a `GET
+   /api/v1/conflicts/resolution-backtest` report is deep-equal (`toEqual`) before and after
+   withdrawing every `DocumentVersion` a resolved conflict's facts point to. That test would fail
+   the moment `ResolutionBacktestService.run` or `loadSourceClassByFactId` gained a `withdrawnAt`
+   predicate — the exact "for consistency" change this bound used to say nothing would catch. It
+   still does not exercise every other reader of a withdrawn version's data (a direct chunk fetch,
+   an old answer's citation) — only this one report shape is under CI.
 4. **Retrieval's over-fetch changes the ANN candidate pool.** `RETRIEVAL_OVER_FETCH_MULTIPLIER = 2`
    is a fixed widening applied unconditionally, not scaled to how many withdrawn versions are
    actually present in a given tenant's corpus. A tenant with many withdrawn versions concentrated
@@ -185,11 +188,11 @@ file, and the Data Room UI and `DocumentsService.list`'s filter can tell the two
 **Costs.** Retrieval always over-fetches by a fixed multiplier now, whether or not the tenant has
 any withdrawn versions at all, and that changes the ANN candidate pool relative to a
 non-over-fetched run (Known bounds 4). The conflicts/backtest invariance (§ Conflicts are
-deliberately untouched by withdrawal) is real but currently unguarded by any test (Known bounds 3).
+deliberately untouched by withdrawal) is guarded by one e2e, not by every reader of a withdrawn
+version's data (Known bounds 3).
 
 **Deferred, deliberately.** An OCR provider seam (§ Scanned PDFs quarantine rather than fail) is
-described, not designed. Whether the conflicts/backtest invariance gets an explicit regression test
-is an open question this ADR surfaces but does not resolve.
+described, not designed.
 
 ## Related
 

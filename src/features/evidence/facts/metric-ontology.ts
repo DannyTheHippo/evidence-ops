@@ -24,6 +24,16 @@ export const METRIC_IDS = [
 
 export type MetricId = (typeof METRIC_IDS)[number];
 
+/**
+ * Which pack produced `METRIC_ONTOLOGY` below, stamped onto every `ExtractedFact`/`Conflict` this
+ * codebase writes (`FactsService.extractFacts`, `ConflictsService.scanForConflicts`) so a row
+ * persisted today stays attributable once a tolerance becomes per-engagement editable. `'cre'` v1
+ * is byte-identical to `METRIC_ONTOLOGY` as defined in this file — the only ontology this code has
+ * ever had — so every existing row is provably a `'cre'` v1 row, not a guess.
+ */
+export const ACTIVE_PACK_ID = 'cre';
+export const ACTIVE_PACK_VERSION = 1;
+
 export type FactValueType = 'currency' | 'percentage' | 'area' | 'duration';
 
 export type ToleranceKind = 'absolute' | 'relative';
@@ -243,11 +253,12 @@ function normalizeAlias(text: string): string {
 
 /** Case-insensitive match against a metric's label and aliases — how the deterministic xlsx
  * extractor maps a column header to a metric, and how a system prompt is built to explain the
- * allowlist to the model. */
-export function findMetricByAlias(
-  ontology: readonly MetricDefinition[],
-  headerOrPhrase: string,
-): MetricDefinition | undefined {
+ * allowlist to the model. Generic over the metric-definition shape for the same reason
+ * `findMetricById` below is: the xlsx extractor now matches against a resolved `MetricPackData`'s
+ * metrics (`metric-pack.schema.ts`, `id: string`), not only this file's own `METRIC_ONTOLOGY`. */
+export function findMetricByAlias<
+  T extends { readonly label: string; readonly aliases: readonly string[] },
+>(ontology: readonly T[], headerOrPhrase: string): T | undefined {
   const needle = normalizeAlias(headerOrPhrase);
   return ontology.find(
     (metric) =>
@@ -256,9 +267,13 @@ export function findMetricByAlias(
   );
 }
 
-export function findMetricById(
-  ontology: readonly MetricDefinition[],
+/** Generic over the metric-definition shape rather than fixed to this file's own
+ * `MetricDefinition` so a caller working from a resolved `MetricPackData` (`metric-pack.schema.ts`,
+ * whose `MetricDefinition.id` is a plain `string` rather than the closed `MetricId` union) can use
+ * the same lookup as a caller still working from `METRIC_ONTOLOGY` directly. */
+export function findMetricById<T extends { readonly id: string }>(
+  ontology: readonly T[],
   id: string,
-): MetricDefinition | undefined {
+): T | undefined {
   return ontology.find((metric) => metric.id === id);
 }

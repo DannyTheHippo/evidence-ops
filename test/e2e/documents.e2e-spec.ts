@@ -45,6 +45,10 @@ import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts
 const FIXTURES = path.join(__dirname, '../../fixtures/data-room');
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
+// Every fixture in this file extracts against the 'cre' v1 pack — the only ontology this code
+// has ever had (`metric-ontology.ts`).
+const PACK_STAMP = { packId: 'cre', packVersion: 1 } as const;
+
 interface DocumentVersionBody {
   id: string;
   versionNumber: number;
@@ -491,6 +495,7 @@ describe('Documents (e2e)', () => {
         rawText: 'NOI of $480,000',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-unclassified',
         documentVersionId: new Types.ObjectId(uploadedVersionId),
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'B2' },
@@ -503,6 +508,7 @@ describe('Documents (e2e)', () => {
         rawText: 'NOI of $500,000',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-pm',
         documentVersionId: pmVersion._id,
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Rent Roll', cell: 'B2' },
@@ -513,6 +519,8 @@ describe('Documents (e2e)', () => {
         groupKeyNormalized: groupKey(factKey),
         factIds: [unclassifiedFact._id, pmFact._id],
         magnitude: 20000,
+        magnitudeUnit: 'usd',
+        ...PACK_STAMP,
         status: 'open',
       });
 
@@ -879,6 +887,7 @@ describe('Documents (e2e)', () => {
         rawText: 'cap rate of 5.25%',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-xlsx',
         documentVersionId: new Types.ObjectId(versionId),
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
@@ -891,6 +900,7 @@ describe('Documents (e2e)', () => {
         rawText: 'cap rate of 6.10%',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-prose',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
@@ -901,6 +911,8 @@ describe('Documents (e2e)', () => {
         tenantId,
         factIds: [deletedFact._id, survivingFact._id],
         magnitude: 0.0085,
+        magnitudeUnit: 'ratio',
+        ...PACK_STAMP,
         status: 'open',
       });
 
@@ -988,6 +1000,7 @@ describe('Documents (e2e)', () => {
         rawText: 'cap rate of 5.25%',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-xlsx-3fact',
         documentVersionId: new Types.ObjectId(versionId),
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F3' },
@@ -1000,6 +1013,7 @@ describe('Documents (e2e)', () => {
         rawText: 'cap rate of 6.10%',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-prose-a',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
@@ -1012,6 +1026,7 @@ describe('Documents (e2e)', () => {
         rawText: 'cap rate of 5.80%',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-prose-b',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 4 },
@@ -1022,6 +1037,8 @@ describe('Documents (e2e)', () => {
         tenantId,
         factIds: [deletedFact._id, survivingFactA._id, survivingFactB._id],
         magnitude: 0.011,
+        magnitudeUnit: 'ratio',
+        ...PACK_STAMP,
         status: 'open',
       });
 
@@ -1085,6 +1102,7 @@ describe('Documents (e2e)', () => {
         rawText: 'cap rate of 5.25%',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-xlsx-resolved',
         documentVersionId: new Types.ObjectId(versionId),
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F4' },
@@ -1097,6 +1115,7 @@ describe('Documents (e2e)', () => {
         rawText: 'cap rate of 6.10%',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-prose-resolved',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 3 },
@@ -1107,6 +1126,8 @@ describe('Documents (e2e)', () => {
         tenantId,
         factIds: [deletedFact._id, survivingFact._id],
         magnitude: 0.0085,
+        magnitudeUnit: 'ratio',
+        ...PACK_STAMP,
         status: 'resolved',
         resolution: {
           outcome: 'resolved',
@@ -1155,6 +1176,7 @@ describe('Documents (e2e)', () => {
         rawText: 'cap rate of 5.25%',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-xlsx-orphaned',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F5' },
@@ -1167,6 +1189,7 @@ describe('Documents (e2e)', () => {
         rawText: 'cap rate of 6.10%',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-prose-orphaned',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 5 },
@@ -1177,6 +1200,8 @@ describe('Documents (e2e)', () => {
         tenantId,
         factIds: [factLow._id, factHigh._id],
         magnitude: 0.0085,
+        magnitudeUnit: 'ratio',
+        ...PACK_STAMP,
         status: 'resolved',
         resolution: { outcome: 'resolved', winningFactId: factLow._id, resolvedAt: new Date() },
       });

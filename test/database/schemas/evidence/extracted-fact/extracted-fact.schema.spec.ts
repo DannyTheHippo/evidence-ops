@@ -18,6 +18,8 @@ const buildFactInput = () => ({
   rawText: 'Revenue for Q3 2025 was $12.0M',
   confidence: 0.92,
   extractionMethod: 'llm' as const,
+  packId: 'cre',
+  packVersion: 1,
   // Content-addressed (`computeChunkId`), not an ObjectId — see `EvidenceChunk._id`'s doc comment.
   chunkId: 'chunk-b7',
   documentVersionId: new mongoose.Types.ObjectId(),
@@ -36,7 +38,7 @@ describe('ExtractedFact schema', () => {
       ExtractedFactSchema,
     );
 
-    it('requires factKey, value, rawText, confidence, extractionMethod, chunkId, and locator', () => {
+    it('requires factKey, value, rawText, confidence, extractionMethod, packId, packVersion, chunkId, and locator', () => {
       const fact = new ExtractedFactModel({});
 
       const error = fact.validateSync();
@@ -46,6 +48,8 @@ describe('ExtractedFact schema', () => {
       expect(error?.errors.rawText).toBeDefined();
       expect(error?.errors.confidence).toBeDefined();
       expect(error?.errors.extractionMethod).toBeDefined();
+      expect(error?.errors.packId).toBeDefined();
+      expect(error?.errors.packVersion).toBeDefined();
       expect(error?.errors.chunkId).toBeDefined();
       expect(error?.errors.locator).toBeDefined();
       expect(error?.errors.tenantId).toBeDefined();

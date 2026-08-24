@@ -16,6 +16,7 @@ import {
   ExtractedFactDocument,
   type FactKey,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import type { MetricPackData } from '../../../database/schemas/evidence/metric-pack/metric-pack.schema';
 import {
   MODEL_PROVIDER,
   type ModelProvider,
@@ -31,7 +32,7 @@ import { ParserRegistry } from '../ingestion/parser.registry';
 import type { ParsedElement } from '../ingestion/parsers/parsed-element.type';
 import { CanonicalEntityService } from './canonical-entity.service';
 import { DocumentVersionNotFoundException } from './exceptions/facts.exception';
-import { METRIC_ONTOLOGY } from './metric-ontology';
+import { MetricPacksService } from './metric-packs.service';
 import { extractProseFacts, type ProseFactExtractionResult } from './prose-fact-extractor';
 import { findXlsxRegionChunk, parseRowFromCellAddress } from './resolve-xlsx-fact-chunk';
 import { extractXlsxFacts, type FactCandidate } from './xlsx-fact-extractor';
@@ -75,6 +76,8 @@ export class FactsService {
     private readonly parserRegistry: ParserRegistry,
 
     private readonly canonicalEntityService: CanonicalEntityService,
+
+    private readonly metricPacksService: MetricPacksService,
 
     private readonly config: TypedConfigService,
 
@@ -146,6 +149,12 @@ export class FactsService {
       );
     }
 
+    // Resolved once per extraction, not once per branch: both the xlsx and prose paths detect
+    // against the same tenant's ontology, and every fact this call inserts stamps `packId`/
+    // `packVersion` from this same resolution, so detection and attribution never disagree about
+    // which pack was in force.
+    const pack = await this.metricPacksService.resolveActive(tenantId);
+
     const parser = this.parserRegistry.resolve(stored.contentType);
     const parsed = await parser.parse(stored.content);
 
@@ -153,9 +162,9 @@ export class FactsService {
     let candidates: (FactCandidate & { chunkId: string })[];
     let skippedChunkCount = 0;
     if (isSpreadsheet) {
-      candidates = await this.buildXlsxCandidates(version._id, parsed.elements, tenantId);
+      candidates = await this.buildXlsxCandidates(version._id, parsed.elements, tenantId, pack);
     } else {
-      const prose = await this.buildProseCandidates(version._id, parsed.elements, tenantId);
+      const prose = await this.buildProseCandidates(version._id, parsed.elements, tenantId, pack);
       candidates = prose.candidates;
       skippedChunkCount = prose.skippedChunkCount;
     }
@@ -178,6 +187,8 @@ export class FactsService {
           rawText: candidate.rawText,
           confidence: candidate.confidence,
           extractionMethod: candidate.extractionMethod,
+          packId: pack.packId,
+          packVersion: pack.version,
           chunkId: candidate.chunkId,
           documentVersionId: version._id,
           locator: candidate.locator,
@@ -283,6 +294,7 @@ export class FactsService {
     versionId: Types.ObjectId,
     elements: readonly ParsedElement[],
     tenantId: string,
+    pack: MetricPackData,
   ): Promise<(FactCandidate & { chunkId: string })[]> {
     const chunks = await this.evidenceChunkModel.find({ documentVersionId: versionId, tenantId });
     if (chunks.length === 0) {
@@ -297,7 +309,7 @@ export class FactsService {
     // `rejected` is always empty for real input — a log statement gated on it would be dead code
     // in this 100%-coverage-gated file. `extractXlsxFacts`'s own test suite (a synthetic,
     // deliberately misconfigured ontology) is where that branch is exercised.
-    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(elements, pack.metrics);
 
     const candidates: (FactCandidate & { chunkId: string })[] = [];
     for (const candidate of accepted) {
@@ -326,6 +338,7 @@ export class FactsService {
     versionId: Types.ObjectId,
     elements: readonly ParsedElement[],
     tenantId: string,
+    pack: MetricPackData,
   ): Promise<{
     readonly candidates: (FactCandidate & { chunkId: string })[];
     readonly skippedChunkCount: number;
@@ -352,7 +365,7 @@ export class FactsService {
           chunkLocator: chunk.locator,
           sourceElements: elements,
           modelProvider: this.modelProvider,
-          ontology: METRIC_ONTOLOGY,
+          ontology: pack.metrics,
           tenantId,
         }),
     );

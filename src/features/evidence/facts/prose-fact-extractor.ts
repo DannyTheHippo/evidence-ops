@@ -4,17 +4,21 @@ import type {
   FactKey,
   FactValue,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
+// The pack schema's `MetricDefinition` (`id: string`), not `metric-ontology.ts`'s own
+// (`id: MetricId`) — `ontology` here is a resolved `MetricPackData`'s metrics, per-tenant, not
+// necessarily the closed CRE ontology.
+import type { MetricDefinition } from '../../../database/schemas/evidence/metric-pack/metric-pack.schema';
 import type { ModelProvider } from '../../../providers/model/model-provider.interface';
 import { locateQuote } from '../../../shared/utils/locate-quote.util';
 import { EVIDENCE_DELIMITER_TAG } from '../ingestion/sanitize-evidence-text';
 import type { ParsedElement } from '../ingestion/parsers/parsed-element.type';
 import { agreeFacts, type AgreementReport } from './agree-facts';
 import {
-  factExtractionResultSchema,
+  buildFactExtractionResultSchema,
   type FactCandidateOutput,
 } from './contracts/fact-extraction.contract';
 import { derivePeriodFromDateText } from './derive-period';
-import { findMetricById, type MetricDefinition } from './metric-ontology';
+import { findMetricById } from './metric-ontology';
 import { parseCalendarDate } from './parse-calendar-date';
 
 export interface ExtractedFactInput {
@@ -226,13 +230,20 @@ export async function extractProseFacts(params: {
   // verification for a missing tag it never needed to include.
   const fencedChunkText = `<${EVIDENCE_DELIMITER_TAG}>\n${chunkText}\n</${EVIDENCE_DELIMITER_TAG}>`;
 
+  // Built once per chunk, reused across all `PASS_COUNT` calls — not once per pass — so every pass
+  // hits `computeCacheKey`'s identical schema hash. `ontology.map` preserves the resolved pack's
+  // own declared order with no sort or dedupe, since the allowlist prompt (`buildSystemPrompt`)
+  // and the enum here must list the same metrics in the same order to stay byte-identical for a
+  // tenant resolving to the same pack.
+  const outputSchema = buildFactExtractionResultSchema(ontology.map((metric) => metric.id));
+
   const settlements = await Promise.allSettled(
     Array.from({ length: PASS_COUNT }, (_, passOrdinal) =>
       modelProvider.generate({
         taskClass: 'fact_extraction',
         system: buildSystemPrompt(ontology),
         messages: [{ role: 'user', content: fencedChunkText }],
-        outputSchema: factExtractionResultSchema,
+        outputSchema,
         maxTokens: MAX_OUTPUT_TOKENS,
         maxCostUsd: MAX_COST_USD,
         passOrdinal,

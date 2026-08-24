@@ -30,8 +30,9 @@ import { ResolutionBacktestService } from './resolution-backtest.service';
 // `ProvidersModule` import is for `WORKFLOW_ENGINE`, `WorkflowRunsModule` for
 // `WorkflowRunsService` — both `ConflictsService.requestResolution` needs (see its own doc
 // comment and `WorkflowRunsModule`'s own comment naming this as the expected consumer).
-// `FactsModule` is for its exported `MetricPoliciesService` — `ConflictsService` reads a tenant's
-// resolved survivorship policy through it rather than registering `MetricPolicy` here itself.
+// `FactsModule` is for its exported `MetricPoliciesService` and `MetricPacksService` —
+// `ConflictsService` reads a tenant's resolved survivorship policy and active metric pack through
+// them rather than registering `MetricPolicy`/`MetricPack` here itself.
 // `Document`/`DocumentVersion` are for `ConflictsService`'s survivorship-proposal lookup —
 // resolving each disagreeing fact's `sourceClass` for `resolveConflictPolicy`. `Approval` is for
 // `requestResolution`'s own pending-duplicate guard — a read-only check against the same

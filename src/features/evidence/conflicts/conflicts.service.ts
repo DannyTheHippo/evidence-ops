@@ -23,6 +23,7 @@ import {
   type FactKey,
   type FactValue,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import type { MetricPackData } from '../../../database/schemas/evidence/metric-pack/metric-pack.schema';
 import {
   Approval,
   type ApprovalDocument,
@@ -36,7 +37,7 @@ import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
 import type { ResolveConflictWorkflowInput } from '../../../workflows/types';
-import { METRIC_ONTOLOGY, type MetricId } from '../facts/metric-ontology';
+import { MetricPacksService } from '../facts/metric-packs.service';
 import { MetricPoliciesService } from '../facts/metric-policies.service';
 import {
   WorkflowRunsService,
@@ -70,6 +71,10 @@ export interface ConflictScanResult {
    * caller (the `eval` harness, a future admin surface) can assert on or alert on the count without
    * scraping logs. Zero on every run where every fact's unit was recognized. */
   readonly skippedFactCount: number;
+}
+
+export interface ConflictRetractionResult {
+  readonly conflictsRetracted: number;
 }
 
 /** One side of an open `Conflict`, projected for `GroundingGateService.verify`'s
@@ -190,6 +195,7 @@ export class ConflictsService {
     private readonly workflowRunsService: WorkflowRunsService,
 
     private readonly metricPoliciesService: MetricPoliciesService,
+    private readonly metricPacksService: MetricPacksService,
 
     private readonly auditService: AuditService,
     private readonly logger: AppLogger,
@@ -223,7 +229,10 @@ export class ConflictsService {
     // Resolved once for the whole page, not once per conflict: `MetricPoliciesService
     // .resolveForTenant` is a query, and a page of N conflicts sharing (as most do) only a
     // handful of distinct metrics must not turn into N policy reads.
-    let policies = new Map<MetricId, SurvivorshipPolicy>();
+    let policies = new Map<string, SurvivorshipPolicy>();
+    // Resolved once for the whole page too, for the same reason — every row's `stale` flag
+    // (`toConflictDto`) compares against this one resolution rather than a per-row read.
+    let activePack: MetricPackData | undefined;
     if (conflicts.length > 0) {
       const everyFactId = [
         ...new Set(conflicts.flatMap((conflict) => conflict.factIds.map((id) => id.toString()))),
@@ -240,6 +249,7 @@ export class ConflictsService {
         tenantId,
       );
       policies = await this.metricPoliciesService.resolveForTenant(tenantId);
+      activePack = await this.metricPacksService.resolveActive(tenantId);
     }
 
     await this.auditService.record({
@@ -251,7 +261,16 @@ export class ConflictsService {
 
     return {
       docs: conflicts.map((conflict) =>
-        this.toConflictDto(conflict, factById, factEnrichmentByFactId, policies),
+        // `activePack` is always resolved by this point when `conflicts.length > 0` — the only
+        // condition under which this callback ever runs — same reasoning `factEnrichmentByFactId
+        // .get(...)`'s own `as` cast above documents for an equivalent "always present here" case.
+        this.toConflictDto(
+          conflict,
+          factById,
+          factEnrichmentByFactId,
+          policies,
+          activePack as MetricPackData,
+        ),
       ),
       count,
     };
@@ -259,8 +278,10 @@ export class ConflictsService {
 
   /**
    * Scans `ExtractedFact`s for one tenant, groups by `(entity, metric, period)`, and persists a
-   * `Conflict` for each group whose normalized values disagree by more than the metric's
-   * tolerance.
+   * `Conflict` for each group whose normalized values disagree by more than the tenant's active
+   * metric pack's tolerance for that metric (`MetricPacksService.resolveActive`, resolved once per
+   * call — every candidate this call detects, and every `Conflict` it inserts, is judged and
+   * stamped against that one resolution).
    *
    * Two paths over the identical `detectConflicts` core, chosen by whether `factKeys` is
    * `undefined` (not by emptiness — `factKeys: []` is a real "this ingest produced zero facts"
@@ -276,31 +297,25 @@ export class ConflictsService {
    *   Mongoose cursor rather than one `find()` materializing the whole collection — the
    *   maintenance/eval path (`npm run eval`, an admin re-scan), not the per-ingest hot path.
    *
-   * Idempotent by factKey rather than by a run identifier: a group that already has an `open`
-   * `Conflict` is skipped, so re-running either path after new evidence arrives only creates
-   * conflicts for keys that did not already have one — it never duplicates an existing one, and it
-   * never re-opens or touches a conflict a reviewer already resolved or dismissed (those statuses
-   * are read as "already handled", not as "needs a fresh Conflict record").
+   * `scanForConflictsByMetrics` below is a third path, metric-scoped rather than fact-scoped — it
+   * shares this method's incremental tail (`scanGroupKeys`) rather than duplicating it.
+   *
+   * Idempotent by group, not by run: a group with an `open` `Conflict` always blocks a new one. A
+   * `resolved`/`dismissed` `Conflict` blocks a new one only when its `factIds` exactly match the
+   * candidate's — the disagreement is unchanged, so there is nothing new to decide. A
+   * `resolved`/`dismissed` `Conflict` whose `factIds` differ from the candidate's — the group grew
+   * with a genuinely new fact — does not block: new evidence is a new decision, not a repeat of an
+   * old one.
    */
   async scanForConflicts(
     tenantId: string,
     factKeys?: readonly FactKey[],
   ): Promise<ConflictScanResult> {
+    const pack = await this.metricPacksService.resolveActive(tenantId);
+
     if (factKeys !== undefined) {
       const groupKeys = [...new Set(factKeys.map(groupKey))];
-      const facts = await this.extractedFactModel.find(
-        { tenantId, groupKeyNormalized: { $in: groupKeys } },
-        { factKey: 1, value: 1 },
-      );
-      return this.detectAndPersist(
-        tenantId,
-        facts.map((fact) => this.toFactForScan(fact)),
-        {
-          tenantId,
-          status: 'open',
-          groupKeyNormalized: { $in: groupKeys },
-        },
-      );
+      return this.scanGroupKeys(tenantId, groupKeys, pack);
     }
 
     const facts: FactForConflictScan[] = [];
@@ -308,7 +323,31 @@ export class ConflictsService {
     for await (const fact of cursor) {
       facts.push(this.toFactForScan(fact));
     }
-    return this.detectAndPersist(tenantId, facts, { tenantId, status: 'open' });
+    return this.detectAndPersist(tenantId, facts, { tenantId }, pack);
+  }
+
+  /**
+   * Scans only the groups whose `factKey.metric` is one of `metricIds` — the seam a future
+   * metric-pack activation trigger calls with exactly the metric ids a new version actually
+   * changed (a tolerance, a unit factor), never the whole tenant. Resolves `metricIds` to their
+   * `groupKeyNormalized` values via one `distinct` query, then shares `scanForConflicts`'s own
+   * incremental tail (`scanGroupKeys`) rather than a second copy of it — the same reasoning that
+   * method's own doc comment gives for sharing `detectConflicts`. `metricIds: []` resolves no
+   * groups and rescans nothing, the same "real empty result, not an unset param" contract
+   * `scanForConflicts`'s `factKeys: []` already keeps — a pack version that only renamed labels or
+   * added aliases changed no metric's detection config, so the caller passes an empty set and this
+   * method does no work at all.
+   */
+  async scanForConflictsByMetrics(
+    tenantId: string,
+    metricIds: readonly string[],
+  ): Promise<ConflictScanResult> {
+    const pack = await this.metricPacksService.resolveActive(tenantId);
+    const groupKeys = await this.extractedFactModel.distinct('groupKeyNormalized', {
+      tenantId,
+      'factKey.metric': { $in: [...metricIds] },
+    });
+    return this.scanGroupKeys(tenantId, groupKeys, pack);
   }
 
   private toFactForScan(fact: {
@@ -319,12 +358,33 @@ export class ConflictsService {
     return { id: fact._id.toString(), factKey: fact.factKey, value: fact.value };
   }
 
+  /** Shared tail of `scanForConflicts`'s `factKeys` branch and `scanForConflictsByMetrics`: load
+   * every fact in the given `groupKeyNormalized` set and hand it to `detectAndPersist`, scoped to
+   * that identical set for the existing-conflict idempotency check. */
+  private async scanGroupKeys(
+    tenantId: string,
+    groupKeys: readonly string[],
+    pack: MetricPackData,
+  ): Promise<ConflictScanResult> {
+    const facts = await this.extractedFactModel.find(
+      { tenantId, groupKeyNormalized: { $in: groupKeys } },
+      { factKey: 1, value: 1 },
+    );
+    return this.detectAndPersist(
+      tenantId,
+      facts.map((fact) => this.toFactForScan(fact)),
+      { tenantId, groupKeyNormalized: { $in: groupKeys } },
+      pack,
+    );
+  }
+
   private async detectAndPersist(
     tenantId: string,
     facts: readonly FactForConflictScan[],
-    openConflictFilter: QueryFilter<ConflictDocument>,
+    existingConflictScope: QueryFilter<ConflictDocument>,
+    pack: MetricPackData,
   ): Promise<ConflictScanResult> {
-    const { conflicts: candidates, skipped } = detectConflicts(facts, METRIC_ONTOLOGY);
+    const { conflicts: candidates, skipped } = detectConflicts(facts, pack.metrics);
 
     // A silently-dropped fact is a fact that can never conflict — the quiet correctness loss this
     // whole scan exists to prevent — so every skip is logged individually with the context (fact
@@ -340,14 +400,43 @@ export class ConflictsService {
       return { conflictsCreated: 0, skippedFactCount: skipped.length };
     }
 
-    const openConflicts = await this.conflictModel.find(openConflictFilter);
-    const alreadyOpenKeys = new Set(openConflicts.map((conflict) => groupKey(conflict.factKey)));
-    const newCandidates = candidates.filter(
-      (candidate) => !alreadyOpenKeys.has(groupKey(candidate.factKey)),
-    );
+    // Every existing conflict in `existingConflictScope`, any status — not scoped to `open` — so
+    // the filter below can both skip a group with an `open` conflict and skip a group whose most
+    // recent `resolved`/`dismissed` conflict already covers the exact same `factIds` set. A
+    // `resolved`/`dismissed` conflict whose `factIds` differ from a candidate's does not count as
+    // a match for that candidate — see this method's own idempotency comment on `scanForConflicts`.
+    const existingConflicts = await this.conflictModel.find(existingConflictScope);
+    const openGroupKeys = new Set<string>();
+    const closedFactIdSetsByGroupKey = new Map<string, Set<string>[]>();
+    for (const conflict of existingConflicts) {
+      const key = groupKey(conflict.factKey);
+      if (conflict.status === 'open') {
+        openGroupKeys.add(key);
+        continue;
+      }
+      const sets = closedFactIdSetsByGroupKey.get(key) ?? [];
+      sets.push(new Set(conflict.factIds.map((id) => id.toString())));
+      closedFactIdSetsByGroupKey.set(key, sets);
+    }
+
+    const newCandidates = candidates.filter((candidate) => {
+      const key = groupKey(candidate.factKey);
+      if (openGroupKeys.has(key)) {
+        return false;
+      }
+      const closedFactIdSets = closedFactIdSetsByGroupKey.get(key);
+      if (!closedFactIdSets) {
+        return true;
+      }
+      return !closedFactIdSets.some(
+        (factIdSet) =>
+          factIdSet.size === candidate.factIds.length &&
+          candidate.factIds.every((factId) => factIdSet.has(factId)),
+      );
+    });
 
     if (newCandidates.length === 0) {
-      this.logger.debug(`All detected conflicts for tenant '${tenantId}' are already open`);
+      this.logger.debug(`All detected conflicts for tenant '${tenantId}' are already handled`);
       return { conflictsCreated: 0, skippedFactCount: skipped.length };
     }
 
@@ -357,6 +446,9 @@ export class ConflictsService {
         groupKeyNormalized: groupKey(candidate.factKey),
         factIds: candidate.factIds.map((id) => new Types.ObjectId(id)),
         magnitude: candidate.magnitude,
+        magnitudeUnit: candidate.magnitudeUnit,
+        packId: pack.packId,
+        packVersion: pack.version,
         status: 'open',
         tenantId,
       })),
@@ -365,6 +457,98 @@ export class ConflictsService {
     this.logger.debug(`Created ${newCandidates.length} conflicts for tenant '${tenantId}'`);
 
     return { conflictsCreated: newCandidates.length, skippedFactCount: skipped.length };
+  }
+
+  /**
+   * Retracts every `open` conflict, scoped to `metricIds`, that the tenant's active metric pack no
+   * longer considers a disagreement — the complement of `scanForConflictsByMetrics`: that method
+   * creates conflicts a pack version newly detects, this one closes conflicts a pack version no
+   * longer detects. Re-evaluates each candidate group's CURRENT facts (every `ExtractedFact`
+   * sharing the conflict's `groupKeyNormalized`, not just the conflict's own stored `factIds`)
+   * against the resolved pack — a group that grew since the conflict opened must be judged as it
+   * stands now, or a live disagreement among the newer facts could be silently closed alongside
+   * the settled one. Writes `status: 'dismissed'` with `resolution.outcome: 'retracted'`, never
+   * `'resolved'` — see `ConflictResolutionOutcome`'s own doc comment for why a machine retraction
+   * must not land in `MeasuresService.conflictsResolved`. Never deletes and never reopens, the same
+   * `superseded` precedent `DocumentsService.remove` sets for its own machine-driven status flip.
+   *
+   * Skips a conflict carrying a pending resolution `Approval` — the other half of the race
+   * `recordResolution`'s own guard closes: even skipped here, a reviewer who approved a proposal
+   * before this run started must not have that approval overwritten by, nor race, a retraction
+   * that started before their decision landed.
+   */
+  async retractConflicts(
+    tenantId: string,
+    metricIds: readonly string[],
+  ): Promise<ConflictRetractionResult> {
+    if (metricIds.length === 0) {
+      return { conflictsRetracted: 0 };
+    }
+
+    const pack = await this.metricPacksService.resolveActive(tenantId);
+
+    const openConflicts = await this.conflictModel.find({
+      tenantId,
+      status: 'open',
+      'factKey.metric': { $in: [...metricIds] },
+    });
+    if (openConflicts.length === 0) {
+      return { conflictsRetracted: 0 };
+    }
+
+    const pendingApprovals = await this.approvalModel.find(
+      {
+        tenantId,
+        state: 'pending',
+        'subject.entityType': 'Conflict',
+        'subject.entityId': { $in: openConflicts.map((conflict) => conflict._id) },
+      },
+      { 'subject.entityId': 1 },
+    );
+    const pendingConflictIds = new Set(
+      pendingApprovals.map((approval) => approval.subject.entityId.toString()),
+    );
+
+    const groupKeys = [...new Set(openConflicts.map((conflict) => conflict.groupKeyNormalized))];
+    const facts = await this.extractedFactModel.find(
+      { tenantId, groupKeyNormalized: { $in: groupKeys } },
+      { factKey: 1, value: 1 },
+    );
+    const { conflicts: stillConflicting } = detectConflicts(
+      facts.map((fact) => this.toFactForScan(fact)),
+      pack.metrics,
+    );
+    const stillConflictingGroupKeys = new Set(
+      stillConflicting.map((candidate) => groupKey(candidate.factKey)),
+    );
+
+    const toRetract = openConflicts.filter(
+      (conflict) =>
+        !stillConflictingGroupKeys.has(conflict.groupKeyNormalized) &&
+        !pendingConflictIds.has(conflict._id.toString()),
+    );
+    if (toRetract.length === 0) {
+      return { conflictsRetracted: 0 };
+    }
+
+    await this.conflictModel.updateMany(
+      { _id: { $in: toRetract.map((conflict) => conflict._id) } },
+      {
+        status: 'dismissed',
+        resolution: {
+          outcome: 'retracted',
+          resolvedAt: new Date(),
+          packId: pack.packId,
+          packVersion: pack.version,
+        },
+      },
+    );
+
+    this.logger.debug(
+      `Retracted ${toRetract.length} conflict(s) for tenant '${tenantId}' under pack '${pack.packId}' v${pack.version}`,
+    );
+
+    return { conflictsRetracted: toRetract.length };
   }
 
   /**
@@ -622,6 +806,14 @@ export class ConflictsService {
    * present) — `rejected`/`timed_out`, a `'none'` proposal, and a stale pre-capture history (see
    * `ResolveConflictWorkflowInput`'s own doc comment) all leave it absent rather than fabricate a
    * `false`.
+   *
+   * Refuses, on every outcome, a conflict `retractConflicts` already dismissed as `'retracted'` —
+   * the other half of the race that method's own guard closes. `loadConflictForResolution` checked
+   * `status === 'open'` only at request time, up to 24 hours before this call; a rescan can retract
+   * the conflict in between, and this activity runs regardless of that (`resolveConflict` never
+   * re-checks status before waking). Without this guard a late `resolved`/`rejected`/`timed_out`
+   * write would silently overwrite the retraction's provenance even though `status` itself never
+   * moves off `'dismissed'`.
    */
   async recordResolution(
     input: RecordConflictResolutionInput,
@@ -634,6 +826,13 @@ export class ConflictsService {
     const conflict = await this.conflictModel.findOne({ _id: input.conflictId, tenantId });
     if (!conflict) {
       throw new ConflictNotFoundException(`Conflict '${input.conflictId}' not found`);
+    }
+
+    if (conflict.status === 'dismissed' && conflict.resolution?.outcome === 'retracted') {
+      throw new InvalidConflictResolutionException(
+        `Conflict '${input.conflictId}' was retracted by a metric-pack rescan and cannot be ` +
+          `recorded as '${input.outcome}'`,
+      );
     }
 
     const followedProposal =
@@ -673,22 +872,23 @@ export class ConflictsService {
   /**
    * Pure given its inputs: looks up `metricId` in the tenant's resolved survivorship-policy map
    * (`policies`, built once per request by `MetricPoliciesService.resolveForTenant` — see `list`
-   * and `requestResolution`, its only two callers) and calls `resolveConflictPolicy`.
-   * `detectConflicts` only ever persists a `Conflict` for a metric present in `METRIC_ONTOLOGY`,
-   * and `resolveForTenant` folds over every entry in that same ontology, so `policies.get` always
-   * hits in practice — the `?? { authorityOrder: undefined, stalenessWindowMs: Infinity }`
-   * fallback exists for a `metricId` the map has no opinion on, and produces exactly the
+   * and `requestResolution`, its only two callers) and calls `resolveConflictPolicy`. `metricId`
+   * (from `Conflict.factKey.metric`, stored as a plain string on the schema) is not guaranteed to
+   * be a metric the tenant's *currently* resolved active pack still defines — this conflict was
+   * detected against whichever pack was active at scan time (stamped on `Conflict.packId`/
+   * `packVersion`, see that field's own doc comment on staleness), while `policies` here is folded
+   * over whatever pack is active right now; a pack activation between the two can drop the metric
+   * entirely. `policies.get` therefore stays a checked lookup with a real miss branch: the `?? {
+   * authorityOrder: undefined, stalenessWindowMs: Infinity }` fallback produces exactly the
    * `ruleFired: 'none'` a genuinely unconfigured metric already gets, rather than throw for a case
-   * that isn't a data-integrity fault. `metricId` is cast to `MetricId` for the lookup only —
-   * `Conflict.factKey.metric` is stored as a plain string on the schema, not narrowed to the
-   * ontology's id union.
+   * that isn't a data-integrity fault — this method only ever proposes, never gates.
    */
   private computeConflictProposal(
     candidates: readonly ConflictingFactForResolution[],
     metricId: string,
-    policies: ReadonlyMap<MetricId, SurvivorshipPolicy>,
+    policies: ReadonlyMap<string, SurvivorshipPolicy>,
   ): ResolveConflictProposal {
-    const policy = policies.get(metricId as MetricId) ?? {
+    const policy = policies.get(metricId) ?? {
       authorityOrder: undefined,
       stalenessWindowMs: Number.POSITIVE_INFINITY,
     };
@@ -711,7 +911,7 @@ export class ConflictsService {
   private async computeProposalForConflict(
     conflict: { readonly factIds: readonly Types.ObjectId[]; readonly factKey: FactKey },
     tenantId: string,
-    policies: ReadonlyMap<MetricId, SurvivorshipPolicy>,
+    policies: ReadonlyMap<string, SurvivorshipPolicy>,
   ): Promise<ResolveConflictProposal> {
     const facts = await this.extractedFactModel.find({
       _id: { $in: conflict.factIds },
@@ -738,7 +938,8 @@ export class ConflictsService {
     conflict: ConflictDocument,
     factById: Map<string, ExtractedFactDocument>,
     factEnrichmentByFactId: Map<string, FactSourceEnrichment>,
-    policies: ReadonlyMap<MetricId, SurvivorshipPolicy>,
+    policies: ReadonlyMap<string, SurvivorshipPolicy>,
+    activePack: MetricPackData,
   ): ConflictResponseDto {
     const values: ConflictValueShape[] = [];
     const candidates: ConflictingFactForResolution[] = [];
@@ -769,6 +970,15 @@ export class ConflictsService {
       });
     }
 
+    // A conflict's `packId`/`packVersion` are stamped at detection time (`detectAndPersist`) and
+    // never rewritten in place — a pack activation between then and now (or a retraction that
+    // hasn't reached this group yet) leaves the row stale: the pack that would run against this
+    // group's facts today may no longer treat them as a disagreement at all. Independent of
+    // `unscorable` below and computed for every row, including one — staleness and evidence
+    // integrity are unrelated failure modes and a row can carry either, both, or neither.
+    const stale =
+      conflict.packId !== activePack.packId || conflict.packVersion !== activePack.version;
+
     const base = {
       id: conflict._id.toString(),
       // Spread rather than pass `conflict.factKey` through by reference: unlike
@@ -785,6 +995,11 @@ export class ConflictsService {
       magnitude: conflict.magnitude,
       status: conflict.status,
       createdAt: conflict.createdAt,
+      stale,
+      staleReason: stale
+        ? `Detected under pack '${conflict.packId}' v${conflict.packVersion}; the tenant's ` +
+          `active pack is now '${activePack.packId}' v${activePack.version}.`
+        : undefined,
     };
 
     if (values.length < conflict.factIds.length) {

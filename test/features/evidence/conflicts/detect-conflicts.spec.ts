@@ -34,7 +34,30 @@ describe('detectConflicts', () => {
     expect(conflicts[0].factKey).toEqual(facts[0].factKey);
     expect(conflicts[0].factIds.sort()).toEqual(['pdf-fact', 'xlsx-fact']);
     expect(conflicts[0].magnitude).toBeCloseTo(0.0085, 10);
+    // cap_rate's canonical unit, not a fixed constant — a currency metric's group would carry
+    // 'usd' instead (see the sale_price case below).
+    expect(conflicts[0].magnitudeUnit).toBe('ratio');
     expect(skipped).toEqual([]);
+  });
+
+  it('should stamp magnitudeUnit with a currency metric’s canonical unit', () => {
+    const facts = [
+      fact({
+        id: 'a',
+        factKey: { entity: 'Sablewood Retail Court', metric: 'sale_price', period: '2025-03' },
+        value: { amount: 41_000_000, unit: 'usd' },
+      }),
+      fact({
+        id: 'b',
+        factKey: { entity: 'Sablewood Retail Court', metric: 'sale_price', period: '2025-03' },
+        value: { amount: 42_500_000, unit: 'usd' },
+      }),
+    ];
+
+    const { conflicts } = detectConflicts(facts, METRIC_ONTOLOGY);
+
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0].magnitudeUnit).toBe('usd');
   });
 
   it('should not emit a conflict when two facts sharing a key agree within tolerance', () => {

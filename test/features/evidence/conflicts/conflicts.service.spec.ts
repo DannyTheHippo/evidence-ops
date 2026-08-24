@@ -16,7 +16,9 @@ import {
 } from '../../../../src/features/evidence/conflicts/exceptions/conflicts.exception';
 import * as resolveConflictPolicyModule from '../../../../src/features/evidence/conflicts/resolve-conflict-policy';
 import { METRIC_ONTOLOGY } from '../../../../src/features/evidence/facts/metric-ontology';
+import { MetricPacksService } from '../../../../src/features/evidence/facts/metric-packs.service';
 import { MetricPoliciesService } from '../../../../src/features/evidence/facts/metric-policies.service';
+import { CRE_PACK_V1 } from '../../../../src/features/evidence/facts/packs/cre.pack';
 import { WorkflowRunsService } from '../../../../src/features/evidence/workflow-runs/workflow-runs.service';
 import { approvalTimeoutCounter } from '../../../../src/providers/telemetry/domain-metrics';
 import { WORKFLOW_ENGINE } from '../../../../src/providers/workflow-engine/workflow-engine.interface';
@@ -36,6 +38,9 @@ describe('ConflictsService', () => {
   const mockWorkflowEngine = { start: jest.fn(), status: jest.fn(), signal: jest.fn() };
   const mockWorkflowRunsService = { create: jest.fn(), findById: jest.fn() };
   const mockMetricPoliciesService = { resolveForTenant: jest.fn() };
+  const mockMetricPacksService = {
+    resolveActive: jest.fn(),
+  } satisfies Record<keyof Pick<MetricPacksService, 'resolveActive'>, jest.Mock>;
   const mockAuditService = { record: jest.fn() };
   const mockLogger = getMockLogger();
 
@@ -85,6 +90,7 @@ describe('ConflictsService', () => {
         { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
         { provide: WorkflowRunsService, useValue: mockWorkflowRunsService },
         { provide: MetricPoliciesService, useValue: mockMetricPoliciesService },
+        { provide: MetricPacksService, useValue: mockMetricPacksService },
         { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: mockLogger },
       ],
@@ -94,6 +100,9 @@ describe('ConflictsService', () => {
     // Re-set every `beforeEach`, not once at module scope — `afterEach`'s `resetAllMocks()` wipes
     // implementations, not just call history.
     mockMetricPoliciesService.resolveForTenant.mockResolvedValue(defaultPolicies);
+    // The byte-identical-to-today pack every existing test below assumes: no tenant has authored
+    // or activated a pack of its own, so every scan/list resolves to exactly the code default.
+    mockMetricPacksService.resolveActive.mockResolvedValue(CRE_PACK_V1);
   });
 
   afterEach(() => {
@@ -146,7 +155,7 @@ describe('ConflictsService', () => {
 
     const result = await service.scanForConflicts(tenantId);
 
-    expect(mockConflictModel.find).toHaveBeenCalledWith({ tenantId, status: 'open' });
+    expect(mockConflictModel.find).toHaveBeenCalledWith({ tenantId });
     expect(mockConflictModel.insertMany).toHaveBeenCalledTimes(1);
     const insertManyMock = mockConflictModel.insertMany as jest.Mock<
       Promise<unknown[]>,
@@ -156,6 +165,9 @@ describe('ConflictsService', () => {
           groupKeyNormalized: string;
           factIds: Types.ObjectId[];
           magnitude: number;
+          magnitudeUnit: string;
+          packId: string;
+          packVersion: number;
           status: string;
           tenantId: string;
         }[],
@@ -172,9 +184,35 @@ describe('ConflictsService', () => {
       factHigh._id.toString(),
     ]);
     expect(insertedConflicts[0].magnitude).toBeCloseTo(0.0085, 4);
+    // cap_rate is a ratio metric — see the paired currency-metric assertion below, which is what
+    // catches a magnitudeUnit backfill that blanket-assigns one unit to every conflict.
+    expect(insertedConflicts[0].magnitudeUnit).toBe('ratio');
+    expect(insertedConflicts[0].packId).toBe(CRE_PACK_V1.packId);
+    expect(insertedConflicts[0].packVersion).toBe(CRE_PACK_V1.version);
     expect(insertedConflicts[0].status).toBe('open');
     expect(insertedConflicts[0].tenantId).toBe(tenantId);
     expect(result).toEqual({ conflictsCreated: 1, skippedFactCount: 0 });
+  });
+
+  it('should stamp magnitudeUnit with the currency metric’s canonical unit, not the ratio metric’s', async () => {
+    const tenantId = 'acme-corp';
+    const factKey = { entity: 'Northgate Business Park', metric: 'sale_price', period: '2025-03' };
+    // 1% relative tolerance; $41.0M vs $42.5M is a 3.5%-of-larger-value spread past it.
+    const factLow = buildFact(factKey, { amount: 41_000_000, unit: 'usd' });
+    const factHigh = buildFact(factKey, { amount: 42_500_000, unit: 'usd' });
+    mockExtractedFactModel.find.mockReturnValueOnce(asCursor([factLow, factHigh]));
+    mockConflictModel.find.mockResolvedValueOnce([]);
+    mockConflictModel.insertMany.mockResolvedValueOnce([]);
+
+    await service.scanForConflicts(tenantId);
+
+    const insertManyMock = mockConflictModel.insertMany as jest.Mock<
+      Promise<unknown[]>,
+      [{ magnitudeUnit: string }[]]
+    >;
+    const insertedConflicts = insertManyMock.mock.calls[0][0];
+    expect(insertedConflicts).toHaveLength(1);
+    expect(insertedConflicts[0].magnitudeUnit).toBe('usd');
   });
 
   it('should skip a candidate whose group already has an open Conflict record', async () => {
@@ -183,7 +221,7 @@ describe('ConflictsService', () => {
     const factLow = buildFact(factKey, { amount: 5.25, unit: 'percent' });
     const factHigh = buildFact(factKey, { amount: 6.1, unit: 'percent' });
     mockExtractedFactModel.find.mockReturnValueOnce(asCursor([factLow, factHigh]));
-    mockConflictModel.find.mockResolvedValueOnce([{ factKey }]);
+    mockConflictModel.find.mockResolvedValueOnce([{ factKey, status: 'open' }]);
 
     const result = await service.scanForConflicts(tenantId);
 
@@ -236,7 +274,6 @@ describe('ConflictsService', () => {
       );
       expect(mockConflictModel.find).toHaveBeenCalledWith({
         tenantId,
-        status: 'open',
         groupKeyNormalized: { $in: [groupKeyNormalized] },
       });
       expect(result).toEqual({ conflictsCreated: 1, skippedFactCount: 0 });
@@ -281,6 +318,9 @@ describe('ConflictsService', () => {
       ).mock.calls[0][0];
 
       jest.resetAllMocks();
+      // `resetAllMocks()` wipes implementations, not just call history — re-arm the default pack
+      // resolution the same way `beforeEach` does.
+      mockMetricPacksService.resolveActive.mockResolvedValue(CRE_PACK_V1);
       mockExtractedFactModel.find.mockResolvedValueOnce([factLow, factHigh]);
       mockConflictModel.find.mockResolvedValueOnce([]);
       mockConflictModel.insertMany.mockResolvedValueOnce([]);
@@ -290,6 +330,199 @@ describe('ConflictsService', () => {
       ).mock.calls[0][0];
 
       expect(incrementalPayload).toEqual(fullScanPayload);
+    });
+  });
+
+  describe('idempotency against resolved/dismissed conflicts', () => {
+    const tenantId = 'acme-corp';
+    const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+
+    it.each(['resolved', 'dismissed'] as const)(
+      "should not resurrect a %s conflict when the group's factIds are unchanged",
+      async (status) => {
+        const factLow = buildFact(factKey, { amount: 5.25, unit: 'percent' });
+        const factHigh = buildFact(factKey, { amount: 6.1, unit: 'percent' });
+        mockExtractedFactModel.find.mockReturnValueOnce(asCursor([factLow, factHigh]));
+        mockConflictModel.find.mockResolvedValueOnce([
+          { factKey, status, factIds: [factLow._id, factHigh._id] },
+        ]);
+
+        const result = await service.scanForConflicts(tenantId);
+
+        expect(mockConflictModel.insertMany).not.toHaveBeenCalled();
+        expect(result).toEqual({ conflictsCreated: 0, skippedFactCount: 0 });
+      },
+    );
+
+    it('should create a fresh conflict when the group grew with a new fact, even though a resolved conflict already exists for the old evidence', async () => {
+      const factLow = buildFact(factKey, { amount: 5.25, unit: 'percent' });
+      const factHigh = buildFact(factKey, { amount: 6.1, unit: 'percent' });
+      const factNew = buildFact(factKey, { amount: 6.5, unit: 'percent' });
+      mockExtractedFactModel.find.mockReturnValueOnce(asCursor([factLow, factHigh, factNew]));
+      mockConflictModel.find.mockResolvedValueOnce([
+        { factKey, status: 'resolved', factIds: [factLow._id, factHigh._id] },
+      ]);
+      mockConflictModel.insertMany.mockResolvedValueOnce([]);
+
+      const result = await service.scanForConflicts(tenantId);
+
+      expect(mockConflictModel.insertMany).toHaveBeenCalledTimes(1);
+      const insertedConflicts = (
+        mockConflictModel.insertMany as jest.Mock<
+          Promise<unknown[]>,
+          [{ factIds: Types.ObjectId[] }[]]
+        >
+      ).mock.calls[0][0];
+      expect(insertedConflicts[0].factIds.map((id) => id.toString())).toEqual(
+        [factLow._id, factHigh._id, factNew._id].map((id) => id.toString()),
+      );
+      expect(result).toEqual({ conflictsCreated: 1, skippedFactCount: 0 });
+    });
+  });
+
+  describe('scanForConflictsByMetrics', () => {
+    const tenantId = 'acme-corp';
+    const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+    const groupKeyNormalized = 'northgate business park::cap_rate::2025-03';
+
+    it('should resolve metricIds to their groupKeyNormalized values via distinct, then scan only those groups', async () => {
+      const factLow = buildFact(factKey, { amount: 5.25, unit: 'percent' });
+      const factHigh = buildFact(factKey, { amount: 6.1, unit: 'percent' });
+      mockExtractedFactModel.distinct.mockResolvedValueOnce([groupKeyNormalized]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([factLow, factHigh]);
+      mockConflictModel.find.mockResolvedValueOnce([]);
+      mockConflictModel.insertMany.mockResolvedValueOnce([]);
+
+      const result = await service.scanForConflictsByMetrics(tenantId, ['cap_rate']);
+
+      expect(mockExtractedFactModel.distinct).toHaveBeenCalledWith('groupKeyNormalized', {
+        tenantId,
+        'factKey.metric': { $in: ['cap_rate'] },
+      });
+      expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
+        { tenantId, groupKeyNormalized: { $in: [groupKeyNormalized] } },
+        { factKey: 1, value: 1 },
+      );
+      expect(mockConflictModel.find).toHaveBeenCalledWith({
+        tenantId,
+        groupKeyNormalized: { $in: [groupKeyNormalized] },
+      });
+      expect(result).toEqual({ conflictsCreated: 1, skippedFactCount: 0 });
+    });
+
+    it('should rescan nothing when metricIds is empty — a pack version that only renamed labels or added aliases', async () => {
+      mockExtractedFactModel.distinct.mockResolvedValueOnce([]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+
+      const result = await service.scanForConflictsByMetrics(tenantId, []);
+
+      expect(mockExtractedFactModel.distinct).toHaveBeenCalledWith('groupKeyNormalized', {
+        tenantId,
+        'factKey.metric': { $in: [] },
+      });
+      expect(mockConflictModel.find).not.toHaveBeenCalled();
+      expect(result).toEqual({ conflictsCreated: 0, skippedFactCount: 0 });
+    });
+  });
+
+  describe('retractConflicts', () => {
+    const tenantId = 'acme-corp';
+    const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+    const groupKeyNormalized = 'northgate business park::cap_rate::2025-03';
+
+    it('should return conflictsRetracted 0 without querying when metricIds is empty', async () => {
+      const result = await service.retractConflicts(tenantId, []);
+
+      expect(mockConflictModel.find).not.toHaveBeenCalled();
+      expect(result).toEqual({ conflictsRetracted: 0 });
+    });
+
+    it('should return conflictsRetracted 0 without further queries when no open conflict matches the given metrics', async () => {
+      mockConflictModel.find.mockResolvedValueOnce([]);
+
+      const result = await service.retractConflicts(tenantId, ['cap_rate']);
+
+      expect(mockConflictModel.find).toHaveBeenCalledWith({
+        tenantId,
+        status: 'open',
+        'factKey.metric': { $in: ['cap_rate'] },
+      });
+      expect(mockApprovalModel.find).not.toHaveBeenCalled();
+      expect(result).toEqual({ conflictsRetracted: 0 });
+    });
+
+    it('should dismiss an open conflict as retracted, stamped with the active pack, when its current group no longer conflicts', async () => {
+      const conflictId = new Types.ObjectId();
+      const openConflict = { _id: conflictId, factKey, groupKeyNormalized, status: 'open' };
+      // 5.25% vs 5.30% is a 5bp spread — well inside cap_rate's 25bp absolute tolerance, so the
+      // group the conflict once disagreed over no longer does.
+      const factLow = buildFact(factKey, { amount: 5.25, unit: 'percent' });
+      const factHigh = buildFact(factKey, { amount: 5.3, unit: 'percent' });
+      mockConflictModel.find.mockResolvedValueOnce([openConflict]);
+      mockApprovalModel.find.mockResolvedValueOnce([]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([factLow, factHigh]);
+      mockConflictModel.updateMany.mockResolvedValueOnce({});
+
+      const result = await service.retractConflicts(tenantId, ['cap_rate']);
+
+      expect(mockApprovalModel.find).toHaveBeenCalledWith(
+        {
+          tenantId,
+          state: 'pending',
+          'subject.entityType': 'Conflict',
+          'subject.entityId': { $in: [conflictId] },
+        },
+        { 'subject.entityId': 1 },
+      );
+      expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
+        { tenantId, groupKeyNormalized: { $in: [groupKeyNormalized] } },
+        { factKey: 1, value: 1 },
+      );
+      expect(mockConflictModel.updateMany).toHaveBeenCalledWith(
+        { _id: { $in: [conflictId] } },
+        {
+          status: 'dismissed',
+          resolution: {
+            outcome: 'retracted',
+            resolvedAt: expect.any(Date) as Date,
+            packId: CRE_PACK_V1.packId,
+            packVersion: CRE_PACK_V1.version,
+          },
+        },
+      );
+      expect(result).toEqual({ conflictsRetracted: 1 });
+    });
+
+    it('should not retract an open conflict whose current group still conflicts under the active pack', async () => {
+      const conflictId = new Types.ObjectId();
+      const openConflict = { _id: conflictId, factKey, groupKeyNormalized, status: 'open' };
+      const factLow = buildFact(factKey, { amount: 5.25, unit: 'percent' });
+      const factHigh = buildFact(factKey, { amount: 6.1, unit: 'percent' });
+      mockConflictModel.find.mockResolvedValueOnce([openConflict]);
+      mockApprovalModel.find.mockResolvedValueOnce([]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([factLow, factHigh]);
+
+      const result = await service.retractConflicts(tenantId, ['cap_rate']);
+
+      expect(mockConflictModel.updateMany).not.toHaveBeenCalled();
+      expect(result).toEqual({ conflictsRetracted: 0 });
+    });
+
+    it('should skip retracting a conflict that carries a pending resolution approval', async () => {
+      const conflictId = new Types.ObjectId();
+      const openConflict = { _id: conflictId, factKey, groupKeyNormalized, status: 'open' };
+      const factLow = buildFact(factKey, { amount: 5.25, unit: 'percent' });
+      const factHigh = buildFact(factKey, { amount: 5.3, unit: 'percent' });
+      mockConflictModel.find.mockResolvedValueOnce([openConflict]);
+      mockApprovalModel.find.mockResolvedValueOnce([
+        { subject: { entityId: conflictId, entityType: 'Conflict' } },
+      ]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([factLow, factHigh]);
+
+      const result = await service.retractConflicts(tenantId, ['cap_rate']);
+
+      expect(mockConflictModel.updateMany).not.toHaveBeenCalled();
+      expect(result).toEqual({ conflictsRetracted: 0 });
     });
   });
 
@@ -416,6 +649,8 @@ describe('ConflictsService', () => {
         magnitude: 0.0085,
         status: 'open',
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        packId: CRE_PACK_V1.packId,
+        packVersion: CRE_PACK_V1.version,
       };
       const documentVersionIdA = new Types.ObjectId();
       const documentVersionIdB = new Types.ObjectId();
@@ -500,6 +735,7 @@ describe('ConflictsService', () => {
             magnitude: 0.0085,
             status: 'open',
             createdAt: conflict.createdAt,
+            stale: false,
             unscorable: false,
             ruleFired: 'none',
             explanation: 'No authorityOrder is configured for this metric.',
@@ -507,6 +743,54 @@ describe('ConflictsService', () => {
         ],
         count: 1,
       });
+    });
+
+    it("should mark a conflict stale, with a reason naming both packs, when its stamped packId/packVersion no longer match the tenant's active pack", async () => {
+      const actorId = new Types.ObjectId().toString();
+      const factIdA = new Types.ObjectId();
+      const factIdB = new Types.ObjectId();
+      const conflict = {
+        _id: new Types.ObjectId(),
+        factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+        factIds: [factIdA, factIdB],
+        magnitude: 0.0085,
+        status: 'open',
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        // Detected under an earlier pack version than the tenant's current active one.
+        packId: CRE_PACK_V1.packId,
+        packVersion: CRE_PACK_V1.version + 1,
+      };
+      const factA = {
+        _id: factIdA,
+        value: { amount: 5.25, unit: 'percent' },
+        chunkId: 'chunk-xlsx',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
+      };
+      const factB = {
+        _id: factIdB,
+        value: { amount: 6.1, unit: 'percent' },
+        chunkId: 'chunk-prose',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+      };
+      mockConflictModel.find.mockResolvedValueOnce([conflict]);
+      mockConflictModel.countDocuments.mockResolvedValueOnce(1);
+      mockExtractedFactModel.find.mockResolvedValueOnce([factA, factB]);
+      mockDocumentVersionModel.find.mockResolvedValueOnce([]);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      const result = await service.list({ skip: 0, limit: 20 }, actorId, 'tenant-a');
+
+      expect(result.docs[0].stale).toBe(true);
+      expect(result.docs[0].staleReason).toContain(
+        `${CRE_PACK_V1.packId}' v${CRE_PACK_V1.version + 1}`,
+      );
+      expect(result.docs[0].staleReason).toContain(
+        `${CRE_PACK_V1.packId}' v${CRE_PACK_V1.version}`,
+      );
+      // Staleness is independent of unscorability — this row's evidence is fully intact.
+      expect(result.docs[0].unscorable).toBe(false);
     });
 
     it('should resolve the tenant survivorship-policy map once for a page of multiple conflicts, not once per conflict', async () => {
@@ -826,6 +1110,8 @@ describe('ConflictsService', () => {
         magnitude: 0.0085,
         status: 'resolved',
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        packId: CRE_PACK_V1.packId,
+        packVersion: CRE_PACK_V1.version,
       };
       const factA = {
         _id: factIdA,
@@ -861,6 +1147,7 @@ describe('ConflictsService', () => {
         magnitude: 0.0085,
         status: 'resolved',
         createdAt: conflict.createdAt,
+        stale: false,
         unscorable: true,
         unscorableReason: '1 of 2 disagreeing fact(s) no longer resolve to an ExtractedFact.',
       });
@@ -1308,6 +1595,46 @@ describe('ConflictsService', () => {
         _id: conflictId,
         tenantId: 'tenant-a',
       });
+    });
+
+    it('should refuse to record any outcome for a conflict a metric-pack rescan already retracted', async () => {
+      const conflict: MockConflictDoc = {
+        status: 'dismissed',
+        factKey,
+        factIds: [],
+        resolution: {
+          outcome: 'retracted',
+          resolvedAt: new Date('2026-07-01T00:00:00.000Z'),
+        },
+        save: jest.fn(),
+      };
+      mockConflictModel.findOne.mockResolvedValueOnce(conflict);
+
+      await expect(
+        service.recordResolution({ conflictId, outcome: 'timed_out', tenantId: 'acme-corp' }),
+      ).rejects.toThrow(InvalidConflictResolutionException);
+      expect(conflict.save).not.toHaveBeenCalled();
+    });
+
+    it('should still record an outcome for a conflict that is dismissed for a reason other than retraction', async () => {
+      const mockSave = jest.fn().mockResolvedValueOnce(undefined);
+      const conflict: MockConflictDoc = {
+        status: 'dismissed',
+        factKey,
+        factIds: [],
+        resolution: { outcome: 'resolved', resolvedAt: new Date('2026-07-01T00:00:00.000Z') },
+        save: mockSave,
+      };
+      mockConflictModel.findOne.mockResolvedValueOnce(conflict);
+
+      const result = await service.recordResolution({
+        conflictId,
+        outcome: 'timed_out',
+        tenantId: 'acme-corp',
+      });
+
+      expect(mockSave).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ conflictId, outcome: 'timed_out' });
     });
 
     it('should record an approved resolution, set the winner, flip status to resolved, and record no proposal to follow when ruleFired is none', async () => {

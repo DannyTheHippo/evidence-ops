@@ -93,6 +93,28 @@ export class ConflictResponseDto {
   @ApiProperty({
     example: false,
     description:
+      "True when this conflict's factKey.metric was detected under a metric pack version that " +
+      "is no longer the tenant's active one — a pack activation (or a retraction rescan that " +
+      "hasn't reached this group yet) can leave a row's tolerance out of date with what the " +
+      'active pack would compute today. Always present, independent of unscorable — the two are ' +
+      'unrelated failure modes and a row can carry either, both, or neither. Never hidden: a stale ' +
+      'row stays in the list, shown and labelled, rather than silently dropped.',
+  })
+  stale: boolean;
+
+  @Expose()
+  @ApiProperty({
+    example: "Detected under pack 'cre' v1; the tenant's active pack is now 'acme-cre' v2.",
+    description:
+      'Present only when stale is true — which pack detected this row versus which is active now.',
+    required: false,
+  })
+  staleReason?: string;
+
+  @Expose()
+  @ApiProperty({
+    example: false,
+    description:
       "True when one or more of this conflict's factIds no longer resolve to an ExtractedFact " +
       "— the document that produced them was deleted after this conflict left 'open' status, so " +
       "the delete cascade's fact removal was never mirrored back onto this conflict's factIds. " +

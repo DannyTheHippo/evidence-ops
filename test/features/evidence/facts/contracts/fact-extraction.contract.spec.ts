@@ -1,7 +1,11 @@
 import {
-  factCandidateSchema,
-  factExtractionResultSchema,
+  buildFactCandidateSchema,
+  buildFactExtractionResultSchema,
 } from '../../../../../src/features/evidence/facts/contracts/fact-extraction.contract';
+import { METRIC_IDS } from '../../../../../src/features/evidence/facts/metric-ontology';
+
+const factCandidateSchema = buildFactCandidateSchema(METRIC_IDS);
+const factExtractionResultSchema = buildFactExtractionResultSchema(METRIC_IDS);
 
 const validCandidate = {
   entity: 'Northgate Business Park',
@@ -64,6 +68,24 @@ describe('factCandidateSchema', () => {
     expect(
       factCandidateSchema.safeParse({ ...validCandidate, observedAtText: undefined }).success,
     ).toBe(false);
+  });
+});
+
+describe('buildFactCandidateSchema', () => {
+  it("should accept a metric outside the CRE ontology's ids when a different pack's ids are passed", () => {
+    const customSchema = buildFactCandidateSchema(['occupancy_rate']);
+
+    const result = customSchema.safeParse({ ...validCandidate, metric: 'occupancy_rate' });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('should reject a CRE metric id once a differently-scoped pack no longer allowlists it', () => {
+    const customSchema = buildFactCandidateSchema(['occupancy_rate']);
+
+    const result = customSchema.safeParse(validCandidate);
+
+    expect(result.success).toBe(false);
   });
 });
 

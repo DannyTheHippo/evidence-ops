@@ -16,9 +16,13 @@ export const WORKFLOW_RUN_STATUSES: readonly WorkflowRunStatus[] = [
  * `answer-question` and `ingest-document-version` run without one. `workflowId` is a bare
  * `randomUUID()`, so this is the only field carrying what a run *is*.
  */
-export type WorkflowRunType = 'resolve-conflict' | 'sync-source';
+export type WorkflowRunType = 'resolve-conflict' | 'sync-source' | 'rescan-conflicts';
 
-export const WORKFLOW_RUN_TYPES: readonly WorkflowRunType[] = ['resolve-conflict', 'sync-source'];
+export const WORKFLOW_RUN_TYPES: readonly WorkflowRunType[] = [
+  'resolve-conflict',
+  'sync-source',
+  'rescan-conflicts',
+];
 
 export type WorkflowRunDocument = HydratedDocument<WithTimestamps<WorkflowRun>>;
 

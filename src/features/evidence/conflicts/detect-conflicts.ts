@@ -2,7 +2,11 @@ import type {
   FactKey,
   FactValue,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
-import { findMetricById, type MetricDefinition } from '../facts/metric-ontology';
+// The pack schema's `MetricDefinition` (`id: string`), not `metric-ontology.ts`'s own
+// (`id: MetricId`) — `ConflictsService` calls this against a tenant's resolved `MetricPackData`,
+// which a tenant-authored pack can define metric ids for that `METRIC_IDS` never enumerates.
+import type { MetricDefinition } from '../../../database/schemas/evidence/metric-pack/metric-pack.schema';
+import { findMetricById } from '../facts/metric-ontology';
 import { isConflictingPair, normalizeFactValue } from './normalize-fact-value';
 
 export interface FactForConflictScan {
@@ -15,6 +19,9 @@ export interface ConflictCandidate {
   readonly factKey: FactKey;
   readonly factIds: string[];
   readonly magnitude: number;
+  /** The metric's `canonicalUnit` `magnitude` is expressed in — see `Conflict.magnitudeUnit`'s own
+   * doc comment for why this travels with the candidate instead of being re-derived later. */
+  readonly magnitudeUnit: string;
 }
 
 /** A fact `normalizeFactValue` could not convert to its metric's canonical unit, dropped from
@@ -113,6 +120,7 @@ export function detectConflicts(
         factKey: group[0].factKey,
         factIds: normalized.map((entry) => entry.fact.id),
         magnitude: max - min,
+        magnitudeUnit: metric.canonicalUnit,
       });
     }
   }

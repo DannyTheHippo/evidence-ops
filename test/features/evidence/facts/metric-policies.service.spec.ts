@@ -2,10 +2,13 @@ import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { DEFAULT_TENANT_ID } from '../../../../src/database/constants/tenant.constant';
+import type { MetricPackData } from '../../../../src/database/schemas/evidence/metric-pack/metric-pack.schema';
 import { MetricPolicy } from '../../../../src/database/schemas/evidence/metric-policy/metric-policy.schema';
 import { UnknownMetricException } from '../../../../src/features/evidence/facts/exceptions/facts.exception';
+import { MetricPacksService } from '../../../../src/features/evidence/facts/metric-packs.service';
 import { MetricPoliciesService } from '../../../../src/features/evidence/facts/metric-policies.service';
 import { METRIC_ONTOLOGY } from '../../../../src/features/evidence/facts/metric-ontology';
+import { CRE_PACK_V1 } from '../../../../src/features/evidence/facts/packs/cre.pack';
 import {
   resolveConflictPolicy,
   type ConflictingFactForResolution,
@@ -23,18 +26,26 @@ describe('MetricPoliciesService', () => {
   const mockMetricPolicyModel = getMockModel();
   const mockLogger = getMockLogger();
   const mockAuditService = { record: jest.fn() };
+  // Every test in this suite runs a tenant with no authored `MetricPack` row unless it re-arms
+  // this per-call — `beforeEach` re-arms it to `CRE_PACK_V1` after each `resetAllMocks`, matching
+  // `MetricPacksService.resolveActive`'s own fallback and `FactsService`'s identical test setup.
+  const mockMetricPacksService = {
+    resolveActive: jest.fn(),
+  } satisfies Record<keyof Pick<MetricPacksService, 'resolveActive'>, jest.Mock>;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         MetricPoliciesService,
         { provide: getModelToken(MetricPolicy.name), useValue: mockMetricPolicyModel },
+        { provide: MetricPacksService, useValue: mockMetricPacksService },
         { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: mockLogger },
       ],
     }).compile();
 
     service = module.get<MetricPoliciesService>(MetricPoliciesService);
+    mockMetricPacksService.resolveActive.mockResolvedValue(CRE_PACK_V1);
   });
 
   afterEach(() => {
@@ -184,10 +195,70 @@ describe('MetricPoliciesService', () => {
   });
 
   describe('upsert', () => {
-    it('should throw UnknownMetricException for a metric outside METRIC_IDS', async () => {
-      await expect(
-        service.upsert(DEFAULT_TENANT_ID, 'not_a_metric' as never, {}, actorId),
-      ).rejects.toThrow(UnknownMetricException);
+    it("should throw UnknownMetricException for a metric the tenant's active pack does not define", async () => {
+      await expect(service.upsert(DEFAULT_TENANT_ID, 'not_a_metric', {}, actorId)).rejects.toThrow(
+        UnknownMetricException,
+      );
+
+      expect(mockMetricPolicyModel.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(mockAuditService.record).not.toHaveBeenCalled();
+    });
+
+    // The check is against the tenant's resolved active pack, not the fixed `METRIC_ONTOLOGY`
+    // union — a metric a forked pack authors that the code default never defined must be accepted.
+    it("should accept a metric the tenant's forked pack defines but METRIC_ONTOLOGY does not", async () => {
+      const forkedPack: MetricPackData = {
+        packId: 'walkability-fork',
+        version: 1,
+        label: 'Walkability Fork',
+        metrics: [
+          ...CRE_PACK_V1.metrics,
+          {
+            id: 'walkability_score',
+            label: 'Walkability Score',
+            aliases: ['Walkability Score'],
+            valueType: 'percentage',
+            canonicalUnit: 'ratio',
+            units: [{ id: 'ratio', toCanonicalFactor: 1 }],
+            toleranceKind: 'absolute',
+            tolerance: 0.01,
+          },
+        ],
+      };
+      mockMetricPacksService.resolveActive.mockResolvedValueOnce(forkedPack);
+      mockMetricPolicyModel.findOneAndUpdate.mockResolvedValueOnce({
+        _id: 'policy-1',
+        metric: 'walkability_score',
+      });
+
+      await service.upsert(
+        DEFAULT_TENANT_ID,
+        'walkability_score',
+        { authorityOrder: ['memo'] },
+        actorId,
+      );
+
+      expect(mockMetricPolicyModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { tenantId: DEFAULT_TENANT_ID, metric: 'walkability_score' },
+        { $set: { authorityOrder: ['memo'] }, $unset: { stalenessWindowMs: '' } },
+        { upsert: true, new: true, setDefaultsOnInsert: true },
+      );
+    });
+
+    // The same check refuses a `METRIC_ONTOLOGY` id once the tenant's active pack has dropped it —
+    // proving validation reads the resolved pack, not the fixed compile-time union.
+    it("should throw UnknownMetricException for a METRIC_ONTOLOGY metric the tenant's active pack no longer defines", async () => {
+      const droppedSalePricePack: MetricPackData = {
+        packId: 'trimmed-fork',
+        version: 1,
+        label: 'Trimmed Fork',
+        metrics: CRE_PACK_V1.metrics.filter((metric) => metric.id !== 'sale_price'),
+      };
+      mockMetricPacksService.resolveActive.mockResolvedValueOnce(droppedSalePricePack);
+
+      await expect(service.upsert(DEFAULT_TENANT_ID, 'sale_price', {}, actorId)).rejects.toThrow(
+        UnknownMetricException,
+      );
 
       expect(mockMetricPolicyModel.findOneAndUpdate).not.toHaveBeenCalled();
       expect(mockAuditService.record).not.toHaveBeenCalled();
@@ -278,10 +349,10 @@ describe('MetricPoliciesService', () => {
   });
 
   describe('remove', () => {
-    it('should throw UnknownMetricException for a metric outside METRIC_IDS', async () => {
-      await expect(
-        service.remove(DEFAULT_TENANT_ID, 'not_a_metric' as never, actorId),
-      ).rejects.toThrow(UnknownMetricException);
+    it("should throw UnknownMetricException for a metric the tenant's active pack does not define", async () => {
+      await expect(service.remove(DEFAULT_TENANT_ID, 'not_a_metric', actorId)).rejects.toThrow(
+        UnknownMetricException,
+      );
 
       expect(mockMetricPolicyModel.findOneAndDelete).not.toHaveBeenCalled();
       expect(mockAuditService.record).not.toHaveBeenCalled();

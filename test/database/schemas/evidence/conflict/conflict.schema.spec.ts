@@ -18,7 +18,7 @@ describe('Conflict schema', () => {
   describe('validation (offline — no database connection)', () => {
     const ConflictModel = mongoose.model<Conflict>('ConflictValidationOnly', ConflictSchema);
 
-    it('requires factKey, factIds, magnitude, groupKeyNormalized, and tenantId', () => {
+    it('requires factKey, factIds, magnitude, magnitudeUnit, groupKeyNormalized, packId, packVersion, and tenantId', () => {
       const conflict = new ConflictModel({});
 
       const error = conflict.validateSync();
@@ -26,7 +26,10 @@ describe('Conflict schema', () => {
       expect(error?.errors.factKey).toBeDefined();
       expect(error?.errors.factIds).toBeDefined();
       expect(error?.errors.magnitude).toBeDefined();
+      expect(error?.errors.magnitudeUnit).toBeDefined();
       expect(error?.errors.groupKeyNormalized).toBeDefined();
+      expect(error?.errors.packId).toBeDefined();
+      expect(error?.errors.packVersion).toBeDefined();
       expect(error?.errors.tenantId).toBeDefined();
     });
 
@@ -36,6 +39,9 @@ describe('Conflict schema', () => {
         groupKeyNormalized,
         factIds: [new mongoose.Types.ObjectId()],
         magnitude: 0.04,
+        magnitudeUnit: 'ratio',
+        packId: 'cre',
+        packVersion: 1,
       });
 
       const error = conflict.validateSync();
@@ -49,6 +55,9 @@ describe('Conflict schema', () => {
         groupKeyNormalized,
         factIds: [new mongoose.Types.ObjectId(), new mongoose.Types.ObjectId()],
         magnitude: 0.04,
+        magnitudeUnit: 'ratio',
+        packId: 'cre',
+        packVersion: 1,
         tenantId: 'tenant-a',
       });
 
@@ -82,6 +91,9 @@ describe('Conflict schema', () => {
         groupKeyNormalized,
         factIds,
         magnitude: 0.04,
+        magnitudeUnit: 'ratio',
+        packId: 'cre',
+        packVersion: 1,
         tenantId: 'tenant-a',
       });
 

@@ -12,7 +12,9 @@ import { METRIC_IDS } from './metric-ontology';
 
 // Mirrors METRIC_IDS's own naming convention (lowercase snake_case), so a tenant-added measure
 // reads no differently from a code-ontology one in any listing that sorts or displays both.
-const METRIC_ID_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+// Exported so `MetricDefinitionRequestDto` (`create-metric-pack-version.request.dto.ts`) validates
+// a pack-authored metric id against this same pattern rather than a second copy.
+export const METRIC_ID_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 
 function assertValidMetricId(metricId: string): void {
   if (!METRIC_ID_PATTERN.test(metricId)) {

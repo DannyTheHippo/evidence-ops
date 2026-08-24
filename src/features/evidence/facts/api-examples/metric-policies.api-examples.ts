@@ -14,7 +14,7 @@ export const metricPoliciesApiExamples: Record<string, ApiResponseOptions> = {
     status: HttpStatus.OK,
     description:
       "The tenant's authored metric policy rows. A metric with no row here resolves " +
-      'to the code ontology default, not to anything absent.',
+      "to the tenant's active metric pack default, not to anything absent.",
     examples: {
       example: {
         summary: 'One authored policy',
@@ -34,7 +34,7 @@ export const metricPoliciesApiExamples: Record<string, ApiResponseOptions> = {
   },
   unknownMetric: {
     status: HttpStatus.BAD_REQUEST,
-    description: "The metric named in the path is not one of METRIC_IDS's members.",
+    description: "The metric named in the path is not one the tenant's active metric pack defines.",
     examples: {
       example: {
         summary: 'Unrecognized metric',
@@ -64,7 +64,7 @@ export const metricPoliciesApiExamples: Record<string, ApiResponseOptions> = {
   },
   reverted: {
     status: HttpStatus.NO_CONTENT,
-    description: 'The metric now resolves to the code ontology default again.',
+    description: "The metric now resolves to the tenant's active metric pack default again.",
   },
   forbidden: {
     status: HttpStatus.FORBIDDEN,

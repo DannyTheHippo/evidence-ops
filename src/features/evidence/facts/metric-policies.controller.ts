@@ -22,7 +22,6 @@ import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { metricPoliciesApiExamples } from './api-examples/metric-policies.api-examples';
 import { UpsertMetricPolicyRequestDto } from './dtos/request/upsert-metric-policy.request.dto';
 import { MetricPolicyResponseDto } from './dtos/response/metric-policy.response.dto';
-import type { MetricId } from './metric-ontology';
 import { MetricPoliciesService } from './metric-policies.service';
 
 @Controller('metric-policies')
@@ -73,7 +72,7 @@ export class MetricPoliciesController {
       MetricPolicyResponseDto,
       await this.metricPoliciesService.upsert(
         user.tenantId,
-        metric as MetricId,
+        metric,
         {
           authorityOrder: dto.authorityOrder,
           stalenessWindowMs: dto.stalenessWindowMs,
@@ -100,6 +99,6 @@ export class MetricPoliciesController {
       throw new UnauthorizedException('No token provided');
     }
 
-    await this.metricPoliciesService.remove(user.tenantId, metric as MetricId, user.userId);
+    await this.metricPoliciesService.remove(user.tenantId, metric, user.userId);
   }
 }

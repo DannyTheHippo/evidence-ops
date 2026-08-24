@@ -17,6 +17,10 @@ import {
   ExtractedFactSchema,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import {
+  MetricPack,
+  MetricPackSchema,
+} from '../../../database/schemas/evidence/metric-pack/metric-pack.schema';
+import {
   MetricPolicy,
   MetricPolicySchema,
 } from '../../../database/schemas/evidence/metric-policy/metric-policy.schema';
@@ -29,6 +33,8 @@ import { IngestionModule } from '../ingestion/ingestion.module';
 import { CanonicalEntitiesController } from './canonical-entities.controller';
 import { CanonicalEntityService } from './canonical-entity.service';
 import { FactsService } from './facts.service';
+import { MetricPacksController } from './metric-packs.controller';
+import { MetricPacksService } from './metric-packs.service';
 import { MetricPoliciesController } from './metric-policies.controller';
 import { MetricPoliciesService } from './metric-policies.service';
 import { TenantMetricsController } from './tenant-metrics.controller';
@@ -41,6 +47,7 @@ import { TenantMetricsService } from './tenant-metrics.service';
       { name: DocumentVersion.name, schema: DocumentVersionSchema },
       { name: EvidenceChunk.name, schema: EvidenceChunkSchema },
       { name: ExtractedFact.name, schema: ExtractedFactSchema },
+      { name: MetricPack.name, schema: MetricPackSchema },
       { name: MetricPolicy.name, schema: MetricPolicySchema },
       { name: TenantMetric.name, schema: TenantMetricSchema },
     ]),
@@ -50,12 +57,30 @@ import { TenantMetricsService } from './tenant-metrics.service';
     // deterministic xlsx facts, and for narrowing a prose fact's locator past its chunk's anchor).
     IngestionModule,
   ],
-  controllers: [CanonicalEntitiesController, MetricPoliciesController, TenantMetricsController],
+  controllers: [
+    CanonicalEntitiesController,
+    MetricPacksController,
+    MetricPoliciesController,
+    TenantMetricsController,
+  ],
   // Exported as well as registered: `FactsService` depends on `CanonicalEntityService` to
   // canonicalize an extracted fact's entity, but the registry is also reachable via DI on its own,
-  // the same way `FactsService` is. `MetricPoliciesService`/`TenantMetricsService` are exported for
-  // the same reason — reachable on their own by a future caller without depending on `FactsService`.
-  providers: [CanonicalEntityService, FactsService, MetricPoliciesService, TenantMetricsService],
-  exports: [CanonicalEntityService, FactsService, MetricPoliciesService, TenantMetricsService],
+  // the same way `FactsService` is. `MetricPacksService`/`MetricPoliciesService`/
+  // `TenantMetricsService` are exported for the same reason — reachable on their own by a future
+  // caller without depending on `FactsService`.
+  providers: [
+    CanonicalEntityService,
+    FactsService,
+    MetricPacksService,
+    MetricPoliciesService,
+    TenantMetricsService,
+  ],
+  exports: [
+    CanonicalEntityService,
+    FactsService,
+    MetricPacksService,
+    MetricPoliciesService,
+    TenantMetricsService,
+  ],
 })
 export class FactsModule {}

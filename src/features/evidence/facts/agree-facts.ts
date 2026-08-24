@@ -1,7 +1,10 @@
 import type { FactKey } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
+// The pack schema's `MetricDefinition` (`id: string`), matching `extractProseFacts`'s own
+// `ontology` param — a resolved `MetricPackData`'s metrics, not necessarily `METRIC_ONTOLOGY`.
+import type { MetricDefinition } from '../../../database/schemas/evidence/metric-pack/metric-pack.schema';
 import { groupKey } from '../conflicts/detect-conflicts';
 import { isConflictingPair, normalizeFactValue } from '../conflicts/normalize-fact-value';
-import { findMetricById, type MetricDefinition } from './metric-ontology';
+import { findMetricById } from './metric-ontology';
 import type { ExtractedFactInput } from './prose-fact-extractor';
 
 const MIN_AGREEING_PASSES = 2;

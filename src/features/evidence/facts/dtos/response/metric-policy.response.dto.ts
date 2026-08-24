@@ -4,7 +4,6 @@ import {
   DOCUMENT_SOURCE_CLASSES,
   type DocumentSourceClass,
 } from '../../../../../database/schemas/evidence/document/document.schema';
-import { METRIC_IDS, type MetricId } from '../../metric-ontology';
 
 export class MetricPolicyResponseDto {
   @Expose()
@@ -14,10 +13,11 @@ export class MetricPolicyResponseDto {
   @Expose()
   @ApiProperty({
     example: 'net_operating_income',
-    enum: METRIC_IDS,
-    description: 'The metric this row overrides the ontology default for.',
+    description:
+      'The metric this row overrides the default for. Valid ids are per-tenant, drawn from the ' +
+      "tenant's active metric pack, not a fixed global enum.",
   })
-  metric: MetricId;
+  metric: string;
 
   @Expose()
   @ApiProperty({

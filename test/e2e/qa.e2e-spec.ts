@@ -33,6 +33,10 @@ import { readSseEvent } from '../utils/read-sse-event';
 import { registerTestUser } from '../utils/register-test-user';
 import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts';
 
+// Every fixture in this file extracts against the 'cre' v1 pack — the only ontology this code
+// has ever had (`metric-ontology.ts`).
+const PACK_STAMP = { packId: 'cre', packVersion: 1 } as const;
+
 interface AnswerUsageBody {
   promptTokens: number;
   completionTokens: number;
@@ -477,6 +481,7 @@ describe('QA and Conflicts (e2e)', () => {
         rawText: 'cap rate of 5.25%',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-xlsx',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
@@ -489,6 +494,7 @@ describe('QA and Conflicts (e2e)', () => {
         rawText: 'cap rate of 6.10%',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-prose',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
@@ -499,6 +505,8 @@ describe('QA and Conflicts (e2e)', () => {
         groupKeyNormalized: groupKey(factKey),
         factIds: [factLow._id, factHigh._id],
         magnitude: 0.0085,
+        magnitudeUnit: 'ratio',
+        ...PACK_STAMP,
         status: 'open',
       });
 
@@ -525,6 +533,7 @@ describe('QA and Conflicts (e2e)', () => {
           'status',
           'createdAt',
           'unscorable',
+          'stale',
           'ruleFired',
           'explanation',
         ].sort(),
@@ -574,6 +583,7 @@ describe('QA and Conflicts (e2e)', () => {
         rawText: 'cap rate of 5.25%',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-withdrawn-conflict',
         documentVersionId: withdrawnVersion._id,
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
@@ -586,6 +596,7 @@ describe('QA and Conflicts (e2e)', () => {
         rawText: 'cap rate of 6.10%',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-live-conflict',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
@@ -596,6 +607,8 @@ describe('QA and Conflicts (e2e)', () => {
         groupKeyNormalized: groupKey(factKey),
         factIds: [factWithdrawn._id, factLive._id],
         magnitude: 0.0085,
+        magnitudeUnit: 'ratio',
+        ...PACK_STAMP,
         status: 'open',
       });
 
@@ -661,6 +674,7 @@ describe('QA and Conflicts (e2e)', () => {
         rawText: 'NOI of $500,000',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-pm',
         documentVersionId: pmVersion._id,
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Rent Roll', cell: 'B2' },
@@ -673,6 +687,7 @@ describe('QA and Conflicts (e2e)', () => {
         rawText: 'NOI of $550,000',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-comps',
         documentVersionId: spreadsheetVersion._id,
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'C4' },
@@ -683,6 +698,8 @@ describe('QA and Conflicts (e2e)', () => {
         groupKeyNormalized: groupKey(factKey),
         factIds: [factPm._id, factSpreadsheet._id],
         magnitude: 50000,
+        magnitudeUnit: 'usd',
+        ...PACK_STAMP,
         status: 'open',
       });
 
@@ -703,6 +720,7 @@ describe('QA and Conflicts (e2e)', () => {
           'status',
           'createdAt',
           'unscorable',
+          'stale',
           'proposedWinnerFactId',
           'ruleFired',
           'explanation',
@@ -726,6 +744,7 @@ describe('QA and Conflicts (e2e)', () => {
         rawText: 'cap rate of 5.10%',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-eastgate-low',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F3' },
@@ -738,6 +757,7 @@ describe('QA and Conflicts (e2e)', () => {
         rawText: 'cap rate of 6.20%',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-eastgate-high',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 3 },
@@ -748,6 +768,8 @@ describe('QA and Conflicts (e2e)', () => {
         groupKeyNormalized: groupKey(openFactKey),
         factIds: [openFactLow._id, openFactHigh._id],
         magnitude: 0.011,
+        magnitudeUnit: 'ratio',
+        ...PACK_STAMP,
         status: 'open',
       });
 
@@ -764,6 +786,7 @@ describe('QA and Conflicts (e2e)', () => {
         rawText: 'cap rate of 5.00%',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-westgate-low',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F4' },
@@ -776,6 +799,7 @@ describe('QA and Conflicts (e2e)', () => {
         rawText: 'cap rate of 6.30%',
         confidence: 0.9,
         extractionMethod: 'llm',
+        ...PACK_STAMP,
         chunkId: 'chunk-westgate-high',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 4 },
@@ -786,6 +810,8 @@ describe('QA and Conflicts (e2e)', () => {
         groupKeyNormalized: groupKey(dismissedFactKey),
         factIds: [dismissedFactLow._id, dismissedFactHigh._id],
         magnitude: 0.013,
+        magnitudeUnit: 'ratio',
+        ...PACK_STAMP,
         status: 'dismissed',
       });
 

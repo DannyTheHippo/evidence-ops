@@ -181,6 +181,9 @@ describe('Measures (e2e)', () => {
         groupKeyNormalized: groupKey(factKey),
         factIds: [new Types.ObjectId(), new Types.ObjectId()],
         magnitude: 0.01,
+        magnitudeUnit: 'ratio',
+        packId: 'cre',
+        packVersion: 1,
         status: 'open',
       });
       await conflictModel.create({
@@ -189,6 +192,9 @@ describe('Measures (e2e)', () => {
         groupKeyNormalized: groupKey(factKey),
         factIds: [new Types.ObjectId(), new Types.ObjectId()],
         magnitude: 0.02,
+        magnitudeUnit: 'ratio',
+        packId: 'cre',
+        packVersion: 1,
         status: 'resolved',
         resolution: {
           outcome: 'resolved',

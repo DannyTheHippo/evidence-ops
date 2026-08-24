@@ -11,6 +11,12 @@ import type { CanonicalEntityResolution } from '../../../../src/features/evidenc
 import { CanonicalEntityService } from '../../../../src/features/evidence/facts/canonical-entity.service';
 import { DocumentVersionNotFoundException } from '../../../../src/features/evidence/facts/exceptions/facts.exception';
 import { FactsService } from '../../../../src/features/evidence/facts/facts.service';
+import {
+  ACTIVE_PACK_ID,
+  ACTIVE_PACK_VERSION,
+} from '../../../../src/features/evidence/facts/metric-ontology';
+import { MetricPacksService } from '../../../../src/features/evidence/facts/metric-packs.service';
+import { CRE_PACK_V1 } from '../../../../src/features/evidence/facts/packs/cre.pack';
 import { PASS_COUNT } from '../../../../src/features/evidence/facts/prose-fact-extractor';
 import { ParserRegistry } from '../../../../src/features/evidence/ingestion/parser.registry';
 import type {
@@ -101,6 +107,12 @@ describe('FactsService', () => {
   const mockCanonicalEntityService = {
     resolveMany: jest.fn(),
   } satisfies Record<keyof Pick<CanonicalEntityService, 'resolveMany'>, jest.Mock>;
+  // Every test in this suite runs a tenant with no authored `MetricPack` row, so extraction always
+  // resolves to the code default — `beforeEach` re-arms this to `CRE_PACK_V1` after each
+  // `resetAllMocks`, matching `MetricPacksService.resolveActive`'s own fallback.
+  const mockMetricPacksService = {
+    resolveActive: jest.fn(),
+  } satisfies Record<keyof Pick<MetricPacksService, 'resolveActive'>, jest.Mock>;
 
   const versionId = new Types.ObjectId();
   const documentId = new Types.ObjectId();
@@ -149,6 +161,7 @@ describe('FactsService', () => {
         { provide: MODEL_PROVIDER, useValue: options.modelProvider ?? fakeModelProvider },
         { provide: ParserRegistry, useValue: mockParserRegistry },
         { provide: CanonicalEntityService, useValue: mockCanonicalEntityService },
+        { provide: MetricPacksService, useValue: mockMetricPacksService },
         {
           provide: TypedConfigService,
           useValue: getMockTypedConfig({
@@ -173,6 +186,7 @@ describe('FactsService', () => {
         rawNames.map((name): CanonicalEntityResolution => ({ name, matched: false })),
       ),
     );
+    mockMetricPacksService.resolveActive.mockResolvedValue(CRE_PACK_V1);
 
     service = await buildService();
   });
@@ -297,6 +311,8 @@ describe('FactsService', () => {
             chunkId: string;
             documentVersionId: Types.ObjectId;
             tenantId: string;
+            packId: string;
+            packVersion: number;
           }[],
         ]
       >;
@@ -313,6 +329,8 @@ describe('FactsService', () => {
       // check and rollback filters (both scoped by this field) never match anything they wrote.
       expect(insertedFacts[0].documentVersionId).toBe(versionId);
       expect(insertedFacts[0].tenantId).toBe('default');
+      expect(insertedFacts[0].packId).toBe(ACTIVE_PACK_ID);
+      expect(insertedFacts[0].packVersion).toBe(ACTIVE_PACK_VERSION);
       expect(result).toEqual({
         factsCreated: 1,
         alreadyExtracted: false,
@@ -677,6 +695,10 @@ describe('FactsService', () => {
       expect(byChunkId.get(CHUNK_B.id)?.rawText).toBe(CHUNK_B.quote);
       expect(byChunkId.get(CHUNK_B.id)?.factKey.entity).toBe(CHUNK_B.entity);
       expect(result.factsCreated).toBe(2);
+      // Resolved once per extraction, not once per chunk — two chunks' worth of passes must not
+      // have queried the tenant's active pack twice.
+      expect(mockMetricPacksService.resolveActive).toHaveBeenCalledTimes(1);
+      expect(mockMetricPacksService.resolveActive).toHaveBeenCalledWith('default');
     });
 
     it('should start no more chunks at once than config.extraction.chunkConcurrency allows', async () => {

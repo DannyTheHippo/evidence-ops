@@ -68,6 +68,19 @@ export class ExtractedFact extends AuditableDocument {
   @Prop({ type: String, required: true, enum: EXTRACTION_METHODS })
   extractionMethod: ExtractionMethod;
 
+  /**
+   * The metric pack (`metric-ontology.ts`'s `ACTIVE_PACK_ID`/`ACTIVE_PACK_VERSION` until a
+   * resolved `MetricPack` replaces them) in force when this fact was extracted. Required, not
+   * optional: a fact that cannot say which ontology and tolerance produced it resolves against
+   * *some* pack once a pack becomes editable per engagement, quietly and possibly wrongly — the
+   * same reasoning `EvidenceLocator.extractorVersion` documents for a coordinate's extractor.
+   */
+  @Prop({ type: String, required: true })
+  packId: string;
+
+  @Prop({ type: Number, required: true })
+  packVersion: number;
+
   // `EvidenceChunk._id` is a content-addressed string (`computeChunkId`), not an ObjectId — see
   // that schema's own doc comment.
   @Prop({ type: String, ref: 'EvidenceChunk', required: true })

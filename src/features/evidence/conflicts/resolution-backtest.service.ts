@@ -22,7 +22,6 @@ import {
   type FactKey,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
-import type { MetricId } from '../facts/metric-ontology';
 import { MetricPoliciesService } from '../facts/metric-policies.service';
 import { loadSourceClassByFactId } from './load-source-class-by-fact-id';
 import {
@@ -97,10 +96,11 @@ export class ResolutionBacktestService {
    * conflict with too few facts to stay open — no human ever decided a winner there, so there is
    * nothing this backtest exists to score.
    *
-   * `scoreConflict`'s `unscorable` gate runs BEFORE `resolveConflictPolicy` is ever called for a
-   * conflict — a starved candidate set (no recorded winner, or a fact deleted since resolution)
-   * makes the policy return `ruleFired: 'none'`, which is indistinguishable from a genuine
-   * `silent` unless the gate is checked first and the policy call is skipped entirely.
+   * `scoreConflict`'s `unscorable` gates all run BEFORE `resolveConflictPolicy` is ever called for
+   * a conflict — a starved candidate set (no recorded winner, or a fact deleted since resolution),
+   * or a metric the tenant's currently active pack no longer defines, would each make the policy
+   * return `ruleFired: 'none'`, indistinguishable from a genuine `silent` unless the relevant gate
+   * is checked first and the policy call is skipped entirely.
    */
   async run(tenantId: string): Promise<ResolutionBacktestReport> {
     const conflicts = await this.conflictModel.find({
@@ -163,7 +163,7 @@ export class ResolutionBacktestService {
 
   /**
    * Pure given its inputs: `factById` and `sourceClassByFactId` are the whole run's batched
-   * enrichment (see `run`), never re-queried per conflict. The two `unscorable` gates below both
+   * enrichment (see `run`), never re-queried per conflict. All three `unscorable` gates below
    * `return` before `resolveConflictPolicy` is reached — that early return, not merely the label
    * on the result, is what proves this conflict's replay never happened.
    */
@@ -171,7 +171,7 @@ export class ResolutionBacktestService {
     conflict: ConflictDocument,
     factById: ReadonlyMap<string, ExtractedFactDocument>,
     sourceClassByFactId: ReadonlyMap<string, DocumentSourceClass>,
-    policies: ReadonlyMap<MetricId, SurvivorshipPolicy>,
+    policies: ReadonlyMap<string, SurvivorshipPolicy>,
   ): ConflictBacktestResult {
     // `conflict.resolution` is guaranteed present — `run`'s query only ever returns conflicts
     // matching `'resolution.outcome': { $in: [...] }` — but the field stays optional on the
@@ -224,6 +224,20 @@ export class ResolutionBacktestService {
       };
     }
 
+    // Gate THREE, before any policy call: `conflict.factKey.metric` must be a metric the tenant's
+    // currently resolved active pack still defines. A dropped metric has no policy row to look up
+    // at all — `resolveConflictPolicy` would return `ruleFired: 'none'`, indistinguishable from a
+    // genuine `silent` (which means "your rule has no opinion, consider authoring one"), but there
+    // is no rule to author for a metric the pack no longer contains. The gate keeps the two apart
+    // by never making the call.
+    if (!policies.has(conflict.factKey.metric)) {
+      return {
+        ...base,
+        verdict: 'unscorable',
+        unscorableReason: `Metric '${conflict.factKey.metric}' is not defined by the tenant's active metric pack.`,
+      };
+    }
+
     const candidates: ConflictingFactForResolution[] = conflictFacts.map((fact) => ({
       id: fact._id.toString(),
       // Both gates above passed, so every fact here was in `factById` — `loadSourceClassByFactId`
@@ -232,10 +246,10 @@ export class ResolutionBacktestService {
       sourceClass: sourceClassByFactId.get(fact._id.toString()) as DocumentSourceClass,
       observedAt: fact.observedAt,
     }));
-    const policy = policies.get(conflict.factKey.metric as MetricId) ?? {
-      authorityOrder: undefined,
-      stalenessWindowMs: Number.POSITIVE_INFINITY,
-    };
+    // Gate THREE above guarantees `policies.has(conflict.factKey.metric)`; `as` (not `??`) keeps
+    // TypeScript satisfied without an untestable fallback branch, matching `sourceClass`'s
+    // identical pattern above.
+    const policy = policies.get(conflict.factKey.metric) as SurvivorshipPolicy;
     const proposal = resolveConflictPolicy(candidates, policy);
 
     if (proposal.ruleFired === 'none') {
