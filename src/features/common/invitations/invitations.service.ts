@@ -7,11 +7,16 @@ import {
   InvitationDocument,
 } from '../../../database/schemas/administration/invitation/invitation.schema';
 import { User, UserDocument } from '../../../database/schemas/administration/user/user.schema';
-import type { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import { UserRole } from '../../../shared/enums/user-role.enum';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import { resolveSort } from '../../../shared/utils/resolve-sort.util';
+import {
+  DEFAULT_INVITATION_SORT_DIRECTION,
+  DEFAULT_INVITATION_SORT_FIELD,
+  type ListInvitationsRequestDto,
+} from './dtos/request/list-invitations.request.dto';
 import {
   InvitationEmailAlreadyRegisteredException,
   InvitationNotFoundException,
@@ -124,7 +129,7 @@ export class InvitationsService {
   }
 
   async list(
-    pagination: PaginationRequestDto,
+    pagination: ListInvitationsRequestDto,
     actorId: string,
     tenantId: string,
   ): Promise<DocumentResultWithCount<InvitationResult>> {
@@ -132,7 +137,12 @@ export class InvitationsService {
 
     const [invitations, count] = await Promise.all([
       this.invitationModel.find(filter, null, {
-        sort: { createdAt: -1 },
+        sort: resolveSort(
+          pagination.sort,
+          pagination.sortDir,
+          DEFAULT_INVITATION_SORT_FIELD,
+          DEFAULT_INVITATION_SORT_DIRECTION,
+        ),
         skip: pagination.skip,
         limit: pagination.limit,
       }),

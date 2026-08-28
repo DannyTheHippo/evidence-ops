@@ -304,6 +304,27 @@ describe('WorkflowRunsService', () => {
       });
       expect(mockWorkflowRunModel.countDocuments).toHaveBeenCalledWith({ tenantId: 'acme-corp' });
     });
+
+    it.each([
+      ['status', 'asc', { status: 1 }],
+      ['workflowType', 'desc', { workflowType: -1 }],
+    ] as const)(
+      'should sort by the caller-supplied %s field and %s direction',
+      async (sort, sortDir, expectedSort) => {
+        const actorId = new Types.ObjectId().toString();
+        mockWorkflowRunModel.find.mockResolvedValueOnce([]);
+        mockWorkflowRunModel.countDocuments.mockResolvedValueOnce(0);
+        mockAuditService.record.mockResolvedValueOnce(undefined);
+
+        await service.listByWorkflowId({ skip: 0, limit: 20, sort, sortDir }, actorId, 'tenant-a');
+
+        expect(mockWorkflowRunModel.find).toHaveBeenCalledWith({ tenantId: 'tenant-a' }, null, {
+          sort: expectedSort,
+          skip: 0,
+          limit: 20,
+        });
+      },
+    );
   });
 
   describe('findRunByWorkflowId', () => {

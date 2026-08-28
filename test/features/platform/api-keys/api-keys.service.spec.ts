@@ -264,6 +264,26 @@ describe('ApiKeysService', () => {
       expect(result.count).toBe(5);
     });
 
+    it.each([
+      ['name', 'asc', { name: 1 }],
+      ['lastUsedAt', 'desc', { lastUsedAt: -1 }],
+      ['expiresAt', 'asc', { expiresAt: 1 }],
+    ] as const)(
+      'should sort by the caller-supplied %s field and %s direction',
+      async (sort, sortDir, expectedSort) => {
+        mockApiKeyModel.find.mockResolvedValueOnce([]);
+        mockApiKeyModel.countDocuments.mockResolvedValueOnce(0);
+
+        await service.list({ skip: 0, limit: 20, sort, sortDir }, actorId, 'tenant-a');
+
+        expect(mockApiKeyModel.find).toHaveBeenCalledWith(
+          { tenantId: 'tenant-a', userId },
+          null,
+          expect.objectContaining({ sort: expectedSort }),
+        );
+      },
+    );
+
     it('should expose lastUsedAt on a listed key', async () => {
       const lastUsedAt = new Date('2026-08-01T00:00:00.000Z');
       mockApiKeyModel.find.mockResolvedValueOnce([buildMockApiKey({ lastUsedAt })]);

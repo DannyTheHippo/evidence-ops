@@ -9,7 +9,12 @@ import {
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
-import type { ListAuditEventsRequestDto } from './dtos/request/list-audit-events.request.dto';
+import { resolveSort } from '../../../shared/utils/resolve-sort.util';
+import {
+  DEFAULT_AUDIT_EVENT_SORT_DIRECTION,
+  DEFAULT_AUDIT_EVENT_SORT_FIELD,
+  type ListAuditEventsRequestDto,
+} from './dtos/request/list-audit-events.request.dto';
 
 export interface AuditEventResult {
   readonly id: string;
@@ -38,10 +43,12 @@ export class AuditEventsService {
   }
 
   /**
-   * Tenant-scoped read of the audit log. `action`/`entityType`/`entityId` are not part of the
-   * `{ tenantId: 1, createdAt: -1 }` index this rides (`migrations/0001-baseline.ts`), so a
-   * filtered call scans the tenant's slice rather than seeking straight to matching rows —
-   * accepted at this corpus size, not an oversight.
+   * Tenant-scoped read of the audit log. `entityType`/`entityId`/`origin`/`refusalReason` filters
+   * are not part of any index this rides (`audit-event.schema.ts`, mirrored in
+   * `migrations/0001-baseline.ts`), so a call filtered on one of them scans the tenant's slice
+   * rather than seeking straight to matching rows — accepted at this corpus size, not an
+   * oversight. `action`, unlike the others, has its own `{tenantId, action}` index (added to back
+   * `sort=action`), so a call filtered on it alone seeks.
    *
    * Recording `audit-events.listed` here means reading the audit log is itself audited. That is
    * the point, not a bug: do not "clean up" this call as recursive noise.
@@ -62,7 +69,12 @@ export class AuditEventsService {
 
     const [events, count] = await Promise.all([
       this.auditEventModel.find(filter, null, {
-        sort: { createdAt: -1 },
+        sort: resolveSort(
+          dto.sort,
+          dto.sortDir,
+          DEFAULT_AUDIT_EVENT_SORT_FIELD,
+          DEFAULT_AUDIT_EVENT_SORT_DIRECTION,
+        ),
         skip: dto.skip,
         limit: dto.limit,
       }),

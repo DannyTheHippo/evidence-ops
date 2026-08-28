@@ -183,7 +183,8 @@ CanonicalEntitySchema.index(
   { name: 'canonical_entities_tenantId_aliasesNormalized' },
 );
 
-/** Backs the registry's unfiltered, tenant-scoped, newest-first default listing. */
+/** Backs `GET /canonical-entities?sort=createdAt` — the registry's default listing sorts
+ *  `canonicalNameNormalized` instead, riding the unique index above. */
 CanonicalEntitySchema.index(
   { tenantId: 1, createdAt: -1 },
   { name: 'canonical_entities_tenantId_createdAt' },

@@ -388,6 +388,57 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
         ['id', 'subject', 'action', 'summary', 'workflowId', 'state', 'createdAt'].sort(),
       );
     });
+
+    it('returns 400 for a sort field outside the declared allowlist', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/approvals')
+        .query({ sort: 'action' })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 400 for a sortDir outside asc/desc', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/approvals')
+        .query({ sort: 'decidedAt', sortDir: 'ascending' })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('sorts decided approvals by decidedAt ascending when asked', async () => {
+      const decidedLater = await approvalModel.create({
+        subject: { entityType: 'Conflict', entityId: new Types.ObjectId() },
+        action: 'resolve_conflict',
+        summary: 'Decided second.',
+        state: 'approved',
+        decidedBy: 'reviewer@example.com',
+        decidedAt: new Date('2026-01-02T00:00:00.000Z'),
+        tenantId,
+      });
+      const decidedEarlier = await approvalModel.create({
+        subject: { entityType: 'Conflict', entityId: new Types.ObjectId() },
+        action: 'resolve_conflict',
+        summary: 'Decided first.',
+        state: 'approved',
+        decidedBy: 'reviewer@example.com',
+        decidedAt: new Date('2026-01-01T00:00:00.000Z'),
+        tenantId,
+      });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/approvals')
+        .query({ state: 'approved', sort: 'decidedAt', sortDir: 'asc' })
+        .set('Cookie', cookie);
+      const body = response.body as { docs: ApprovalBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      const ids = body.docs.map((doc) => doc.id);
+      expect(ids.indexOf(decidedEarlier._id.toString())).toBeLessThan(
+        ids.indexOf(decidedLater._id.toString()),
+      );
+    });
   });
 
   describe('POST /approvals/:id/decision', () => {
@@ -759,6 +810,52 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
 
       const events = await auditEventModel.find({ action: 'workflow-runs.listed' });
       expect(events.length).toBeGreaterThan(0);
+    });
+
+    it('returns 400 for a sort field outside the declared allowlist', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/workflow-runs')
+        .query({ sort: 'errorMessage' })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 400 for a sortDir outside asc/desc', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/workflow-runs')
+        .query({ sort: 'status', sortDir: 'ascending' })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('sorts by workflowType ascending when asked, instead of the createdAt-descending default', async () => {
+      const workflowId = `wf-sort-${new Types.ObjectId().toString()}`;
+      const syncRun = await workflowRunModel.create({
+        workflowId,
+        workflowType: 'sync-source',
+        status: 'running',
+        tenantId,
+      });
+      const resolveRun = await workflowRunModel.create({
+        workflowId,
+        workflowType: 'resolve-conflict',
+        status: 'running',
+        tenantId,
+      });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/workflow-runs')
+        .query({ workflowId, sort: 'workflowType', sortDir: 'asc' })
+        .set('Cookie', cookie);
+      const body = response.body as { docs: WorkflowRunBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.docs.map((doc) => doc.id)).toEqual([
+        resolveRun._id.toString(),
+        syncRun._id.toString(),
+      ]);
     });
   });
 

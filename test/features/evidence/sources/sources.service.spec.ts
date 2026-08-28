@@ -354,6 +354,39 @@ describe('SourcesService', () => {
         expect.objectContaining({ skip: 0, limit: 20 }),
       );
     });
+
+    it.each([
+      ['createdAt', 'desc', { createdAt: -1 }],
+      ['owner', 'asc', { owner: 1 }],
+      ['lastSyncAt', 'desc', { lastSyncAt: -1 }],
+    ] as const)(
+      'should sort by the caller-supplied %s field and %s direction',
+      async (sort, sortDir, expectedSort) => {
+        mockSourceModel.find.mockResolvedValueOnce([]);
+        mockSourceModel.countDocuments.mockResolvedValueOnce(0);
+
+        await service.list({ skip: 0, limit: 20, sort, sortDir }, actorId, 'tenant-a');
+
+        expect(mockSourceModel.find).toHaveBeenCalledWith(
+          { tenantId: 'tenant-a' },
+          null,
+          expect.objectContaining({ sort: expectedSort }),
+        );
+      },
+    );
+
+    it('should default to sorting by name ascending when no sort is given', async () => {
+      mockSourceModel.find.mockResolvedValueOnce([]);
+      mockSourceModel.countDocuments.mockResolvedValueOnce(0);
+
+      await service.list({ skip: 0, limit: 20 }, actorId, 'tenant-a');
+
+      expect(mockSourceModel.find).toHaveBeenCalledWith(
+        { tenantId: 'tenant-a' },
+        null,
+        expect.objectContaining({ sort: { name: 1 } }),
+      );
+    });
   });
 
   describe('getById', () => {

@@ -278,6 +278,50 @@ describe('ApiKeys (e2e)', () => {
       const secondIds = secondBody.docs.map((doc) => doc.id);
       expect(firstIds).not.toEqual(expect.arrayContaining(secondIds));
     });
+
+    it('returns 400 for a sort field outside the declared allowlist', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/api-keys')
+        .query({ sort: 'tokenPrefix' })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 400 for a sortDir outside asc/desc', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/api-keys')
+        .query({ sort: 'name', sortDir: 'ascending' })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('sorts by name ascending when asked, instead of the createdAt-descending default', async () => {
+      const sortUser = await registerTestUser(app, {
+        email: 'api-keys-sort-e2e@example.com',
+        password: 'correct-horse-battery',
+      });
+      const minted1 = await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Cookie', sortUser.cookie)
+        .send({ name: 'Zeta key' });
+      const minted2 = await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Cookie', sortUser.cookie)
+        .send({ name: 'Alpha key' });
+      const zetaId = (minted1.body as MintedKeyBody).id;
+      const alphaId = (minted2.body as MintedKeyBody).id;
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/api-keys')
+        .query({ sort: 'name', sortDir: 'asc' })
+        .set('Cookie', sortUser.cookie);
+      const body = response.body as { docs: ApiKeyBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.docs.map((doc) => doc.id)).toEqual([alphaId, zetaId]);
+    });
   });
 
   describe('DELETE /api-keys/:id', () => {

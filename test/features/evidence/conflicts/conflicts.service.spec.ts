@@ -977,6 +977,27 @@ describe('ConflictsService', () => {
       });
     });
 
+    it.each([
+      ['createdAt', 'asc', { createdAt: 1 }],
+      ['status', 'desc', { status: -1 }],
+    ] as const)(
+      'should sort by the caller-supplied %s field and %s direction',
+      async (sort, sortDir, expectedSort) => {
+        const actorId = new Types.ObjectId().toString();
+        mockConflictModel.find.mockResolvedValueOnce([]);
+        mockConflictModel.countDocuments.mockResolvedValueOnce(0);
+        mockAuditService.record.mockResolvedValueOnce(undefined);
+
+        await service.list({ skip: 0, limit: 20, sort, sortDir }, actorId, 'tenant-a');
+
+        expect(mockConflictModel.find).toHaveBeenCalledWith({ tenantId: 'tenant-a' }, null, {
+          sort: expectedSort,
+          skip: 0,
+          limit: 20,
+        });
+      },
+    );
+
     it("should mark a conflict stale, with a reason naming both packs, when its stamped packId/packVersion no longer match the tenant's active pack", async () => {
       const actorId = new Types.ObjectId().toString();
       const factIdA = new Types.ObjectId();

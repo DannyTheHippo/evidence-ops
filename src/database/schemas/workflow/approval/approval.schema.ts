@@ -82,3 +82,7 @@ export const ApprovalSchema = SchemaFactory.createForClass(Approval);
  * `tenantId` and sorts by `createdAt` alone, for a caller that queries without a state filter.
  */
 ApprovalSchema.index({ tenantId: 1, createdAt: -1 }, { name: 'approvals_tenantId_createdAt' });
+
+/** Backs `GET /approvals?sort=decidedAt` — the one allowlisted sort field with no existing
+ *  `{tenantId, ...}` prefix to ride. */
+ApprovalSchema.index({ tenantId: 1, decidedAt: 1 }, { name: 'approvals_tenantId_decidedAt' });

@@ -16,7 +16,6 @@ import {
 import { ApiResponse, ApiTags } from '@nestjs/swagger';
 import { RolesGuard } from '../../common/auth/guards/roles.guard';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
-import { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
 import { RequireRole } from '../../../shared/decorators/require-role.decorator';
 import { UserRole } from '../../../shared/enums/user-role.enum';
@@ -25,6 +24,7 @@ import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { canonicalEntitiesApiExamples } from './api-examples/canonical-entities.api-examples';
 import { CanonicalEntityService } from './canonical-entity.service';
 import { CreateCanonicalEntityRequestDto } from './dtos/request/create-canonical-entity.request.dto';
+import { ListCanonicalEntitiesRequestDto } from './dtos/request/list-canonical-entities.request.dto';
 import { RevokeHarvestedAliasRequestDto } from './dtos/request/revoke-harvested-alias.request.dto';
 import { UpdateCanonicalEntityRequestDto } from './dtos/request/update-canonical-entity.request.dto';
 import { CanonicalEntityResponseDto } from './dtos/response/canonical-entity.response.dto';
@@ -40,7 +40,7 @@ export class CanonicalEntitiesController {
   @HttpCode(HttpStatus.OK)
   @ApiResponse(canonicalEntitiesApiExamples.list)
   async list(
-    @Query() pagination: PaginationRequestDto,
+    @Query() pagination: ListCanonicalEntitiesRequestDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
   ): Promise<WithCountResponseDto<CanonicalEntityResponseDto>> {
     if (!user) {

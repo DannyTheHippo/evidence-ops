@@ -232,3 +232,9 @@ SourceSchema.index(
   { tenantId: 1, name: 1 },
   { unique: true, name: 'sources_tenantId_name_unique' },
 );
+
+/** Backs `GET /sources?sort=owner|lastSyncAt`, the two allowlisted sort fields with no existing
+ *  `{tenantId, ...}` prefix to ride — `name` rides the unique index above, `createdAt` rides
+ *  `sources_tenantId_createdAt`. */
+SourceSchema.index({ tenantId: 1, owner: 1 }, { name: 'sources_tenantId_owner' });
+SourceSchema.index({ tenantId: 1, lastSyncAt: 1 }, { name: 'sources_tenantId_lastSyncAt' });

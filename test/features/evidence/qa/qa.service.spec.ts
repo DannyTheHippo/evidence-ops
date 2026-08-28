@@ -477,6 +477,23 @@ describe('QaService', () => {
       expect(mockAnswerModel.countDocuments).toHaveBeenCalledWith(expectedFilter);
     });
 
+    it('should resolve a caller-supplied sort field and direction into the Mongoose sort option', async () => {
+      mockAnswerModel.find.mockResolvedValueOnce([]);
+      mockAnswerModel.countDocuments.mockResolvedValueOnce(0);
+
+      await service.listByTenant(
+        { skip: 0, limit: 20, sort: 'claimCoverage', sortDir: 'asc' },
+        'actor',
+        'tenant-a',
+      );
+
+      expect(mockAnswerModel.find).toHaveBeenCalledWith({ tenantId: 'tenant-a' }, null, {
+        sort: { claimCoverage: 1 },
+        skip: 0,
+        limit: 20,
+      });
+    });
+
     it('should present a queued row from the same list with outcome and verificationReport omitted', async () => {
       const answer = buildAnswerDoc({
         runStatus: 'queued',

@@ -19,6 +19,7 @@ import { EvidenceRetrievalService } from './evidence-retrieval.service';
 import { GroundingGateService } from './grounding-gate.service';
 import { QaController } from './qa.controller';
 import { QaService } from './qa.service';
+import { QueryEmbeddingCacheService } from './query-embedding-cache.service';
 import { SynthesisService } from './synthesis.service';
 
 // `GroundingGateService` has no Mongoose/model dependency of its own (see its doc comment: it
@@ -48,6 +49,7 @@ import { SynthesisService } from './synthesis.service';
     SynthesisService,
     GroundingGateService,
     EvidenceRetrievalService,
+    QueryEmbeddingCacheService,
     AnswerPersistenceService,
     ClaimVerificationService,
     QaService,

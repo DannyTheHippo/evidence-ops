@@ -61,3 +61,13 @@ InvitationSchema.index(
   { expiresAt: 1 },
   { name: 'invitations_expiresAt_ttl', expireAfterSeconds: 0 },
 );
+
+/**
+ * Backs `GET /invitations?sort=email|expiresAt|role`, the three allowlisted sort fields with no
+ * existing `{tenantId, ...}` prefix to ride — the TTL index above is keyed on bare `expiresAt`
+ * (no `tenantId` prefix, by design: `expireAfterSeconds` reaping is tenant-agnostic), so it
+ * cannot serve a tenant-scoped sort.
+ */
+InvitationSchema.index({ tenantId: 1, email: 1 }, { name: 'invitations_tenantId_email' });
+InvitationSchema.index({ tenantId: 1, expiresAt: 1 }, { name: 'invitations_tenantId_expiresAt' });
+InvitationSchema.index({ tenantId: 1, role: 1 }, { name: 'invitations_tenantId_role' });

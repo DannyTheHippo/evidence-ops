@@ -1,6 +1,11 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { ApiError, searchEvidence, type RetrievedChunkView, type WithCount } from '../api/client';
+import {
+  ApiError,
+  searchEvidence,
+  type RetrievedChunkView,
+  type SearchEvidenceResult,
+} from '../api/client';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import Field from '../components/ui/Field';
@@ -46,7 +51,7 @@ function ResultRow({ chunk, resolved }: ResultRowProps) {
 
 export default function SearchPage() {
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<WithCount<RetrievedChunkView> | null>(null);
+  const [results, setResults] = useState<SearchEvidenceResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [documentIndex, setDocumentIndex] = useState<Map<string, ResolvedVersion>>(new Map());
@@ -56,7 +61,7 @@ export default function SearchPage() {
     setLoading(true);
     setError(null);
     try {
-      const found = await searchEvidence(query);
+      const found = await searchEvidence({ query });
       setResults(found);
     } catch (err: unknown) {
       setResults(null);
@@ -156,7 +161,12 @@ export default function SearchPage() {
         <section className="card">
           <div className="card-head">
             <h2 className="card-title">Results</h2>
-            <p className="card-meta">{results.count}</p>
+            {/* The count on this page, never a total — the endpoint returns hasMore, not a count,
+                because paging over a fused, filtered, over-fetched result set has no stable total
+                to report. */}
+            <p className="card-meta">
+              {results.docs.length} on this page{results.hasMore ? ' · more available' : ''}
+            </p>
           </div>
           <ul className="citations">
             {results.docs.map((chunk) => (

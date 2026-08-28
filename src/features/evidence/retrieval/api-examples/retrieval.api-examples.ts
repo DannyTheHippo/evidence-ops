@@ -16,12 +16,15 @@ const exampleChunk = {
 export const retrievalApiExamples: Record<string, ApiResponseOptions> = {
   found: {
     status: HttpStatus.OK,
-    description: 'Hybrid retrieval hits for the query, ranked as the store returns them.',
+    description:
+      'Hybrid retrieval hits for the query, paged and sorted by score. hasMore signals ' +
+      'whether another page exists — there is no total, since paging applies after fusion, ' +
+      'the score floor, and withdrawn-version filtering.',
     type: RetrievedChunkResponseDto,
     examples: {
       example: {
         summary: 'One matching chunk',
-        value: { docs: [exampleChunk], count: 1 },
+        value: { docs: [exampleChunk], hasMore: false },
       },
     },
   },

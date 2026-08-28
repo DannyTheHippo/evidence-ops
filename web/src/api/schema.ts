@@ -1869,6 +1869,10 @@ export interface operations {
         skip?: number;
         /** @description Maximum number of documents to return. */
         limit?: number;
+        /** @description Field to sort by. Defaults to createdAt. */
+        sort?: 'createdAt' | 'email' | 'expiresAt' | 'role';
+        /** @description Sort direction. Defaults to desc. */
+        sortDir?: 'asc' | 'desc';
       };
       header?: never;
       path?: never;
@@ -2513,6 +2517,10 @@ export interface operations {
         skip?: number;
         /** @description Maximum number of documents to return. */
         limit?: number;
+        /** @description Field to sort by. Defaults to canonicalNameNormalized. */
+        sort?: 'canonicalNameNormalized' | 'createdAt';
+        /** @description Sort direction. Defaults to asc. */
+        sortDir?: 'asc' | 'desc';
       };
       header?: never;
       path?: never;
@@ -2829,6 +2837,10 @@ export interface operations {
         limit?: number;
         /** @description Exact conflict status to filter by. */
         status?: 'open' | 'resolved' | 'dismissed';
+        /** @description Field to sort by. Defaults to createdAt. */
+        sort?: 'createdAt' | 'status';
+        /** @description Sort direction. Defaults to desc. */
+        sortDir?: 'asc' | 'desc';
       };
       header?: never;
       path?: never;
@@ -2906,6 +2918,10 @@ export interface operations {
         status?: 'queued' | 'running' | 'completed' | 'failed';
         /** @description Filter by which workflow the run projects. Includes 'rescan-conflicts', a legacy type no current workflow writes — accepted so a tenant with an existing legacy row can still filter it into view, not because new rows of that type can appear. */
         workflowType?: 'resolve-conflict' | 'sync-source' | 'rescan-conflicts';
+        /** @description Field to sort by. Defaults to createdAt. */
+        sort?: 'createdAt' | 'status' | 'workflowType';
+        /** @description Sort direction. Defaults to desc. */
+        sortDir?: 'asc' | 'desc';
       };
       header?: never;
       path?: never;
@@ -2995,6 +3011,10 @@ export interface operations {
         limit?: number;
         /** @description Approval state to filter by. Defaults to `pending` — this endpoint is the pending inbox. */
         state?: 'pending' | 'approved' | 'rejected' | 'timed_out';
+        /** @description Field to sort by. Defaults to createdAt. */
+        sort?: 'createdAt' | 'state' | 'decidedAt';
+        /** @description Sort direction. Defaults to desc. */
+        sortDir?: 'asc' | 'desc';
       };
       header?: never;
       path?: never;
@@ -3139,6 +3159,10 @@ export interface operations {
         limit?: number;
         /** @description Exact workflow run status to filter by. */
         runStatus?: 'queued' | 'running' | 'completed' | 'failed';
+        /** @description Field to sort by. Defaults to createdAt. */
+        sort?: 'createdAt' | 'runStatus' | 'claimCoverage';
+        /** @description Sort direction. Defaults to desc. */
+        sortDir?: 'asc' | 'desc';
       };
       header?: never;
       path?: never;
@@ -3191,8 +3215,27 @@ export interface operations {
   RetrievalController_search: {
     parameters: {
       query: {
+        /** @description Comma-separated fields to include; `_id` is always returned. */
+        select?: string;
+        /** @description Number of documents to skip (offset). */
+        skip?: number;
+        /** @description Maximum number of documents to return. */
+        limit?: number;
         /** @description Search text run against the hybrid retrieval index. */
         query: string;
+        /** @description Restrict results to chunks belonging to this document. */
+        documentId?: string;
+        /** @description Restrict results to documents whose sourceClass matches. Omit for every class. */
+        sourceClass?:
+          'crm-export' | 'pm-export' | 'spreadsheet' | 'memo' | 'report' | 'unclassified';
+        /** @description Restrict results to documents created on or after this timestamp (inclusive). */
+        createdAfter?: string;
+        /** @description Restrict results to documents created on or before this timestamp (inclusive). */
+        createdBefore?: string;
+        /** @description Field to sort by. Score is the only field this endpoint exposes — it exists only after fusion runs, unlike every other list endpoint, which sorts a Mongo query directly. Defaults to score. */
+        sort?: 'score';
+        /** @description Sort direction. Defaults to desc (highest relevance first). */
+        sortDir?: 'asc' | 'desc';
       };
       header?: never;
       path?: never;
@@ -3200,7 +3243,7 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description Hybrid retrieval hits for the query, ranked as the store returns them. */
+      /** @description Hybrid retrieval hits for the query, paged and sorted by score. hasMore signals whether another page exists — there is no total, since paging applies after fusion, the score floor, and withdrawn-version filtering. */
       200: {
         headers: {
           [name: string]: unknown;
@@ -3224,6 +3267,10 @@ export interface operations {
         lastSyncStatus?: string;
         /** @description Filter to sources with this exact tracked value. R4 renders synced ('tracked: true') and inventory-only ('tracked: false') sources as two separately-paged lists, so this cannot be done by partitioning one fetched page client-side. */
         tracked?: boolean;
+        /** @description Field to sort by. Defaults to name. */
+        sort?: 'name' | 'owner' | 'lastSyncAt' | 'createdAt';
+        /** @description Sort direction. Defaults to asc. */
+        sortDir?: 'asc' | 'desc';
       };
       header?: never;
       path?: never;
@@ -3480,6 +3527,10 @@ export interface operations {
         origin?: 'api' | 'mcp';
         /** @description Exact refusal reason to filter by, matching mcp.tool_call.refused rows. */
         refusalReason?: string;
+        /** @description Field to sort by. Defaults to createdAt. */
+        sort?: 'createdAt' | 'action' | 'origin';
+        /** @description Sort direction. Defaults to desc. */
+        sortDir?: 'asc' | 'desc';
       };
       header?: never;
       path?: never;
@@ -3516,6 +3567,10 @@ export interface operations {
         skip?: number;
         /** @description Maximum number of documents to return. */
         limit?: number;
+        /** @description Field to sort by. Defaults to createdAt. */
+        sort?: 'createdAt' | 'name' | 'lastUsedAt' | 'expiresAt';
+        /** @description Sort direction. Defaults to desc. */
+        sortDir?: 'asc' | 'desc';
       };
       header?: never;
       path?: never;

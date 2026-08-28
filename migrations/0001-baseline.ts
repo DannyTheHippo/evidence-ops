@@ -126,6 +126,24 @@ const INDEXES: readonly IndexSpec[] = [
     keys: { tenantId: 1, userId: 1, revokedAt: 1 },
     options: { name: 'api_keys_tenantId_userId_revokedAt' },
   },
+  // Backs `GET /api-keys?sort=name|lastUsedAt|expiresAt` — `list`'s filter always includes
+  // `userId` alongside `tenantId`, so each carries the same two-field prefix as the `createdAt`
+  // index above rather than a bare `{tenantId, ...}` pair.
+  {
+    collection: 'api_keys',
+    keys: { tenantId: 1, userId: 1, name: 1 },
+    options: { name: 'api_keys_tenantId_userId_name' },
+  },
+  {
+    collection: 'api_keys',
+    keys: { tenantId: 1, userId: 1, lastUsedAt: 1 },
+    options: { name: 'api_keys_tenantId_userId_lastUsedAt' },
+  },
+  {
+    collection: 'api_keys',
+    keys: { tenantId: 1, userId: 1, expiresAt: 1 },
+    options: { name: 'api_keys_tenantId_userId_expiresAt' },
+  },
 
   // `invitations_expiresAt_ttl` uses `expireAfterSeconds: 0`, which reads `expiresAt` as an
   // absolute deletion time rather than an offset to add to it — Mongo removes a row the moment its
@@ -146,6 +164,24 @@ const INDEXES: readonly IndexSpec[] = [
     collection: 'invitations',
     keys: { expiresAt: 1 },
     options: { name: 'invitations_expiresAt_ttl', expireAfterSeconds: 0 },
+  },
+  // Backs `GET /invitations?sort=email|expiresAt|role`, the three allowlisted sort fields with no
+  // existing `{tenantId, ...}` prefix to ride — the TTL index above is keyed on bare `expiresAt`
+  // (no `tenantId` prefix, by design), so it cannot serve a tenant-scoped sort.
+  {
+    collection: 'invitations',
+    keys: { tenantId: 1, email: 1 },
+    options: { name: 'invitations_tenantId_email' },
+  },
+  {
+    collection: 'invitations',
+    keys: { tenantId: 1, expiresAt: 1 },
+    options: { name: 'invitations_tenantId_expiresAt' },
+  },
+  {
+    collection: 'invitations',
+    keys: { tenantId: 1, role: 1 },
+    options: { name: 'invitations_tenantId_role' },
   },
 
   // `TenantSpendService.reserve` upserts a window keyed by `(tenantId, windowStart)` and then
@@ -344,6 +380,13 @@ const INDEXES: readonly IndexSpec[] = [
     keys: { tenantId: 1, createdAt: -1 },
     options: { name: 'approvals_tenantId_createdAt' },
   },
+  // Backs `GET /approvals?sort=decidedAt` — the one allowlisted sort field with no existing
+  // `{tenantId, ...}` prefix to ride.
+  {
+    collection: 'approvals',
+    keys: { tenantId: 1, decidedAt: 1 },
+    options: { name: 'approvals_tenantId_decidedAt' },
+  },
 
   // Tenant-wide newest-first feeds.
   {
@@ -351,15 +394,51 @@ const INDEXES: readonly IndexSpec[] = [
     keys: { tenantId: 1, createdAt: -1 },
     options: { name: 'answers_tenantId_createdAt' },
   },
+  // Backs `GET /answers?sort=runStatus|claimCoverage`, the two allowlisted sort fields with no
+  // existing `{tenantId, ...}` prefix to ride.
+  {
+    collection: 'answers',
+    keys: { tenantId: 1, runStatus: 1 },
+    options: { name: 'answers_tenantId_runStatus' },
+  },
+  {
+    collection: 'answers',
+    keys: { tenantId: 1, claimCoverage: 1 },
+    options: { name: 'answers_tenantId_claimCoverage' },
+  },
   {
     collection: 'workflow_runs',
     keys: { tenantId: 1, createdAt: -1 },
     options: { name: 'workflow_runs_tenantId_createdAt' },
   },
+  // Backs `GET /workflow-runs?sort=status|workflowType`, the two allowlisted sort fields with no
+  // existing `{tenantId, ...}` prefix to ride.
+  {
+    collection: 'workflow_runs',
+    keys: { tenantId: 1, status: 1 },
+    options: { name: 'workflow_runs_tenantId_status' },
+  },
+  {
+    collection: 'workflow_runs',
+    keys: { tenantId: 1, workflowType: 1 },
+    options: { name: 'workflow_runs_tenantId_workflowType' },
+  },
   {
     collection: 'audit_events',
     keys: { tenantId: 1, createdAt: -1 },
     options: { name: 'audit_events_tenantId_createdAt' },
+  },
+  // Backs `GET /audit-events?sort=action|origin`, the two allowlisted sort fields (besides
+  // `createdAt`, already served above) with no existing `{tenantId, ...}` prefix to ride.
+  {
+    collection: 'audit_events',
+    keys: { tenantId: 1, action: 1 },
+    options: { name: 'audit_events_tenantId_action' },
+  },
+  {
+    collection: 'audit_events',
+    keys: { tenantId: 1, origin: 1 },
+    options: { name: 'audit_events_tenantId_origin' },
   },
 
   // The unique `{tenantId, name}` index is the backstop for a `Source` name collision within a
@@ -373,6 +452,19 @@ const INDEXES: readonly IndexSpec[] = [
     collection: 'sources',
     keys: { tenantId: 1, name: 1 },
     options: { unique: true, name: 'sources_tenantId_name_unique' },
+  },
+  // Backs `GET /sources?sort=owner|lastSyncAt`, the two allowlisted sort fields with no existing
+  // `{tenantId, ...}` prefix to ride — `name` rides the unique index above, `createdAt` rides
+  // the index above it.
+  {
+    collection: 'sources',
+    keys: { tenantId: 1, owner: 1 },
+    options: { name: 'sources_tenantId_owner' },
+  },
+  {
+    collection: 'sources',
+    keys: { tenantId: 1, lastSyncAt: 1 },
+    options: { name: 'sources_tenantId_lastSyncAt' },
   },
 
   // Two canonical rows for the same normalised name within one tenant is a data error, not a

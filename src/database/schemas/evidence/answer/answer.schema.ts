@@ -89,3 +89,9 @@ AnswerSchema.pre('validate', function (this: AnswerDocument): void {
     this.invalidate('outcome', 'outcome may only be set when runStatus is completed');
   }
 });
+
+// Backs `GET /answers?sort=runStatus|claimCoverage`, the two allowlisted sort fields with no
+// existing `{tenantId, ...}` prefix to ride — `answers_tenantId_createdAt` (baseline-only, backing
+// the default sort) already covers `createdAt`.
+AnswerSchema.index({ tenantId: 1, runStatus: 1 }, { name: 'answers_tenantId_runStatus' });
+AnswerSchema.index({ tenantId: 1, claimCoverage: 1 }, { name: 'answers_tenantId_claimCoverage' });

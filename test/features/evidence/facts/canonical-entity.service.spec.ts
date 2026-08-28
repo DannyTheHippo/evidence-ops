@@ -323,7 +323,7 @@ describe('CanonicalEntityService', () => {
         { tenantId: DEFAULT_TENANT_ID },
         null,
         expect.objectContaining({
-          sort: { createdAt: -1 },
+          sort: { canonicalNameNormalized: 1 },
           skip: 0,
           limit: DEFAULT_PAGINATION_LIMIT,
         }),
@@ -353,6 +353,25 @@ describe('CanonicalEntityService', () => {
       );
       expect(result.count).toBe(5);
     });
+
+    it.each([
+      ['createdAt', 'desc', { createdAt: -1 }],
+      ['canonicalNameNormalized', 'desc', { canonicalNameNormalized: -1 }],
+    ] as const)(
+      'should sort by the caller-supplied %s field and %s direction',
+      async (sort, sortDir, expectedSort) => {
+        mockCanonicalEntityModel.find.mockResolvedValueOnce([]);
+        mockCanonicalEntityModel.countDocuments.mockResolvedValueOnce(0);
+
+        await service.listForTenant(DEFAULT_TENANT_ID, { skip: 0, limit: 20, sort, sortDir });
+
+        expect(mockCanonicalEntityModel.find).toHaveBeenCalledWith(
+          { tenantId: DEFAULT_TENANT_ID },
+          null,
+          expect.objectContaining({ sort: expectedSort }),
+        );
+      },
+    );
   });
 
   describe('create', () => {

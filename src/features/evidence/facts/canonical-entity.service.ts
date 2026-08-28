@@ -14,10 +14,15 @@ import {
   ExtractedFact,
   type ExtractedFactDocument,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
-import type { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import { resolveSort } from '../../../shared/utils/resolve-sort.util';
+import {
+  DEFAULT_CANONICAL_ENTITY_SORT_DIRECTION,
+  DEFAULT_CANONICAL_ENTITY_SORT_FIELD,
+  type ListCanonicalEntitiesRequestDto,
+} from './dtos/request/list-canonical-entities.request.dto';
 import {
   CanonicalEntityNameConflictException,
   CanonicalEntityNotFoundException,
@@ -259,17 +264,23 @@ export class CanonicalEntityService {
   }
 
   /** The tenant's authored rows, paginated — not {@link listCanonicalEntities}'s unpaginated,
-   *  match-oriented projection. Sorted newest-first, matching `ApiKeysService.list`/
-   *  `InvitationsService.list`'s identical paginated-listing shape. */
+   *  match-oriented projection. Sorted by `canonicalNameNormalized` ascending by default — the
+   *  registry is a lookup table a human scans alphabetically, not a feed read newest-first the
+   *  way `ApiKeysService.list`/`InvitationsService.list` are. */
   async listForTenant(
     tenantId: string,
-    pagination: PaginationRequestDto,
+    pagination: ListCanonicalEntitiesRequestDto,
   ): Promise<DocumentResultWithCount<CanonicalEntityResult>> {
     const filter = { tenantId };
 
     const [rows, count] = await Promise.all([
       this.canonicalEntityModel.find(filter, null, {
-        sort: { createdAt: -1 },
+        sort: resolveSort(
+          pagination.sort,
+          pagination.sortDir,
+          DEFAULT_CANONICAL_ENTITY_SORT_FIELD,
+          DEFAULT_CANONICAL_ENTITY_SORT_DIRECTION,
+        ),
         skip: pagination.skip,
         limit: pagination.limit,
       }),

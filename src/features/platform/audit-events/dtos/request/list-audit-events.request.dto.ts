@@ -4,7 +4,21 @@ import {
   AUDIT_EVENT_ORIGINS,
   type AuditEventOrigin,
 } from '../../../../../database/schemas/audit/audit-event/audit-event.schema';
+import { SORT_DIRECTIONS, type SortDirection } from '../../../../../shared/constants/sort.constant';
 import { PaginationRequestDto } from '../../../../../shared/dtos/request/pagination.request.dto';
+
+// `actor` deliberately excluded: it serializes as an unresolved actor ObjectId
+// (`AuditEventsService.toResult`), so ordering by it groups rows by an opaque id, not by the
+// person behind it — that grouping is a filter this DTO does not offer yet, not a sort.
+//
+// `timestamp` deliberately excluded alongside `createdAt`: both fields exist and both are on the
+// wire, but `audit_events_tenantId_createdAt` is this collection's only non-`_id` index.
+// Allowlisting `timestamp` needs its own `{tenantId, timestamp}` index first.
+export const AUDIT_EVENT_SORT_FIELDS = ['createdAt', 'action', 'origin'] as const;
+export type AuditEventSortField = (typeof AUDIT_EVENT_SORT_FIELDS)[number];
+
+export const DEFAULT_AUDIT_EVENT_SORT_FIELD: AuditEventSortField = 'createdAt';
+export const DEFAULT_AUDIT_EVENT_SORT_DIRECTION: SortDirection = 'desc';
 
 // actorId is deliberately not a filter here — deferred until a consumer needs it (see the
 // feature's plan note); adding it later is additive, not a breaking change to this DTO.
@@ -55,4 +69,24 @@ export class ListAuditEventsRequestDto extends PaginationRequestDto {
   @IsOptional()
   @IsString()
   refusalReason?: string;
+
+  @ApiProperty({
+    example: 'createdAt',
+    enum: AUDIT_EVENT_SORT_FIELDS,
+    description: 'Field to sort by. Defaults to createdAt.',
+    required: false,
+  })
+  @IsOptional()
+  @IsIn(AUDIT_EVENT_SORT_FIELDS)
+  sort?: AuditEventSortField;
+
+  @ApiProperty({
+    example: 'desc',
+    enum: SORT_DIRECTIONS,
+    description: 'Sort direction. Defaults to desc.',
+    required: false,
+  })
+  @IsOptional()
+  @IsIn(SORT_DIRECTIONS)
+  sortDir?: SortDirection;
 }

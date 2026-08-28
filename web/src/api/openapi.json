@@ -343,6 +343,36 @@
               "example": 20,
               "type": "number"
             }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Field to sort by. Defaults to createdAt.",
+            "schema": {
+              "example": "createdAt",
+              "type": "string",
+              "enum": [
+                "createdAt",
+                "email",
+                "expiresAt",
+                "role"
+              ]
+            }
+          },
+          {
+            "name": "sortDir",
+            "required": false,
+            "in": "query",
+            "description": "Sort direction. Defaults to desc.",
+            "schema": {
+              "example": "desc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
           }
         ],
         "responses": {
@@ -1569,6 +1599,34 @@
               "example": 20,
               "type": "number"
             }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Field to sort by. Defaults to canonicalNameNormalized.",
+            "schema": {
+              "example": "canonicalNameNormalized",
+              "type": "string",
+              "enum": [
+                "canonicalNameNormalized",
+                "createdAt"
+              ]
+            }
+          },
+          {
+            "name": "sortDir",
+            "required": false,
+            "in": "query",
+            "description": "Sort direction. Defaults to asc.",
+            "schema": {
+              "example": "asc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
           }
         ],
         "responses": {
@@ -2239,6 +2297,34 @@
                 "dismissed"
               ]
             }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Field to sort by. Defaults to createdAt.",
+            "schema": {
+              "example": "createdAt",
+              "type": "string",
+              "enum": [
+                "createdAt",
+                "status"
+              ]
+            }
+          },
+          {
+            "name": "sortDir",
+            "required": false,
+            "in": "query",
+            "description": "Sort direction. Defaults to desc.",
+            "schema": {
+              "example": "desc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
           }
         ],
         "responses": {
@@ -2477,6 +2563,35 @@
                 "rescan-conflicts"
               ]
             }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Field to sort by. Defaults to createdAt.",
+            "schema": {
+              "example": "createdAt",
+              "type": "string",
+              "enum": [
+                "createdAt",
+                "status",
+                "workflowType"
+              ]
+            }
+          },
+          {
+            "name": "sortDir",
+            "required": false,
+            "in": "query",
+            "description": "Sort direction. Defaults to desc.",
+            "schema": {
+              "example": "desc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
           }
         ],
         "responses": {
@@ -2665,6 +2780,35 @@
                 "approved",
                 "rejected",
                 "timed_out"
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Field to sort by. Defaults to createdAt.",
+            "schema": {
+              "example": "createdAt",
+              "type": "string",
+              "enum": [
+                "createdAt",
+                "state",
+                "decidedAt"
+              ]
+            }
+          },
+          {
+            "name": "sortDir",
+            "required": false,
+            "in": "query",
+            "description": "Sort direction. Defaults to desc.",
+            "schema": {
+              "example": "desc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
               ]
             }
           }
@@ -2968,6 +3112,35 @@
                 "failed"
               ]
             }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Field to sort by. Defaults to createdAt.",
+            "schema": {
+              "example": "createdAt",
+              "type": "string",
+              "enum": [
+                "createdAt",
+                "runStatus",
+                "claimCoverage"
+              ]
+            }
+          },
+          {
+            "name": "sortDir",
+            "required": false,
+            "in": "query",
+            "description": "Sort direction. Defaults to desc.",
+            "schema": {
+              "example": "desc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
           }
         ],
         "responses": {
@@ -3109,6 +3282,41 @@
         "operationId": "RetrievalController_search",
         "parameters": [
           {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
             "name": "query",
             "required": true,
             "in": "query",
@@ -3117,11 +3325,88 @@
               "example": "What is the cap rate for Northgate Business Park?",
               "type": "string"
             }
+          },
+          {
+            "name": "documentId",
+            "required": false,
+            "in": "query",
+            "description": "Restrict results to chunks belonging to this document.",
+            "schema": {
+              "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+              "type": "string"
+            }
+          },
+          {
+            "name": "sourceClass",
+            "required": false,
+            "in": "query",
+            "description": "Restrict results to documents whose sourceClass matches. Omit for every class.",
+            "schema": {
+              "example": "memo",
+              "type": "string",
+              "enum": [
+                "crm-export",
+                "pm-export",
+                "spreadsheet",
+                "memo",
+                "report",
+                "unclassified"
+              ]
+            }
+          },
+          {
+            "name": "createdAfter",
+            "required": false,
+            "in": "query",
+            "description": "Restrict results to documents created on or after this timestamp (inclusive).",
+            "schema": {
+              "format": "date-time",
+              "example": "2026-01-01T00:00:00.000Z",
+              "type": "string"
+            }
+          },
+          {
+            "name": "createdBefore",
+            "required": false,
+            "in": "query",
+            "description": "Restrict results to documents created on or before this timestamp (inclusive).",
+            "schema": {
+              "format": "date-time",
+              "example": "2026-12-31T23:59:59.999Z",
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Field to sort by. Score is the only field this endpoint exposes — it exists only after fusion runs, unlike every other list endpoint, which sorts a Mongo query directly. Defaults to score.",
+            "schema": {
+              "example": "score",
+              "type": "string",
+              "enum": [
+                "score"
+              ]
+            }
+          },
+          {
+            "name": "sortDir",
+            "required": false,
+            "in": "query",
+            "description": "Sort direction. Defaults to desc (highest relevance first).",
+            "schema": {
+              "example": "desc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Hybrid retrieval hits for the query, ranked as the store returns them.",
+            "description": "Hybrid retrieval hits for the query, paged and sorted by score. hasMore signals whether another page exists — there is no total, since paging applies after fusion, the score floor, and withdrawn-version filtering.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3147,7 +3432,7 @@
                           "score": 0.0164
                         }
                       ],
-                      "count": 1
+                      "hasMore": false
                     }
                   }
                 }
@@ -3299,6 +3584,36 @@
             "schema": {
               "example": false,
               "type": "boolean"
+            }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Field to sort by. Defaults to name.",
+            "schema": {
+              "example": "name",
+              "type": "string",
+              "enum": [
+                "name",
+                "owner",
+                "lastSyncAt",
+                "createdAt"
+              ]
+            }
+          },
+          {
+            "name": "sortDir",
+            "required": false,
+            "in": "query",
+            "description": "Sort direction. Defaults to asc.",
+            "schema": {
+              "example": "asc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
             }
           }
         ],
@@ -3788,6 +4103,35 @@
               "example": "authz-denied",
               "type": "string"
             }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Field to sort by. Defaults to createdAt.",
+            "schema": {
+              "example": "createdAt",
+              "type": "string",
+              "enum": [
+                "createdAt",
+                "action",
+                "origin"
+              ]
+            }
+          },
+          {
+            "name": "sortDir",
+            "required": false,
+            "in": "query",
+            "description": "Sort direction. Defaults to desc.",
+            "schema": {
+              "example": "desc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
           }
         ],
         "responses": {
@@ -3952,6 +4296,36 @@
               "default": 20,
               "example": 20,
               "type": "number"
+            }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Field to sort by. Defaults to createdAt.",
+            "schema": {
+              "example": "createdAt",
+              "type": "string",
+              "enum": [
+                "createdAt",
+                "name",
+                "lastUsedAt",
+                "expiresAt"
+              ]
+            }
+          },
+          {
+            "name": "sortDir",
+            "required": false,
+            "in": "query",
+            "description": "Sort direction. Defaults to desc.",
+            "schema": {
+              "example": "desc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
             }
           }
         ],

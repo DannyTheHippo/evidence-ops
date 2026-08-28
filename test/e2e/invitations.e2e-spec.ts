@@ -249,6 +249,50 @@ describe('Invitations (e2e)', () => {
       expect(secondBody.docs).toHaveLength(1);
       expect(secondBody.count).toBe(3);
     });
+
+    it('returns 400 for a sort field outside the declared allowlist', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/invitations')
+        .query({ sort: 'tokenHash' })
+        .set('Cookie', adminCookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 400 for a sortDir outside asc/desc', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/invitations')
+        .query({ sort: 'email', sortDir: 'ascending' })
+        .set('Cookie', adminCookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('sorts by email ascending when asked, instead of the createdAt-descending default', async () => {
+      const sortAdmin = await registerTestUser(app, {
+        email: 'invitations-sort-e2e@example.com',
+        password: 'correct-horse-battery',
+      });
+      const zetaMinted = await request(getTestServer(app))
+        .post('/api/v1/invitations')
+        .set('Cookie', sortAdmin.cookie)
+        .send({ email: 'zeta-colleague@example.com', role: UserRole.Member });
+      const alphaMinted = await request(getTestServer(app))
+        .post('/api/v1/invitations')
+        .set('Cookie', sortAdmin.cookie)
+        .send({ email: 'alpha-colleague@example.com', role: UserRole.Member });
+      const zetaId = (zetaMinted.body as MintedInvitationBody).id;
+      const alphaId = (alphaMinted.body as MintedInvitationBody).id;
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/invitations')
+        .query({ sort: 'email', sortDir: 'asc' })
+        .set('Cookie', sortAdmin.cookie);
+      const body = response.body as { docs: InvitationBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.docs.map((doc) => doc.id)).toEqual([alphaId, zetaId]);
+    });
   });
 
   /**

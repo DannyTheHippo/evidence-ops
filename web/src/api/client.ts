@@ -399,17 +399,26 @@ export function getAnswerById(id: string): Promise<Answer> {
   return request<Answer>(`/answers/${id}`);
 }
 
+/** The fields `/answers` will actually order by. Deliberately excludes every other
+ * `AnswerResponseDto` field — offering a column the server ignores would write a query it never
+ * honours. */
+export type AnswerSortField = 'createdAt' | 'runStatus' | 'claimCoverage';
+
 // Three independent optional filters, so this one builds its query with
 // URLSearchParams rather than the ad-hoc template literals above.
 export function listAnswers(params?: {
   skip?: number;
   limit?: number;
   runStatus?: AnswerRunStatus;
+  sort?: AnswerSortField;
+  sortDir?: SortDirection;
 }): Promise<WithCount<Answer>> {
   const query = new URLSearchParams();
   if (params?.skip !== undefined) query.set('skip', String(params.skip));
   if (params?.limit !== undefined) query.set('limit', String(params.limit));
   if (params?.runStatus) query.set('runStatus', params.runStatus);
+  if (params?.sort !== undefined) query.set('sort', params.sort);
+  if (params?.sortDir !== undefined) query.set('sortDir', params.sortDir);
   const qs = query.toString();
   return request<WithCount<Answer>>(`/answers${qs ? `?${qs}` : ''}`);
 }
@@ -442,10 +451,43 @@ export interface RetrievedChunkView {
   score: number;
 }
 
-export function searchEvidence(query: string): Promise<WithCount<RetrievedChunkView>> {
-  return request<WithCount<RetrievedChunkView>>(
-    `/retrieval/search?query=${encodeURIComponent(query)}`,
-  );
+/**
+ * `docs` plus `hasMore`, never a total. The store over-fetches non-deterministically, a
+ * fail-closed score floor drops hits after fusion, and withdrawn versions are dropped after
+ * that, so page boundaries can shift between two identical calls and a filter can leave a page
+ * short while more results exist — a count taken at any single point would already be wrong by
+ * the time it renders. `hasMore` is the only claim this endpoint can make honestly.
+ */
+export interface SearchEvidenceResult {
+  docs: RetrievedChunkView[];
+  hasMore: boolean;
+}
+
+/** The only field `/retrieval/search` sorts by — it exists only after fusion runs, unlike every
+ * other list endpoint, which sorts a Mongo query directly. */
+export type RetrievalSortField = 'score';
+
+export function searchEvidence(params: {
+  query: string;
+  skip?: number;
+  limit?: number;
+  documentId?: string;
+  sourceClass?: DocumentSourceClass;
+  createdAfter?: string;
+  createdBefore?: string;
+  sort?: RetrievalSortField;
+  sortDir?: SortDirection;
+}): Promise<SearchEvidenceResult> {
+  const query = new URLSearchParams({ query: params.query });
+  if (params.skip !== undefined) query.set('skip', String(params.skip));
+  if (params.limit !== undefined) query.set('limit', String(params.limit));
+  if (params.documentId !== undefined) query.set('documentId', params.documentId);
+  if (params.sourceClass !== undefined) query.set('sourceClass', params.sourceClass);
+  if (params.createdAfter !== undefined) query.set('createdAfter', params.createdAfter);
+  if (params.createdBefore !== undefined) query.set('createdBefore', params.createdBefore);
+  if (params.sort !== undefined) query.set('sort', params.sort);
+  if (params.sortDir !== undefined) query.set('sortDir', params.sortDir);
+  return request<SearchEvidenceResult>(`/retrieval/search?${query.toString()}`);
 }
 
 // ── Conflicts ────────────────────────────────────────────────────────────
@@ -490,15 +532,23 @@ export interface Conflict {
   explanation?: string;
 }
 
+// Deliberately excludes `magnitude`: each row carries its own `magnitudeUnit`, so ordering by the
+// bare number alone would rank a cap-rate spread against a dollar spread as if on the same scale.
+export type ConflictSortField = 'createdAt' | 'status';
+
 export function listConflicts(params?: {
   skip?: number;
   limit?: number;
   status?: ConflictStatus;
+  sort?: ConflictSortField;
+  sortDir?: SortDirection;
 }): Promise<WithCount<Conflict>> {
   const query = new URLSearchParams();
   if (params?.skip !== undefined) query.set('skip', String(params.skip));
   if (params?.limit !== undefined) query.set('limit', String(params.limit));
   if (params?.status) query.set('status', params.status);
+  if (params?.sort !== undefined) query.set('sort', params.sort);
+  if (params?.sortDir !== undefined) query.set('sortDir', params.sortDir);
   const qs = query.toString();
   return request<WithCount<Conflict>>(`/conflicts${qs ? `?${qs}` : ''}`);
 }
@@ -539,15 +589,21 @@ export interface Approval {
   createdAt: string;
 }
 
+export type ApprovalSortField = 'createdAt' | 'state' | 'decidedAt';
+
 export function listApprovals(params?: {
   skip?: number;
   limit?: number;
   state?: ApprovalState;
+  sort?: ApprovalSortField;
+  sortDir?: SortDirection;
 }): Promise<WithCount<Approval>> {
   const query = new URLSearchParams();
   if (params?.skip !== undefined) query.set('skip', String(params.skip));
   if (params?.limit !== undefined) query.set('limit', String(params.limit));
   if (params?.state) query.set('state', params.state);
+  if (params?.sort !== undefined) query.set('sort', params.sort);
+  if (params?.sortDir !== undefined) query.set('sortDir', params.sortDir);
   const qs = query.toString();
   return request<WithCount<Approval>>(`/approvals${qs ? `?${qs}` : ''}`);
 }
@@ -598,12 +654,16 @@ export function getWorkflowRunById(id: string): Promise<WorkflowRun> {
  * workflow engine, unlike the detail route and the event stream. A UI must not present this filter
  * as live.
  */
+export type WorkflowRunSortField = 'createdAt' | 'status' | 'workflowType';
+
 export function listWorkflowRuns(params?: {
   workflowId?: string;
   status?: WorkflowRunStatus;
   workflowType?: WorkflowRunType;
   skip?: number;
   limit?: number;
+  sort?: WorkflowRunSortField;
+  sortDir?: SortDirection;
 }): Promise<WithCount<WorkflowRun>> {
   const query = new URLSearchParams();
   if (params?.workflowId) query.set('workflowId', params.workflowId);
@@ -611,6 +671,8 @@ export function listWorkflowRuns(params?: {
   if (params?.workflowType) query.set('workflowType', params.workflowType);
   if (params?.skip !== undefined) query.set('skip', String(params.skip));
   if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  if (params?.sort !== undefined) query.set('sort', params.sort);
+  if (params?.sortDir !== undefined) query.set('sortDir', params.sortDir);
   const qs = query.toString();
   return request<WithCount<WorkflowRun>>(`/workflow-runs${qs ? `?${qs}` : ''}`);
 }
@@ -646,6 +708,8 @@ export interface AuditEventView {
   modifiedCount?: number;
 }
 
+export type AuditEventSortField = 'createdAt' | 'action' | 'origin';
+
 // Five independent optional filters, so this one builds its query with
 // URLSearchParams rather than the ad-hoc template literals above.
 export function listAuditEvents(params?: {
@@ -656,6 +720,8 @@ export function listAuditEvents(params?: {
   entityId?: string;
   origin?: AuditEventOrigin;
   refusalReason?: string;
+  sort?: AuditEventSortField;
+  sortDir?: SortDirection;
 }): Promise<WithCount<AuditEventView>> {
   const query = new URLSearchParams();
   if (params?.skip !== undefined) query.set('skip', String(params.skip));
@@ -665,6 +731,8 @@ export function listAuditEvents(params?: {
   if (params?.entityId) query.set('entityId', params.entityId);
   if (params?.origin) query.set('origin', params.origin);
   if (params?.refusalReason) query.set('refusalReason', params.refusalReason);
+  if (params?.sort !== undefined) query.set('sort', params.sort);
+  if (params?.sortDir !== undefined) query.set('sortDir', params.sortDir);
   const qs = query.toString();
   return request<WithCount<AuditEventView>>(`/audit-events${qs ? `?${qs}` : ''}`);
 }
@@ -701,6 +769,12 @@ export function createSource(input: {
   return request<Source>('/sources', { method: 'POST', ...jsonBody(input) });
 }
 
+// Deliberately excludes `fileCount`: it is computed in the response mapper from
+// `fileStates.length`, never stored on the document, so there is no column to order by.
+export type SourceSortField = 'name' | 'owner' | 'lastSyncAt' | 'createdAt';
+
+/** Defaults to `name` ascending server-side, unlike most lists' newest-first — a source catalogue
+ * is read by name, not by when it was added. */
 export function listSources(pagination?: {
   skip?: number;
   limit?: number;
@@ -710,6 +784,8 @@ export function listSources(pagination?: {
   tracked?: boolean;
   // Exact lastSyncStatus to filter by — currently only 'failed' is meaningful.
   lastSyncStatus?: string;
+  sort?: SourceSortField;
+  sortDir?: SortDirection;
 }): Promise<WithCount<Source>> {
   const query = new URLSearchParams();
   if (pagination?.skip !== undefined) query.set('skip', String(pagination.skip));
@@ -718,6 +794,8 @@ export function listSources(pagination?: {
   if (pagination?.lastSyncStatus !== undefined) {
     query.set('lastSyncStatus', pagination.lastSyncStatus);
   }
+  if (pagination?.sort !== undefined) query.set('sort', pagination.sort);
+  if (pagination?.sortDir !== undefined) query.set('sortDir', pagination.sortDir);
   const qs = query.toString();
   return request<WithCount<Source>>(`/sources${qs ? `?${qs}` : ''}`);
 }
@@ -795,13 +873,19 @@ export function mintApiKey(name: string, expiresAt?: string): Promise<MintedApiK
   });
 }
 
+export type ApiKeySortField = 'createdAt' | 'name' | 'lastUsedAt' | 'expiresAt';
+
 export function listApiKeys(params?: {
   skip?: number;
   limit?: number;
+  sort?: ApiKeySortField;
+  sortDir?: SortDirection;
 }): Promise<WithCount<ApiKey>> {
   const query = new URLSearchParams();
   if (params?.skip !== undefined) query.set('skip', String(params.skip));
   if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  if (params?.sort !== undefined) query.set('sort', params.sort);
+  if (params?.sortDir !== undefined) query.set('sortDir', params.sortDir);
   const qs = query.toString();
   return request<WithCount<ApiKey>>(`/api-keys${qs ? `?${qs}` : ''}`);
 }
@@ -844,13 +928,19 @@ export function mintInvitation(email: string, role: UserRole): Promise<MintedInv
   });
 }
 
+export type InvitationSortField = 'createdAt' | 'email' | 'expiresAt' | 'role';
+
 export function listInvitations(pagination?: {
   skip?: number;
   limit?: number;
+  sort?: InvitationSortField;
+  sortDir?: SortDirection;
 }): Promise<WithCount<Invitation>> {
   const query = new URLSearchParams();
   if (pagination?.skip !== undefined) query.set('skip', String(pagination.skip));
   if (pagination?.limit !== undefined) query.set('limit', String(pagination.limit));
+  if (pagination?.sort !== undefined) query.set('sort', pagination.sort);
+  if (pagination?.sortDir !== undefined) query.set('sortDir', pagination.sortDir);
   const qs = query.toString();
   return request<WithCount<Invitation>>(`/invitations${qs ? `?${qs}` : ''}`);
 }
@@ -959,13 +1049,21 @@ export interface CanonicalEntity {
   createdAt: string;
 }
 
+export type CanonicalEntitySortField = 'canonicalNameNormalized' | 'createdAt';
+
+/** Defaults to `canonicalNameNormalized` ascending server-side, unlike most lists' newest-first —
+ * a canonical entity registry is read by name, not by when a row was created. */
 export function listCanonicalEntities(params?: {
   skip?: number;
   limit?: number;
+  sort?: CanonicalEntitySortField;
+  sortDir?: SortDirection;
 }): Promise<WithCount<CanonicalEntity>> {
   const query = new URLSearchParams();
   if (params?.skip !== undefined) query.set('skip', String(params.skip));
   if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  if (params?.sort !== undefined) query.set('sort', params.sort);
+  if (params?.sortDir !== undefined) query.set('sortDir', params.sortDir);
   const qs = query.toString();
   return request<WithCount<CanonicalEntity>>(`/canonical-entities${qs ? `?${qs}` : ''}`);
 }

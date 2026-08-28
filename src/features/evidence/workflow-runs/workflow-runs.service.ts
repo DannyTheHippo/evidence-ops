@@ -42,11 +42,16 @@ import {
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import { resolveSort } from '../../../shared/utils/resolve-sort.util';
 import { reauthTicks$, shouldRecordStreamView } from '../../../shared/utils/stream-session.util';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { ApprovalsService } from '../approvals/approvals.service';
 import { ApprovalResponseDto } from '../approvals/dtos/response/approval.response.dto';
-import type { ListWorkflowRunsRequestDto } from './dtos/request/list-workflow-runs.request.dto';
+import {
+  DEFAULT_WORKFLOW_RUN_SORT_DIRECTION,
+  DEFAULT_WORKFLOW_RUN_SORT_FIELD,
+  type ListWorkflowRunsRequestDto,
+} from './dtos/request/list-workflow-runs.request.dto';
 import { WorkflowRunResponseDto } from './dtos/response/workflow-run.response.dto';
 import { WorkflowRunNotFoundException } from './exceptions/workflow-runs.exception';
 import {
@@ -379,7 +384,12 @@ export class WorkflowRunsService {
 
     const [runs, count] = await Promise.all([
       this.workflowRunModel.find(filter, null, {
-        sort: { createdAt: -1 },
+        sort: resolveSort(
+          dto.sort,
+          dto.sortDir,
+          DEFAULT_WORKFLOW_RUN_SORT_FIELD,
+          DEFAULT_WORKFLOW_RUN_SORT_DIRECTION,
+        ),
         skip: dto.skip,
         limit: dto.limit,
       }),

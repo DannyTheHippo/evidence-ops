@@ -1,15 +1,23 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { listAnswers, type Answer, type AnswerRunStatus } from '../api/client';
+import {
+  listAnswers,
+  type Answer,
+  type AnswerRunStatus,
+  type AnswerSortField,
+  type SortDirection,
+} from '../api/client';
 import { IconFileText } from '../components/icons';
+import RecordListPage, { type RecordListStatus } from '../components/RecordListPage';
 import Badge from '../components/ui/Badge';
-import Button from '../components/ui/Button';
-import EmptyState from '../components/ui/EmptyState';
+import FilterBar from '../components/ui/FilterBar';
 import Pager from '../components/ui/Pager';
 import Select from '../components/ui/Select';
-import Skeleton from '../components/ui/Skeleton';
+import SortableHeaderCell from '../components/ui/SortableHeaderCell';
 import Table, { RowLink, TableCell, TableHeaderCell, TableRow } from '../components/ui/Table';
+import Timestamp from '../components/ui/Timestamp';
 import { answerBadge } from '../lib/answer-status';
+import { useUrlState } from '../lib/use-url-state';
 
 const PAGE_SIZE = 25;
 
@@ -21,21 +29,38 @@ const RUN_STATUS_OPTIONS = [
   { value: 'failed', label: 'Failed' },
 ];
 
+// Declared at module scope: `useUrlState` adopts `defaults` once on mount and keeps that
+// identity, but only needs it stable in value — a module-level object satisfies both. Typed as
+// plain `string` fields, not `as const` literals, so the values written back through
+// `setUrlState` — themselves unions like `AnswerSortField` — stay assignable.
+const URL_DEFAULTS: Record<'runStatus' | 'sort' | 'sortDir' | 'skip', string> = {
+  runStatus: '',
+  sort: 'createdAt',
+  sortDir: 'desc',
+  skip: '0',
+};
+
 export default function AnswersPage() {
+  const [urlState, setUrlState] = useUrlState(URL_DEFAULTS);
+  const appliedRunStatus = urlState.runStatus as AnswerRunStatus | '';
+  const sort = urlState.sort as AnswerSortField;
+  const sortDir = urlState.sortDir as SortDirection;
+  const skip = Number(urlState.skip);
+
+  // Only this, not the `Select`'s own value, drives the fetch — the filter applies on submit,
+  // not on every selection change.
+  const [draftRunStatus, setDraftRunStatus] = useState(appliedRunStatus);
   const [answers, setAnswers] = useState<Answer[] | null>(null);
   const [count, setCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [skip, setSkip] = useState(0);
-  const [runStatus, setRunStatus] = useState<AnswerRunStatus | ''>('');
-  // Only this, not `runStatus` itself, drives the fetch — the filter applies on submit, not on
-  // every selection change.
-  const [appliedRunStatus, setAppliedRunStatus] = useState<AnswerRunStatus | ''>('');
 
   useEffect(() => {
     listAnswers({
       skip,
       limit: PAGE_SIZE,
       runStatus: appliedRunStatus === '' ? undefined : appliedRunStatus,
+      sort,
+      sortDir,
     })
       .then(({ docs, count: total }) => {
         setAnswers(docs);
@@ -45,76 +70,109 @@ export default function AnswersPage() {
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'Failed to load answers');
       });
-  }, [skip, appliedRunStatus]);
+  }, [skip, appliedRunStatus, sort, sortDir]);
 
-  function handleFilter(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setSkip(0);
-    setAppliedRunStatus(runStatus);
+  function handleApply() {
+    setUrlState({ runStatus: draftRunStatus, skip: URL_DEFAULTS.skip });
+  }
+
+  function handleClear() {
+    setDraftRunStatus('');
+    setUrlState({ runStatus: '', skip: URL_DEFAULTS.skip });
+  }
+
+  function handleSort(field: AnswerSortField) {
+    // Switching to a different column always starts it at `desc`; clicking the active column
+    // toggles direction. A per-field default direction would make a URL written by one column
+    // read back with the wrong direction once shared or reloaded, since `useUrlState` carries
+    // exactly one default `sortDir` for every field.
+    const nextDir: SortDirection = field === sort && sortDir === 'desc' ? 'asc' : 'desc';
+    setUrlState({ sort: field, sortDir: nextDir, skip: URL_DEFAULTS.skip });
   }
 
   const hasFilter = appliedRunStatus !== '';
 
-  return (
-    <div className="view">
-      <div className="page-head">
-        <div>
-          <span className="eyebrow">Ask</span>
-          <h1 className="page-title">Answers</h1>
-          <p className="page-sub">Answered questions and their grounding.</p>
-        </div>
-      </div>
-
-      <form onSubmit={handleFilter} className="control-row">
-        <Select
-          label="Run status"
-          options={RUN_STATUS_OPTIONS}
-          value={runStatus}
-          onChange={(value) => setRunStatus(value as AnswerRunStatus | '')}
-        />
-        <Button type="submit" variant="primary">
-          Apply filters
-        </Button>
-      </form>
-
-      {error && (
-        <p className="error error--page" role="alert">
-          {error}
-        </p>
-      )}
-
-      {!answers && !error && <Skeleton label="Loading answers…" />}
-
-      {answers && answers.length === 0 && hasFilter && (
-        <EmptyState
-          icon={<IconFileText size={24} />}
-          title="No answers match this filter"
-          description="Clear or adjust the run status filter above."
-        />
-      )}
-
-      {answers && answers.length === 0 && !hasFilter && (
-        <EmptyState
-          icon={<IconFileText size={24} />}
-          title="No answers yet"
-          description="Ask a question to see it appear here."
-          action={
+  let status: RecordListStatus;
+  if (answers === null) {
+    status = error ? { kind: 'blank' } : { kind: 'loading', label: 'Loading answers…' };
+  } else if (answers.length === 0) {
+    status = hasFilter
+      ? {
+          kind: 'empty',
+          icon: <IconFileText size={24} />,
+          title: 'No answers match this filter',
+          description: 'Clear or adjust the run status filter above.',
+        }
+      : {
+          kind: 'empty',
+          icon: <IconFileText size={24} />,
+          title: 'No answers yet',
+          description: 'Ask a question to see it appear here.',
+          action: (
             <Link className="btn btn--primary" to="/ask">
               Ask a question
             </Link>
-          }
-        />
-      )}
+          ),
+        };
+  } else {
+    status = { kind: 'ready' };
+  }
 
+  return (
+    <RecordListPage
+      eyebrow="Ask"
+      title="Answers"
+      description="Answered questions and their grounding."
+      filters={
+        <FilterBar onApply={handleApply} onClear={handleClear} hasFilter={hasFilter}>
+          <Select
+            label="Run status"
+            options={RUN_STATUS_OPTIONS}
+            value={draftRunStatus}
+            onChange={(value) => setDraftRunStatus(value as AnswerRunStatus | '')}
+          />
+        </FilterBar>
+      }
+      error={error ?? undefined}
+      status={status}
+      footer={
+        answers && (
+          <Pager
+            count={count}
+            skip={skip}
+            pageSize={PAGE_SIZE}
+            onSkipChange={(next) => setUrlState({ skip: String(next) })}
+          />
+        )
+      }
+    >
       {answers && answers.length > 0 && (
         <section className="panel">
           <Table caption="Answered questions and their grounding">
             <thead>
               <tr>
                 <TableHeaderCell>Question</TableHeaderCell>
-                <TableHeaderCell>Outcome</TableHeaderCell>
-                <TableHeaderCell>Claim coverage</TableHeaderCell>
-                <TableHeaderCell>Created</TableHeaderCell>
+                <SortableHeaderCell<AnswerSortField>
+                  field="runStatus"
+                  label="Outcome"
+                  sort={sort}
+                  direction={sortDir}
+                  onSort={handleSort}
+                />
+                <SortableHeaderCell<AnswerSortField>
+                  field="claimCoverage"
+                  label="Claim coverage"
+                  sort={sort}
+                  direction={sortDir}
+                  onSort={handleSort}
+                />
+                <SortableHeaderCell<AnswerSortField>
+                  field="createdAt"
+                  label="Created"
+                  sort={sort}
+                  direction={sortDir}
+                  onSort={handleSort}
+                />
               </tr>
             </thead>
             <tbody>
@@ -131,6 +189,9 @@ export default function AnswersPage() {
                     </TableCell>
                     <TableCell label="Outcome">
                       <Badge tone={badge.tone}>{badge.label}</Badge>
+                      {answer.withdrawnCitedDocVersionIds.length > 0 && (
+                        <Badge tone="caution">citation withdrawn</Badge>
+                      )}
                     </TableCell>
                     <TableCell label="Claim coverage" className="cell-sub">
                       {typeof answer.claimCoverage === 'number'
@@ -138,7 +199,7 @@ export default function AnswersPage() {
                         : '—'}
                     </TableCell>
                     <TableCell label="Created" className="cell-sub">
-                      {new Date(answer.createdAt).toLocaleString()}
+                      <Timestamp value={answer.createdAt} />
                     </TableCell>
                   </TableRow>
                 );
@@ -147,8 +208,6 @@ export default function AnswersPage() {
           </Table>
         </section>
       )}
-
-      {answers && <Pager count={count} skip={skip} pageSize={PAGE_SIZE} onSkipChange={setSkip} />}
-    </div>
+    </RecordListPage>
   );
 }

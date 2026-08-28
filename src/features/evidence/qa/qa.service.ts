@@ -40,12 +40,17 @@ import { UserRole } from '../../../shared/enums/user-role.enum';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import { resolveSort } from '../../../shared/utils/resolve-sort.util';
 import { reauthTicks$, shouldRecordStreamView } from '../../../shared/utils/stream-session.util';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import type { AnswerQuestionInput } from '../../../workflows/types';
 import { neutralizeForDisplay } from '../ingestion/sanitize-evidence-text';
 import type { AnswerContract, Citation, VerificationReport } from './contracts/answer.contract';
-import type { ListAnswersRequestDto } from './dtos/request/list-answers.request.dto';
+import {
+  DEFAULT_ANSWER_SORT_DIRECTION,
+  DEFAULT_ANSWER_SORT_FIELD,
+  type ListAnswersRequestDto,
+} from './dtos/request/list-answers.request.dto';
 import { AnswerResponseDto } from './dtos/response/answer.response.dto';
 import { AnswerNotFoundException } from './exceptions/qa.exception';
 import { ANSWER_STREAM_INTERVAL_MS } from './qa.constant';
@@ -221,7 +226,12 @@ export class QaService {
 
     const [answers, count] = await Promise.all([
       this.answerModel.find(filter, null, {
-        sort: { createdAt: -1 },
+        sort: resolveSort(
+          dto.sort,
+          dto.sortDir,
+          DEFAULT_ANSWER_SORT_FIELD,
+          DEFAULT_ANSWER_SORT_DIRECTION,
+        ),
         skip: dto.skip,
         limit: dto.limit,
       }),

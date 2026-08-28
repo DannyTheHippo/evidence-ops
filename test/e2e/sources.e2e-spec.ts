@@ -341,6 +341,65 @@ describe('Sources (e2e)', () => {
       expect(body.docs.every((doc) => doc.lastSyncStatus === 'failed')).toBe(true);
       expect(body.docs.some((doc) => doc.name === failedName)).toBe(true);
     });
+
+    it('returns 400 for a sort field outside the declared allowlist', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/sources')
+        .query({ sort: 'fileCount' })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 400 for a sortDir outside asc/desc', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/sources')
+        .query({ sort: 'owner', sortDir: 'ascending' })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('sorts by name ascending by default, and lets the caller switch to owner descending', async () => {
+      const sortTenant = await registerTestUser(app, {
+        email: 'sources-sort-e2e@example.com',
+        password: 'correct-horse-battery',
+      });
+      const bSource = await sourceModel.create({
+        name: 'Sort E2E B',
+        kind: 'local-folder',
+        path: 'deal-room',
+        owner: 'owner-a',
+        tenantId: sortTenant.tenantId,
+      });
+      const aSource = await sourceModel.create({
+        name: 'Sort E2E A',
+        kind: 'local-folder',
+        path: 'deal-room',
+        owner: 'owner-b',
+        tenantId: sortTenant.tenantId,
+      });
+
+      const defaultResponse = await request(getTestServer(app))
+        .get('/api/v1/sources')
+        .set('Cookie', sortTenant.cookie);
+      const defaultBody = defaultResponse.body as { docs: SourceBody[]; count: number };
+
+      expect(defaultResponse.status).toBe(200);
+      expect(defaultBody.docs.map((doc) => doc.name)).toEqual(['Sort E2E A', 'Sort E2E B']);
+
+      const ownerDescResponse = await request(getTestServer(app))
+        .get('/api/v1/sources')
+        .query({ sort: 'owner', sortDir: 'desc' })
+        .set('Cookie', sortTenant.cookie);
+      const ownerDescBody = ownerDescResponse.body as { docs: SourceBody[]; count: number };
+
+      expect(ownerDescResponse.status).toBe(200);
+      expect(ownerDescBody.docs.map((doc) => doc.id)).toEqual([
+        aSource._id.toString(),
+        bSource._id.toString(),
+      ]);
+    });
   });
 
   describe('GET /sources/:id', () => {

@@ -98,7 +98,7 @@ describe('Retrieval (e2e)', () => {
       expect(response.status).toBe(400);
     });
 
-    it('returns hits as { docs, count } with the exact chunk key set, scoped to the caller tenant', async () => {
+    it('returns hits as { docs, hasMore } with the exact chunk key set, scoped to the caller tenant', async () => {
       const document = await documentModel.create({
         title: 'Northgate Business Park — Q3 Rent Roll',
         sourceKind: 'pdf',
@@ -131,11 +131,14 @@ describe('Retrieval (e2e)', () => {
         .get('/api/v1/retrieval/search')
         .set('Cookie', cookie)
         .query({ query: 'What is the cap rate?' });
-      const body = response.body as { docs: RetrievedChunkBody[]; count: number };
+      const body = response.body as { docs: RetrievedChunkBody[]; hasMore: boolean };
 
       expect(response.status).toBe(200);
-      expect(Object.keys(body).sort()).toEqual(['docs', 'count'].sort());
-      expect(body.count).toBe(1);
+      // { docs, hasMore }, not { docs, count }: paging applies after fusion, the score floor,
+      // and withdrawn-version filtering, none of which yield a cheap exact total — see
+      // `SearchEvidenceResponseDto`'s own doc comment.
+      expect(Object.keys(body).sort()).toEqual(['docs', 'hasMore'].sort());
+      expect(body.hasMore).toBe(false);
       expect(body.docs).toHaveLength(1);
       expect(body.docs[0].chunkId).toBe('chunk-1');
       expect(body.docs[0].docVersionId).toBe(version._id.toString());
@@ -150,6 +153,126 @@ describe('Retrieval (e2e)', () => {
       // The one predicate `tenantScopePlugin` structurally cannot backstop here — it does not
       // hook `aggregate()`, so the store's filter is the only place tenant scoping is provable.
       expect(fakeRetrievalStore.queries[0].filter).toEqual({ tenantId });
+    });
+
+    it('pages the ranked result with skip/limit and reports hasMore', async () => {
+      const document = await documentModel.create({
+        title: 'Paging Fixture',
+        sourceKind: 'pdf',
+        mimeType: 'application/pdf',
+        tenantId,
+      });
+      const versions = await Promise.all(
+        [1, 2, 3].map((versionNumber) =>
+          documentVersionModel.create({
+            tenantId,
+            documentId: document._id,
+            versionNumber,
+            sha256: `${versionNumber}`.repeat(64).slice(0, 64),
+            sizeBytes: 100,
+            storageKey: `retrieval-e2e-paging-v${versionNumber}`,
+          }),
+        ),
+      );
+      fakeRetrievalStore.setHits(
+        versions.map((version, index) => ({
+          id: `chunk-page-${index}`,
+          score: 1 - index * 0.1,
+          metadata: {
+            text: `Chunk ${index}`,
+            locator: { kind: 'pdf-page', page: index + 1, extractorVersion: 'v1' },
+            documentId: document._id.toString(),
+            documentVersionId: version._id.toString(),
+            tenantId,
+          },
+        })),
+      );
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/retrieval/search')
+        .set('Cookie', cookie)
+        .query({ query: 'paging probe', skip: 1, limit: 1 });
+      const body = response.body as { docs: RetrievedChunkBody[]; hasMore: boolean };
+
+      expect(response.status).toBe(200);
+      expect(body.docs).toHaveLength(1);
+      expect(body.docs[0].chunkId).toBe('chunk-page-1');
+      expect(body.hasMore).toBe(true);
+    });
+
+    it('filters to documents whose sourceClass matches, excluding a document of a different class', async () => {
+      const memoDocument = await documentModel.create({
+        title: 'Memo',
+        sourceKind: 'pdf',
+        mimeType: 'application/pdf',
+        sourceClass: 'memo',
+        tenantId,
+      });
+      const reportDocument = await documentModel.create({
+        title: 'Report',
+        sourceKind: 'pdf',
+        mimeType: 'application/pdf',
+        sourceClass: 'report',
+        tenantId,
+      });
+      const memoVersion = await documentVersionModel.create({
+        tenantId,
+        documentId: memoDocument._id,
+        versionNumber: 1,
+        sha256: 'c'.repeat(64),
+        sizeBytes: 100,
+        storageKey: 'retrieval-e2e-memo-v1',
+      });
+      const reportVersion = await documentVersionModel.create({
+        tenantId,
+        documentId: reportDocument._id,
+        versionNumber: 1,
+        sha256: 'd'.repeat(64),
+        sizeBytes: 100,
+        storageKey: 'retrieval-e2e-report-v1',
+      });
+      fakeRetrievalStore.setHits([
+        {
+          id: 'chunk-memo',
+          score: 1,
+          metadata: {
+            text: 'Memo text',
+            locator: { kind: 'pdf-page', page: 1, extractorVersion: 'v1' },
+            documentId: memoDocument._id.toString(),
+            documentVersionId: memoVersion._id.toString(),
+            tenantId,
+          },
+        },
+        {
+          id: 'chunk-report',
+          score: 0.9,
+          metadata: {
+            text: 'Report text',
+            locator: { kind: 'pdf-page', page: 1, extractorVersion: 'v1' },
+            documentId: reportDocument._id.toString(),
+            documentVersionId: reportVersion._id.toString(),
+            tenantId,
+          },
+        },
+      ]);
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/retrieval/search')
+        .set('Cookie', cookie)
+        .query({ query: 'source class probe', sourceClass: 'memo' });
+      const body = response.body as { docs: RetrievedChunkBody[]; hasMore: boolean };
+
+      expect(response.status).toBe(200);
+      expect(body.docs.map((doc) => doc.chunkId)).toEqual(['chunk-memo']);
+    });
+
+    it('returns 400 for a sourceClass outside the documented enum', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/retrieval/search')
+        .set('Cookie', cookie)
+        .query({ query: 'cap rate', sourceClass: 'not-a-real-class' });
+
+      expect(response.status).toBe(400);
     });
 
     // Regression for the explicit `@RequireRole(Member, Admin)` floor: this route stated no role

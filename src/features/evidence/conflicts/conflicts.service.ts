@@ -35,6 +35,7 @@ import {
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import { resolveSort } from '../../../shared/utils/resolve-sort.util';
 import type { ResolveConflictWorkflowInput } from '../../../workflows/types';
 import {
   ACTIVE_PACK_ID,
@@ -46,7 +47,11 @@ import {
   WorkflowRunsService,
   type WorkflowRunResult,
 } from '../workflow-runs/workflow-runs.service';
-import type { ListConflictsRequestDto } from './dtos/request/list-conflicts.request.dto';
+import {
+  DEFAULT_CONFLICT_SORT_DIRECTION,
+  DEFAULT_CONFLICT_SORT_FIELD,
+  type ListConflictsRequestDto,
+} from './dtos/request/list-conflicts.request.dto';
 import type { ConflictValueShape } from './dtos/response/conflict.response.dto';
 import { ConflictResponseDto } from './dtos/response/conflict.response.dto';
 import {
@@ -230,7 +235,12 @@ export class ConflictsService {
 
     const [conflicts, count] = await Promise.all([
       this.conflictModel.find(filter, null, {
-        sort: { createdAt: -1 },
+        sort: resolveSort(
+          dto.sort,
+          dto.sortDir,
+          DEFAULT_CONFLICT_SORT_FIELD,
+          DEFAULT_CONFLICT_SORT_DIRECTION,
+        ),
         skip: dto.skip,
         limit: dto.limit,
       }),

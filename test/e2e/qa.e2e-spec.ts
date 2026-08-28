@@ -471,6 +471,161 @@ describe('QA and Conflicts (e2e)', () => {
     });
   });
 
+  describe('GET /answers sort', () => {
+    it('returns 400 for a sort field outside the declared allowlist', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/answers')
+        .query({ sort: 'questionText' })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 400 for a sortDir outside asc/desc', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/answers')
+        .query({ sort: 'createdAt', sortDir: 'ascending' })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('sorts by createdAt descending by default, and lets the caller switch to ascending', async () => {
+      const sortTenant = await registerTestUser(app, {
+        email: 'qa-answers-sort-createdAt-e2e@example.com',
+        password: 'correct-horse-battery',
+      });
+
+      // `createdAt` stamped explicitly, out of creation order — sequential in-memory creates can
+      // land in the same millisecond, which would make the ordering assertion below flaky.
+      const bAnswer = await answerModel.create({
+        tenantId: sortTenant.tenantId,
+        questionText: 'Sort E2E B',
+        runStatus: 'queued',
+      });
+      const cAnswer = await answerModel.create({
+        tenantId: sortTenant.tenantId,
+        questionText: 'Sort E2E C',
+        runStatus: 'queued',
+      });
+      const aAnswer = await answerModel.create({
+        tenantId: sortTenant.tenantId,
+        questionText: 'Sort E2E A',
+        runStatus: 'queued',
+      });
+      await answerModel.updateOne(
+        { _id: bAnswer._id },
+        { createdAt: new Date('2026-01-01T00:00:00.000Z') },
+      );
+      await answerModel.updateOne(
+        { _id: cAnswer._id },
+        { createdAt: new Date('2026-01-02T00:00:00.000Z') },
+      );
+      await answerModel.updateOne(
+        { _id: aAnswer._id },
+        { createdAt: new Date('2026-01-03T00:00:00.000Z') },
+      );
+
+      const defaultResponse = await request(getTestServer(app))
+        .get('/api/v1/answers')
+        .set('Cookie', sortTenant.cookie);
+      const defaultBody = defaultResponse.body as { docs: AnswerBody[]; count: number };
+
+      expect(defaultResponse.status).toBe(200);
+      expect(defaultBody.docs.map((doc) => doc.id)).toEqual([
+        aAnswer._id.toString(),
+        cAnswer._id.toString(),
+        bAnswer._id.toString(),
+      ]);
+
+      const ascResponse = await request(getTestServer(app))
+        .get('/api/v1/answers')
+        .query({ sort: 'createdAt', sortDir: 'asc' })
+        .set('Cookie', sortTenant.cookie);
+      const ascBody = ascResponse.body as { docs: AnswerBody[]; count: number };
+
+      expect(ascResponse.status).toBe(200);
+      expect(ascBody.docs.map((doc) => doc.id)).toEqual([
+        bAnswer._id.toString(),
+        cAnswer._id.toString(),
+        aAnswer._id.toString(),
+      ]);
+    });
+
+    it('sorts by runStatus ascending when asked', async () => {
+      const sortTenant = await registerTestUser(app, {
+        email: 'qa-answers-sort-runstatus-e2e@example.com',
+        password: 'correct-horse-battery',
+      });
+
+      const running = await answerModel.create({
+        tenantId: sortTenant.tenantId,
+        questionText: 'Sort E2E running',
+        runStatus: 'running',
+      });
+      const failed = await answerModel.create({
+        tenantId: sortTenant.tenantId,
+        questionText: 'Sort E2E failed',
+        runStatus: 'failed',
+      });
+      const queued = await answerModel.create({
+        tenantId: sortTenant.tenantId,
+        questionText: 'Sort E2E queued',
+        runStatus: 'queued',
+      });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/answers')
+        .query({ sort: 'runStatus', sortDir: 'asc' })
+        .set('Cookie', sortTenant.cookie);
+      const body = response.body as { docs: AnswerBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      // Alphabetical: failed < queued < running.
+      expect(body.docs.map((doc) => doc.id)).toEqual([
+        failed._id.toString(),
+        queued._id.toString(),
+        running._id.toString(),
+      ]);
+    });
+
+    it('sorts by claimCoverage descending when asked', async () => {
+      const sortTenant = await registerTestUser(app, {
+        email: 'qa-answers-sort-claimcoverage-e2e@example.com',
+        password: 'correct-horse-battery',
+      });
+      const buildCompleted = (questionText: string, claimCoverage: number) => ({
+        tenantId: sortTenant.tenantId,
+        questionText,
+        runStatus: 'completed' as const,
+        outcome: {
+          kind: 'insufficient_evidence' as const,
+          reason: 'no evidence',
+          reasonCode: 'no_relevant_evidence' as const,
+        },
+        claims: [],
+        claimCoverage,
+      });
+
+      const low = await answerModel.create(buildCompleted('Sort E2E low', 0.2));
+      const high = await answerModel.create(buildCompleted('Sort E2E high', 0.9));
+      const mid = await answerModel.create(buildCompleted('Sort E2E mid', 0.5));
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/answers')
+        .query({ sort: 'claimCoverage', sortDir: 'desc' })
+        .set('Cookie', sortTenant.cookie);
+      const body = response.body as { docs: AnswerBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.docs.map((doc) => doc.id)).toEqual([
+        high._id.toString(),
+        mid._id.toString(),
+        low._id.toString(),
+      ]);
+    });
+  });
+
   describe('GET /answers/:id/events', () => {
     // Bounded read: `readSseEvent` destroys the connection itself the moment the first `answer`
     // frame arrives, BEFORE its promise resolves — this test never waits for the stream to end

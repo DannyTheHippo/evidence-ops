@@ -8,10 +8,15 @@ import {
   ApiKeyDocument,
 } from '../../../database/schemas/administration/api-key/api-key.schema';
 import { User, UserDocument } from '../../../database/schemas/administration/user/user.schema';
-import type { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import { resolveSort } from '../../../shared/utils/resolve-sort.util';
+import {
+  DEFAULT_API_KEY_SORT_DIRECTION,
+  DEFAULT_API_KEY_SORT_FIELD,
+  type ListApiKeysRequestDto,
+} from './dtos/request/list-api-keys.request.dto';
 import {
   ApiKeyLimitExceededException,
   ApiKeyNotFoundException,
@@ -125,7 +130,7 @@ export class ApiKeysService implements TokenVerifier {
   }
 
   async list(
-    pagination: PaginationRequestDto,
+    pagination: ListApiKeysRequestDto,
     actorId: string,
     tenantId: string,
   ): Promise<DocumentResultWithCount<ApiKeyResult>> {
@@ -133,7 +138,12 @@ export class ApiKeysService implements TokenVerifier {
 
     const [keys, count] = await Promise.all([
       this.apiKeyModel.find(filter, null, {
-        sort: { createdAt: -1 },
+        sort: resolveSort(
+          pagination.sort,
+          pagination.sortDir,
+          DEFAULT_API_KEY_SORT_FIELD,
+          DEFAULT_API_KEY_SORT_DIRECTION,
+        ),
         skip: pagination.skip,
         limit: pagination.limit,
       }),

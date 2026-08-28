@@ -59,3 +59,16 @@ export class WorkflowRun extends AuditableDocument {
 }
 
 export const WorkflowRunSchema = SchemaFactory.createForClass(WorkflowRun);
+
+/**
+ * Declared here as well as in `migrations/0001-baseline.ts`, with the same keys, options and
+ * names — the migration builds them in a deployed database, these declarations are what
+ * `Model.syncIndexes()` builds for a test lane that never runs migrations. Backs
+ * `GET /workflow-runs?sort=status|workflowType`, the two allowlisted sort fields with no existing
+ * `{tenantId, ...}` prefix to ride.
+ */
+WorkflowRunSchema.index({ tenantId: 1, status: 1 }, { name: 'workflow_runs_tenantId_status' });
+WorkflowRunSchema.index(
+  { tenantId: 1, workflowType: 1 },
+  { name: 'workflow_runs_tenantId_workflowType' },
+);

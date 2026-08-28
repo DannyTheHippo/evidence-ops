@@ -38,6 +38,16 @@ describe('LoginPage', () => {
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
   });
 
+  it('shows the password length rule only once account creation is in view', () => {
+    renderPage();
+
+    expect(screen.queryByText('8-72 characters', { exact: false })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Need an account? Create one' }));
+
+    expect(screen.getByText('8-72 characters', { exact: false })).toBeInTheDocument();
+  });
+
   it('shows the server-authored reason for a rejected sign-in, verbatim', async () => {
     vi.stubGlobal(
       'fetch',

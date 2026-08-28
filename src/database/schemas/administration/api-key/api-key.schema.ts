@@ -72,3 +72,16 @@ ApiKeySchema.index(
   { tenantId: 1, userId: 1, revokedAt: 1 },
   { name: 'api_keys_tenantId_userId_revokedAt' },
 );
+
+/** Backs `GET /api-keys?sort=name|lastUsedAt|expiresAt` — `list`'s filter always includes
+ *  `userId` alongside `tenantId`, so each carries the same two-field prefix as the `createdAt`
+ *  index above rather than a bare `{tenantId, ...}` pair. */
+ApiKeySchema.index({ tenantId: 1, userId: 1, name: 1 }, { name: 'api_keys_tenantId_userId_name' });
+ApiKeySchema.index(
+  { tenantId: 1, userId: 1, lastUsedAt: 1 },
+  { name: 'api_keys_tenantId_userId_lastUsedAt' },
+);
+ApiKeySchema.index(
+  { tenantId: 1, userId: 1, expiresAt: 1 },
+  { name: 'api_keys_tenantId_userId_expiresAt' },
+);

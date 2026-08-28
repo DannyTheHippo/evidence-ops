@@ -261,5 +261,26 @@ describe('AuditEventsService', () => {
       });
       expect(mockAuditEventModel.countDocuments).toHaveBeenCalledWith(expectedFilter);
     });
+
+    it.each([
+      ['action', 'asc', { action: 1 }],
+      ['origin', 'desc', { origin: -1 }],
+    ] as const)(
+      'should sort by the caller-supplied %s field and %s direction',
+      async (sort, sortDir, expectedSort) => {
+        const actorId = new Types.ObjectId().toString();
+        mockAuditEventModel.find.mockResolvedValueOnce([]);
+        mockAuditEventModel.countDocuments.mockResolvedValueOnce(0);
+        mockAuditService.record.mockResolvedValueOnce(undefined);
+
+        await service.list({ skip: 0, limit: 20, sort, sortDir }, actorId, 'tenant-a');
+
+        expect(mockAuditEventModel.find).toHaveBeenCalledWith({ tenantId: 'tenant-a' }, null, {
+          sort: expectedSort,
+          skip: 0,
+          limit: 20,
+        });
+      },
+    );
   });
 });

@@ -153,6 +153,27 @@ describe('ApprovalsService', () => {
         state: 'approved',
       });
     });
+
+    it.each([
+      ['decidedAt', 'asc', { decidedAt: 1 }],
+      ['state', 'desc', { state: -1 }],
+    ] as const)(
+      'should sort by the caller-supplied %s field and %s direction',
+      async (sort, sortDir, expectedSort) => {
+        const actorId = new Types.ObjectId().toString();
+        mockApprovalModel.find.mockResolvedValueOnce([]);
+        mockApprovalModel.countDocuments.mockResolvedValueOnce(0);
+        mockAuditService.record.mockResolvedValueOnce(undefined);
+
+        await service.listPending({ skip: 0, limit: 20, sort, sortDir }, actorId, 'tenant-a');
+
+        expect(mockApprovalModel.find).toHaveBeenCalledWith(
+          { tenantId: 'tenant-a', state: 'pending' },
+          null,
+          { sort: expectedSort, skip: 0, limit: 20 },
+        );
+      },
+    );
   });
 
   describe('peekPending', () => {

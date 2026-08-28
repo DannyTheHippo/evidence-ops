@@ -25,6 +25,7 @@ import {
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import { resolveSort } from '../../../shared/utils/resolve-sort.util';
 import type { SyncSourceWorkflowInput } from '../../../workflows/types';
 import { MAX_FILE_SIZE_BYTES, resolveUploadKind } from '../documents/documents.constant';
 import { DocumentsService } from '../documents/documents.service';
@@ -32,7 +33,11 @@ import type { UploadedFileLike } from '../documents/types/uploaded-file.type';
 import type { WorkflowRunResult } from '../workflow-runs/workflow-runs.service';
 import { WorkflowRunsService } from '../workflow-runs/workflow-runs.service';
 import type { SourceFileStateStatus } from './dtos/response/source-file-state.response.dto';
-import type { ListSourcesRequestDto } from './dtos/request/list-sources.request.dto';
+import {
+  DEFAULT_SOURCE_SORT_DIRECTION,
+  DEFAULT_SOURCE_SORT_FIELD,
+  type ListSourcesRequestDto,
+} from './dtos/request/list-sources.request.dto';
 import {
   SourceNameConflictException,
   SourceNotFoundException,
@@ -231,7 +236,12 @@ export class SourcesService {
 
     const [sources, count] = await Promise.all([
       this.sourceModel.find(filter, null, {
-        sort: { createdAt: -1 },
+        sort: resolveSort(
+          dto.sort,
+          dto.sortDir,
+          DEFAULT_SOURCE_SORT_FIELD,
+          DEFAULT_SOURCE_SORT_DIRECTION,
+        ),
         skip: dto.skip,
         limit: dto.limit,
       }),

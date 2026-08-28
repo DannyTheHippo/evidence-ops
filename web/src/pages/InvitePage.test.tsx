@@ -29,19 +29,21 @@ describe('InvitePage', () => {
     vi.unstubAllGlobals();
   });
 
-  it('shows a page-level error and no form when the link carries no token', () => {
+  it('shows a page-level error and no form when the link carries no token, with a way back to sign-in', () => {
     renderPage('/invite');
 
     expect(screen.getByRole('alert')).toHaveTextContent(
       'This invitation link is missing its token.',
     );
     expect(screen.queryByLabelText('Password')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Sign in' })).toHaveAttribute('href', '/login');
   });
 
-  it('renders a password field and submit control when a token is present', () => {
+  it('renders a password field, its length rule, and a submit control when a token is present', () => {
     renderPage();
 
     expect(screen.getByLabelText('Password')).toBeInTheDocument();
+    expect(screen.getByText('8-72 characters', { exact: false })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Accept invitation' })).toBeInTheDocument();
   });
 
@@ -108,7 +110,7 @@ describe('InvitePage', () => {
     });
   });
 
-  it('shows the server-authored reason for a rejected redemption, verbatim', async () => {
+  it('shows the server-authored reason for a rejected redemption, verbatim, and replaces the form with a recovery path', async () => {
     vi.stubGlobal(
       'fetch',
       vi
@@ -124,6 +126,10 @@ describe('InvitePage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Invitation is invalid, expired, or already used',
     );
+    // A rejected redemption is not something resubmitting the same form can fix, so the form is
+    // gone and only the two paths that can help remain: a fresh link, or signing in.
+    expect(screen.queryByLabelText('Password')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'sign in' })).toHaveAttribute('href', '/login');
   });
 
   it('falls back to a connection message instead of a raw browser exception', async () => {

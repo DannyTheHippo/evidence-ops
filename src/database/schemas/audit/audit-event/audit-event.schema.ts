@@ -74,3 +74,14 @@ export class AuditEvent extends AuditableDocument {
 }
 
 export const AuditEventSchema = SchemaFactory.createForClass(AuditEvent);
+
+/**
+ * Declared here as well as in `migrations/0001-baseline.ts`, with the same keys, options and
+ * names — the migration builds them in a deployed database, these declarations are what
+ * `Model.syncIndexes()` builds for a test lane that never runs migrations. Backs
+ * `GET /audit-events?sort=action|origin`, the two allowlisted sort fields (besides `createdAt`,
+ * already served by `audit_events_tenantId_createdAt`) with no existing `{tenantId, ...}` prefix
+ * to ride.
+ */
+AuditEventSchema.index({ tenantId: 1, action: 1 }, { name: 'audit_events_tenantId_action' });
+AuditEventSchema.index({ tenantId: 1, origin: 1 }, { name: 'audit_events_tenantId_origin' });

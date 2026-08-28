@@ -3,7 +3,8 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { login, register } from '../api/client';
 import Button from '../components/ui/Button';
-import Field from '../components/ui/Field';
+import Input from '../components/ui/Input';
+import PasswordRules from '../components/ui/PasswordRules';
 
 type Mode = 'login' | 'signup';
 
@@ -50,31 +51,27 @@ export default function LoginPage() {
 
       <section className="card card--narrow">
         <form onSubmit={(e) => void handleSubmit(e)} className="form">
-          <Field label="Email">
-            {(inputProps) => (
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                autoComplete="email"
-                {...inputProps}
-              />
-            )}
-          </Field>
-          <Field label="Password">
-            {(inputProps) => (
-              <input
-                type="password"
-                required
-                minLength={8}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                {...inputProps}
-              />
-            )}
-          </Field>
+          <Input
+            label="Email"
+            type="email"
+            required
+            value={email}
+            onChange={setEmail}
+            autoComplete="email"
+          />
+          <div className="field">
+            <Input
+              label="Password"
+              type="password"
+              required
+              minLength={8}
+              maxLength={72}
+              value={password}
+              onChange={setPassword}
+              autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+            />
+            {mode === 'signup' && <PasswordRules password={password} />}
+          </div>
           <div className="form-actions">
             <Button type="submit" variant="primary" disabled={loading}>
               {loading

@@ -5,11 +5,16 @@ import { TypedConfigService } from '../../../config/environment/typed-config.ser
 import {
   Document,
   DocumentDocument,
+  type DocumentSourceClass,
 } from '../../../database/schemas/evidence/document/document.schema';
 import {
   DocumentVersion,
   DocumentVersionDocument,
 } from '../../../database/schemas/evidence/document-version/document-version.schema';
+import {
+  EMBEDDING_PROVIDER,
+  type EmbeddingProvider,
+} from '../../../providers/embedding/embedding-provider.interface';
 import type { HybridRetrievalHitMetadata } from '../../../providers/retrieval/mongo-hybrid.store';
 import {
   RETRIEVAL_STORE,
@@ -19,13 +24,67 @@ import {
   emptyRetrievalCounter,
   scoreFloorRejectedAllCounter,
 } from '../../../providers/telemetry/domain-metrics';
+import type { SortDirection } from '../../../shared/constants/sort.constant';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
-import { RETRIEVAL_OVER_FETCH_MULTIPLIER } from '../retrieval/retrieval.constant';
+import {
+  MAX_RETRIEVAL_STORE_LIMIT,
+  RETRIEVAL_OVER_FETCH_MULTIPLIER,
+} from '../retrieval/retrieval.constant';
+import { QueryEmbeddingCacheService } from './query-embedding-cache.service';
 import type { RetrievedChunk } from './types/retrieved-chunk.type';
 
 export interface RetrieveEvidenceInput {
   readonly questionText: string;
   readonly tenantId: string;
+}
+
+/** `documentId`/`sourceClass`/date-range filters all resolve on `Document`, never on
+ *  `evidence_chunks` — see `SearchEvidenceInput`'s own doc comment for why that forces every one
+ *  of them to apply after fusion rather than inside `$search`/`$vectorSearch`. Both date bounds
+ *  are inclusive. */
+export interface RetrieveEvidenceFilter {
+  readonly documentId?: string;
+  readonly sourceClass?: DocumentSourceClass;
+  readonly createdAfter?: Date;
+  readonly createdBefore?: Date;
+}
+
+/**
+ * Input to `EvidenceRetrievalService.searchEvidence`, the paged/filtered/sorted counterpart to
+ * `retrieve` behind `GET /retrieval/search`. `filter` applies after fusion because `documentId`,
+ * `sourceClass` and the date range all live on `Document`, not on the indexed `evidence_chunks`
+ * collection `$search`/`$vectorSearch` run against, and neither index exposes a cross-collection
+ * join. `skip`/`limit` apply after that filter and after the withdrawn-version drop, in that
+ * order — never before either, or a page boundary would silently include documents this request
+ * was never meant to see.
+ */
+export interface SearchEvidenceInput {
+  readonly questionText: string;
+  readonly tenantId: string;
+  readonly skip: number;
+  readonly limit: number;
+  readonly sortDirection: SortDirection;
+  readonly filter: RetrieveEvidenceFilter;
+}
+
+export interface SearchEvidenceResult {
+  readonly chunks: RetrievedChunk[];
+  /**
+   * Whether the ranked, filtered result set holds at least one more chunk beyond this page.
+   * There is no total: the store over-fetches and slices back non-deterministically between
+   * runs, the score floor drops hits after fusion, and withdrawn versions are dropped after
+   * fusion too — so a match count would have to be computed fresh per request and would still
+   * disagree between two identical calls. `hasMore` is the same best-effort signal, not a
+   * stronger guarantee — a filter can legitimately leave a page short of `limit` with `hasMore`
+   * still true, and the over-fetched pool underlying it can itself vary run to run.
+   */
+  readonly hasMore: boolean;
+}
+
+interface RetrievedChunkJoin {
+  readonly chunk: RetrievedChunk;
+  readonly document: DocumentDocument;
+  readonly score: number;
 }
 
 /**
@@ -49,6 +108,11 @@ export class EvidenceRetrievalService {
     @InjectModel(Document.name)
     private readonly documentModel: Model<DocumentDocument>,
 
+    @Inject(EMBEDDING_PROVIDER)
+    private readonly embeddingProvider: EmbeddingProvider,
+
+    private readonly queryEmbeddingCache: QueryEmbeddingCacheService,
+
     private readonly config: TypedConfigService,
 
     private readonly logger: AppLogger,
@@ -57,6 +121,87 @@ export class EvidenceRetrievalService {
   }
 
   async retrieve(input: RetrieveEvidenceInput): Promise<RetrievedChunk[]> {
+    const joined = await this.retrieveAndJoin(
+      input.questionText,
+      input.tenantId,
+      // Widens both the store's candidate pool and the `$vectorSearch` `numCandidates` it
+      // derives from `limit`, so a withdrawn chunk doesn't shrink the caller's requested result
+      // count as long as enough live chunks exist in the wider pool.
+      this.config.retrieval.limit * RETRIEVAL_OVER_FETCH_MULTIPLIER,
+    );
+
+    // Restores the caller's requested count after the over-fetch above.
+    const chunks = joined.slice(0, this.config.retrieval.limit).map((entry) => entry.chunk);
+
+    if (chunks.length === 0) {
+      emptyRetrievalCounter.add(1);
+    }
+
+    return chunks;
+  }
+
+  /**
+   * Paged, filtered, sorted evidence search for `GET /retrieval/search`. Shares fetch/fusion/
+   * score-floor/withdrawn-drop with `retrieve` via `retrieveAndJoin`; what's specific here is the
+   * page-shaped surface described on `SearchEvidenceInput`/`SearchEvidenceResult`.
+   */
+  async searchEvidence(input: SearchEvidenceInput): Promise<SearchEvidenceResult> {
+    // Sized off the caller's own skip/limit rather than `config.retrieval.limit` — a deep page
+    // needs a wider pool to reach it — but capped independently of how large `skip + limit`
+    // grows, so a large `skip` cannot inflate the store's pipeline and `$vectorSearch` candidate
+    // counts without bound (see `MAX_RETRIEVAL_STORE_LIMIT`'s own doc comment).
+    const storeLimit = Math.min(
+      (input.skip + input.limit) * RETRIEVAL_OVER_FETCH_MULTIPLIER,
+      MAX_RETRIEVAL_STORE_LIMIT,
+    );
+
+    const joined = await this.retrieveAndJoin(input.questionText, input.tenantId, storeLimit);
+
+    const filtered = joined.filter((entry) => this.matchesFilter(entry.document, input.filter));
+
+    const sorted = [...filtered].sort((a, b) =>
+      input.sortDirection === 'asc' ? a.score - b.score : b.score - a.score,
+    );
+
+    const page = sorted.slice(input.skip, input.skip + input.limit).map((entry) => entry.chunk);
+
+    if (page.length === 0) {
+      emptyRetrievalCounter.add(1);
+    }
+
+    return { chunks: page, hasMore: sorted.length > input.skip + input.limit };
+  }
+
+  private matchesFilter(document: DocumentDocument, filter: RetrieveEvidenceFilter): boolean {
+    if (filter.documentId !== undefined && !document._id.equals(filter.documentId)) {
+      return false;
+    }
+    if (filter.sourceClass !== undefined && document.sourceClass !== filter.sourceClass) {
+      return false;
+    }
+    if (filter.createdAfter !== undefined && document.createdAt < filter.createdAfter) {
+      return false;
+    }
+    if (filter.createdBefore !== undefined && document.createdAt > filter.createdBefore) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Runs the store search, the fail-closed score floor, the version/document joins and the
+   * withdrawn-version drop — every step both `retrieve` and `searchEvidence` need identically.
+   * Returns the surviving hits already joined to their owning `Document`, unsliced: neither the
+   * final result-count cut (`retrieve`) nor the filter/sort/page cut (`searchEvidence`) belongs
+   * at this layer, since the two callers apply them differently.
+   */
+  private async retrieveAndJoin(
+    questionText: string,
+    tenantId: string,
+    storeLimit: number,
+  ): Promise<RetrievedChunkJoin[]> {
+    const vector = await this.resolveQueryVector(tenantId, questionText);
+
     // Withdrawn-version exclusion happens here, not in `MongoHybridRetrievalStore`: `$search`'s
     // `compound.filter` takes Atlas Search operators over the indexed collection, with no
     // cross-collection join to reach `document_versions`; `$vectorSearch`'s `filter` only reaches
@@ -66,14 +211,10 @@ export class EvidenceRetrievalService {
     // and filter here instead, where the withdrawn set is already known from the version lookup
     // below.
     const rawHits = await this.retrievalStore.search<HybridRetrievalHitMetadata>({
-      text: input.questionText,
-      filter: { tenantId: input.tenantId },
-      // `RETRIEVAL_OVER_FETCH_MULTIPLIER` widens both the store's candidate pool and the
-      // `$vectorSearch` `numCandidates` it derives from `limit`. ANN search is approximate, so the
-      // top-k prefix of an over-fetched run is not guaranteed identical to a non-over-fetched
-      // one — `recallHitRank` has been observed moving between replays of an identical corpus.
-      // That's accepted here, not compensated for.
-      limit: this.config.retrieval.limit * RETRIEVAL_OVER_FETCH_MULTIPLIER,
+      text: questionText,
+      vector,
+      filter: { tenantId },
+      limit: storeLimit,
     });
 
     // Veto gate over answer availability: fails CLOSED toward abstention, not open toward
@@ -86,7 +227,6 @@ export class EvidenceRetrievalService {
     const hits = rawHits.filter((hit) => hit.score >= this.config.retrieval.scoreFloor);
 
     if (hits.length === 0) {
-      emptyRetrievalCounter.add(1);
       // The store returned candidates but every one of them scored below the configured floor —
       // operationally distinct from the corpus itself having nothing relevant, and worth its own
       // signal so a misconfigured floor doesn't read the same as genuine zero-retrieval.
@@ -115,7 +255,7 @@ export class EvidenceRetrievalService {
     // swallow the signal that throw exists to catch.
     const versions = await this.documentVersionModel.find({
       _id: { $in: versionIds.map((id) => new Types.ObjectId(id)) },
-      tenantId: input.tenantId,
+      tenantId,
     });
     const sha256ByVersionId = new Map(
       versions.map((version) => [version._id.toString(), version.sha256]),
@@ -130,19 +270,17 @@ export class EvidenceRetrievalService {
     const documentIds = [...new Set(hits.map((hit) => hit.metadata.documentId))];
     const documents = await this.documentModel.find({
       _id: { $in: documentIds.map((id) => new Types.ObjectId(id)) },
-      tenantId: input.tenantId,
+      tenantId,
     });
-    const titleByDocumentId = new Map(
-      documents.map((document) => [document._id.toString(), document.title]),
-    );
+    const documentById = new Map(documents.map((document) => [document._id.toString(), document]));
 
     this.logger.debug(
-      `Retrieved ${hits.length} chunk(s) across ${versionIds.length} document version(s) for question '${input.questionText}'`,
+      `Retrieved ${hits.length} chunk(s) across ${versionIds.length} document version(s) for question '${questionText}'`,
     );
 
-    const chunks = hits
+    return hits
       .filter((hit) => !withdrawnVersionIds.has(hit.metadata.documentVersionId))
-      .map((hit) => {
+      .map((hit): RetrievedChunkJoin => {
         const sha256 = sha256ByVersionId.get(hit.metadata.documentVersionId);
         if (!sha256) {
           // Data-integrity fault, not a normal input-validation branch — mirrors
@@ -155,11 +293,8 @@ export class EvidenceRetrievalService {
           );
         }
 
-        // `.get` misses on a `Document` with an empty-string title just like it does on a
-        // deleted one, so this checks presence explicitly rather than truthiness — unlike
-        // `sha256` above, `title` has no fixed length that makes an empty value implausible.
-        const documentTitle = titleByDocumentId.get(hit.metadata.documentId);
-        if (documentTitle === undefined) {
+        const document = documentById.get(hit.metadata.documentId);
+        if (!document) {
           // Same data-integrity fault as the sha256 case above, on the document rather than the
           // version: a retrieval hit only ever carries a `documentId` the hybrid store read
           // straight off a persisted `EvidenceChunk`, so a miss here means the owning `Document`
@@ -170,23 +305,45 @@ export class EvidenceRetrievalService {
         }
 
         return {
-          chunkId: hit.id,
-          docVersionId: hit.metadata.documentVersionId,
-          sha256,
-          text: hit.metadata.text,
-          locator: hit.metadata.locator,
+          chunk: {
+            chunkId: hit.id,
+            docVersionId: hit.metadata.documentVersionId,
+            sha256,
+            text: hit.metadata.text,
+            locator: hit.metadata.locator,
+            score: hit.score,
+            documentId: hit.metadata.documentId,
+            documentTitle: document.title,
+          },
+          document,
           score: hit.score,
-          documentId: hit.metadata.documentId,
-          documentTitle,
         };
-      })
-      // Restores the caller's requested count after the over-fetch above.
-      .slice(0, this.config.retrieval.limit);
+      });
+  }
 
-    if (chunks.length === 0) {
-      emptyRetrievalCounter.add(1);
-    }
+  /**
+   * Resolves the query embedding through `QueryEmbeddingCacheService`, keyed by tenant + query
+   * text + this provider's model — a repeated identical question spends one live embedding, not
+   * one per call. Passing the result as `RetrievalQuery.vector` is what lets a cache hit skip
+   * `MongoHybridRetrievalStore`'s own embedding call entirely; that store only embeds when
+   * `vector` is absent.
+   */
+  private async resolveQueryVector(
+    tenantId: string,
+    questionText: string,
+  ): Promise<readonly number[]> {
+    return this.queryEmbeddingCache.getOrCompute(
+      { tenantId, text: questionText, model: this.embeddingProvider.info.model },
+      () => this.embedQuery(questionText),
+    );
+  }
 
-    return chunks;
+  private async embedQuery(text: string): Promise<readonly number[]> {
+    // `input_type: 'query'` (not `'document'`, which `IngestionService` uses to embed chunks) is
+    // Voyage's asymmetric-embedding parameter — using the wrong side degrades retrieval quality
+    // without ever raising an error, so this is the one call site in the app that must pass
+    // `'query'`.
+    const result = await this.embeddingProvider.embed({ inputs: [text], inputType: 'query' });
+    return result.embeddings[0];
   }
 }

@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Answer } from '../api/client';
 import AnswersPage from './AnswersPage';
@@ -19,6 +19,22 @@ function stubFetch(routes: Record<string, () => Response>): void {
     return Promise.resolve(handler());
   });
   vi.stubGlobal('fetch', fetchMock);
+}
+
+// Exposes the current query string as accessible text, since `MemoryRouter` gives a test no other
+// way to read it — proves the URL round-trip without reaching into router internals.
+function LocationProbe() {
+  const location = useLocation();
+  return <output aria-label="current search">{location.search}</output>;
+}
+
+function renderPage(initialEntries: string[] = ['/answers']) {
+  render(
+    <MemoryRouter initialEntries={initialEntries}>
+      <AnswersPage />
+      <LocationProbe />
+    </MemoryRouter>,
+  );
 }
 
 const answered: Answer = {
@@ -72,14 +88,6 @@ const running: Answer = {
   withdrawnCitedDocVersionIds: [],
 };
 
-function renderPage() {
-  render(
-    <MemoryRouter>
-      <AnswersPage />
-    </MemoryRouter>,
-  );
-}
-
 describe('AnswersPage', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -88,7 +96,7 @@ describe('AnswersPage', () => {
 
   it('lists answers with the outcome badge for each completed outcome kind', async () => {
     stubFetch({
-      '/api/v1/answers?skip=0&limit=25': () =>
+      '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc': () =>
         jsonResponse({ docs: [answered, conflicting, insufficient], count: 3 }),
     });
 
@@ -118,7 +126,8 @@ describe('AnswersPage', () => {
 
   it('shows the run status, not an outcome, for an answer that has not completed', async () => {
     stubFetch({
-      '/api/v1/answers?skip=0&limit=25': () => jsonResponse({ docs: [running], count: 1 }),
+      '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc': () =>
+        jsonResponse({ docs: [running], count: 1 }),
     });
 
     renderPage();
@@ -130,7 +139,8 @@ describe('AnswersPage', () => {
 
   it('renders a placeholder, not 0%, when claimCoverage is absent', async () => {
     stubFetch({
-      '/api/v1/answers?skip=0&limit=25': () => jsonResponse({ docs: [insufficient], count: 1 }),
+      '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc': () =>
+        jsonResponse({ docs: [insufficient], count: 1 }),
     });
 
     renderPage();
@@ -143,7 +153,8 @@ describe('AnswersPage', () => {
 
   it('renders the claimCoverage fraction as a percentage when present', async () => {
     stubFetch({
-      '/api/v1/answers?skip=0&limit=25': () => jsonResponse({ docs: [answered], count: 1 }),
+      '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc': () =>
+        jsonResponse({ docs: [answered], count: 1 }),
     });
 
     renderPage();
@@ -153,9 +164,32 @@ describe('AnswersPage', () => {
     expect(within(row).getByText('88%')).toBeInTheDocument();
   });
 
+  it('shows a caution badge when an answer cites a withdrawn document version, and no badge otherwise', async () => {
+    const withdrawn: Answer = {
+      ...answered,
+      id: 'answer-5',
+      questionText: 'What is the debt yield for Northgate Business Park?',
+      withdrawnCitedDocVersionIds: ['docver-1'],
+    };
+    stubFetch({
+      '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc': () =>
+        jsonResponse({ docs: [withdrawn, answered], count: 2 }),
+    });
+
+    renderPage();
+
+    const withdrawnRow = (await screen.findByText(withdrawn.questionText)).closest('tr');
+    const otherRow = screen.getByText(answered.questionText).closest('tr');
+    if (!withdrawnRow || !otherRow) throw new Error('row not found');
+
+    expect(within(withdrawnRow).getByText('citation withdrawn')).toBeInTheDocument();
+    expect(within(otherRow).queryByText('citation withdrawn')).not.toBeInTheDocument();
+  });
+
   it('shows the no-answers-yet empty state with a link to Ask when there is no filter', async () => {
     stubFetch({
-      '/api/v1/answers?skip=0&limit=25': () => jsonResponse({ docs: [], count: 0 }),
+      '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc': () =>
+        jsonResponse({ docs: [], count: 0 }),
     });
 
     renderPage();
@@ -166,10 +200,10 @@ describe('AnswersPage', () => {
 
   it('shows a filter-specific empty state when a run status filter matches nothing', async () => {
     const fetchMock = vi.fn((url: string) => {
-      if (url === '/api/v1/answers?skip=0&limit=25') {
+      if (url === '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc') {
         return Promise.resolve(jsonResponse({ docs: [answered], count: 1 }));
       }
-      if (url === '/api/v1/answers?skip=0&limit=25&runStatus=failed') {
+      if (url === '/api/v1/answers?skip=0&limit=25&runStatus=failed&sort=createdAt&sortDir=desc') {
         return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
       }
       return Promise.reject(new Error(`Unhandled fetch: ${url}`));
@@ -188,10 +222,10 @@ describe('AnswersPage', () => {
 
   it('applies the run status filter as a query parameter, not client-side', async () => {
     const fetchMock = vi.fn((url: string) => {
-      if (url === '/api/v1/answers?skip=0&limit=25') {
+      if (url === '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc') {
         return Promise.resolve(jsonResponse({ docs: [answered], count: 1 }));
       }
-      if (url === '/api/v1/answers?skip=0&limit=25&runStatus=failed') {
+      if (url === '/api/v1/answers?skip=0&limit=25&runStatus=failed&sort=createdAt&sortDir=desc') {
         return Promise.resolve(jsonResponse({ docs: [answered], count: 1 }));
       }
       return Promise.reject(new Error(`Unhandled fetch: ${url}`));
@@ -208,19 +242,108 @@ describe('AnswersPage', () => {
 
     expect(
       fetchMock.mock.calls.some(
-        ([url]) => url === '/api/v1/answers?skip=0&limit=25&runStatus=failed',
+        ([url]) =>
+          url === '/api/v1/answers?skip=0&limit=25&runStatus=failed&sort=createdAt&sortDir=desc',
       ),
     ).toBe(true);
   });
 
-  it('paginates with Previous/Next driven by skip, disabled at the ends', async () => {
+  it('resets paging to the first page in the same patch as applying a filter, and keeps the URL clean at defaults', async () => {
     const fetchMock = vi.fn((url: string) => {
-      if (url === '/api/v1/answers?skip=0&limit=25') {
+      if (url === '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc') {
         return Promise.resolve(jsonResponse({ docs: [answered], count: 30 }));
       }
-      if (url === '/api/v1/answers?skip=25&limit=25') {
+      if (url === '/api/v1/answers?skip=25&limit=25&sort=createdAt&sortDir=desc') {
         return Promise.resolve(
-          jsonResponse({ docs: [{ ...answered, id: 'answer-5' }], count: 30 }),
+          jsonResponse({ docs: [{ ...answered, id: 'answer-page-2' }], count: 30 }),
+        );
+      }
+      if (url === '/api/v1/answers?skip=0&limit=25&runStatus=failed&sort=createdAt&sortDir=desc') {
+        return Promise.resolve(jsonResponse({ docs: [answered], count: 1 }));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+    await screen.findByText(answered.questionText);
+
+    // A page at its defaults keeps a clean address bar.
+    expect(screen.getByRole('status', { name: 'current search' })).toBeEmptyDOMElement();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText('30 total');
+
+    fireEvent.change(screen.getByLabelText('Run status'), { target: { value: 'failed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+
+    await screen.findByText('1 total');
+
+    // The filter landed and paging reset to the first page in the same patch — the URL carries
+    // only the non-default `runStatus`, never a leftover `skip`.
+    expect(screen.getByRole('status', { name: 'current search' })).toHaveTextContent(
+      '?runStatus=failed',
+    );
+  });
+
+  it('reproduces a filtered, sorted, paged view from a deep link', async () => {
+    stubFetch({
+      '/api/v1/answers?skip=25&limit=25&runStatus=failed&sort=claimCoverage&sortDir=asc': () =>
+        jsonResponse({ docs: [answered], count: 30 }),
+    });
+
+    renderPage(['/answers?runStatus=failed&sort=claimCoverage&sortDir=asc&skip=25']);
+
+    await screen.findByText(answered.questionText);
+    expect(screen.getByLabelText('Run status')).toHaveValue('failed');
+    expect(screen.getByRole('button', { name: 'Previous' })).not.toBeDisabled();
+  });
+
+  it('sorts by a column on click, defaulting to descending and toggling on the active column', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (
+        url === '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc' ||
+        url === '/api/v1/answers?skip=0&limit=25&sort=claimCoverage&sortDir=desc' ||
+        url === '/api/v1/answers?skip=0&limit=25&sort=claimCoverage&sortDir=asc'
+      ) {
+        return Promise.resolve(jsonResponse({ docs: [answered], count: 1 }));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+    await screen.findByText(answered.questionText);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sort by Claim coverage' }));
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url]) => url === '/api/v1/answers?skip=0&limit=25&sort=claimCoverage&sortDir=desc',
+        ),
+      ).toBe(true);
+    });
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Sort by Claim coverage, sorted descending' }),
+    );
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url]) => url === '/api/v1/answers?skip=0&limit=25&sort=claimCoverage&sortDir=asc',
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it('paginates with Previous/Next driven by skip, disabled at the ends', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc') {
+        return Promise.resolve(jsonResponse({ docs: [answered], count: 30 }));
+      }
+      if (url === '/api/v1/answers?skip=25&limit=25&sort=createdAt&sortDir=desc') {
+        return Promise.resolve(
+          jsonResponse({ docs: [{ ...answered, id: 'answer-page-2' }], count: 30 }),
         );
       }
       return Promise.reject(new Error(`Unhandled fetch: ${url}`));
@@ -236,15 +359,17 @@ describe('AnswersPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 
     await screen.findByText('30 total');
-    expect(fetchMock.mock.calls.some(([url]) => url === '/api/v1/answers?skip=25&limit=25')).toBe(
-      true,
-    );
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => url === '/api/v1/answers?skip=25&limit=25&sort=createdAt&sortDir=desc',
+      ),
+    ).toBe(true);
     expect(screen.getByRole('button', { name: 'Previous' })).not.toBeDisabled();
   });
 
   it('shows an error when answers fail to load', async () => {
     stubFetch({
-      '/api/v1/answers?skip=0&limit=25': () =>
+      '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc': () =>
         jsonResponse({ message: 'Answers unavailable' }, 500),
     });
 

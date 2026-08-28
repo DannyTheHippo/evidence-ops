@@ -13,13 +13,13 @@ import {
 } from '@nestjs/common';
 import { ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
-import { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
 import { AuthenticatedRequest } from '../../../shared/types/authenticated-request.type';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { apiKeysApiExamples } from './api-examples/api-keys.api-examples';
 import { ApiKeysService } from './api-keys.service';
 import { CreateApiKeyRequestDto } from './dtos/request/create-api-key.request.dto';
+import { ListApiKeysRequestDto } from './dtos/request/list-api-keys.request.dto';
 import { ApiKeyResponseDto } from './dtos/response/api-key.response.dto';
 import { MintedApiKeyResponseDto } from './dtos/response/minted-api-key.response.dto';
 
@@ -57,7 +57,7 @@ export class ApiKeysController {
   @HttpCode(HttpStatus.OK)
   @ApiResponse(apiKeysApiExamples.list)
   async list(
-    @Query() pagination: PaginationRequestDto,
+    @Query() pagination: ListApiKeysRequestDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
   ): Promise<WithCountResponseDto<ApiKeyResponseDto>> {
     if (!user) {

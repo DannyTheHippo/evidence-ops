@@ -176,6 +176,26 @@ describe('InvitationsService', () => {
       expect(result.count).toBe(5);
     });
 
+    it.each([
+      ['email', 'asc', { email: 1 }],
+      ['expiresAt', 'desc', { expiresAt: -1 }],
+      ['role', 'asc', { role: 1 }],
+    ] as const)(
+      'should sort by the caller-supplied %s field and %s direction',
+      async (sort, sortDir, expectedSort) => {
+        mockInvitationModel.find.mockResolvedValueOnce([]);
+        mockInvitationModel.countDocuments.mockResolvedValueOnce(0);
+
+        await service.list({ skip: 0, limit: 20, sort, sortDir }, actorId, 'tenant-a');
+
+        expect(mockInvitationModel.find).toHaveBeenCalledWith(
+          { tenantId: 'tenant-a' },
+          null,
+          expect.objectContaining({ sort: expectedSort }),
+        );
+      },
+    );
+
     it('should expose acceptedAt on a redeemed invitation', async () => {
       const acceptedAt = new Date('2026-07-02T00:00:00.000Z');
       mockInvitationModel.find.mockResolvedValueOnce([buildMockInvitation({ acceptedAt })]);

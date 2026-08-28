@@ -268,5 +268,57 @@ describe('AuditEvents (e2e)', () => {
       expect(body.docs).toHaveLength(1);
       expect(body.docs[0].subject.entityId).toBe(ownEntityId.toString());
     });
+
+    it('returns 400 for a sort field outside the declared allowlist', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/audit-events')
+        .query({ sort: 'actor' })
+        .set('Cookie', adminCookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 400 for a sortDir outside asc/desc', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/audit-events')
+        .query({ sort: 'origin', sortDir: 'ascending' })
+        .set('Cookie', adminCookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('sorts by origin ascending when asked, instead of the createdAt-descending default', async () => {
+      const action = `audit-e2e.sort-${new Types.ObjectId().toString()}`;
+      const mcpRow = await auditEventModel.create({
+        actor: new Types.ObjectId(),
+        action,
+        subject: { entityType: 'Approval', entityId: new Types.ObjectId() },
+        timestamp: new Date(),
+        correlationId: 'corr-sort-mcp',
+        origin: 'mcp',
+        tenantId,
+      });
+      const apiRow = await auditEventModel.create({
+        actor: new Types.ObjectId(),
+        action,
+        subject: { entityType: 'Approval', entityId: new Types.ObjectId() },
+        timestamp: new Date(),
+        correlationId: 'corr-sort-api',
+        origin: 'api',
+        tenantId,
+      });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/audit-events')
+        .query({ action, sort: 'origin', sortDir: 'asc' })
+        .set('Cookie', adminCookie);
+      const body = response.body as { docs: AuditEventBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.docs.map((doc) => doc.id)).toEqual([
+        apiRow._id.toString(),
+        mcpRow._id.toString(),
+      ]);
+    });
   });
 });

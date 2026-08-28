@@ -12,8 +12,13 @@ import {
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import { resolveSort } from '../../../shared/utils/resolve-sort.util';
 import type { ApprovalDecisionSignal } from '../../../workflows/types';
-import type { ListApprovalsRequestDto } from './dtos/request/list-approvals.request.dto';
+import {
+  DEFAULT_APPROVAL_SORT_DIRECTION,
+  DEFAULT_APPROVAL_SORT_FIELD,
+  type ListApprovalsRequestDto,
+} from './dtos/request/list-approvals.request.dto';
 import type { ApprovalResponseDto } from './dtos/response/approval.response.dto';
 import {
   ApprovalAlreadyDecidedException,
@@ -105,7 +110,12 @@ export class ApprovalsService {
 
     const [approvals, count] = await Promise.all([
       this.approvalModel.find(filter, null, {
-        sort: { createdAt: -1 },
+        sort: resolveSort(
+          dto.sort,
+          dto.sortDir,
+          DEFAULT_APPROVAL_SORT_FIELD,
+          DEFAULT_APPROVAL_SORT_DIRECTION,
+        ),
         skip: dto.skip,
         limit: dto.limit,
       }),

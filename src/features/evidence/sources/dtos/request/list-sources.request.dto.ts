@@ -1,7 +1,17 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsIn, IsOptional, IsString } from 'class-validator';
+import { SORT_DIRECTIONS, type SortDirection } from '../../../../../shared/constants/sort.constant';
 import { PaginationRequestDto } from '../../../../../shared/dtos/request/pagination.request.dto';
+
+// `fileCount` deliberately excluded: it is computed in `SourcesService.toResult` from
+// `fileStates.length`, never stored on the document, so there is no column for the database to
+// order by.
+export const SOURCE_SORT_FIELDS = ['name', 'owner', 'lastSyncAt', 'createdAt'] as const;
+export type SourceSortField = (typeof SOURCE_SORT_FIELDS)[number];
+
+export const DEFAULT_SOURCE_SORT_FIELD: SourceSortField = 'name';
+export const DEFAULT_SOURCE_SORT_DIRECTION: SortDirection = 'asc';
 
 export class ListSourcesRequestDto extends PaginationRequestDto {
   @ApiProperty({
@@ -35,4 +45,24 @@ export class ListSourcesRequestDto extends PaginationRequestDto {
   })
   @IsBoolean()
   tracked?: boolean;
+
+  @ApiProperty({
+    example: 'name',
+    enum: SOURCE_SORT_FIELDS,
+    description: 'Field to sort by. Defaults to name.',
+    required: false,
+  })
+  @IsOptional()
+  @IsIn(SOURCE_SORT_FIELDS)
+  sort?: SourceSortField;
+
+  @ApiProperty({
+    example: 'asc',
+    enum: SORT_DIRECTIONS,
+    description: 'Sort direction. Defaults to asc.',
+    required: false,
+  })
+  @IsOptional()
+  @IsIn(SORT_DIRECTIONS)
+  sortDir?: SortDirection;
 }

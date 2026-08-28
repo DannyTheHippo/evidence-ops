@@ -16,13 +16,13 @@ import { ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { RequireRole } from '../../../shared/decorators/require-role.decorator';
-import { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
 import { UserRole } from '../../../shared/enums/user-role.enum';
 import { AuthenticatedRequest } from '../../../shared/types/authenticated-request.type';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { invitationsApiExamples } from './api-examples/invitations.api-examples';
 import { CreateInvitationRequestDto } from './dtos/request/create-invitation.request.dto';
+import { ListInvitationsRequestDto } from './dtos/request/list-invitations.request.dto';
 import { InvitationResponseDto } from './dtos/response/invitation.response.dto';
 import { MintedInvitationResponseDto } from './dtos/response/minted-invitation.response.dto';
 import { InvitationsService } from './invitations.service';
@@ -69,7 +69,7 @@ export class InvitationsController {
   @ApiResponse(invitationsApiExamples.list)
   @ApiResponse(invitationsApiExamples.forbidden)
   async list(
-    @Query() pagination: PaginationRequestDto,
+    @Query() pagination: ListInvitationsRequestDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
   ): Promise<WithCountResponseDto<InvitationResponseDto>> {
     if (!user) {

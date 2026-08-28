@@ -58,7 +58,7 @@ describe('SearchPage', () => {
   it('fires exactly one request on submit and renders the result with its locator and trace chip', async () => {
     const fetchMock = vi.fn((url: string) => {
       if (url.startsWith('/api/v1/retrieval/search')) {
-        return Promise.resolve(jsonResponse({ docs: [chunk], count: 1 }));
+        return Promise.resolve(jsonResponse({ docs: [chunk], hasMore: false }));
       }
       if (url.startsWith('/api/v1/documents/versions/lookup')) {
         return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
@@ -73,15 +73,38 @@ describe('SearchPage', () => {
     expect(await screen.findByText('Cap rate for Northgate is 6.1%.')).toBeInTheDocument();
     expect(screen.getByText('p.2')).toBeInTheDocument();
     expect(screen.getByTitle(`sha256 ${chunk.sha256} · chunk chunk-1`)).toBeInTheDocument();
-    expect(
-      fetchMock.mock.calls.filter(([url]) => url.startsWith('/api/v1/retrieval/search')).length,
-    ).toBe(1);
+    expect(screen.getByText('1 on this page')).toBeInTheDocument();
+    const searchCalls = fetchMock.mock.calls.filter(([url]) =>
+      url.startsWith('/api/v1/retrieval/search'),
+    );
+    expect(searchCalls).toHaveLength(1);
+    expect(searchCalls[0][0]).toBe('/api/v1/retrieval/search?query=cap+rate');
+  });
+
+  it('marks more results as available when the response says so', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (url.startsWith('/api/v1/retrieval/search')) {
+          return Promise.resolve(jsonResponse({ docs: [chunk], hasMore: true }));
+        }
+        if (url.startsWith('/api/v1/documents/versions/lookup')) {
+          return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+        }
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    renderPage();
+    search();
+
+    expect(await screen.findByText('1 on this page · more available')).toBeInTheDocument();
   });
 
   it('shows a no-results state, distinct from the pre-search invitation, when a search finds nothing', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(() => Promise.resolve(jsonResponse({ docs: [], count: 0 }))),
+      vi.fn(() => Promise.resolve(jsonResponse({ docs: [], hasMore: false }))),
     );
 
     renderPage();

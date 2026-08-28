@@ -122,6 +122,47 @@ describe('Canonical Entities (e2e)', () => {
 
       expect(response.status).toBe(200);
     });
+
+    it('returns 400 for a sort field outside the declared allowlist', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/canonical-entities')
+        .query({ sort: 'canonicalName' })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 400 for a sortDir outside asc/desc', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/canonical-entities')
+        .query({ sort: 'createdAt', sortDir: 'ascending' })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('sorts by canonicalNameNormalized ascending by default', async () => {
+      const sortTenant = await registerTestUser(app, {
+        email: 'canonical-entities-sort-e2e@example.com',
+        password: 'correct-horse-battery',
+      });
+      const zeta = await canonicalEntityModel.create({
+        tenantId: sortTenant.tenantId,
+        canonicalName: 'Zeta Business Park',
+      });
+      const alpha = await canonicalEntityModel.create({
+        tenantId: sortTenant.tenantId,
+        canonicalName: 'Alpha Business Park',
+      });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/canonical-entities')
+        .set('Cookie', sortTenant.cookie);
+      const body = response.body as { docs: CanonicalEntityBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.docs.map((doc) => doc.id)).toEqual([alpha._id.toString(), zeta._id.toString()]);
+    });
   });
 
   describe('POST /canonical-entities', () => {

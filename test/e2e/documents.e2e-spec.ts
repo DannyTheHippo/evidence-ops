@@ -1564,4 +1564,104 @@ describe('Documents (e2e)', () => {
       expect(resolvedListed?.unscorable).toBe(true);
     });
   });
+
+  describe('GET /conflicts sort', () => {
+    it('returns 400 for a sort field outside the declared allowlist', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/conflicts')
+        .query({ sort: 'magnitude' })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 400 for a sortDir outside asc/desc', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/conflicts')
+        .query({ sort: 'status', sortDir: 'ascending' })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('sorts by status ascending when asked, instead of the createdAt-descending default', async () => {
+      const sortTenant = await registerTestUser(app, {
+        email: 'conflicts-sort-e2e@example.com',
+        password: 'correct-horse-battery',
+      });
+      const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+      const factA = await extractedFactModel.create({
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        tenantId: sortTenant.tenantId,
+        value: { amount: 5.25, unit: 'percent' },
+        rawText: 'cap rate of 5.25%',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        ...PACK_STAMP,
+        chunkId: 'chunk-xlsx',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
+      });
+      const factB = await extractedFactModel.create({
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        tenantId: sortTenant.tenantId,
+        value: { amount: 6.1, unit: 'percent' },
+        rawText: 'cap rate of 6.10%',
+        confidence: 0.9,
+        extractionMethod: 'llm',
+        ...PACK_STAMP,
+        chunkId: 'chunk-prose',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+      });
+      // Same fact pair reused across all three rows — this block only exercises `ConflictsService.list`'s
+      // sort, not conflict detection, so a realistic disagreement per row is not the point.
+      const openConflict = await conflictModel.create({
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        tenantId: sortTenant.tenantId,
+        factIds: [factA._id, factB._id],
+        magnitude: 0.0085,
+        magnitudeUnit: 'ratio',
+        ...PACK_STAMP,
+        status: 'open',
+      });
+      const dismissedConflict = await conflictModel.create({
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        tenantId: sortTenant.tenantId,
+        factIds: [factA._id, factB._id],
+        magnitude: 0.0085,
+        magnitudeUnit: 'ratio',
+        ...PACK_STAMP,
+        status: 'dismissed',
+      });
+      const resolvedConflict = await conflictModel.create({
+        factKey,
+        groupKeyNormalized: groupKey(factKey),
+        tenantId: sortTenant.tenantId,
+        factIds: [factA._id, factB._id],
+        magnitude: 0.0085,
+        magnitudeUnit: 'ratio',
+        ...PACK_STAMP,
+        status: 'resolved',
+        resolution: { outcome: 'resolved', winningFactId: factA._id, resolvedAt: new Date() },
+      });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/conflicts')
+        .query({ sort: 'status', sortDir: 'asc' })
+        .set('Cookie', sortTenant.cookie);
+      const body = response.body as { docs: Array<{ id: string; status: string }> };
+
+      expect(response.status).toBe(200);
+      expect(body.docs.map((doc) => doc.id)).toEqual([
+        dismissedConflict._id.toString(),
+        openConflict._id.toString(),
+        resolvedConflict._id.toString(),
+      ]);
+    });
+  });
 });

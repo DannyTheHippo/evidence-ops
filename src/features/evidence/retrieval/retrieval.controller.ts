@@ -13,13 +13,13 @@ import { Throttle } from '@nestjs/throttler';
 import { CurrentUser } from '../../common/auth/decorators/current-user.decorator';
 import { RolesGuard } from '../../common/auth/guards/roles.guard';
 import { RequireRole } from '../../../shared/decorators/require-role.decorator';
-import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
 import { UserRole } from '../../../shared/enums/user-role.enum';
 import { AuthenticatedRequest } from '../../../shared/types/authenticated-request.type';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { retrievalApiExamples } from './api-examples/retrieval.api-examples';
 import { SearchEvidenceRequestDto } from './dtos/request/search-evidence.request.dto';
 import { RetrievedChunkResponseDto } from './dtos/response/retrieved-chunk.response.dto';
+import { SearchEvidenceResponseDto } from './dtos/response/search-evidence.response.dto';
 import { RETRIEVAL_SEARCH_THROTTLE_LIMIT } from './retrieval.constant';
 import { RetrievalService } from './retrieval.service';
 
@@ -46,13 +46,13 @@ export class RetrievalController {
   async search(
     @Query() dto: SearchEvidenceRequestDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
-  ): Promise<WithCountResponseDto<RetrievedChunkResponseDto>> {
+  ): Promise<SearchEvidenceResponseDto> {
     if (!user) {
       throw new UnauthorizedException('No token provided');
     }
 
-    const { docs, count } = await this.retrievalService.search(dto, user.userId, user.tenantId);
+    const { docs, hasMore } = await this.retrievalService.search(dto, user.userId, user.tenantId);
 
-    return { docs: docs.map((doc) => toResponseDto(RetrievedChunkResponseDto, doc)), count };
+    return { docs: docs.map((doc) => toResponseDto(RetrievedChunkResponseDto, doc)), hasMore };
   }
 }

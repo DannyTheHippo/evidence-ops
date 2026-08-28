@@ -8,7 +8,14 @@ import {
   WORKFLOW_RUN_STATUSES,
   WORKFLOW_RUN_TYPES,
 } from '../../../../../database/schemas/workflow/workflow-run/workflow-run.schema';
+import { SORT_DIRECTIONS, type SortDirection } from '../../../../../shared/constants/sort.constant';
 import { PaginationRequestDto } from '../../../../../shared/dtos/request/pagination.request.dto';
+
+export const WORKFLOW_RUN_SORT_FIELDS = ['createdAt', 'status', 'workflowType'] as const;
+export type WorkflowRunSortField = (typeof WORKFLOW_RUN_SORT_FIELDS)[number];
+
+export const DEFAULT_WORKFLOW_RUN_SORT_FIELD: WorkflowRunSortField = 'createdAt';
+export const DEFAULT_WORKFLOW_RUN_SORT_DIRECTION: SortDirection = 'desc';
 
 export class ListWorkflowRunsRequestDto extends PaginationRequestDto {
   @ApiProperty({
@@ -47,4 +54,24 @@ export class ListWorkflowRunsRequestDto extends PaginationRequestDto {
   @IsOptional()
   @IsIn(WORKFLOW_RUN_TYPES)
   workflowType?: WorkflowRunType;
+
+  @ApiProperty({
+    example: 'createdAt',
+    enum: WORKFLOW_RUN_SORT_FIELDS,
+    description: 'Field to sort by. Defaults to createdAt.',
+    required: false,
+  })
+  @IsOptional()
+  @IsIn(WORKFLOW_RUN_SORT_FIELDS)
+  sort?: WorkflowRunSortField;
+
+  @ApiProperty({
+    example: 'desc',
+    enum: SORT_DIRECTIONS,
+    description: 'Sort direction. Defaults to desc.',
+    required: false,
+  })
+  @IsOptional()
+  @IsIn(SORT_DIRECTIONS)
+  sortDir?: SortDirection;
 }
