@@ -24,7 +24,9 @@ export const searchEvidenceToolDefinition: ModelToolDefinition = {
   name: SEARCH_EVIDENCE_TOOL_NAME,
   description:
     "Search the tenant's evidence corpus for chunks relevant to a query. Returns short " +
-    'snippets of matching evidence text, not full chunk text.',
+    'snippets of matching evidence text, not full chunk text, plus the id and title of the ' +
+    'source document each chunk came from, and a relevance score for ranking hits against ' +
+    'each other — the score is a fused rank-based value, not a 0-1 similarity or a percentage.',
   inputSchema: searchEvidenceInputSchema,
 };
 

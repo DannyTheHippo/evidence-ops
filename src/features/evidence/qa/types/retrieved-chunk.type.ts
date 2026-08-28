@@ -14,4 +14,10 @@ export interface RetrievedChunk {
   readonly sha256: string;
   readonly text: string;
   readonly locator: EvidenceLocator;
+  // Optional here, not on `RetrievedChunkResponseDto`: grounding never reads these, so a fixture
+  // built for `GroundingGateService`/`SynthesisService` coverage is not obligated to carry them.
+  // `EvidenceRetrievalService.retrieve` always populates all three.
+  readonly score?: number;
+  readonly documentId?: string;
+  readonly documentTitle?: string;
 }

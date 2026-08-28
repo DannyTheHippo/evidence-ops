@@ -3,6 +3,10 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { User, UserSchema } from '../../../database/schemas/administration/user/user.schema';
 import { Answer, AnswerSchema } from '../../../database/schemas/evidence/answer/answer.schema';
 import {
+  Document,
+  DocumentSchema,
+} from '../../../database/schemas/evidence/document/document.schema';
+import {
   DocumentVersion,
   DocumentVersionSchema,
 } from '../../../database/schemas/evidence/document-version/document-version.schema';
@@ -31,6 +35,7 @@ import { SynthesisService } from './synthesis.service';
   imports: [
     MongooseModule.forFeature([
       { name: Answer.name, schema: AnswerSchema },
+      { name: Document.name, schema: DocumentSchema },
       { name: DocumentVersion.name, schema: DocumentVersionSchema },
       { name: User.name, schema: UserSchema },
     ]),

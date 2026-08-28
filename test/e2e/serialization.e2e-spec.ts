@@ -9,9 +9,23 @@ import {
 } from '../../src/database/schemas/audit/audit-event/audit-event.schema';
 import { Answer, AnswerDocument } from '../../src/database/schemas/evidence/answer/answer.schema';
 import {
+  Conflict,
+  ConflictDocument,
+} from '../../src/database/schemas/evidence/conflict/conflict.schema';
+import {
   DocumentVersion,
   DocumentVersionDocument,
 } from '../../src/database/schemas/evidence/document-version/document-version.schema';
+import {
+  WorkflowRun,
+  WorkflowRunDocument,
+} from '../../src/database/schemas/workflow/workflow-run/workflow-run.schema';
+import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts';
+import {
+  ACTIVE_PACK_ID,
+  ACTIVE_PACK_VERSION,
+  METRIC_ONTOLOGY,
+} from '../../src/features/evidence/facts/metric-ontology';
 import type { Citation } from '../../src/features/evidence/qa/contracts/answer.contract';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
 import { registerTestUser } from '../utils/register-test-user';
@@ -289,5 +303,101 @@ describe('Serialization (e2e)', () => {
     expect(body.citations).toEqual([survivingCitation]);
     expect(body.verificationReport.verifiedClaimCount).toBe(1);
     expect(body.verificationReport.totalClaimCount).toBe(2);
+  });
+
+  // Regression for the metric-label gap: four SPA surfaces render a raw METRIC_IDS value with no
+  // way to show a human label — this is the gate that catches MetricResponseDto losing an
+  // @Expose() or the projection dropping an ontology entry.
+  it('exposes id, label and canonicalUnit for every built-in metric on GET /metrics', async () => {
+    const { cookie } = await registerTestUser(app, {
+      email: 'serialization-metrics-e2e@example.com',
+      password: 'correct-horse-battery',
+    });
+
+    const response = await request(getTestServer(app)).get('/api/v1/metrics').set('Cookie', cookie);
+    const body = response.body as Array<Record<string, unknown>>;
+
+    expect(response.status).toBe(200);
+    expect(body).toHaveLength(METRIC_ONTOLOGY.length);
+    const capRate = body.find((metric) => metric.id === 'cap_rate');
+    expect(capRate).toBeDefined();
+    expect(Object.keys(capRate as object).sort()).toEqual(['id', 'label', 'canonicalUnit'].sort());
+    expect(capRate?.label).toBe('Cap Rate');
+    expect(capRate?.canonicalUnit).toBe('ratio');
+  });
+
+  // Regression for the write-only magnitudeUnit gap: a cap-rate spread and a dollar spread both
+  // rendered as an identical bare number with no @Expose() on this field.
+  it('exposes magnitudeUnit in the conflicts list response', async () => {
+    const { cookie, tenantId } = await registerTestUser(app, {
+      email: 'serialization-conflicts-magnitude-unit-e2e@example.com',
+      password: 'correct-horse-battery',
+    });
+
+    const conflictModel = app.get<Model<ConflictDocument>>(getModelToken(Conflict.name));
+    const factKey = {
+      entity: 'Serialization Test Property',
+      metric: 'cap_rate',
+      period: '2025-03',
+    };
+    await conflictModel.create({
+      tenantId,
+      factKey,
+      groupKeyNormalized: groupKey(factKey),
+      factIds: [new Types.ObjectId(), new Types.ObjectId()],
+      magnitude: 0.0085,
+      magnitudeUnit: 'ratio',
+      packId: ACTIVE_PACK_ID,
+      packVersion: ACTIVE_PACK_VERSION,
+      status: 'open',
+    });
+
+    const response = await request(getTestServer(app))
+      .get('/api/v1/conflicts')
+      .set('Cookie', cookie);
+    const body = response.body as { docs: Array<Record<string, unknown>> };
+
+    expect(response.status).toBe(200);
+    expect(body.docs).toHaveLength(1);
+    expect(body.docs[0].magnitudeUnit).toBe('ratio');
+  });
+
+  // Regression for the workflow-runs list widening: subjectId/subjectType are computed fields
+  // (never spread from the schema document), and status/workflowType are new query filters — this
+  // is the gate that catches either losing its @Expose()/validator decorator, and proves the
+  // filters actually narrow the list rather than being silently dropped as unwhitelisted.
+  it('exposes subjectId and subjectType in the workflow-runs list response and filters by status and workflowType', async () => {
+    const { cookie, tenantId } = await registerTestUser(app, {
+      email: 'serialization-workflow-runs-e2e@example.com',
+      password: 'correct-horse-battery',
+    });
+
+    const workflowRunModel = app.get<Model<WorkflowRunDocument>>(getModelToken(WorkflowRun.name));
+    const answerId = new Types.ObjectId();
+    const matching = await workflowRunModel.create({
+      tenantId,
+      workflowId: 'wf-serialization-e2e-match',
+      workflowType: 'resolve-conflict',
+      status: 'failed',
+      answerId,
+    });
+    await workflowRunModel.create({
+      tenantId,
+      workflowId: 'wf-serialization-e2e-other',
+      workflowType: 'sync-source',
+      status: 'running',
+    });
+
+    const response = await request(getTestServer(app))
+      .get('/api/v1/workflow-runs')
+      .query({ status: 'failed', workflowType: 'resolve-conflict' })
+      .set('Cookie', cookie);
+    const body = response.body as { docs: Array<Record<string, unknown>> };
+
+    expect(response.status).toBe(200);
+    expect(body.docs).toHaveLength(1);
+    expect(body.docs[0].id).toBe(matching._id.toString());
+    expect(body.docs[0].subjectId).toBe(answerId.toString());
+    expect(body.docs[0].subjectType).toBe('Answer');
   });
 });

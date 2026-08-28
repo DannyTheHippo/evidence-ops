@@ -4,6 +4,7 @@ import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { Types } from 'mongoose';
 import { TypedConfigService } from '../../../../src/config/environment/typed-config.service';
+import { Document } from '../../../../src/database/schemas/evidence/document/document.schema';
 import { DocumentVersion } from '../../../../src/database/schemas/evidence/document-version/document-version.schema';
 import { EvidenceRetrievalService } from '../../../../src/features/evidence/qa/evidence-retrieval.service';
 import { RETRIEVAL_OVER_FETCH_MULTIPLIER } from '../../../../src/features/evidence/retrieval/retrieval.constant';
@@ -40,11 +41,18 @@ function buildHit(overrides: Partial<HybridRetrievalHitMetadata> = {}): Retrieva
   };
 }
 
+// `FakeRetrievalStore.setHits` fixes its hits to the interface's default `Record<string,
+// unknown>` metadata, so `hit.metadata.documentId` reads back as `unknown` — this narrows it back
+// to the concrete shape `buildHit` actually constructs.
+const documentIdOf = (hit: RetrievalHit): Types.ObjectId =>
+  new Types.ObjectId((hit.metadata as unknown as HybridRetrievalHitMetadata).documentId);
+
 describe('EvidenceRetrievalService', () => {
   let service: EvidenceRetrievalService;
   let fakeRetrievalStore: FakeRetrievalStore;
   let mockLogger: MockLogger;
   const mockDocumentVersionModel = getMockModel();
+  const mockDocumentModel = getMockModel();
 
   const buildService = async (
     retrievalOverrides: Partial<ReturnType<typeof getMockTypedConfig>['retrieval']> = {},
@@ -58,6 +66,7 @@ describe('EvidenceRetrievalService', () => {
         EvidenceRetrievalService,
         { provide: RETRIEVAL_STORE, useValue: fakeRetrievalStore },
         { provide: getModelToken(DocumentVersion.name), useValue: mockDocumentVersionModel },
+        { provide: getModelToken(Document.name), useValue: mockDocumentModel },
         { provide: TypedConfigService, useValue: config },
         { provide: AppLogger, useValue: mockLogger },
       ],
@@ -87,6 +96,7 @@ describe('EvidenceRetrievalService', () => {
 
     expect(result).toEqual([]);
     expect(mockDocumentVersionModel.find).not.toHaveBeenCalled();
+    expect(mockDocumentModel.find).not.toHaveBeenCalled();
     // Genuine zero-retrieval (the store returned nothing at all) must not be reported as the
     // score floor rejecting hits — that warning is reserved for the case where hits existed and
     // the floor dropped every one of them.
@@ -97,10 +107,13 @@ describe('EvidenceRetrievalService', () => {
   it('should not increment the empty-retrieval counter when the store returns hits', async () => {
     const emptyRetrievalSpy = jest.spyOn(emptyRetrievalCounter, 'add');
     const versionId = new Types.ObjectId();
-    fakeRetrievalStore.setHits([buildHit({ documentVersionId: versionId.toString() })]);
+    const hit = buildHit({ documentVersionId: versionId.toString() });
+    const documentId = documentIdOf(hit);
+    fakeRetrievalStore.setHits([hit]);
     mockDocumentVersionModel.find.mockResolvedValueOnce([
       { _id: versionId, sha256: 'a'.repeat(64) },
     ]);
+    mockDocumentModel.find.mockResolvedValueOnce([{ _id: documentId, title: 'Q3 Rent Roll' }]);
 
     await service.retrieve({ questionText: 'What is the cap rate?', tenantId: 'default' });
 
@@ -132,12 +145,16 @@ describe('EvidenceRetrievalService', () => {
     expect(fakeRetrievalStore.queries[0].limit).toBe(5 * RETRIEVAL_OVER_FETCH_MULTIPLIER);
   });
 
-  it("should join a retrieval hit back to its document version's sha256", async () => {
+  it("should join a retrieval hit back to its document version's sha256, its document's title, and carry the hit's score", async () => {
     const versionId = new Types.ObjectId();
-    const hit = buildHit({ documentVersionId: versionId.toString() });
+    const hit = buildHit({ documentVersionId: versionId.toString(), text: 'excerpt' });
+    const documentId = documentIdOf(hit);
     fakeRetrievalStore.setHits([hit]);
     mockDocumentVersionModel.find.mockResolvedValueOnce([
       { _id: versionId, sha256: 'a'.repeat(64) },
+    ]);
+    mockDocumentModel.find.mockResolvedValueOnce([
+      { _id: documentId, title: 'Northgate Business Park — Q3 Rent Roll' },
     ]);
 
     const result = await service.retrieve({
@@ -152,20 +169,30 @@ describe('EvidenceRetrievalService', () => {
         sha256: 'a'.repeat(64),
         text: hit.metadata.text,
         locator: hit.metadata.locator,
+        score: hit.score,
+        documentId: documentId.toString(),
+        documentTitle: 'Northgate Business Park — Q3 Rent Roll',
       },
     ]);
     expect(mockDocumentVersionModel.find).toHaveBeenCalledWith({
       _id: { $in: [versionId] },
       tenantId: 'default',
     });
+    expect(mockDocumentModel.find).toHaveBeenCalledWith({
+      _id: { $in: [documentId] },
+      tenantId: 'default',
+    });
   });
 
   it('should scope the document version lookup to an explicit tenant, distinct from another tenant', async () => {
     const versionId = new Types.ObjectId();
-    fakeRetrievalStore.setHits([buildHit({ documentVersionId: versionId.toString() })]);
+    const hit = buildHit({ documentVersionId: versionId.toString() });
+    const documentId = documentIdOf(hit);
+    fakeRetrievalStore.setHits([hit]);
     mockDocumentVersionModel.find.mockResolvedValueOnce([
       { _id: versionId, sha256: 'a'.repeat(64) },
     ]);
+    mockDocumentModel.find.mockResolvedValueOnce([{ _id: documentId, title: 'Q3 Rent Roll' }]);
 
     await service.retrieve({ questionText: 'What is the cap rate?', tenantId: 'acme' });
 
@@ -173,11 +200,29 @@ describe('EvidenceRetrievalService', () => {
       _id: { $in: [versionId] },
       tenantId: 'acme',
     });
+    expect(mockDocumentModel.find).toHaveBeenCalledWith({
+      _id: { $in: [documentId] },
+      tenantId: 'acme',
+    });
   });
 
   it('should throw InternalServerErrorException when a hit references a document version that no longer exists', async () => {
     fakeRetrievalStore.setHits([buildHit()]);
     mockDocumentVersionModel.find.mockResolvedValueOnce([]);
+    mockDocumentModel.find.mockResolvedValueOnce([]);
+
+    await expect(
+      service.retrieve({ questionText: 'What is the cap rate?', tenantId: 'default' }),
+    ).rejects.toBeInstanceOf(InternalServerErrorException);
+  });
+
+  it('should throw InternalServerErrorException when a hit references a document that no longer exists', async () => {
+    const versionId = new Types.ObjectId();
+    fakeRetrievalStore.setHits([buildHit({ documentVersionId: versionId.toString() })]);
+    mockDocumentVersionModel.find.mockResolvedValueOnce([
+      { _id: versionId, sha256: 'a'.repeat(64) },
+    ]);
+    mockDocumentModel.find.mockResolvedValueOnce([]);
 
     await expect(
       service.retrieve({ questionText: 'What is the cap rate?', tenantId: 'default' }),
@@ -189,11 +234,13 @@ describe('EvidenceRetrievalService', () => {
     const withdrawnVersionId = new Types.ObjectId();
     const liveHit = buildHit({ documentVersionId: liveVersionId.toString() });
     const withdrawnHit = buildHit({ documentVersionId: withdrawnVersionId.toString() });
+    const liveDocumentId = documentIdOf(liveHit);
     fakeRetrievalStore.setHits([liveHit, withdrawnHit]);
     mockDocumentVersionModel.find.mockResolvedValueOnce([
       { _id: liveVersionId, sha256: 'a'.repeat(64) },
       { _id: withdrawnVersionId, sha256: 'b'.repeat(64), withdrawnAt: new Date() },
     ]);
+    mockDocumentModel.find.mockResolvedValueOnce([{ _id: liveDocumentId, title: 'Q3 Rent Roll' }]);
 
     const result = await service.retrieve({
       questionText: 'What is the cap rate?',
@@ -207,6 +254,9 @@ describe('EvidenceRetrievalService', () => {
         sha256: 'a'.repeat(64),
         text: liveHit.metadata.text,
         locator: liveHit.metadata.locator,
+        score: liveHit.score,
+        documentId: liveDocumentId.toString(),
+        documentTitle: 'Q3 Rent Roll',
       },
     ]);
   });
@@ -215,14 +265,18 @@ describe('EvidenceRetrievalService', () => {
     service = await buildService({ limit: 2 });
     const withdrawnVersionId = new Types.ObjectId();
     const liveVersionIds = [new Types.ObjectId(), new Types.ObjectId(), new Types.ObjectId()];
-    fakeRetrievalStore.setHits([
-      buildHit({ documentVersionId: withdrawnVersionId.toString() }),
-      ...liveVersionIds.map((versionId) => buildHit({ documentVersionId: versionId.toString() })),
-    ]);
+    const withdrawnHit = buildHit({ documentVersionId: withdrawnVersionId.toString() });
+    const liveHits = liveVersionIds.map((versionId) =>
+      buildHit({ documentVersionId: versionId.toString() }),
+    );
+    fakeRetrievalStore.setHits([withdrawnHit, ...liveHits]);
     mockDocumentVersionModel.find.mockResolvedValueOnce([
       { _id: withdrawnVersionId, sha256: 'a'.repeat(64), withdrawnAt: new Date() },
       ...liveVersionIds.map((versionId) => ({ _id: versionId, sha256: 'b'.repeat(64) })),
     ]);
+    mockDocumentModel.find.mockResolvedValueOnce(
+      liveHits.map((hit) => ({ _id: documentIdOf(hit), title: 'Q3 Rent Roll' })),
+    );
 
     const result = await service.retrieve({
       questionText: 'What is the cap rate?',
@@ -236,10 +290,12 @@ describe('EvidenceRetrievalService', () => {
   it('should keep a hit whose score is barely above zero at the default score floor', async () => {
     const versionId = new Types.ObjectId();
     const hit = { ...buildHit({ documentVersionId: versionId.toString() }), score: 0.001 };
+    const documentId = documentIdOf(hit);
     fakeRetrievalStore.setHits([hit]);
     mockDocumentVersionModel.find.mockResolvedValueOnce([
       { _id: versionId, sha256: 'a'.repeat(64) },
     ]);
+    mockDocumentModel.find.mockResolvedValueOnce([{ _id: documentId, title: 'Q3 Rent Roll' }]);
 
     const result = await service.retrieve({
       questionText: 'What is the cap rate?',
@@ -255,16 +311,28 @@ describe('EvidenceRetrievalService', () => {
     const belowVersionId = new Types.ObjectId();
     const atFloorVersionId = new Types.ObjectId();
     const aboveVersionId = new Types.ObjectId();
+    const atFloorHit = {
+      ...buildHit({ documentVersionId: atFloorVersionId.toString() }),
+      score: floor,
+    };
+    const aboveHit = {
+      ...buildHit({ documentVersionId: aboveVersionId.toString() }),
+      score: rrfScore(1, 2),
+    };
     fakeRetrievalStore.setHits([
       // Single-pipeline rank 2 scores below the rank-1 floor.
       { ...buildHit({ documentVersionId: belowVersionId.toString() }), score: rrfScore(2) },
-      { ...buildHit({ documentVersionId: atFloorVersionId.toString() }), score: floor },
+      atFloorHit,
       // Both pipelines ranking the hit #1 is the highest score the store can ever produce.
-      { ...buildHit({ documentVersionId: aboveVersionId.toString() }), score: rrfScore(1, 2) },
+      aboveHit,
     ]);
     mockDocumentVersionModel.find.mockResolvedValueOnce([
       { _id: atFloorVersionId, sha256: 'a'.repeat(64) },
       { _id: aboveVersionId, sha256: 'b'.repeat(64) },
+    ]);
+    mockDocumentModel.find.mockResolvedValueOnce([
+      { _id: documentIdOf(atFloorHit), title: 'Q3 Rent Roll' },
+      { _id: documentIdOf(aboveHit), title: 'Q3 Rent Roll' },
     ]);
 
     const result = await service.retrieve({
@@ -289,6 +357,7 @@ describe('EvidenceRetrievalService', () => {
 
     expect(result).toEqual([]);
     expect(mockDocumentVersionModel.find).not.toHaveBeenCalled();
+    expect(mockDocumentModel.find).not.toHaveBeenCalled();
     expect(emptyRetrievalSpy).toHaveBeenCalledWith(1);
     // The store did return a hit — it just failed the floor. That must be distinguishable from
     // genuine zero-retrieval (see the earlier no-hits test), not folded into the same signal.
@@ -307,6 +376,7 @@ describe('EvidenceRetrievalService', () => {
     mockDocumentVersionModel.find.mockResolvedValueOnce([
       { _id: withdrawnVersionId, sha256: 'a'.repeat(64), withdrawnAt: new Date() },
     ]);
+    mockDocumentModel.find.mockResolvedValueOnce([]);
 
     const result = await service.retrieve({
       questionText: 'What is the cap rate?',

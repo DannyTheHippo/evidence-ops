@@ -1,11 +1,14 @@
 import { HttpStatus } from '@nestjs/common';
 import type { ApiResponseOptions } from '@nestjs/swagger';
+import { WorkflowRunResponseDto } from '../dtos/response/workflow-run.response.dto';
 
 const exampleRunningRun = {
   id: '65f1c2e4a1b2c3d4e5f6a7b8',
   workflowId: 'a3f1b2c4-5678-4d9e-9abc-1234567890ab',
   workflowType: 'resolve-conflict',
   status: 'running',
+  subjectId: '65f1c2e4a1b2c3d4e5f6a7c0',
+  subjectType: 'Answer',
   createdAt: '2026-07-01T00:00:00.000Z',
 };
 
@@ -14,7 +17,10 @@ export const workflowRunsApiExamples: Record<string, ApiResponseOptions> = {
     status: HttpStatus.OK,
     description:
       "Runs for the caller's tenant, most recent first. Filters to a single workflow when " +
-      'workflowId is given; omitting it lists every run.',
+      'workflowId is given, and/or to a status or workflowType — both match the durable row, ' +
+      'never the live engine (see WorkflowRunResponseDto.status). Omitting every filter lists ' +
+      'every run.',
+    type: WorkflowRunResponseDto,
     examples: {
       example: {
         summary: 'One running run',

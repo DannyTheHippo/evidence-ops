@@ -1,5 +1,6 @@
 import { HttpStatus } from '@nestjs/common';
 import type { ApiResponseOptions } from '@nestjs/swagger';
+import { ConflictResponseDto } from '../dtos/response/conflict.response.dto';
 
 const exampleConflict = {
   id: '65f1c2e4a1b2c3d4e5f6a7b8',
@@ -24,6 +25,7 @@ const exampleConflict = {
     },
   ],
   magnitude: 0.0085,
+  magnitudeUnit: 'ratio',
   status: 'open',
   createdAt: '2026-07-01T00:00:00.000Z',
   // `cap_rate` has no configured `authorityOrder` (see `metric-ontology.ts`), so the survivorship
@@ -42,6 +44,7 @@ const exampleResolutionRequestedRun = {
 export const conflictsApiExamples: Record<string, ApiResponseOptions> = {
   list: {
     status: HttpStatus.OK,
+    type: [ConflictResponseDto],
     description: 'Paginated list of detected conflicts.',
     examples: {
       example: {

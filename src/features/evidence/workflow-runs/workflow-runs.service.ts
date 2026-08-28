@@ -67,6 +67,8 @@ export interface WorkflowRunResult {
   readonly workflowType?: WorkflowRunType;
   readonly status: WorkflowRunStatus;
   readonly errorMessage?: string;
+  readonly subjectId?: string;
+  readonly subjectType?: string;
   readonly createdAt: Date;
 }
 
@@ -352,21 +354,28 @@ export class WorkflowRunsService {
   }
 
   /**
-   * Tenant-scoped listing, optionally filtered by Temporal `workflowId` — the SPA's only way to
-   * link an `ApprovalResponseDto` (which exposes `workflowId`, not the Mongo `_id`) to its run
-   * timeline. Omitting `workflowId` lists every run for the tenant, most recent first, which is
-   * how a caller who navigated away from a run without keeping its id finds it again. Deliberately
-   * does not refresh against the live engine the way `findById` does: a caller lands here to find
-   * the `_id` to link to, then immediately follows with `GET /workflow-runs/:id`, which already
-   * does the best-effort refresh — refreshing twice would be a redundant Temporal round-trip for a
-   * listing view.
+   * Tenant-scoped listing, optionally filtered by Temporal `workflowId`, `status`, and
+   * `workflowType` — `workflowId` is the SPA's only way to link an `ApprovalResponseDto` (which
+   * exposes `workflowId`, not the Mongo `_id`) to its run timeline. Omitting every filter lists
+   * every run for the tenant, most recent first, which is how a caller who navigated away from a
+   * run without keeping its id finds it again. Deliberately does not refresh against the live
+   * engine the way `findById` does: a caller lands here to find the `_id` to link to, then
+   * immediately follows with `GET /workflow-runs/:id`, which already does the best-effort refresh
+   * — refreshing twice would be a redundant Temporal round-trip for a listing view. This also means
+   * `status` filters against the durable row exactly as stored, not the live engine's current
+   * state — a run can look stale here for as long as it goes between activity updates.
    */
   async listByWorkflowId(
     dto: ListWorkflowRunsRequestDto,
     actorId: string,
     tenantId: string,
   ): Promise<DocumentResultWithCount<WorkflowRunResult>> {
-    const filter = { tenantId, ...(dto.workflowId ? { workflowId: dto.workflowId } : {}) };
+    const filter = {
+      tenantId,
+      ...(dto.workflowId ? { workflowId: dto.workflowId } : {}),
+      ...(dto.status ? { status: dto.status } : {}),
+      ...(dto.workflowType ? { workflowType: dto.workflowType } : {}),
+    };
 
     const [runs, count] = await Promise.all([
       this.workflowRunModel.find(filter, null, {
@@ -414,6 +423,11 @@ export class WorkflowRunsService {
       workflowType: run.workflowType,
       status: statusOverride ?? run.status,
       errorMessage: run.errorMessage,
+      // `answerId` is the only subject reference the schema carries today; no current writer of
+      // `resolve-conflict` or `sync-source` rows sets it, so this pair is populated only for a row
+      // that does.
+      subjectId: run.answerId?.toString(),
+      subjectType: run.answerId ? 'Answer' : undefined,
       createdAt: run.createdAt,
     };
   }

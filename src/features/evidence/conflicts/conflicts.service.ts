@@ -1069,6 +1069,7 @@ export class ConflictsService {
       factIds: conflict.factIds.map((id) => id.toString()),
       values,
       magnitude: conflict.magnitude,
+      magnitudeUnit: conflict.magnitudeUnit,
       status: conflict.status,
       createdAt: conflict.createdAt,
       stale,

@@ -3,6 +3,10 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { TypedConfigService } from '../../../config/environment/typed-config.service';
 import {
+  Document,
+  DocumentDocument,
+} from '../../../database/schemas/evidence/document/document.schema';
+import {
   DocumentVersion,
   DocumentVersionDocument,
 } from '../../../database/schemas/evidence/document-version/document-version.schema';
@@ -30,6 +34,8 @@ export interface RetrieveEvidenceInput {
  * field-by-field. `sha256` isn't on `EvidenceChunk` or the store's hit metadata at all — it lives
  * on `DocumentVersion` (content-addressing, see that schema) — so this service is the one place
  * that joins a retrieval hit back to its version's hash before a citation can be built against it.
+ * The same join also resolves `documentTitle` off `Document`, for callers (the retrieval endpoint,
+ * the MCP `search_evidence` tool) that display a hit's source rather than only citing it.
  */
 @Injectable()
 export class EvidenceRetrievalService {
@@ -39,6 +45,9 @@ export class EvidenceRetrievalService {
 
     @InjectModel(DocumentVersion.name)
     private readonly documentVersionModel: Model<DocumentVersionDocument>,
+
+    @InjectModel(Document.name)
+    private readonly documentModel: Model<DocumentDocument>,
 
     private readonly config: TypedConfigService,
 
@@ -115,6 +124,18 @@ export class EvidenceRetrievalService {
       versions.filter((version) => version.withdrawnAt).map((version) => version._id.toString()),
     );
 
+    // Same shape as the version lookup above, joined on `documentId` instead of
+    // `documentVersionId`: a document's title outlives any one version, so it is not on
+    // `DocumentVersion` at all.
+    const documentIds = [...new Set(hits.map((hit) => hit.metadata.documentId))];
+    const documents = await this.documentModel.find({
+      _id: { $in: documentIds.map((id) => new Types.ObjectId(id)) },
+      tenantId: input.tenantId,
+    });
+    const titleByDocumentId = new Map(
+      documents.map((document) => [document._id.toString(), document.title]),
+    );
+
     this.logger.debug(
       `Retrieved ${hits.length} chunk(s) across ${versionIds.length} document version(s) for question '${input.questionText}'`,
     );
@@ -134,12 +155,29 @@ export class EvidenceRetrievalService {
           );
         }
 
+        // `.get` misses on a `Document` with an empty-string title just like it does on a
+        // deleted one, so this checks presence explicitly rather than truthiness — unlike
+        // `sha256` above, `title` has no fixed length that makes an empty value implausible.
+        const documentTitle = titleByDocumentId.get(hit.metadata.documentId);
+        if (documentTitle === undefined) {
+          // Same data-integrity fault as the sha256 case above, on the document rather than the
+          // version: a retrieval hit only ever carries a `documentId` the hybrid store read
+          // straight off a persisted `EvidenceChunk`, so a miss here means the owning `Document`
+          // was deleted out from under still-indexed chunks.
+          throw new InternalServerErrorException(
+            `Evidence chunk '${hit.id}' references document '${hit.metadata.documentId}', which no longer exists`,
+          );
+        }
+
         return {
           chunkId: hit.id,
           docVersionId: hit.metadata.documentVersionId,
           sha256,
           text: hit.metadata.text,
           locator: hit.metadata.locator,
+          score: hit.score,
+          documentId: hit.metadata.documentId,
+          documentTitle,
         };
       })
       // Restores the caller's requested count after the over-fetch above.

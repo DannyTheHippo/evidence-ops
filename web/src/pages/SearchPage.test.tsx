@@ -17,6 +17,10 @@ const chunk: RetrievedChunkView = {
   sha256: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
   text: 'Cap rate for Northgate is 6.1%.',
   locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+  documentId: 'doc-1',
+  documentTitle: 'Northgate lease abstract',
+  // A realistic fused RRF value, near the ~0.0328 ceiling rather than a 0-1 similarity.
+  score: 0.0328,
 };
 
 function renderPage() {

@@ -35,7 +35,11 @@ export class WorkflowRunResponseDto {
   @ApiProperty({
     example: 'running',
     enum: WORKFLOW_RUN_STATUSES,
-    description: 'Run status — best-effort refreshed from the live engine, durable row on failure.',
+    description:
+      'Run status. On GET /workflow-runs/:id and the SSE stream, best-effort refreshed from the ' +
+      'live engine (cached up to 15s, falling back to this durable value on an engine failure). ' +
+      'On the list endpoint, always the durable row as last written by the workflow — the list ' +
+      'never queries the engine, so a status filter there matches stored state, not live state.',
   })
   status: WorkflowRunStatus;
 
@@ -46,6 +50,24 @@ export class WorkflowRunResponseDto {
     required: false,
   })
   errorMessage?: string;
+
+  @Expose()
+  @ApiProperty({
+    example: '65f1c2e4a1b2c3d4e5f6a7c0',
+    description:
+      'Identifier of the entity this run acted on, present when the run carries a subject ' +
+      'reference. Read alongside subjectType, never alone.',
+    required: false,
+  })
+  subjectId?: string;
+
+  @Expose()
+  @ApiProperty({
+    example: 'Answer',
+    description: "The subjectId's entity type, present exactly when subjectId is.",
+    required: false,
+  })
+  subjectType?: string;
 
   @Expose()
   @ApiProperty({ example: '2026-07-01T00:00:00.000Z', description: 'Run creation timestamp.' })

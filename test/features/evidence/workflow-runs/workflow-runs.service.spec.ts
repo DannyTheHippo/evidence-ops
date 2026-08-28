@@ -180,14 +180,17 @@ describe('WorkflowRunsService', () => {
   });
 
   describe('listByWorkflowId', () => {
-    it('should page runs by workflowId, never refreshing from the live engine, and record an audit event scoped to the actor', async () => {
+    it('should page runs by workflowId, never refreshing from the live engine, and record an audit event scoped to the actor, projecting a subject reference from answerId', async () => {
       const actorId = new Types.ObjectId().toString();
       const id = new Types.ObjectId();
+      const answerId = new Types.ObjectId();
       const run = {
         _id: id,
         workflowId: 'wf-1',
+        workflowType: 'resolve-conflict',
         status: 'running',
         errorMessage: undefined,
+        answerId,
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
       };
       mockWorkflowRunModel.find.mockResolvedValueOnce([run]);
@@ -221,12 +224,45 @@ describe('WorkflowRunsService', () => {
           {
             id: id.toString(),
             workflowId: 'wf-1',
+            workflowType: 'resolve-conflict',
             status: 'running',
             errorMessage: undefined,
+            subjectId: answerId.toString(),
+            subjectType: 'Answer',
             createdAt: run.createdAt,
           },
         ],
         count: 1,
+      });
+    });
+
+    it('should combine status and workflowType filters with workflowId and tenant scoping', async () => {
+      const actorId = new Types.ObjectId().toString();
+      mockWorkflowRunModel.find.mockResolvedValueOnce([]);
+      mockWorkflowRunModel.countDocuments.mockResolvedValueOnce(0);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      await service.listByWorkflowId(
+        { workflowId: 'wf-1', status: 'failed', workflowType: 'sync-source', skip: 0, limit: 20 },
+        actorId,
+        'acme-corp',
+      );
+
+      expect(mockWorkflowRunModel.find).toHaveBeenCalledWith(
+        {
+          workflowId: 'wf-1',
+          status: 'failed',
+          workflowType: 'sync-source',
+          tenantId: 'acme-corp',
+        },
+        null,
+        { sort: { createdAt: -1 }, skip: 0, limit: 20 },
+      );
+      expect(mockWorkflowRunModel.countDocuments).toHaveBeenCalledWith({
+        workflowId: 'wf-1',
+        status: 'failed',
+        workflowType: 'sync-source',
+        tenantId: 'acme-corp',
       });
     });
 

@@ -1,8 +1,11 @@
 import type { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import type { Model } from 'mongoose';
-import { Types } from 'mongoose';
 import request from 'supertest';
+import {
+  Document,
+  DocumentDocument,
+} from '../../src/database/schemas/evidence/document/document.schema';
 import {
   DocumentVersion,
   DocumentVersionDocument,
@@ -18,15 +21,28 @@ interface RetrievedChunkBody {
   sha256: string;
   text: string;
   locator: unknown;
+  documentId: string;
+  documentTitle: string;
+  score: number;
 }
 
-const RETRIEVED_CHUNK_KEYS = ['chunkId', 'docVersionId', 'sha256', 'text', 'locator'].sort();
+const RETRIEVED_CHUNK_KEYS = [
+  'chunkId',
+  'docVersionId',
+  'sha256',
+  'text',
+  'locator',
+  'documentId',
+  'documentTitle',
+  'score',
+].sort();
 
 describe('Retrieval (e2e)', () => {
   let app: INestApplication;
   let cookie: string;
   let tenantId: string;
   let fakeRetrievalStore: FakeRetrievalStore;
+  let documentModel: Model<DocumentDocument>;
   let documentVersionModel: Model<DocumentVersionDocument>;
 
   beforeAll(async () => {
@@ -36,6 +52,7 @@ describe('Retrieval (e2e)', () => {
     ({ cookie, tenantId } = await registerTestUser(app, credentials));
 
     fakeRetrievalStore = app.get<FakeRetrievalStore>(RETRIEVAL_STORE);
+    documentModel = app.get<Model<DocumentDocument>>(getModelToken(Document.name));
     documentVersionModel = app.get<Model<DocumentVersionDocument>>(
       getModelToken(DocumentVersion.name),
     );
@@ -82,9 +99,15 @@ describe('Retrieval (e2e)', () => {
     });
 
     it('returns hits as { docs, count } with the exact chunk key set, scoped to the caller tenant', async () => {
+      const document = await documentModel.create({
+        title: 'Northgate Business Park — Q3 Rent Roll',
+        sourceKind: 'pdf',
+        mimeType: 'application/pdf',
+        tenantId,
+      });
       const version = await documentVersionModel.create({
         tenantId,
-        documentId: new Types.ObjectId(),
+        documentId: document._id,
         versionNumber: 1,
         sha256: 'a'.repeat(64),
         sizeBytes: 100,
@@ -97,6 +120,7 @@ describe('Retrieval (e2e)', () => {
           metadata: {
             text: 'The cap rate for Northgate Business Park is approximately 6.10%.',
             locator: { kind: 'pdf-page', page: 3, extractorVersion: 'v1' },
+            documentId: document._id.toString(),
             documentVersionId: version._id.toString(),
             tenantId,
           },
@@ -116,6 +140,9 @@ describe('Retrieval (e2e)', () => {
       expect(body.docs[0].chunkId).toBe('chunk-1');
       expect(body.docs[0].docVersionId).toBe(version._id.toString());
       expect(body.docs[0].sha256).toBe(version.sha256);
+      expect(body.docs[0].documentId).toBe(document._id.toString());
+      expect(body.docs[0].documentTitle).toBe(document.title);
+      expect(body.docs[0].score).toBe(1);
       // Asserting the exact key set is the only gate that catches a response-DTO field missing
       // @Expose() — such a field is silently dropped from the payload with no error anywhere.
       expect(Object.keys(body.docs[0]).sort()).toEqual(RETRIEVED_CHUNK_KEYS);

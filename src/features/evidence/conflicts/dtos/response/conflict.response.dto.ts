@@ -82,6 +82,16 @@ export class ConflictResponseDto {
   magnitude: number;
 
   @Expose()
+  @ApiProperty({
+    example: 'ratio',
+    description:
+      "The unit magnitude is expressed in — the metric's canonicalUnit at detection time, not a " +
+      'fixed unit for the collection. Distinguishes, for example, a cap-rate spread from a ' +
+      'dollar spread, which would otherwise render as an identical bare number.',
+  })
+  magnitudeUnit: string;
+
+  @Expose()
   @ApiProperty({ example: 'open', enum: CONFLICT_STATUSES, description: 'Conflict status.' })
   status: ConflictStatus;
 

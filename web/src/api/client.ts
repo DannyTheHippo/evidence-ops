@@ -395,6 +395,16 @@ export interface RetrievedChunkView {
   sha256: string;
   text: string;
   locator: Locator;
+  documentId: string;
+  documentTitle: string;
+  /**
+   * Fused hybrid-retrieval relevance score (reciprocal rank fusion across the lexical and vector
+   * pipelines). **Not a 0-1 similarity**: it is bounded above by a small constant — two pipelines
+   * over (60 + best rank 1), about 0.0328 — that shrinks as the query widens. Rank this response's
+   * hits against each other with it; never render it as a percentage, compare it across queries,
+   * or test it against a fixed threshold.
+   */
+  score: number;
 }
 
 export function searchEvidence(query: string): Promise<WithCount<RetrievedChunkView>> {
@@ -427,6 +437,12 @@ export interface Conflict {
   factIds: string[];
   values: ConflictValue[];
   magnitude: number;
+  /**
+   * The unit `magnitude` is expressed in. Required to render it at all: without it a cap-rate
+   * spread and a dollar spread are indistinguishable, and magnitudes are not comparable across
+   * rows carrying different units.
+   */
+  magnitudeUnit: string;
   status: ConflictStatus;
   createdAt: string;
   // True when one or more factIds no longer resolve to an ExtractedFact — the document that
@@ -528,6 +544,13 @@ export interface WorkflowRun {
   workflowType?: WorkflowRunType;
   status: WorkflowRunStatus;
   errorMessage?: string;
+  /**
+   * What the run acted on. Derived from the run's `answerId`, so it is populated only for runs
+   * that carry one — a resolve-conflict or sync-source run records no subject today, and reads
+   * back empty. Render the link only when both fields are present.
+   */
+  subjectId?: string;
+  subjectType?: string;
   createdAt: string;
 }
 
@@ -535,13 +558,22 @@ export function getWorkflowRunById(id: string): Promise<WorkflowRun> {
   return request<WorkflowRun>(`/workflow-runs/${id}`);
 }
 
+/**
+ * `status` filters the stored row, not live engine state — the list endpoint never queries the
+ * workflow engine, unlike the detail route and the event stream. A UI must not present this filter
+ * as live.
+ */
 export function listWorkflowRuns(params?: {
   workflowId?: string;
+  status?: WorkflowRunStatus;
+  workflowType?: WorkflowRunType;
   skip?: number;
   limit?: number;
 }): Promise<WithCount<WorkflowRun>> {
   const query = new URLSearchParams();
   if (params?.workflowId) query.set('workflowId', params.workflowId);
+  if (params?.status) query.set('status', params.status);
+  if (params?.workflowType) query.set('workflowType', params.workflowType);
   if (params?.skip !== undefined) query.set('skip', String(params.skip));
   if (params?.limit !== undefined) query.set('limit', String(params.limit));
   const qs = query.toString();
@@ -833,6 +865,22 @@ export async function removeUser(id: string): Promise<void> {
  * against the same `User.tokenVersion` a session cookie is checked against. */
 export function revokeUserSessions(id: string): Promise<User> {
   return request<User>(`/users/${id}/revoke-sessions`, { method: 'POST' });
+}
+
+// ── Metrics ──────────────────────────────────────────────────────────────
+
+/** One entry of the built-in metric ontology: the id facts and conflicts carry on the wire, the
+ * label to show a reader instead of that id, and the unit the metric is normalised to. */
+export interface Metric {
+  id: string;
+  label: string;
+  canonicalUnit: string;
+}
+
+/** The full ontology, a fixed set rather than a paginated collection. Read-only: metrics are part
+ * of the deployed code, so there is no route that adds or edits one. */
+export function listMetrics(): Promise<Metric[]> {
+  return request<Metric[]>('/metrics');
 }
 
 // ── Canonical entities ───────────────────────────────────────────────────
