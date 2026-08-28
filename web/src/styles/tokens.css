@@ -61,8 +61,8 @@
   --text-base: 0.875rem;
   --text-md: 0.9375rem;
   --text-lg: 1.125rem;
-  --text-xl: 1.5rem;
-  --text-2xl: 1.875rem;
+  --text-xl: 1.3125rem;
+  --text-2xl: 1.5rem;
   --text-mono-id: 0.8125rem;
   --tracking-mono-id: 0.01em;
   --leading-tight: 1.25;
@@ -79,8 +79,6 @@
   --space-5: 1.25rem;
   --space-6: 1.5rem;
   --space-8: 2rem;
-  --space-10: 2.5rem;
-  --space-12: 3rem;
   /* Density — semantic aliases over the spacing scale, tunable independently of it: row rhythm
      for an actionable/table row, and the gap between a claim and its evidence in the apparatus. */
   --density-row: var(--space-3);
@@ -95,6 +93,16 @@
   --shadow-pop: 0 2px 6px rgba(16, 20, 28, 0.08), 0 12px 32px rgba(16, 20, 28, 0.16);
   --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--signal);
   --ledger-bar-height: 8px;
+
+  /* Controls — `--control-h` is shared by `.btn`, `.field input` and `.select`, so a button and a
+     field standing on the same row render at the same height; `--control-h-sm` is the compact
+     button's. `--control-pad-x` is the horizontal padding for all of them. `--control-pad-y` is
+     spent only on the two controls that take padding instead of a height — the textarea and the
+     file input — since a height-driven control needs no vertical padding to centre its text. */
+  --control-h: 36px;
+  --control-h-sm: 28px;
+  --control-pad-x: var(--space-4);
+  --control-pad-y: var(--space-2);
 
   /* Motion — cross-cutting timing values for transitions and looping animations, named by role
      rather than speed so a call site never has to guess which token maps to which duration. */
