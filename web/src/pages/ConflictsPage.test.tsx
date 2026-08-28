@@ -10,23 +10,15 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-const documentVersion = {
-  id: 'docver-1',
+// The batch lookup row for `docver-1` — every fixture conflict cites this same version, matching
+// `documents/versions/lookup`'s response shape rather than the single-document detail shape.
+const versionLookup = {
+  versionId: 'docver-1',
+  documentId: 'doc-1',
+  documentTitle: 'Rent Roll Q1',
   versionNumber: 1,
-  sha256: 'abc',
-  sizeBytes: 10,
-  ingestionStatus: 'completed',
-  createdAt: new Date().toISOString(),
-};
-// Not named `document` — that shadows the jsdom global (see client.ts's own note on
-// `EvidenceDocument` for the same hazard).
-const documentFixture = {
-  id: 'doc-1',
-  title: 'Rent Roll Q1',
   sourceKind: 'pdf',
-  mimeType: 'application/pdf',
-  currentVersion: documentVersion,
-  createdAt: new Date().toISOString(),
+  withdrawn: false,
 };
 
 const openConflict = {
@@ -126,7 +118,7 @@ function renderPage() {
   );
 }
 
-// Interleaves the conflicts fetch, the document-index fetches, and (in some tests) the
+// Interleaves the conflicts fetch, the document-index lookup, and (in some tests) the
 // resolution-request call — dispatch by URL rather than by call order.
 function fetchStub(resolution?: () => Response, conflicts: unknown[] = [openConflict]) {
   return vi.fn((url: string, _init?: RequestInit) => {
@@ -138,11 +130,8 @@ function fetchStub(resolution?: () => Response, conflicts: unknown[] = [openConf
     if (url === '/api/v1/conflicts' || url.startsWith('/api/v1/conflicts?')) {
       return Promise.resolve(jsonResponse({ docs: conflicts, count: conflicts.length }));
     }
-    if (url === '/api/v1/documents' || url.startsWith('/api/v1/documents?')) {
-      return Promise.resolve(jsonResponse({ docs: [documentFixture], count: 1 }));
-    }
-    if (url === '/api/v1/documents/doc-1') {
-      return Promise.resolve(jsonResponse({ ...documentFixture, versions: [documentVersion] }));
+    if (url.startsWith('/api/v1/documents/versions/lookup')) {
+      return Promise.resolve(jsonResponse({ docs: [versionLookup], count: 1 }));
     }
     return Promise.reject(new Error(`Unhandled fetch: ${url}`));
   });
@@ -271,11 +260,8 @@ describe('ConflictsPage', () => {
         if (url === '/api/v1/conflicts' || url.startsWith('/api/v1/conflicts?')) {
           return Promise.resolve(jsonResponse({ docs: [openConflict], count: 47 }));
         }
-        if (url === '/api/v1/documents' || url.startsWith('/api/v1/documents?')) {
-          return Promise.resolve(jsonResponse({ docs: [documentFixture], count: 1 }));
-        }
-        if (url === '/api/v1/documents/doc-1') {
-          return Promise.resolve(jsonResponse({ ...documentFixture, versions: [documentVersion] }));
+        if (url.startsWith('/api/v1/documents/versions/lookup')) {
+          return Promise.resolve(jsonResponse({ docs: [versionLookup], count: 1 }));
         }
         return Promise.reject(new Error(`Unhandled fetch: ${url}`));
       }),
@@ -306,11 +292,8 @@ describe('ConflictsPage', () => {
       if (url === '/api/v1/conflicts' || url.startsWith('/api/v1/conflicts?')) {
         return Promise.resolve(jsonResponse({ docs: [openConflict], count: 47 }));
       }
-      if (url === '/api/v1/documents' || url.startsWith('/api/v1/documents?')) {
-        return Promise.resolve(jsonResponse({ docs: [documentFixture], count: 1 }));
-      }
-      if (url === '/api/v1/documents/doc-1') {
-        return Promise.resolve(jsonResponse({ ...documentFixture, versions: [documentVersion] }));
+      if (url.startsWith('/api/v1/documents/versions/lookup')) {
+        return Promise.resolve(jsonResponse({ docs: [versionLookup], count: 1 }));
       }
       return Promise.reject(new Error(`Unhandled fetch: ${url}`));
     });
@@ -336,11 +319,8 @@ describe('ConflictsPage', () => {
       if (url === '/api/v1/conflicts' || url.startsWith('/api/v1/conflicts?')) {
         return Promise.resolve(jsonResponse({ docs: [openConflict], count: 47 }));
       }
-      if (url === '/api/v1/documents' || url.startsWith('/api/v1/documents?')) {
-        return Promise.resolve(jsonResponse({ docs: [documentFixture], count: 1 }));
-      }
-      if (url === '/api/v1/documents/doc-1') {
-        return Promise.resolve(jsonResponse({ ...documentFixture, versions: [documentVersion] }));
+      if (url.startsWith('/api/v1/documents/versions/lookup')) {
+        return Promise.resolve(jsonResponse({ docs: [versionLookup], count: 1 }));
       }
       return Promise.reject(new Error(`Unhandled fetch: ${url}`));
     });

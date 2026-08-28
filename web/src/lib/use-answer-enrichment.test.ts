@@ -53,29 +53,23 @@ describe('useAnswerEnrichment', () => {
   });
 
   it('resolves the document index for a completed answer carrying citations', async () => {
-    const documentVersion = {
-      id: 'docver-1',
-      versionNumber: 1,
-      sha256: 'abc',
-      sizeBytes: 10,
-      ingestionStatus: 'completed',
-      createdAt: new Date().toISOString(),
-    };
-    const document = {
-      id: 'doc-1',
-      title: 'Rent Roll Q1',
-      sourceKind: 'pdf',
-      mimeType: 'application/pdf',
-      currentVersion: documentVersion,
-      createdAt: new Date().toISOString(),
-    };
-
     const fetchMock = vi.fn((url: string) => {
-      if (url === '/api/v1/documents') {
-        return Promise.resolve(jsonResponse({ docs: [document], count: 1 }));
-      }
-      if (url === '/api/v1/documents/doc-1') {
-        return Promise.resolve(jsonResponse({ ...document, versions: [documentVersion] }));
+      if (url === '/api/v1/documents/versions/lookup?versionIds=docver-1') {
+        return Promise.resolve(
+          jsonResponse({
+            docs: [
+              {
+                versionId: 'docver-1',
+                documentId: 'doc-1',
+                documentTitle: 'Rent Roll Q1',
+                versionNumber: 1,
+                sourceKind: 'pdf',
+                withdrawn: false,
+              },
+            ],
+            count: 1,
+          }),
+        );
       }
       return Promise.reject(new Error(`Unhandled fetch: ${url}`));
     });
@@ -101,6 +95,7 @@ describe('useAnswerEnrichment', () => {
       expect(result.current.documentIndex.get('docver-1')).toEqual({
         documentId: 'doc-1',
         documentTitle: 'Rent Roll Q1',
+        withdrawn: false,
       });
     });
   });

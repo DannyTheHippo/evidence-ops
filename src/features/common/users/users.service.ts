@@ -1,16 +1,26 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import type { ClientSession } from 'mongoose';
 import { Model, Types } from 'mongoose';
+import {
+  Tenant,
+  TenantDocument,
+} from '../../../database/schemas/administration/tenant/tenant.schema';
 import { User, UserDocument } from '../../../database/schemas/administration/user/user.schema';
-import type { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import { UserRole } from '../../../shared/enums/user-role.enum';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import { resolveSort } from '../../../shared/utils/resolve-sort.util';
 import {
+  DEFAULT_USER_SORT_DIRECTION,
+  DEFAULT_USER_SORT_FIELD,
+  type ListUsersRequestDto,
+} from './dtos/request/list-users.request.dto';
+import {
+  AdminGuardUnavailableException,
   LastAdminException,
   UserNotFoundException,
-  UserRestoreFailedException,
 } from './exceptions/users.exception';
 
 export interface UserSummaryResult {
@@ -26,6 +36,9 @@ export class UsersService {
     @InjectModel(User.name)
     private readonly userModel: Model<UserDocument>,
 
+    @InjectModel(Tenant.name)
+    private readonly tenantModel: Model<TenantDocument>,
+
     private readonly auditService: AuditService,
     private readonly logger: AppLogger,
   ) {
@@ -33,7 +46,7 @@ export class UsersService {
   }
 
   async list(
-    pagination: PaginationRequestDto,
+    pagination: ListUsersRequestDto,
     actorId: string,
     tenantId: string,
   ): Promise<DocumentResultWithCount<UserSummaryResult>> {
@@ -41,7 +54,12 @@ export class UsersService {
 
     const [users, count] = await Promise.all([
       this.userModel.find(filter, null, {
-        sort: { createdAt: -1 },
+        sort: resolveSort(
+          pagination.sort,
+          pagination.sortDir,
+          DEFAULT_USER_SORT_FIELD,
+          DEFAULT_USER_SORT_DIRECTION,
+        ),
         skip: pagination.skip,
         limit: pagination.limit,
       }),
@@ -59,25 +77,29 @@ export class UsersService {
   }
 
   /**
-   * Write-then-verify-then-compensate, but only on a write that can actually reduce the tenant's
-   * admin count — `previous.role === Admin && role !== Admin`. Every other transition
-   * (admin→admin, member→admin, member→member) writes the role and returns without paying for a
-   * count query or a compensation, because none of those can take the tenant to zero admins.
+   * Guarded only on a write that can actually reduce the tenant's admin count —
+   * `previous.role === Admin && role !== Admin`. Every other transition (admin→admin,
+   * member→admin, member→member) writes the role and returns without touching the tenant's
+   * admin-guard marker or counting anything, because none of those can take the tenant to zero
+   * admins.
    *
-   * On a guarded write, the role is written first, then the tenant's admin count is read fresh —
-   * never a count taken before the write, which a second concurrent caller could invalidate
-   * before either write lands. The compensation always restores `previous.role`, and the guard
-   * only ever runs when `previous.role` was `Admin`, so every compensation this method performs
-   * writes `admin` back. Compensations can therefore only add admins, never remove one, under any
-   * interleaving of concurrent callers — see `test/features/common/users/users.service.spec.ts`
-   * for the branch-level proof.
+   * The guarded write, the marker touch (`touchAdminGuard`), and the admin count all run inside
+   * one transaction on `session`, in that order. The marker touch is what makes two concurrent
+   * guarded writes in the same tenant collide: MongoDB gives snapshot isolation rather than
+   * serializability, so two transactions demoting two different admins would otherwise never
+   * conflict with each other — each only touches its own user document, and each would
+   * independently see the other's admin still standing. Touching one document every guarded
+   * caller in the tenant shares forces whichever transaction loses the write race to abort with a
+   * write conflict and retry the whole callback against newly committed state, where it re-reads
+   * the real admin count and refuses correctly.
    *
-   * The one gap this leaves: between the unconditional write and the count-check that follows it,
-   * the database genuinely holds zero admins for that instant. A process death in that window
-   * makes the demotion permanent, with no path back through the API. That is a separate, tracked
-   * follow-up — a transaction would not close it either, since MongoDB gives snapshot isolation
-   * rather than serializability, and two transactions demoting two different admins never
-   * conflict with each other.
+   * Because the write, the marker touch, and the count share one transaction, there is no instant
+   * at which the database durably holds a demoted row without also having validated the count
+   * that demotion produced: an abort — a write conflict, a failed count, or the process dying
+   * before commit — leaves the tenant exactly as it stood before this call. Only
+   * `LastAdminException` gets audited as a refusal; any other abort (a missing user, a missing
+   * tenant registry row) propagates without one, since neither ever put this tenant's admin count
+   * at risk.
    */
   async changeRole(
     id: string,
@@ -89,99 +111,121 @@ export class UsersService {
       throw new UserNotFoundException(`User '${id}' not found`);
     }
 
-    const previous = await this.userModel.findOneAndUpdate(
-      { _id: id, tenantId },
-      { $set: { role } },
-    );
-    if (!previous) {
-      throw new UserNotFoundException(`User '${id}' not found`);
-    }
+    const session = await this.userModel.startSession();
+    try {
+      const result = await session.withTransaction(async () => {
+        const previous = await this.userModel.findOneAndUpdate(
+          { _id: id, tenantId },
+          { $set: { role } },
+          { session },
+        );
+        if (!previous) {
+          throw new UserNotFoundException(`User '${id}' not found`);
+        }
 
-    const canReduceAdminCount = previous.role === UserRole.Admin && role !== UserRole.Admin;
-    if (canReduceAdminCount && !(await this.hasRemainingAdmin(tenantId))) {
-      await this.userModel.updateOne({ _id: id, tenantId }, { $set: { role: previous.role } });
+        const canReduceAdminCount = previous.role === UserRole.Admin && role !== UserRole.Admin;
+        if (canReduceAdminCount) {
+          await this.touchAdminGuard(tenantId, session);
+          const adminCount = await this.userModel.countDocuments(
+            { tenantId, role: UserRole.Admin },
+            { session },
+          );
+          if (adminCount === 0) {
+            throw new LastAdminException(
+              `Tenant '${tenantId}' must always keep at least one admin; changing user '${id}' to '${role}' would leave none`,
+            );
+          }
+        }
+
+        return {
+          id: previous._id.toString(),
+          email: previous.email,
+          role,
+          createdAt: previous.createdAt,
+        };
+      });
+
       await this.auditService.record({
-        action: 'users.role-change-refused',
+        action: 'users.role-changed',
         actorId,
         subject: { entityType: 'User', entityId: id },
         tenantId,
       });
-      throw new LastAdminException(
-        `Tenant '${tenantId}' must always keep at least one admin; changing user '${id}' to '${role}' would leave none`,
-      );
+      this.logger.debug(`Changed role for user '${id}' to '${role}' in tenant '${tenantId}'`);
+
+      return result;
+    } catch (error) {
+      if (error instanceof LastAdminException) {
+        await this.auditService.record({
+          action: 'users.role-change-refused',
+          actorId,
+          subject: { entityType: 'User', entityId: id },
+          tenantId,
+        });
+      }
+      throw error;
+    } finally {
+      await session.endSession();
     }
-
-    await this.auditService.record({
-      action: 'users.role-changed',
-      actorId,
-      subject: { entityType: 'User', entityId: id },
-      tenantId,
-    });
-
-    this.logger.debug(`Changed role for user '${id}' to '${role}' in tenant '${tenantId}'`);
-
-    return {
-      id: previous._id.toString(),
-      email: previous.email,
-      role,
-      createdAt: previous.createdAt,
-    };
   }
 
   /**
-   * Same guarded write-then-verify-then-compensate shape as `changeRole` — see that method's doc
-   * comment for the concurrency argument and its one remaining gap. Guarded only when
-   * `removed.role === Admin`; removing a member never touches the admin count, so it skips
-   * straight to the audit record.
+   * Same guarded-transaction shape as `changeRole` — see that method's doc comment for the
+   * write-conflict mechanics. Guarded only when `removed.role === Admin`; removing a member never
+   * touches the admin count, so it skips straight past the marker touch and the count.
    *
-   * `create` cannot stand in for the revert here: `AuditableDocument`'s `pre('save')` hook stamps
-   * a fresh `createdBy`/`updatedBy` (and Mongoose mints a fresh `createdAt`/`updatedAt`) on every
-   * document it treats as new, which a refused removal must not do — the row is being restored
-   * exactly as it stood, not created. The compensating insert goes through the driver directly,
-   * bypassing `auditablePlugin` and `tenantScopePlugin` entirely. That is correct only because the
-   * document being restored is one this same call just read back out of a tenant-scoped query —
-   * nothing about it needs either plugin's help.
+   * Because the delete and the count share one transaction, an abort — a write conflict, a failed
+   * count, or the process dying before commit — rolls the delete back along with it: there is no
+   * instant at which a refused removal is durably deleted while its refusal is only decided
+   * afterwards, so nothing needs restoring.
    */
   async remove(id: string, actorId: string, tenantId: string): Promise<void> {
     if (!Types.ObjectId.isValid(id)) {
       throw new UserNotFoundException(`User '${id}' not found`);
     }
 
-    const removed = await this.userModel.findOneAndDelete({ _id: id, tenantId });
-    if (!removed) {
-      throw new UserNotFoundException(`User '${id}' not found`);
-    }
+    const session = await this.userModel.startSession();
+    try {
+      await session.withTransaction(async () => {
+        const removed = await this.userModel.findOneAndDelete({ _id: id, tenantId }, { session });
+        if (!removed) {
+          throw new UserNotFoundException(`User '${id}' not found`);
+        }
 
-    if (removed.role === UserRole.Admin && !(await this.hasRemainingAdmin(tenantId))) {
-      try {
-        await this.userModel.collection.insertOne(removed.toObject());
-      } catch (error) {
-        throw new UserRestoreFailedException(
-          `Removing user '${id}' from tenant '${tenantId}' was refused to keep the tenant's last ` +
-            `admin, but restoring the row failed; the account is deleted and needs manual recovery`,
-          error,
-        );
-      }
+        if (removed.role === UserRole.Admin) {
+          await this.touchAdminGuard(tenantId, session);
+          const adminCount = await this.userModel.countDocuments(
+            { tenantId, role: UserRole.Admin },
+            { session },
+          );
+          if (adminCount === 0) {
+            throw new LastAdminException(
+              `Tenant '${tenantId}' must always keep at least one admin; removing user '${id}' would leave none`,
+            );
+          }
+        }
+      });
 
       await this.auditService.record({
-        action: 'users.remove-refused',
+        action: 'users.removed',
         actorId,
         subject: { entityType: 'User', entityId: id },
         tenantId,
       });
-      throw new LastAdminException(
-        `Tenant '${tenantId}' must always keep at least one admin; removing user '${id}' would leave none`,
-      );
+      this.logger.debug(`Removed user '${id}' from tenant '${tenantId}'`);
+    } catch (error) {
+      if (error instanceof LastAdminException) {
+        await this.auditService.record({
+          action: 'users.remove-refused',
+          actorId,
+          subject: { entityType: 'User', entityId: id },
+          tenantId,
+        });
+      }
+      throw error;
+    } finally {
+      await session.endSession();
     }
-
-    await this.auditService.record({
-      action: 'users.removed',
-      actorId,
-      subject: { entityType: 'User', entityId: id },
-      tenantId,
-    });
-
-    this.logger.debug(`Removed user '${id}' from tenant '${tenantId}'`);
   }
 
   /**
@@ -222,9 +266,30 @@ export class UsersService {
     return this.toResult(revoked);
   }
 
-  private async hasRemainingAdmin(tenantId: string): Promise<boolean> {
-    const adminCount = await this.userModel.countDocuments({ tenantId, role: UserRole.Admin });
-    return adminCount > 0;
+  /**
+   * Increments the tenant registry row's guard counter by one, inside the caller's transaction.
+   * `$inc` always registers a write — unlike a `$set` of a value that might already match, which
+   * MongoDB is free to skip, leaving no write intent and nothing for a concurrent transaction to
+   * collide with. Every guarded caller in a tenant touches the same row, so the first to commit
+   * forces every other concurrent guarded caller to abort with a write conflict and retry against
+   * the state that commit produced.
+   *
+   * Fails closed: a tenant with no registry row cannot be a real caller path (every tenant is
+   * created before its first user), so a `matchedCount` of zero here means the invariant this
+   * guard exists to protect cannot be evaluated, not that it holds — it throws rather than letting
+   * the calling transaction commit unguarded.
+   */
+  private async touchAdminGuard(tenantId: string, session: ClientSession): Promise<void> {
+    const result = await this.tenantModel.updateOne(
+      { tenantId },
+      { $inc: { adminGuardEpoch: 1 } },
+      { session },
+    );
+    if (result.matchedCount === 0) {
+      throw new AdminGuardUnavailableException(
+        `Tenant '${tenantId}' has no registry row to guard its admin count with`,
+      );
+    }
   }
 
   private toResult(user: UserDocument): UserSummaryResult {

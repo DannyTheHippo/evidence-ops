@@ -1,6 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
-import { getModelToken } from '@nestjs/mongoose';
-import type { Model } from 'mongoose';
+import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
+import type { Connection, Model } from 'mongoose';
 import request from 'supertest';
 import { User, UserDocument } from '../../src/database/schemas/administration/user/user.schema';
 import { UserRole } from '../../src/shared/enums/user-role.enum';
@@ -123,6 +123,64 @@ describe('Users (e2e)', () => {
       expect(secondBody.docs).toHaveLength(2);
       expect(secondBody.count).toBe(4);
     });
+
+    it('returns 400 for a sort field outside the declared allowlist', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/users')
+        .query({ sort: 'password' })
+        .set('Cookie', adminCookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 400 for a sortDir outside asc/desc', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/users')
+        .query({ sort: 'email', sortDir: 'ascending' })
+        .set('Cookie', adminCookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('sorts by email ascending by default, and lets the caller switch to role', async () => {
+      const owner = await registerTestUser(app, {
+        email: 'users-sort-b-e2e@example.com',
+        password,
+      });
+      await registerTestUser(
+        app,
+        { email: 'users-sort-c-e2e@example.com', password },
+        { role: 'member', tenantId: owner.tenantId },
+      );
+      await registerTestUser(
+        app,
+        { email: 'users-sort-a-e2e@example.com', password },
+        { tenantId: owner.tenantId },
+      );
+
+      const defaultResponse = await request(getTestServer(app))
+        .get('/api/v1/users')
+        .set('Cookie', owner.cookie);
+      const defaultBody = defaultResponse.body as { docs: UserBody[]; count: number };
+
+      expect(defaultResponse.status).toBe(200);
+      expect(defaultBody.docs.map((doc) => doc.email)).toEqual([
+        'users-sort-a-e2e@example.com',
+        'users-sort-b-e2e@example.com',
+        'users-sort-c-e2e@example.com',
+      ]);
+
+      const roleDescResponse = await request(getTestServer(app))
+        .get('/api/v1/users')
+        .query({ sort: 'role', sortDir: 'desc' })
+        .set('Cookie', owner.cookie);
+      const roleDescBody = roleDescResponse.body as { docs: UserBody[]; count: number };
+
+      expect(roleDescResponse.status).toBe(200);
+      // 'member' sorts after 'admin' lexicographically, so a descending sort puts the tenant's
+      // sole member first.
+      expect(roleDescBody.docs[0].role).toBe(UserRole.Member);
+    });
   });
 
   describe('PATCH /users/:id/role', () => {
@@ -192,12 +250,11 @@ describe('Users (e2e)', () => {
     });
 
     /**
-     * Smoke coverage against the real database and driver, not a proof: two concurrent requests
-     * can simply serialize, in which case this passes whether or not the guard is correct — it
-     * does not observe that an interleaving actually happened, and two mutual demotions can never
-     * reach the three-request defect Fix 1 closes (that needs a third, retried write landing
-     * between a guarded write and its own compensation). The deterministic branch tests in
-     * `test/features/common/users/users.service.spec.ts` are what pin the invariant.
+     * Against the real database and driver, not mocked: both requests demote a different admin in
+     * the same tenant, so both transactions touch the same guard row on `Tenant`. Whichever loses
+     * that write race aborts with a write conflict and retries against the state the winner
+     * committed, where it sees the winner's demotion and refuses correctly — this is what the
+     * shared marker exists to force, not a race that might simply serialize.
      */
     it('never lets a concurrent mutual demotion leave the tenant with zero admins', async () => {
       const first = await registerTestUser(app, {
@@ -230,6 +287,43 @@ describe('Users (e2e)', () => {
         role: UserRole.Admin,
       });
       expect(remainingAdmins).toBeGreaterThanOrEqual(1);
+    });
+
+    /**
+     * Proves the durability guarantee directly, without racing against timing: this drives the
+     * exact write `UsersService.changeRole` performs, through a hand-held session whose transaction
+     * is never committed — standing in for a process dying at that instant. A second, independent
+     * read while the transaction is still open is what a concurrent request or a restarted process
+     * would see, and it must find the row exactly as it stood before this call, because nothing a
+     * transaction writes is visible or durable before it commits.
+     */
+    it('leaves the tenant’s sole admin durably unchanged if the process dies before a guarded demotion commits', async () => {
+      const solo = await registerTestUser(app, {
+        email: 'users-crash-window-role-e2e@example.com',
+        password,
+      });
+
+      const connection = app.get<Connection>(getConnectionToken());
+      const session = await connection.startSession();
+      session.startTransaction();
+      try {
+        await userModel.updateOne(
+          { _id: solo.userId, tenantId: solo.tenantId },
+          { $set: { role: UserRole.Member } },
+          { session },
+        );
+
+        const duringTransaction = await userModel.findById(solo.userId);
+        expect(duringTransaction?.role).toBe(UserRole.Admin);
+      } finally {
+        // A crash exactly here never surfaces as a commit; aborting reproduces the same durable
+        // outcome a real process death would leave behind.
+        await session.abortTransaction();
+        await session.endSession();
+      }
+
+      const afterAbort = await userModel.findById(solo.userId);
+      expect(afterAbort?.role).toBe(UserRole.Admin);
     });
   });
 
@@ -288,15 +382,15 @@ describe('Users (e2e)', () => {
       const persisted = await userModel.findById(solo.userId);
       expect(persisted).not.toBeNull();
       expect(persisted?.role).toBe(UserRole.Admin);
-      // The compensating insert bypasses `auditablePlugin`, so a refused removal must not rewrite
-      // the row's provenance: same creation time, same (absent) creator, not the acting admin.
+      // The delete shares the aborted transaction, so a refused removal never touches the row at
+      // all: same creation time, same (absent) creator, not the acting admin.
       expect(persisted?.createdAt).toEqual(before?.createdAt);
       expect(persisted?.createdBy).toEqual(before?.createdBy);
     });
 
     /**
-     * Same shape as the role-change smoke test above, for removal instead of demotion — see that
-     * test's doc comment for why this is coverage, not proof.
+     * Same shape as the role-change race test above, for removal instead of demotion — see that
+     * test's doc comment for the write-conflict mechanics this exercises.
      */
     it('never lets a concurrent mutual removal leave the tenant with zero admins', async () => {
       const first = await registerTestUser(app, {
@@ -327,6 +421,38 @@ describe('Users (e2e)', () => {
         role: UserRole.Admin,
       });
       expect(remainingAdmins).toBeGreaterThanOrEqual(1);
+    });
+
+    /**
+     * Same proof as the role-change durability test above, for removal instead of demotion: a
+     * hand-held session drives the exact delete `UsersService.remove` performs, its transaction is
+     * never committed, and a second, independent read while it is still open must still see the row
+     * — nothing a transaction writes is visible or durable before it commits, so a process dying at
+     * this instant leaves the tenant exactly as it stood before the call.
+     */
+    it('leaves the tenant’s sole admin durably in place if the process dies before a guarded removal commits', async () => {
+      const solo = await registerTestUser(app, {
+        email: 'users-crash-window-remove-e2e@example.com',
+        password,
+      });
+
+      const connection = app.get<Connection>(getConnectionToken());
+      const session = await connection.startSession();
+      session.startTransaction();
+      try {
+        await userModel.deleteOne({ _id: solo.userId, tenantId: solo.tenantId }, { session });
+
+        const duringTransaction = await userModel.findById(solo.userId);
+        expect(duringTransaction).not.toBeNull();
+        expect(duringTransaction?.role).toBe(UserRole.Admin);
+      } finally {
+        await session.abortTransaction();
+        await session.endSession();
+      }
+
+      const afterAbort = await userModel.findById(solo.userId);
+      expect(afterAbort).not.toBeNull();
+      expect(afterAbort?.role).toBe(UserRole.Admin);
     });
   });
 

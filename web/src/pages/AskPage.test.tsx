@@ -85,21 +85,14 @@ describe('AskPage', () => {
       createdAt: new Date().toISOString(),
     };
 
-    const documentVersion = {
-      id: 'docver-1',
+    // The batch lookup row for `docver-1`, matching `documents/versions/lookup`'s response shape.
+    const versionLookup = {
+      versionId: 'docver-1',
+      documentId: 'doc-1',
+      documentTitle: 'Rent Roll Q1',
       versionNumber: 1,
-      sha256: 'abc',
-      sizeBytes: 10,
-      ingestionStatus: 'completed',
-      createdAt: new Date().toISOString(),
-    };
-    const document = {
-      id: 'doc-1',
-      title: 'Rent Roll Q1',
       sourceKind: 'pdf',
-      mimeType: 'application/pdf',
-      currentVersion: documentVersion,
-      createdAt: new Date().toISOString(),
+      withdrawn: false,
     };
     const conflicts = {
       docs: [
@@ -132,11 +125,8 @@ describe('AskPage', () => {
         return Promise.resolve(jsonResponse({ id: 'answer-2', runStatus: 'queued' }, 201));
       }
       if (url === '/api/v1/answers/answer-2') return Promise.resolve(jsonResponse(completedAnswer));
-      if (url === '/api/v1/documents') {
-        return Promise.resolve(jsonResponse({ docs: [document], count: 1 }));
-      }
-      if (url === '/api/v1/documents/doc-1') {
-        return Promise.resolve(jsonResponse({ ...document, versions: [documentVersion] }));
+      if (url.startsWith('/api/v1/documents/versions/lookup')) {
+        return Promise.resolve(jsonResponse({ docs: [versionLookup], count: 1 }));
       }
       if (url === '/api/v1/conflicts?limit=100') return Promise.resolve(jsonResponse(conflicts));
       return Promise.reject(new Error(`Unhandled fetch: ${url}`));

@@ -1,6 +1,7 @@
 import { HttpStatus } from '@nestjs/common';
 import type { ApiResponseOptions } from '@nestjs/swagger';
 import { DocumentResponseDto } from '../dtos/response/document.response.dto';
+import { DocumentVersionLookupResponseDto } from '../dtos/response/document-version-lookup.response.dto';
 import { DocumentWithVersionsResponseDto } from '../dtos/response/document-with-versions.response.dto';
 import { EvidenceChunkResponseDto } from '../dtos/response/evidence-chunk.response.dto';
 
@@ -104,6 +105,32 @@ export const documentsApiExamples: Record<string, ApiResponseOptions> = {
           statusCode: HttpStatus.TOO_MANY_REQUESTS,
           message: "User 'user-1' is at its open-stream limit (10)",
           error: 'Too Many Requests',
+        },
+      },
+    },
+  },
+  versionLookup: {
+    status: HttpStatus.OK,
+    description:
+      'Resolves each requested version id to the document it belongs to. An id that does not ' +
+      'resolve — unknown or belonging to another tenant — is silently absent from `docs`, never ' +
+      'a 404: the response may carry fewer rows than requested.',
+    type: DocumentVersionLookupResponseDto,
+    examples: {
+      example: {
+        summary: 'One resolved version',
+        value: {
+          docs: [
+            {
+              versionId: '65f1c2e4a1b2c3d4e5f6a7b9',
+              documentId: '65f1c2e4a1b2c3d4e5f6a7b8',
+              documentTitle: 'Q3 Rent Roll',
+              versionNumber: 1,
+              sourceKind: 'xlsx',
+              withdrawn: false,
+            },
+          ],
+          count: 1,
         },
       },
     },

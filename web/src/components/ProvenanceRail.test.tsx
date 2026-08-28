@@ -109,7 +109,9 @@ describe('ProvenanceRail', () => {
     const c = citation();
     renderRail(
       { kind: 'answered', claims: [{ statement: 'Statement.', citations: [c] }] },
-      new Map([[c.docVersionId, { documentId: 'doc-1', documentTitle: 'comps.xlsx' }]]),
+      new Map([
+        [c.docVersionId, { documentId: 'doc-1', documentTitle: 'comps.xlsx', withdrawn: false }],
+      ]),
     );
 
     const chip = screen.getByRole('link', { name: 'a1b2c3d4…789a · c6d1cd73…c3db' });

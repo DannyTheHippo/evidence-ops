@@ -101,6 +101,25 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.nav-count {
+  margin-left: auto;
+  flex: none;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+.sidebar-link.is-active .nav-count {
+  color: var(--signal);
+}
+/* Only meaningful once the rail hides `.nav-count`'s text — shown in its place below. */
+.nav-count-dot {
+  display: none;
+  flex: none;
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: var(--radius-pill);
+  background: var(--signal);
+}
 
 /* Manual collapse. Mirrors the rail declarations in the `max-width: 1023px` block below — a media
    query and a class cannot be combined into one selector, so the two blocks are kept in step by
@@ -117,8 +136,12 @@
 }
 .sidebar--collapsed .sidebar-brand-label,
 .sidebar--collapsed .sidebar-label,
-.sidebar--collapsed .sidebar-heading {
+.sidebar--collapsed .sidebar-heading,
+.sidebar--collapsed .nav-count {
   display: none;
+}
+.sidebar--collapsed .nav-count-dot {
+  display: block;
 }
 .sidebar--collapsed .sidebar-link {
   justify-content: center;
@@ -178,10 +201,45 @@
   border-bottom: 1px solid var(--hairline);
 }
 .breadcrumb {
+  min-width: 0;
+  display: flex;
+}
+.breadcrumb ol {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+.breadcrumb li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
   font-size: var(--text-sm);
   font-weight: 600;
-  color: var(--ink);
+  color: var(--muted);
   white-space: nowrap;
+}
+.breadcrumb li:not(:first-child)::before {
+  content: '/';
+  font-weight: 400;
+  color: var(--hairline-strong);
+}
+.breadcrumb li:last-child span {
+  color: var(--ink);
+}
+.breadcrumb a {
+  color: inherit;
+}
+.breadcrumb a:hover {
+  color: var(--signal);
+}
+/* Shown only at <=560px, in place of whichever leading crumbs `.breadcrumb-collapse` hides
+   there — see the max-width: 560px block below. */
+.breadcrumb-ellipsis {
+  display: none;
 }
 .connection-status {
   display: flex;
@@ -198,6 +256,21 @@
   align-items: center;
   gap: var(--space-3);
   margin-left: auto;
+}
+/* The SPA never learns a tenant id, so this is the whole tenant-context slot: email plus role,
+   nothing more. Collapses to the account menu's avatar trigger alone below 768px. */
+.topbar-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.topbar-identity-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 14rem;
 }
 .account-avatar {
   display: inline-flex;
@@ -231,8 +304,12 @@
   }
   /* aria-label on the brand and each NavLink carries the accessible name once these are hidden. */
   .sidebar-brand-label,
-  .sidebar-label {
+  .sidebar-label,
+  .nav-count {
     display: none;
+  }
+  .nav-count-dot {
+    display: block;
   }
   /* Group headings are a visual grouping aid only, dropped at rail width along with the space
      to show them; no aria-label substitute needed since they label no interactive control. */
@@ -251,6 +328,11 @@
   .menu-toggle {
     display: inline-flex;
   }
+  /* The account menu's avatar trigger carries the same identity via its sr-only label; the
+     persistent email/role pair is a >=768px affordance only. */
+  .topbar-identity {
+    display: none;
+  }
 }
 
 @media (max-width: 560px) {
@@ -259,12 +341,13 @@
     padding: 0 var(--space-4);
   }
   /* The breadcrumb yields before the controls do: it restates the page title sitting directly
-     below it, while each control in `.topbar-end` is the only way to reach what it does. */
-  .breadcrumb {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
+     below it, while each control in `.topbar-end` is the only way to reach what it does. Every
+     crumb but the last two collapses into the single ellipsis marker above. */
+  .breadcrumb-collapse {
+    display: none;
+  }
+  .breadcrumb-ellipsis {
+    display: flex;
   }
   .topbar-end {
     flex: none;

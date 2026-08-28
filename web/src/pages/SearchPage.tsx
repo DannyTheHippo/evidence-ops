@@ -6,7 +6,7 @@ import EmptyState from '../components/ui/EmptyState';
 import Field from '../components/ui/Field';
 import Skeleton from '../components/ui/Skeleton';
 import { IconSearch } from '../components/icons';
-import { buildDocumentVersionIndex, type ResolvedVersion } from '../lib/document-index';
+import { resolveDocumentVersions, type ResolvedVersion } from '../lib/document-index';
 import { truncateSha256 } from '../lib/identifiers';
 import { formatLocator } from '../lib/locator';
 
@@ -72,13 +72,13 @@ export default function SearchPage() {
 
   // Resolves result document titles/links once there is something to resolve, the same one-call
   // pattern AskPage and ConflictsPage use for citation and conflict-value resolution — one
-  // `buildDocumentVersionIndex()` call per search, never per hit. Failure here must not affect
+  // `resolveDocumentVersions()` call per search, never per hit. Failure here must not affect
   // result rendering — see document-index.ts.
   useEffect(() => {
     if (!results || results.docs.length === 0) return;
     let cancelled = false;
 
-    buildDocumentVersionIndex()
+    resolveDocumentVersions(results.docs.map((chunk) => chunk.docVersionId))
       .then((index) => {
         if (!cancelled) setDocumentIndex(index);
       })

@@ -457,25 +457,6 @@ export function IconUserPlus({ size = 16, className }: IconProps) {
   );
 }
 
-export function IconBarChart({ size = 16, className }: IconProps) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 16 16"
-      aria-hidden="true"
-      focusable="false"
-      className={className}
-      {...strokeProps}
-    >
-      <path d="M2.5 13.5H13.5" />
-      <path d="M4.5 13.5V9.5" />
-      <path d="M8 13.5V6.5" />
-      <path d="M11.5 13.5V3.5" />
-    </svg>
-  );
-}
-
 export function IconTag({ size = 16, className }: IconProps) {
   return (
     <svg
@@ -493,7 +474,7 @@ export function IconTag({ size = 16, className }: IconProps) {
   );
 }
 
-export function IconLayers({ size = 16, className }: IconProps) {
+export function IconUsers({ size = 16, className }: IconProps) {
   return (
     <svg
       width={size}
@@ -504,9 +485,9 @@ export function IconLayers({ size = 16, className }: IconProps) {
       className={className}
       {...strokeProps}
     >
-      <path d="M8 2 1.5 5.5 8 9 14.5 5.5Z" />
-      <path d="M1.5 8 8 11.5 14.5 8" />
-      <path d="M1.5 10.5 8 14 14.5 10.5" />
+      <circle cx="5.5" cy="5" r="2.5" />
+      <path d="M1 14C1 11 2.9 9.5 5.5 9.5C8.1 9.5 10 11 10 14" />
+      <path d="M9.5 5.5A2.25 2.25 0 1 0 9.5 1M11 9.7C13 10.1 14.5 11.5 14.5 14" />
     </svg>
   );
 }

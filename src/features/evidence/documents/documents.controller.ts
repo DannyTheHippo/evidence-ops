@@ -36,8 +36,10 @@ import { documentsApiExamples } from './api-examples/documents.api-examples';
 import { MAX_FILE_SIZE_BYTES } from './documents.constant';
 import { DocumentsService } from './documents.service';
 import { ListDocumentsRequestDto } from './dtos/request/list-documents.request.dto';
+import { LookupDocumentVersionsRequestDto } from './dtos/request/lookup-document-versions.request.dto';
 import { UploadDocumentRequestDto } from './dtos/request/upload-document.request.dto';
 import { DocumentResponseDto } from './dtos/response/document.response.dto';
+import { DocumentVersionLookupResponseDto } from './dtos/response/document-version-lookup.response.dto';
 import { DocumentWithVersionsResponseDto } from './dtos/response/document-with-versions.response.dto';
 import { EvidenceChunkResponseDto } from './dtos/response/evidence-chunk.response.dto';
 import type { UploadedFileLike } from './types/uploaded-file.type';
@@ -172,6 +174,34 @@ export class DocumentsController {
       DocumentWithVersionsResponseDto,
       await this.documentsService.getById(id, user.tenantId),
     );
+  }
+
+  // 'versions/lookup' is two path segments against the three-segment 'versions/:versionId/content'
+  // and 'versions/:versionId/chunks' below, so it cannot collide with either regardless of
+  // declaration order — declared here anyway, grouped with the version-scoped routes it resolves
+  // ids against, so a reader confirms the non-collision at a glance rather than by counting
+  // segments.
+  @Get('versions/lookup')
+  @Version('1')
+  @HttpCode(HttpStatus.OK)
+  @ApiResponse(documentsApiExamples.versionLookup)
+  async lookupVersions(
+    @Query() query: LookupDocumentVersionsRequestDto,
+    @CurrentUser() user: AuthenticatedRequest['user'],
+  ): Promise<WithCountResponseDto<DocumentVersionLookupResponseDto>> {
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    const { docs, count } = await this.documentsService.lookupVersions(
+      query.versionIds,
+      user.tenantId,
+    );
+
+    return {
+      docs: docs.map((doc) => toResponseDto(DocumentVersionLookupResponseDto, doc)),
+      count,
+    };
   }
 
   // Buffered, not streamed: uploads already buffer under `MAX_FILE_SIZE_BYTES`, so returning a

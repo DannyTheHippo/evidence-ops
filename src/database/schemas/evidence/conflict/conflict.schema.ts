@@ -166,3 +166,10 @@ export class Conflict extends AuditableDocument {
 }
 
 export const ConflictSchema = SchemaFactory.createForClass(Conflict);
+
+/**
+ * Backs `ConflictsService.list`'s unfiltered, tenant-scoped, newest-first default — the three
+ * `{tenantId, status, ...}` indexes above only serve a query that also equality-filters on
+ * `status`, which the unfiltered first page does not.
+ */
+ConflictSchema.index({ tenantId: 1, createdAt: -1 }, { name: 'conflicts_tenantId_createdAt' });

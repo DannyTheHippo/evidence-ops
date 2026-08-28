@@ -220,6 +220,13 @@ export function uploadDocument(
   return request<EvidenceDocument>('/documents', { method: 'POST', body: formData });
 }
 
+export type SortDirection = 'asc' | 'desc';
+
+/** The fields `/documents` will actually order by. Deliberately excludes `sizeBytes` and
+ * `ingestionStatus`: both live on `DocumentVersion`, not `Document`, so the server cannot sort a
+ * document list by them and offering the column would write a query it ignores. */
+export type DocumentSortField = 'createdAt' | 'title' | 'sourceKind';
+
 export function listDocuments(params?: {
   skip?: number;
   limit?: number;
@@ -227,11 +234,15 @@ export function listDocuments(params?: {
   // 'needs-ocr' are the corpus-health use cases. An older failed version superseded by a
   // completed one does not match.
   ingestionStatus?: DocumentVersionIngestionStatus;
+  sort?: DocumentSortField;
+  sortDir?: SortDirection;
 }): Promise<WithCount<EvidenceDocument>> {
   const query = new URLSearchParams();
   if (params?.skip !== undefined) query.set('skip', String(params.skip));
   if (params?.limit !== undefined) query.set('limit', String(params.limit));
   if (params?.ingestionStatus !== undefined) query.set('ingestionStatus', params.ingestionStatus);
+  if (params?.sort !== undefined) query.set('sort', params.sort);
+  if (params?.sortDir !== undefined) query.set('sortDir', params.sortDir);
   const qs = query.toString();
   return request<WithCount<EvidenceDocument>>(`/documents${qs ? `?${qs}` : ''}`);
 }
@@ -275,6 +286,30 @@ export type EvidenceChunkView = StrictOmit<Schemas['EvidenceChunkResponseDto'], 
 
 export function listVersionChunks(versionId: string): Promise<WithCount<EvidenceChunkView>> {
   return request<WithCount<EvidenceChunkView>>(`/documents/versions/${versionId}/chunks`);
+}
+
+/** Resolves a `Citation`'s `docVersionId` to the document it belongs to — the join a citation
+ * cannot make on its own, since it carries no `documentId`. An id that does not resolve (unknown,
+ * cross-tenant, or malformed) is silently absent from `docs`, never a 404 — a caller must index
+ * the result by `versionId` rather than assume one row per requested id, or it will index out of
+ * bounds. Hand-written rather than read from `Schemas`: the `{ docs, count }` envelope is never
+ * named in the OpenAPI document, the same gap `WithCount<T>` itself documents above. */
+export interface DocumentVersionLookup {
+  versionId: string;
+  documentId: string;
+  documentTitle: string;
+  versionNumber: number;
+  sourceKind: DocumentSourceKind;
+  withdrawn: boolean;
+}
+
+export function lookupDocumentVersions(
+  versionIds: string[],
+): Promise<WithCount<DocumentVersionLookup>> {
+  const query = new URLSearchParams({ versionIds: versionIds.join(',') });
+  return request<WithCount<DocumentVersionLookup>>(
+    `/documents/versions/lookup?${query.toString()}`,
+  );
 }
 
 // ── Questions & answers ─────────────────────────────────────────────────
@@ -841,13 +876,21 @@ export interface User {
   createdAt: string;
 }
 
+export type UserSortField = 'createdAt' | 'email' | 'role';
+
+/** Defaults to `email` ascending server-side, unlike the other lists' newest-first — a membership
+ * roster is read by name, not by join date. */
 export function listUsers(pagination?: {
   skip?: number;
   limit?: number;
+  sort?: UserSortField;
+  sortDir?: SortDirection;
 }): Promise<WithCount<User>> {
   const query = new URLSearchParams();
   if (pagination?.skip !== undefined) query.set('skip', String(pagination.skip));
   if (pagination?.limit !== undefined) query.set('limit', String(pagination.limit));
+  if (pagination?.sort !== undefined) query.set('sort', pagination.sort);
+  if (pagination?.sortDir !== undefined) query.set('sortDir', pagination.sortDir);
   const qs = query.toString();
   return request<WithCount<User>>(`/users${qs ? `?${qs}` : ''}`);
 }

@@ -349,19 +349,29 @@ describe('App / shell', () => {
       role: 'member',
       createdAt: new Date().toISOString(),
     });
+    // Dispatched by URL rather than answering everything alike: a completed answer also drives the
+    // batch version lookup, which reads a `{ docs, count }` envelope off its response.
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(
-        jsonResponse({
-          id: 'answer-1',
-          questionText: 'What is the cap rate?',
-          runStatus: 'completed',
-          outcome: { kind: 'insufficient_evidence', reason: 'No document mentions the cap rate.' },
-          citations: [],
-          conflictIds: [],
-          createdAt: new Date().toISOString(),
-        }),
-      ),
+      vi.fn((url: string) => {
+        if (url.startsWith('/api/v1/documents/versions/lookup')) {
+          return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+        }
+        return Promise.resolve(
+          jsonResponse({
+            id: 'answer-1',
+            questionText: 'What is the cap rate?',
+            runStatus: 'completed',
+            outcome: {
+              kind: 'insufficient_evidence',
+              reason: 'No document mentions the cap rate.',
+            },
+            citations: [],
+            conflictIds: [],
+            createdAt: new Date().toISOString(),
+          }),
+        );
+      }),
     );
 
     render(

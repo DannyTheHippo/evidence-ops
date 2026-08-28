@@ -17,13 +17,13 @@ import { ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { RequireRole } from '../../../shared/decorators/require-role.decorator';
-import { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
 import { UserRole } from '../../../shared/enums/user-role.enum';
 import { AuthenticatedRequest } from '../../../shared/types/authenticated-request.type';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { usersApiExamples } from './api-examples/users.api-examples';
 import { ChangeRoleRequestDto } from './dtos/request/change-role.request.dto';
+import { ListUsersRequestDto } from './dtos/request/list-users.request.dto';
 import { UserResponseDto } from './dtos/response/user.response.dto';
 import { UsersService } from './users.service';
 
@@ -40,14 +40,14 @@ export class UsersController {
   @ApiResponse(usersApiExamples.list)
   @ApiResponse(usersApiExamples.forbidden)
   async list(
-    @Query() pagination: PaginationRequestDto,
+    @Query() query: ListUsersRequestDto,
     @CurrentUser() user: AuthenticatedRequest['user'],
   ): Promise<WithCountResponseDto<UserResponseDto>> {
     if (!user) {
       throw new UnauthorizedException('No token provided');
     }
 
-    const { docs, count } = await this.usersService.list(pagination, user.userId, user.tenantId);
+    const { docs, count } = await this.usersService.list(query, user.userId, user.tenantId);
 
     return { docs: docs.map((doc) => toResponseDto(UserResponseDto, doc)), count };
   }

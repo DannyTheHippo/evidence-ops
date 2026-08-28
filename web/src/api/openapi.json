@@ -621,6 +621,35 @@
               "example": 20,
               "type": "number"
             }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Field to sort by. Defaults to email.",
+            "schema": {
+              "example": "email",
+              "type": "string",
+              "enum": [
+                "createdAt",
+                "email",
+                "role"
+              ]
+            }
+          },
+          {
+            "name": "sortDir",
+            "required": false,
+            "in": "query",
+            "description": "Sort direction. Defaults to asc.",
+            "schema": {
+              "example": "asc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
           }
         ],
         "responses": {
@@ -1071,6 +1100,35 @@
                 "needs-ocr"
               ]
             }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Field to sort by. Defaults to createdAt.",
+            "schema": {
+              "example": "createdAt",
+              "type": "string",
+              "enum": [
+                "createdAt",
+                "title",
+                "sourceKind"
+              ]
+            }
+          },
+          {
+            "name": "sortDir",
+            "required": false,
+            "in": "query",
+            "description": "Sort direction. Defaults to desc.",
+            "schema": {
+              "example": "desc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
           }
         ],
         "responses": {
@@ -1298,6 +1356,62 @@
                       "statusCode": 404,
                       "message": "Document '65f1c2e4a1b2c3d4e5f6a7b8' not found",
                       "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/documents/versions/lookup": {
+      "get": {
+        "operationId": "DocumentsController_lookupVersions",
+        "parameters": [
+          {
+            "name": "versionIds",
+            "required": true,
+            "in": "query",
+            "description": "Document version ids to resolve, comma-separated in a single querystring value or repeated (versionIds=a&versionIds=b) — both arrive at this handler the same way.",
+            "schema": {
+              "example": [
+                "65f1c2e4a1b2c3d4e5f6a7b9",
+                "65f1c2e4a1b2c3d4e5f6a7ba"
+              ],
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resolves each requested version id to the document it belongs to. An id that does not resolve — unknown or belonging to another tenant — is silently absent from `docs`, never a 404: the response may carry fewer rows than requested.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentVersionLookupResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "One resolved version",
+                    "value": {
+                      "docs": [
+                        {
+                          "versionId": "65f1c2e4a1b2c3d4e5f6a7b9",
+                          "documentId": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "documentTitle": "Q3 Rent Roll",
+                          "versionNumber": 1,
+                          "sourceKind": "xlsx",
+                          "withdrawn": false
+                        }
+                      ],
+                      "count": 1
                     }
                   }
                 }
@@ -4357,6 +4471,60 @@
           "currentVersion",
           "createdAt",
           "versions"
+        ]
+      },
+      "DocumentVersionLookupResponseDto": {
+        "type": "object",
+        "properties": {
+          "versionId": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b9",
+            "description": "Document version identifier."
+          },
+          "documentId": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Owning document identifier."
+          },
+          "documentTitle": {
+            "type": "string",
+            "example": "Q3 Rent Roll",
+            "description": "Owning document title."
+          },
+          "versionNumber": {
+            "type": "number",
+            "example": 1,
+            "description": "Sequential version number, starting at 1."
+          },
+          "sourceKind": {
+            "type": "string",
+            "example": "xlsx",
+            "enum": [
+              "pdf",
+              "docx",
+              "xlsx",
+              "pptx",
+              "csv",
+              "tsv",
+              "txt",
+              "md",
+              "eml"
+            ],
+            "description": "Extractor pipeline kind, for choosing a PDF pane vs. the chunk reader."
+          },
+          "withdrawn": {
+            "type": "boolean",
+            "example": false,
+            "description": "True when this version is soft-withdrawn — it still resolves, but is stale."
+          }
+        },
+        "required": [
+          "versionId",
+          "documentId",
+          "documentTitle",
+          "versionNumber",
+          "sourceKind",
+          "withdrawn"
         ]
       },
       "EvidenceChunkResponseDto": {

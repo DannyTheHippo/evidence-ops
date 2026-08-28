@@ -1,10 +1,11 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { logout } from './api/client';
 import ErrorBoundary from './components/ErrorBoundary';
 import Sidebar, { NAV_LABELS } from './components/shell/Sidebar';
 import Topbar from './components/shell/Topbar';
 import Toaster from './components/ui/Toaster';
+import { useBreadcrumbTrail } from './lib/breadcrumbs';
 import { useSession } from './lib/use-session';
 import InvitePage from './pages/InvitePage';
 import LoginPage from './pages/LoginPage';
@@ -61,13 +62,24 @@ export default function App() {
   // Suspense boundary, so this effect never races the lazy chunk resolving.
   const previousPathname = useRef(location.pathname);
 
-  useEffect(() => {
-    // breadcrumbFor falls back to the brand for a route outside NAV_LABELS — /login and /invite,
-    // which have no nav destination — so qualifying it there would title the tab "Evidence Ops ·
-    // Evidence Ops".
-    const label = breadcrumbFor(location.pathname);
-    document.title = label === 'Evidence Ops' ? label : `${label} · Evidence Ops`;
+  // breadcrumbFor falls back to the brand for a route outside NAV_LABELS — /login and /invite,
+  // which have no nav destination. Memoized so its identity only changes with the pathname: it
+  // feeds `useBreadcrumbTrail` as the fallback trail, and a fresh array literal on every render
+  // would otherwise re-fire the title effect below on every unrelated App re-render.
+  const fallbackLabel = breadcrumbFor(location.pathname);
+  const fallbackTrail = useMemo(() => [{ label: fallbackLabel }], [fallbackLabel]);
+  // The one source `document.title` and the topbar's breadcrumb nav both read: whichever page
+  // most recently called `useBreadcrumbs` publishes here, or the route-derived fallback while
+  // none has.
+  const trail = useBreadcrumbTrail(fallbackTrail);
 
+  useEffect(() => {
+    const label = trail.at(-1)?.label ?? fallbackLabel;
+    // Qualifying the brand's own title would render "Evidence Ops · Evidence Ops".
+    document.title = label === 'Evidence Ops' ? label : `${label} · Evidence Ops`;
+  }, [trail, fallbackLabel]);
+
+  useEffect(() => {
     if (previousPathname.current === location.pathname) return;
     previousPathname.current = location.pathname;
     mainRef.current?.focus();
@@ -152,7 +164,7 @@ export default function App() {
           />
           <div className="shell-main">
             <Topbar
-              breadcrumbLabel={breadcrumbFor(location.pathname)}
+              breadcrumbFallback={fallbackLabel}
               onOpenMenu={() => setDrawerOpen(true)}
               onLogout={() => void handleLogout()}
             />

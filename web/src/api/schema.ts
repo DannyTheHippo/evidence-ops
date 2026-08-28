@@ -260,6 +260,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/documents/versions/lookup': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['DocumentsController_lookupVersions'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/documents/versions/{versionId}/content': {
     parameters: {
       query?: never;
@@ -945,6 +961,39 @@ export interface components {
       createdAt: string;
       /** @description Full version history, oldest first. */
       versions: components['schemas']['DocumentVersionResponseDto'][];
+    };
+    DocumentVersionLookupResponseDto: {
+      /**
+       * @description Document version identifier.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b9
+       */
+      versionId: string;
+      /**
+       * @description Owning document identifier.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      documentId: string;
+      /**
+       * @description Owning document title.
+       * @example Q3 Rent Roll
+       */
+      documentTitle: string;
+      /**
+       * @description Sequential version number, starting at 1.
+       * @example 1
+       */
+      versionNumber: number;
+      /**
+       * @description Extractor pipeline kind, for choosing a PDF pane vs. the chunk reader.
+       * @example xlsx
+       * @enum {string}
+       */
+      sourceKind: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv' | 'tsv' | 'txt' | 'md' | 'eml';
+      /**
+       * @description True when this version is soft-withdrawn — it still resolves, but is stale.
+       * @example false
+       */
+      withdrawn: boolean;
     };
     EvidenceChunkResponseDto: {
       /**
@@ -2016,6 +2065,10 @@ export interface operations {
         skip?: number;
         /** @description Maximum number of documents to return. */
         limit?: number;
+        /** @description Field to sort by. Defaults to email. */
+        sort?: 'createdAt' | 'email' | 'role';
+        /** @description Sort direction. Defaults to asc. */
+        sortDir?: 'asc' | 'desc';
       };
       header?: never;
       path?: never;
@@ -2194,6 +2247,10 @@ export interface operations {
         limit?: number;
         /** @description Filter to documents whose CURRENT version has this ingestionStatus — 'failed' and 'needs-ocr' are the corpus-health use cases. An older failed version superseded by a newer completed one does not match, the same semantics `HomePage.tsx`'s client-side filter already uses. Omit to list every document regardless of ingestion outcome. */
         ingestionStatus?: 'pending' | 'completed' | 'facts-failed' | 'failed' | 'needs-ocr';
+        /** @description Field to sort by. Defaults to createdAt. */
+        sort?: 'createdAt' | 'title' | 'sourceKind';
+        /** @description Sort direction. Defaults to desc. */
+        sortDir?: 'asc' | 'desc';
       };
       header?: never;
       path?: never;
@@ -2360,6 +2417,29 @@ export interface operations {
         };
         content: {
           'application/json': unknown;
+        };
+      };
+    };
+  };
+  DocumentsController_lookupVersions: {
+    parameters: {
+      query: {
+        /** @description Document version ids to resolve, comma-separated in a single querystring value or repeated (versionIds=a&versionIds=b) — both arrive at this handler the same way. */
+        versionIds: string[];
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Resolves each requested version id to the document it belongs to. An id that does not resolve — unknown or belonging to another tenant — is silently absent from `docs`, never a 404: the response may carry fewer rows than requested. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DocumentVersionLookupResponseDto'];
         };
       };
     };

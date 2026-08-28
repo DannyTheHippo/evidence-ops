@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { listConflicts, type Answer } from '../api/client';
 import type { ConflictChunkResolution } from '../components/AnswerView';
-import { buildDocumentVersionIndex, type ResolvedVersion } from './document-index';
+import { resolveDocumentVersions, type ResolvedVersion } from './document-index';
 
 interface AnswerEnrichment {
   documentIndex: Map<string, ResolvedVersion>;
@@ -23,24 +23,6 @@ export function useAnswerEnrichment(answer: Answer | null): AnswerEnrichment {
   const [conflictChunkIndex, setConflictChunkIndex] = useState<
     Map<string, ConflictChunkResolution>
   >(new Map());
-
-  useEffect(() => {
-    if (answer?.runStatus !== 'completed') return;
-    const hasCitations = answer.citations.length > 0;
-    const hasConflict = answer.outcome?.kind === 'conflicting_evidence';
-    if (!hasCitations && !hasConflict) return;
-    let cancelled = false;
-
-    buildDocumentVersionIndex()
-      .then((index) => {
-        if (!cancelled) setDocumentIndex(index);
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-    };
-  }, [answer?.runStatus, answer?.citations, answer?.outcome]);
 
   // Narrowed to this answer's conflictIds; listConflicts({ limit: 100 }) is the API's max page
   // size, so a chunk belonging to a conflict past the first 100 falls back to its raw
@@ -73,6 +55,31 @@ export function useAnswerEnrichment(answer: Answer | null): AnswerEnrichment {
       cancelled = true;
     };
   }, [answer?.runStatus, answer?.outcome, answer?.conflictIds]);
+
+  // Version ids come from the citations an `answered`/`insufficient_evidence` outcome carries
+  // directly, plus — for `conflicting_evidence` — the document versions the chunk-resolution
+  // effect above discovers via `sourceChunkId`. The latter only exist once `conflictChunkIndex`
+  // has populated, which is why this effect also runs on that state rather than on the answer
+  // alone.
+  useEffect(() => {
+    if (answer?.runStatus !== 'completed') return;
+    const versionIds = [
+      ...answer.citations.map((citation) => citation.docVersionId),
+      ...Array.from(conflictChunkIndex.values(), (resolution) => resolution.documentVersionId),
+    ];
+    if (versionIds.length === 0) return;
+    let cancelled = false;
+
+    resolveDocumentVersions(versionIds)
+      .then((index) => {
+        if (!cancelled) setDocumentIndex(index);
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [answer?.runStatus, answer?.citations, conflictChunkIndex]);
 
   return { documentIndex, conflictChunkIndex };
 }

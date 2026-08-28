@@ -14,8 +14,9 @@ import {
   IconPanelLeft,
   IconSearch,
   IconTag,
-  IconUserPlus,
+  IconUsers,
 } from '../icons';
+import { usePendingCounts, type PendingCounts } from '../../lib/use-pending-counts';
 import Dialog from '../ui/Dialog';
 import IconButton from '../ui/IconButton';
 
@@ -24,6 +25,9 @@ interface NavItem {
   label: string;
   icon: ReactElement;
   end?: boolean;
+  // A pending-item count for the Review queue and Organisation badges. `null`/`undefined` and `0`
+  // all render no badge — a count is decoration, never a claim there is nothing to see.
+  count?: number | null;
 }
 
 interface NavGroup {
@@ -32,10 +36,10 @@ interface NavGroup {
 }
 
 /** Flat `to` → `label` pairs for every nav destination, independent of the icon/grouping shape
- * above — the topbar breadcrumb looks a route up here rather than re-deriving it from
+ * below — the topbar breadcrumb fallback looks a route up here rather than re-deriving it from
  * `buildNavGroups`, which also carries an `isAdmin`-gated shape and rendered icon elements it has
  * no use for. */
-// eslint-disable-next-line react-refresh/only-export-components -- non-component export: App.tsx's breadcrumb lookup and this file's own nav-group builder both read it
+// eslint-disable-next-line react-refresh/only-export-components -- non-component export: App.tsx's breadcrumb fallback and this file's own nav-group builder both read it
 export const NAV_LABELS: { to: string; label: string }[] = [
   { to: '/', label: 'Home' },
   { to: '/ask', label: 'Ask' },
@@ -46,14 +50,14 @@ export const NAV_LABELS: { to: string; label: string }[] = [
   { to: '/conflicts', label: 'Conflicts' },
   { to: '/approvals', label: 'Approvals' },
   { to: '/workflow-runs', label: 'Runs' },
-  { to: '/api-keys', label: 'API Keys' },
-  { to: '/audit-events', label: 'Audit Log' },
   { to: '/invitations', label: 'Invitations' },
   { to: '/canonical-entities', label: 'Canonical Entities' },
+  { to: '/audit-events', label: 'Audit Log' },
+  { to: '/api-keys', label: 'API Keys' },
 ];
 
-function buildNavGroups(isAdmin: boolean): NavGroup[] {
-  return [
+function buildNavGroups(isAdmin: boolean, counts: PendingCounts): NavGroup[] {
+  const groups: NavGroup[] = [
     {
       items: [{ to: '/', label: 'Home', icon: <IconHome />, end: true }],
     },
@@ -73,31 +77,52 @@ function buildNavGroups(isAdmin: boolean): NavGroup[] {
       ],
     },
     {
-      heading: 'Review',
+      heading: 'Review queue',
       items: [
-        { to: '/conflicts', label: 'Conflicts', icon: <IconAlertTriangle /> },
-        { to: '/approvals', label: 'Approvals', icon: <IconCheck /> },
+        {
+          to: '/conflicts',
+          label: 'Conflicts',
+          icon: <IconAlertTriangle />,
+          count: counts.conflicts,
+        },
+        {
+          to: '/approvals',
+          label: 'Approvals',
+          icon: <IconCheck />,
+          count: counts.approvals,
+        },
         { to: '/workflow-runs', label: 'Runs', icon: <IconActivity /> },
       ],
     },
-    {
-      heading: 'Admin',
-      items: [
-        { to: '/api-keys', label: 'API Keys', icon: <IconKey /> },
-        ...(isAdmin
-          ? [
-              { to: '/audit-events', label: 'Audit Log', icon: <IconClipboard /> },
-              { to: '/invitations', label: 'Invitations', icon: <IconUserPlus /> },
-              { to: '/canonical-entities', label: 'Canonical Entities', icon: <IconTag /> },
-            ]
-          : []),
-      ],
-    },
   ];
+
+  if (isAdmin) {
+    groups.push({
+      heading: 'Organisation',
+      items: [
+        { to: '/invitations', label: 'Invitations', icon: <IconUsers /> },
+        // No badge: no endpoint exposes a count of pending harvested-alias proposals without
+        // fetching every canonical entity's alias list, which the badge contract forbids.
+        { to: '/canonical-entities', label: 'Canonical Entities', icon: <IconTag /> },
+        { to: '/audit-events', label: 'Audit Log', icon: <IconClipboard /> },
+      ],
+    });
+  }
+
+  groups.push({
+    heading: 'Account',
+    items: [{ to: '/api-keys', label: 'API Keys', icon: <IconKey /> }],
+  });
+
+  return groups;
 }
 
 function sidebarLinkClassName({ isActive }: { isActive: boolean }): string {
   return isActive ? 'sidebar-link is-active' : 'sidebar-link';
+}
+
+function navItemAriaLabel(item: NavItem): string {
+  return item.count ? `${item.label}, ${item.count} pending` : item.label;
 }
 
 /** Renders the group headings and nav links shared by the persistent sidebar and the drawer.
@@ -114,12 +139,20 @@ function NavGroups({ groups, onNavigate }: { groups: NavGroup[]; onNavigate?: ()
                 <NavLink
                   to={item.to}
                   end={item.end}
-                  aria-label={item.label}
+                  aria-label={navItemAriaLabel(item)}
                   className={sidebarLinkClassName}
                   onClick={onNavigate}
                 >
                   {item.icon}
                   <span className="sidebar-label">{item.label}</span>
+                  {!!item.count && (
+                    <>
+                      <span className="nav-count" aria-hidden="true">
+                        · {item.count}
+                      </span>
+                      <span className="nav-count-dot" aria-hidden="true" />
+                    </>
+                  )}
                 </NavLink>
               </li>
             ))}
@@ -142,7 +175,11 @@ interface SidebarProps {
  * the sub-768px drawer — one nav-group source, two presentations, so the two never drift apart.
  *
  * `collapsed` narrows the persistent sidebar to an icon rail. It only has an effect at 1024px and
- * up; below that the breakpoints in shell.css already impose the rail, then the drawer. */
+ * up; below that the breakpoints in shell.css already impose the rail, then the drawer.
+ *
+ * Fetches its own Review queue badge counts via `usePendingCounts()`, the same self-contained
+ * pattern `Topbar` uses for `useSession()` — `App.tsx` composes this component without passing
+ * count data down. */
 export default function Sidebar({
   isAdmin,
   drawerOpen,
@@ -150,7 +187,8 @@ export default function Sidebar({
   collapsed,
   onToggleCollapsed,
 }: SidebarProps) {
-  const groups = buildNavGroups(isAdmin);
+  const counts = usePendingCounts();
+  const groups = buildNavGroups(isAdmin, counts);
 
   return (
     <>

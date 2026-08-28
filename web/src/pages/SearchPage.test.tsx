@@ -60,7 +60,9 @@ describe('SearchPage', () => {
       if (url.startsWith('/api/v1/retrieval/search')) {
         return Promise.resolve(jsonResponse({ docs: [chunk], count: 1 }));
       }
-      if (url === '/api/v1/documents') return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+      if (url.startsWith('/api/v1/documents/versions/lookup')) {
+        return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+      }
       return Promise.reject(new Error(`Unhandled fetch: ${url}`));
     });
     vi.stubGlobal('fetch', fetchMock);

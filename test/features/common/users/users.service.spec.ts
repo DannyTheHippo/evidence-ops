@@ -2,31 +2,32 @@ import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { Types } from 'mongoose';
+import { Tenant } from '../../../../src/database/schemas/administration/tenant/tenant.schema';
 import { User } from '../../../../src/database/schemas/administration/user/user.schema';
 import { UsersService } from '../../../../src/features/common/users/users.service';
 import {
+  AdminGuardUnavailableException,
   LastAdminException,
   UserNotFoundException,
-  UserRestoreFailedException,
 } from '../../../../src/features/common/users/exceptions/users.exception';
 import { DEFAULT_PAGINATION_LIMIT } from '../../../../src/shared/constants/pagination-defaults.constant';
 import { UserRole } from '../../../../src/shared/enums/user-role.enum';
 import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
-import { getMockModel, type MockModel } from '../../../utils/get-mock-model';
+import { getMockModel } from '../../../utils/get-mock-model';
 
 describe('UsersService', () => {
   let service: UsersService;
 
-  // `UsersService.remove`'s compensating insert bypasses Mongoose and calls the driver collection
-  // directly, which `getMockModel()` does not stub — extended here rather than in the shared
-  // factory since no other service uses this path yet.
-  const mockUserModel = getMockModel() as MockModel & {
-    collection: { insertOne: jest.Mock<Promise<unknown>, [Record<string, unknown>]> };
-  };
-  mockUserModel.collection = {
-    insertOne: jest.fn<Promise<unknown>, [Record<string, unknown>]>(),
+  const mockUserModel = getMockModel();
+  const mockTenantModel = getMockModel();
+  // Stands in for a real `ClientSession`: `withTransaction` runs its callback once and resolves to
+  // whatever it returns, the same shape a caller sees when nothing forces a retry. Tests that care
+  // about the guard's fail-closed branch override `mockTenantModel.updateOne` instead of this.
+  const mockSession = {
+    withTransaction: jest.fn<Promise<unknown>, [() => Promise<unknown>]>(),
+    endSession: jest.fn<Promise<void>, []>(),
   };
   const mockAuditService = { record: jest.fn() };
   const mockLogger = getMockLogger();
@@ -54,12 +55,20 @@ describe('UsersService', () => {
       providers: [
         UsersService,
         { provide: getModelToken(User.name), useValue: mockUserModel },
+        { provide: getModelToken(Tenant.name), useValue: mockTenantModel },
         { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: mockLogger },
       ],
     }).compile();
 
     service = module.get<UsersService>(UsersService);
+
+    mockUserModel.startSession.mockResolvedValue(mockSession);
+    mockSession.withTransaction.mockImplementation(
+      async (fn: () => Promise<unknown>) => await fn(),
+    );
+    mockSession.endSession.mockResolvedValue(undefined);
+    mockTenantModel.updateOne.mockResolvedValue({ matchedCount: 1 });
   });
 
   afterEach(() => {
@@ -81,7 +90,7 @@ describe('UsersService', () => {
         { tenantId: 'tenant-a' },
         null,
         expect.objectContaining({
-          sort: { createdAt: -1 },
+          sort: { email: 1 },
           skip: 0,
           limit: DEFAULT_PAGINATION_LIMIT,
         }),
@@ -111,6 +120,25 @@ describe('UsersService', () => {
       );
       expect(result.count).toBe(5);
     });
+
+    it.each([
+      ['createdAt', 'asc', { createdAt: 1 }],
+      ['role', 'desc', { role: -1 }],
+    ] as const)(
+      'should sort by the caller-supplied %s field and %s direction',
+      async (sort, sortDir, expectedSort) => {
+        mockUserModel.find.mockResolvedValueOnce([buildMockUser()]);
+        mockUserModel.countDocuments.mockResolvedValueOnce(1);
+
+        await service.list({ skip: 0, limit: 20, sort, sortDir }, actorId, 'tenant-a');
+
+        expect(mockUserModel.find).toHaveBeenCalledWith(
+          { tenantId: 'tenant-a' },
+          null,
+          expect.objectContaining({ sort: expectedSort }),
+        );
+      },
+    );
   });
 
   describe('changeRole', () => {
@@ -118,6 +146,7 @@ describe('UsersService', () => {
       await expect(
         service.changeRole('not-an-object-id', UserRole.Admin, actorId, 'tenant-a'),
       ).rejects.toBeInstanceOf(UserNotFoundException);
+      expect(mockUserModel.startSession).not.toHaveBeenCalled();
       expect(mockUserModel.findOneAndUpdate).not.toHaveBeenCalled();
     });
 
@@ -128,13 +157,14 @@ describe('UsersService', () => {
         service.changeRole(userId.toString(), UserRole.Admin, actorId, 'tenant-a'),
       ).rejects.toBeInstanceOf(UserNotFoundException);
       expect(mockUserModel.countDocuments).not.toHaveBeenCalled();
+      expect(mockAuditService.record).not.toHaveBeenCalled();
+      expect(mockSession.endSession).toHaveBeenCalled();
     });
 
-    it('should change the role, scoped to the tenant, and record an audit event', async () => {
+    it('should change the role, scoped to the tenant, inside the guarded transaction, and record an audit event', async () => {
       mockUserModel.findOneAndUpdate.mockResolvedValueOnce(
         buildMockUser({ role: UserRole.Member }),
       );
-      mockUserModel.countDocuments.mockResolvedValueOnce(1);
 
       const result = await service.changeRole(
         userId.toString(),
@@ -143,17 +173,21 @@ describe('UsersService', () => {
         'tenant-a',
       );
 
+      expect(mockUserModel.startSession).toHaveBeenCalled();
       expect(mockUserModel.findOneAndUpdate).toHaveBeenCalledWith(
         { _id: userId.toString(), tenantId: 'tenant-a' },
         { $set: { role: UserRole.Admin } },
+        { session: mockSession },
       );
-      expect(mockUserModel.updateOne).not.toHaveBeenCalled();
+      expect(mockTenantModel.updateOne).not.toHaveBeenCalled();
+      expect(mockUserModel.countDocuments).not.toHaveBeenCalled();
       expect(mockAuditService.record).toHaveBeenCalledWith({
         action: 'users.role-changed',
         actorId,
         subject: { entityType: 'User', entityId: userId.toString() },
         tenantId: 'tenant-a',
       });
+      expect(mockSession.endSession).toHaveBeenCalled();
       expect(result).toEqual({
         id: userId.toString(),
         email: 'colleague@example.com',
@@ -162,7 +196,7 @@ describe('UsersService', () => {
       });
     });
 
-    it('should revert the role, audit the refusal, and refuse when the change would leave the tenant with no admin', async () => {
+    it('should touch the admin-guard marker, audit the refusal, and refuse when the change would leave the tenant with no admin', async () => {
       mockUserModel.findOneAndUpdate.mockResolvedValueOnce(buildMockUser({ role: UserRole.Admin }));
       mockUserModel.countDocuments.mockResolvedValueOnce(0);
 
@@ -170,11 +204,14 @@ describe('UsersService', () => {
         service.changeRole(userId.toString(), UserRole.Member, actorId, 'tenant-a'),
       ).rejects.toBeInstanceOf(LastAdminException);
 
-      // Compensating update restores this call's own row to the role it read before writing — the
-      // guard only ran because that role was Admin, so this write can only ever add an admin back.
-      expect(mockUserModel.updateOne).toHaveBeenCalledWith(
-        { _id: userId.toString(), tenantId: 'tenant-a' },
-        { $set: { role: UserRole.Admin } },
+      expect(mockTenantModel.updateOne).toHaveBeenCalledWith(
+        { tenantId: 'tenant-a' },
+        { $inc: { adminGuardEpoch: 1 } },
+        { session: mockSession },
+      );
+      expect(mockUserModel.countDocuments).toHaveBeenCalledWith(
+        { tenantId: 'tenant-a', role: UserRole.Admin },
+        { session: mockSession },
       );
       expect(mockAuditService.record).toHaveBeenCalledWith({
         action: 'users.role-change-refused',
@@ -182,32 +219,48 @@ describe('UsersService', () => {
         subject: { entityType: 'User', entityId: userId.toString() },
         tenantId: 'tenant-a',
       });
+      expect(mockSession.endSession).toHaveBeenCalled();
+    });
+
+    it('should refuse with AdminGuardUnavailableException, and not audit a refusal, when the tenant has no registry row to guard against', async () => {
+      mockUserModel.findOneAndUpdate.mockResolvedValueOnce(buildMockUser({ role: UserRole.Admin }));
+      mockTenantModel.updateOne.mockResolvedValueOnce({ matchedCount: 0 });
+
+      await expect(
+        service.changeRole(userId.toString(), UserRole.Member, actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(AdminGuardUnavailableException);
+
+      expect(mockUserModel.countDocuments).not.toHaveBeenCalled();
+      expect(mockAuditService.record).not.toHaveBeenCalled();
+      expect(mockSession.endSession).toHaveBeenCalled();
     });
 
     /**
-     * The whole of the guard: a count taken before the write is a read a second concurrent caller
-     * can invalidate before either write lands, which is exactly how two admins demoting each
-     * other at once could both proceed and leave zero. Counting after the write makes each
-     * caller's own row visible to its own check. Asserted as call order, mirroring
-     * `ApiKeysService.assertUnderActiveKeyCap`'s own test — no mocked model can interleave two
-     * calls to prove the race directly.
+     * The whole of the guard: writing, touching the shared tenant marker, and counting all run
+     * inside one transaction, in that order — the marker touch is what forces a concurrent guarded
+     * write in the same tenant to abort and retry against committed state rather than racing to a
+     * shared zero-admin outcome, and it has to land before the count for that retry to see it.
+     * Asserted as call order, since no mocked model can interleave two real transactions to prove
+     * the write conflict directly.
      */
-    it('should count remaining admins only after writing an admin-reducing role change', async () => {
+    it('should touch the admin-guard marker and count remaining admins only after writing an admin-reducing role change', async () => {
       mockUserModel.findOneAndUpdate.mockResolvedValueOnce(buildMockUser({ role: UserRole.Admin }));
       mockUserModel.countDocuments.mockResolvedValueOnce(1);
 
       await service.changeRole(userId.toString(), UserRole.Member, actorId, 'tenant-a');
 
       expect(mockUserModel.findOneAndUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+        mockTenantModel.updateOne.mock.invocationCallOrder[0],
+      );
+      expect(mockTenantModel.updateOne.mock.invocationCallOrder[0]).toBeLessThan(
         mockUserModel.countDocuments.mock.invocationCallOrder[0],
       );
     });
 
     /**
-     * Pins Fix 1's actual invariant: the guard only runs on a write that can reduce the admin
-     * count. None of these three transitions can, so each must skip the count query and the
-     * compensation entirely — the defect this closes was a compensation running (and misfiring)
-     * on a transition that never should have paid for one.
+     * Pins the guard's actual invariant: it only runs on a write that can reduce the admin count.
+     * None of these three transitions can, so each must skip the marker touch and the count
+     * entirely.
      */
     it.each([
       ['admin→admin', UserRole.Admin, UserRole.Admin],
@@ -220,8 +273,8 @@ describe('UsersService', () => {
 
         const result = await service.changeRole(userId.toString(), targetRole, actorId, 'tenant-a');
 
+        expect(mockTenantModel.updateOne).not.toHaveBeenCalled();
         expect(mockUserModel.countDocuments).not.toHaveBeenCalled();
-        expect(mockUserModel.updateOne).not.toHaveBeenCalled();
         expect(mockAuditService.record).toHaveBeenCalledWith({
           action: 'users.role-changed',
           actorId,
@@ -238,6 +291,7 @@ describe('UsersService', () => {
       await expect(service.remove('not-an-object-id', actorId, 'tenant-a')).rejects.toBeInstanceOf(
         UserNotFoundException,
       );
+      expect(mockUserModel.startSession).not.toHaveBeenCalled();
       expect(mockUserModel.findOneAndDelete).not.toHaveBeenCalled();
     });
 
@@ -248,31 +302,33 @@ describe('UsersService', () => {
         UserNotFoundException,
       );
       expect(mockUserModel.countDocuments).not.toHaveBeenCalled();
+      expect(mockAuditService.record).not.toHaveBeenCalled();
+      expect(mockSession.endSession).toHaveBeenCalled();
     });
 
-    it('should remove the member, scoped to the tenant, and record an audit event', async () => {
+    it('should remove the member, scoped to the tenant, inside the guarded transaction, and record an audit event', async () => {
       mockUserModel.findOneAndDelete.mockResolvedValueOnce(buildMockUser());
-      mockUserModel.countDocuments.mockResolvedValueOnce(1);
 
       await service.remove(userId.toString(), actorId, 'tenant-a');
 
-      expect(mockUserModel.findOneAndDelete).toHaveBeenCalledWith({
-        _id: userId.toString(),
-        tenantId: 'tenant-a',
-      });
-      expect(mockUserModel.create).not.toHaveBeenCalled();
-      expect(mockUserModel.collection.insertOne).not.toHaveBeenCalled();
+      expect(mockUserModel.startSession).toHaveBeenCalled();
+      expect(mockUserModel.findOneAndDelete).toHaveBeenCalledWith(
+        { _id: userId.toString(), tenantId: 'tenant-a' },
+        { session: mockSession },
+      );
+      expect(mockTenantModel.updateOne).not.toHaveBeenCalled();
       expect(mockAuditService.record).toHaveBeenCalledWith({
         action: 'users.removed',
         actorId,
         subject: { entityType: 'User', entityId: userId.toString() },
         tenantId: 'tenant-a',
       });
+      expect(mockSession.endSession).toHaveBeenCalled();
     });
 
     /**
-     * Pins Fix 1's invariant on the `remove` side: removing a member can never take the tenant to
-     * zero admins, so the guard must skip the count query and the compensating insert entirely.
+     * Pins the guard's invariant on the `remove` side: removing a member can never take the tenant
+     * to zero admins, so the guard must skip the marker touch and the count entirely.
      */
     it('should skip the admin-count guard when removing a member', async () => {
       mockUserModel.findOneAndDelete.mockResolvedValueOnce(
@@ -281,64 +337,61 @@ describe('UsersService', () => {
 
       await service.remove(userId.toString(), actorId, 'tenant-a');
 
+      expect(mockTenantModel.updateOne).not.toHaveBeenCalled();
       expect(mockUserModel.countDocuments).not.toHaveBeenCalled();
-      expect(mockUserModel.collection.insertOne).not.toHaveBeenCalled();
     });
 
-    it('should re-insert the removed row unchanged, audit the refusal, and refuse when removal would leave the tenant with no admin', async () => {
-      const removedUser = buildMockUser({ role: UserRole.Admin });
-      mockUserModel.findOneAndDelete.mockResolvedValueOnce(removedUser);
+    it('should touch the admin-guard marker, audit the refusal, and refuse when removal would leave the tenant with no admin', async () => {
+      mockUserModel.findOneAndDelete.mockResolvedValueOnce(buildMockUser({ role: UserRole.Admin }));
       mockUserModel.countDocuments.mockResolvedValueOnce(0);
-      mockUserModel.collection.insertOne.mockResolvedValueOnce(undefined);
 
       await expect(service.remove(userId.toString(), actorId, 'tenant-a')).rejects.toBeInstanceOf(
         LastAdminException,
       );
 
-      // Bypasses `create` — and therefore `auditablePlugin` — entirely, so the restored row keeps
-      // exactly the `createdAt`/`createdBy` it had before the refused delete rather than acquiring
-      // new ones stamped for the acting admin (Fix 2's regression: a refused removal must not
-      // rewrite the record's provenance).
-      expect(mockUserModel.create).not.toHaveBeenCalled();
-      expect(mockUserModel.collection.insertOne).toHaveBeenCalledWith(removedUser.toObject());
-      const restored = mockUserModel.collection.insertOne.mock.calls[0]?.[0];
-      expect(restored?.createdAt).toEqual(removedUser.createdAt);
-      expect(restored?.createdBy).toEqual(removedUser.createdBy);
+      // The delete shares the aborted transaction, so it never commits — there is nothing to
+      // restore, unlike a compensating write issued after an unconditional delete would need.
+      expect(mockTenantModel.updateOne).toHaveBeenCalledWith(
+        { tenantId: 'tenant-a' },
+        { $inc: { adminGuardEpoch: 1 } },
+        { session: mockSession },
+      );
       expect(mockAuditService.record).toHaveBeenCalledWith({
         action: 'users.remove-refused',
         actorId,
         subject: { entityType: 'User', entityId: userId.toString() },
         tenantId: 'tenant-a',
       });
+      expect(mockSession.endSession).toHaveBeenCalled();
     });
 
-    it('should wrap a failed compensating insert rather than lose the removed row silently', async () => {
-      const removedUser = buildMockUser({ role: UserRole.Admin });
-      mockUserModel.findOneAndDelete.mockResolvedValueOnce(removedUser);
-      mockUserModel.countDocuments.mockResolvedValueOnce(0);
-      const duplicateKeyError = Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
-      mockUserModel.collection.insertOne.mockRejectedValueOnce(duplicateKeyError);
+    it('should refuse with AdminGuardUnavailableException, and not audit a refusal, when the tenant has no registry row to guard against', async () => {
+      mockUserModel.findOneAndDelete.mockResolvedValueOnce(buildMockUser({ role: UserRole.Admin }));
+      mockTenantModel.updateOne.mockResolvedValueOnce({ matchedCount: 0 });
 
-      const rejection = await service
-        .remove(userId.toString(), actorId, 'tenant-a')
-        .catch((error: unknown) => error);
+      await expect(service.remove(userId.toString(), actorId, 'tenant-a')).rejects.toBeInstanceOf(
+        AdminGuardUnavailableException,
+      );
 
-      expect(rejection).toBeInstanceOf(UserRestoreFailedException);
-      expect((rejection as UserRestoreFailedException).cause).toBe(duplicateKeyError);
+      expect(mockUserModel.countDocuments).not.toHaveBeenCalled();
       expect(mockAuditService.record).not.toHaveBeenCalled();
+      expect(mockSession.endSession).toHaveBeenCalled();
     });
 
     /**
      * Same shape as `changeRole`'s call-order assertion — see that test's doc comment for why this
-     * ordering is what closes the race rather than a count taken before the delete.
+     * ordering, not just the transaction boundary, is what closes the durability gap.
      */
-    it('should count remaining admins only after deleting an admin', async () => {
+    it('should touch the admin-guard marker and count remaining admins only after deleting an admin', async () => {
       mockUserModel.findOneAndDelete.mockResolvedValueOnce(buildMockUser({ role: UserRole.Admin }));
       mockUserModel.countDocuments.mockResolvedValueOnce(1);
 
       await service.remove(userId.toString(), actorId, 'tenant-a');
 
       expect(mockUserModel.findOneAndDelete.mock.invocationCallOrder[0]).toBeLessThan(
+        mockTenantModel.updateOne.mock.invocationCallOrder[0],
+      );
+      expect(mockTenantModel.updateOne.mock.invocationCallOrder[0]).toBeLessThan(
         mockUserModel.countDocuments.mock.invocationCallOrder[0],
       );
     });

@@ -65,6 +65,7 @@ import {
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import { resolveSort } from '../../../shared/utils/resolve-sort.util';
 import { reauthTicks$ } from '../../../shared/utils/stream-session.util';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import type { IngestDocumentVersionInput } from '../../../workflows/types';
@@ -77,9 +78,14 @@ import {
   SOURCE_KIND_TO_MIME_TYPE,
 } from './documents.constant';
 import type { PaginationRequestDto } from '../../../shared/dtos/request/pagination.request.dto';
-import type { ListDocumentsRequestDto } from './dtos/request/list-documents.request.dto';
+import {
+  DEFAULT_DOCUMENT_SORT_FIELD,
+  DEFAULT_DOCUMENT_SORT_DIRECTION,
+  type ListDocumentsRequestDto,
+} from './dtos/request/list-documents.request.dto';
 import { UploadDocumentRequestDto } from './dtos/request/upload-document.request.dto';
 import { DocumentResponseDto } from './dtos/response/document.response.dto';
+import { DocumentVersionLookupResponseDto } from './dtos/response/document-version-lookup.response.dto';
 import { DocumentVersionResponseDto } from './dtos/response/document-version.response.dto';
 import { DocumentWithVersionsResponseDto } from './dtos/response/document-with-versions.response.dto';
 import { EvidenceChunkResponseDto } from './dtos/response/evidence-chunk.response.dto';
@@ -291,7 +297,12 @@ export class DocumentsService {
 
     const [documents, count] = await Promise.all([
       this.documentModel.find(filter, null, {
-        sort: { createdAt: -1 },
+        sort: resolveSort(
+          pagination.sort,
+          pagination.sortDir,
+          DEFAULT_DOCUMENT_SORT_FIELD,
+          DEFAULT_DOCUMENT_SORT_DIRECTION,
+        ),
         skip: pagination.skip,
         limit: pagination.limit,
       }),
@@ -394,11 +405,16 @@ export class DocumentsService {
    * `QaService.streamAnswer`'s identical rejected-alternative note.
    *
    * `pagination` is the caller's current `skip`/`limit`, threaded straight through to `list` —
-   * this stream mirrors a list the caller is paging through (`list`'s `sort: {createdAt: -1}`
-   * above), so stream and poll must agree on every page, not only the newest one. A hardcoded
-   * newest-page window here is what used to force the SPA to disable the stream past page 1
-   * (`DocumentList.tsx`'s former workaround); with the caller's own page threaded through instead,
-   * that stopgap is no longer needed.
+   * this stream mirrors a list the caller is paging through, so stream and poll must agree on
+   * every page, not only the newest one. A hardcoded newest-page window here is what used to
+   * force the SPA to disable the stream past page 1 (`DocumentList.tsx`'s former workaround);
+   * with the caller's own page threaded through instead, that stopgap is no longer needed.
+   *
+   * `pagination` is typed `PaginationRequestDto`, not `ListDocumentsRequestDto` — this route does
+   * not accept `sort`/`sortDir`, so `list` always resolves its default sort here regardless of
+   * what sort a concurrent `GET /documents` request used. Agreement holds for `skip`/`limit`
+   * only; a caller polling a non-default sort through the plain GET route sees a stream that
+   * agrees on the page window but not on ordering within it.
    *
    * No `peekList`/`list` split, unlike `qa`/`workflow-runs`/`approvals`: `list` above never
    * records an audit row to begin with (unlike `getAnswerById`/`findById`/`listPending`), so there
@@ -486,6 +502,56 @@ export class DocumentsService {
       ...this.toDocumentDto(document, this.assertCurrentVersion(document, currentVersion)),
       versions: versions.map((version) => this.toVersionDto(version)),
     };
+  }
+
+  /**
+   * Resolves each requested version id to the document it belongs to — the join a `Citation`
+   * needs to become a link, since it carries `docVersionId` but no `documentId`. An id that does
+   * not resolve (unknown, cross-tenant, or malformed past `@IsMongoId`) is silently absent from
+   * `docs` rather than a 404: one stale id must not fail a whole page of citations, and a
+   * cross-tenant id must stay indistinguishable from a nonexistent one, so this endpoint cannot
+   * be used as an existence oracle. A soft-withdrawn version still resolves, with `withdrawn: true`.
+   */
+  async lookupVersions(
+    versionIds: string[],
+    tenantId: string,
+  ): Promise<DocumentResultWithCount<DocumentVersionLookupResponseDto>> {
+    const versions = await this.documentVersionModel.find({
+      _id: { $in: versionIds.map((id) => new Types.ObjectId(id)) },
+      tenantId,
+    });
+
+    const documentIds = [...new Set(versions.map((version) => version.documentId.toString()))];
+    const documents = await this.documentModel.find({
+      _id: { $in: documentIds.map((id) => new Types.ObjectId(id)) },
+      tenantId,
+    });
+    const documentById = new Map(documents.map((document) => [document._id.toString(), document]));
+
+    const docs = versions.map((version) => {
+      const documentId = version.documentId.toString();
+      const document = documentById.get(documentId);
+      if (!document) {
+        // A version whose owning document does not resolve is corruption, not a normal miss —
+        // the same data-integrity fault `EvidenceRetrievalService.retrieve`'s identical join
+        // throws on, and distinct from a requested id that never resolved to a version at all
+        // (silently dropped above, never here).
+        throw new InternalServerErrorException(
+          `Document version '${version._id.toString()}' references document '${documentId}', which no longer exists`,
+        );
+      }
+
+      return {
+        versionId: version._id.toString(),
+        documentId,
+        documentTitle: document.title,
+        versionNumber: version.versionNumber,
+        sourceKind: document.sourceKind,
+        withdrawn: version.withdrawnAt !== undefined,
+      };
+    });
+
+    return { docs, count: docs.length };
   }
 
   /**

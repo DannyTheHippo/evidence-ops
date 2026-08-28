@@ -128,7 +128,9 @@ describe('AnswerView', () => {
           ],
         },
       }),
-      new Map([['docver-1', { documentId: 'doc-1', documentTitle: 'Rent Roll Q1' }]]),
+      new Map([
+        ['docver-1', { documentId: 'doc-1', documentTitle: 'Rent Roll Q1', withdrawn: false }],
+      ]),
       new Map([
         [
           'chunk-a',

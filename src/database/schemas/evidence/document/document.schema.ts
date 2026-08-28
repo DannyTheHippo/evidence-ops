@@ -158,3 +158,11 @@ DocumentSchema.index(
     partialFilterExpression: { 'emailOrigin.parentVersionId': { $exists: true } },
   },
 );
+
+/**
+ * Back `ListDocumentsRequestDto`'s `title`/`sourceKind` sort fields (`documents.controller.ts`'s
+ * `GET /documents`) the same way `documents_tenantId_createdAt` backs its default — every real
+ * query is tenant-scoped first, so `tenantId` leads each.
+ */
+DocumentSchema.index({ tenantId: 1, title: 1 }, { name: 'documents_tenantId_title' });
+DocumentSchema.index({ tenantId: 1, sourceKind: 1 }, { name: 'documents_tenantId_sourceKind' });

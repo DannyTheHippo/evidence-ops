@@ -45,3 +45,7 @@ UserSchema.index({ email: 1 }, { unique: true, name: 'users_email_unique' });
 /** Backs `UsersService.list`'s tenant-scoped, newest-first membership listing — same shape as
  *  `invitations_tenantId_createdAt`. */
 UserSchema.index({ tenantId: 1, createdAt: -1 }, { name: 'users_tenantId_createdAt' });
+
+/** Backs `ListUsersRequestDto`'s `email` sort field — the tenant's membership listing defaults to
+ *  it (`DEFAULT_USER_SORT_FIELD`), not `createdAt`. */
+UserSchema.index({ tenantId: 1, email: 1 }, { name: 'users_tenantId_email' });

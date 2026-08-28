@@ -74,3 +74,11 @@ export class Approval extends AuditableDocument {
 }
 
 export const ApprovalSchema = SchemaFactory.createForClass(Approval);
+
+/**
+ * Every real query already filters by `{tenantId, state}` (`ListApprovalsRequestDto.state`
+ * defaults to `'pending'`), which `migrations/0001-baseline.ts`'s
+ * `approvals_tenantId_state_createdAt` already serves. This index backs a query that scopes by
+ * `tenantId` and sorts by `createdAt` alone, for a caller that queries without a state filter.
+ */
+ApprovalSchema.index({ tenantId: 1, createdAt: -1 }, { name: 'approvals_tenantId_createdAt' });

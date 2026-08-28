@@ -596,6 +596,27 @@ describe('DocumentsService', () => {
       expect(result.count).toBe(1);
       expect(result.docs[0].currentVersion.ingestionStatus).toBe('failed');
     });
+
+    it.each([
+      ['title', 'asc', { title: 1 }],
+      ['sourceKind', 'desc', { sourceKind: -1 }],
+    ] as const)(
+      'should sort by the caller-supplied %s field and %s direction',
+      async (sort, sortDir, expectedSort) => {
+        const mockDocument = buildMockDocument();
+        mockDocumentModel.find.mockResolvedValueOnce([mockDocument]);
+        mockDocumentModel.countDocuments.mockResolvedValueOnce(1);
+        mockDocumentVersionModel.find.mockResolvedValueOnce([buildMockVersion()]);
+
+        await service.list({ skip: 0, limit: 20, sort, sortDir }, 'tenant-a');
+
+        expect(mockDocumentModel.find).toHaveBeenCalledWith(
+          { tenantId: 'tenant-a' },
+          null,
+          expect.objectContaining({ sort: expectedSort }),
+        );
+      },
+    );
   });
 
   describe('countBySourceAndClass', () => {
@@ -745,6 +766,101 @@ describe('DocumentsService', () => {
 
       await expect(service.getById(documentId.toString(), 'tenant-a')).rejects.toBeInstanceOf(
         InternalServerErrorException,
+      );
+    });
+  });
+
+  describe('lookupVersions', () => {
+    it('should resolve a requested version id to its document, with all six response fields', async () => {
+      const version = buildMockVersion();
+      mockDocumentVersionModel.find.mockResolvedValueOnce([version]);
+      const document = buildMockDocument();
+      mockDocumentModel.find.mockResolvedValueOnce([document]);
+
+      const result = await service.lookupVersions([versionId.toString()], 'tenant-a');
+
+      expect(mockDocumentVersionModel.find).toHaveBeenCalledWith({
+        _id: { $in: [new Types.ObjectId(versionId.toString())] },
+        tenantId: 'tenant-a',
+      });
+      expect(mockDocumentModel.find).toHaveBeenCalledWith({
+        _id: { $in: [documentId] },
+        tenantId: 'tenant-a',
+      });
+      expect(result.count).toBe(1);
+      expect(result.docs).toEqual([
+        {
+          versionId: versionId.toString(),
+          documentId: documentId.toString(),
+          documentTitle: 'Q3 Rent Roll',
+          versionNumber: 1,
+          sourceKind: 'xlsx',
+          withdrawn: false,
+        },
+      ]);
+    });
+
+    it('should mark a soft-withdrawn version as withdrawn rather than dropping it', async () => {
+      const version = buildMockVersion({ withdrawnAt: new Date('2026-07-15T00:00:00.000Z') });
+      mockDocumentVersionModel.find.mockResolvedValueOnce([version]);
+      mockDocumentModel.find.mockResolvedValueOnce([buildMockDocument()]);
+
+      const result = await service.lookupVersions([versionId.toString()], 'tenant-a');
+
+      expect(result.docs[0].withdrawn).toBe(true);
+    });
+
+    it('should silently omit a requested id that does not resolve to a version, never throwing or 404ing', async () => {
+      mockDocumentVersionModel.find.mockResolvedValueOnce([]);
+      mockDocumentModel.find.mockResolvedValueOnce([]);
+
+      const result = await service.lookupVersions([new Types.ObjectId().toString()], 'tenant-a');
+
+      expect(result).toEqual({ docs: [], count: 0 });
+    });
+
+    it('should return only the versions that resolved when one of several requested ids is unknown', async () => {
+      const version = buildMockVersion();
+      // The mock model does not filter by predicate — a real Mongo `$in` would simply return the
+      // subset that matched, which this simulates by resolving only the one requested id that
+      // exists.
+      mockDocumentVersionModel.find.mockResolvedValueOnce([version]);
+      mockDocumentModel.find.mockResolvedValueOnce([buildMockDocument()]);
+
+      const result = await service.lookupVersions(
+        [versionId.toString(), new Types.ObjectId().toString()],
+        'tenant-a',
+      );
+
+      expect(result.count).toBe(1);
+      expect(result.docs).toHaveLength(1);
+      expect(result.docs[0].versionId).toBe(versionId.toString());
+    });
+
+    // Data-integrity fault, not a normal miss — mirrors `EvidenceRetrievalService.retrieve`'s
+    // identical join: a version row only ever carries a `documentId` set by `addVersion`/
+    // `createDocument`, so a resolved version whose document does not resolve means the document
+    // was deleted out from under a version that still references it.
+    it('should throw InternalServerErrorException when a resolved version references a document that no longer exists', async () => {
+      mockDocumentVersionModel.find.mockResolvedValueOnce([buildMockVersion()]);
+      mockDocumentModel.find.mockResolvedValueOnce([]);
+
+      await expect(
+        service.lookupVersions([versionId.toString()], 'tenant-a'),
+      ).rejects.toBeInstanceOf(InternalServerErrorException);
+    });
+
+    it('should scope both lookups to the caller tenant', async () => {
+      mockDocumentVersionModel.find.mockResolvedValueOnce([buildMockVersion()]);
+      mockDocumentModel.find.mockResolvedValueOnce([buildMockDocument()]);
+
+      await service.lookupVersions([versionId.toString()], 'tenant-b');
+
+      expect(mockDocumentVersionModel.find).toHaveBeenCalledWith(
+        expect.objectContaining({ tenantId: 'tenant-b' }),
+      );
+      expect(mockDocumentModel.find).toHaveBeenCalledWith(
+        expect.objectContaining({ tenantId: 'tenant-b' }),
       );
     });
   });

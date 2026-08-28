@@ -14,7 +14,7 @@ import Pager from '../components/ui/Pager';
 import Select from '../components/ui/Select';
 import Skeleton from '../components/ui/Skeleton';
 import { notify } from '../components/ui/toast';
-import { buildDocumentVersionIndex, type ResolvedVersion } from '../lib/document-index';
+import { resolveDocumentVersions, type ResolvedVersion } from '../lib/document-index';
 import { truncateSha256 } from '../lib/identifiers';
 import { formatLocator } from '../lib/locator';
 
@@ -77,7 +77,9 @@ export default function ConflictsPage() {
     if (!conflicts || conflicts.length === 0) return;
     let cancelled = false;
 
-    buildDocumentVersionIndex()
+    resolveDocumentVersions(
+      conflicts.flatMap((conflict) => conflict.values.map((value) => value.documentVersionId)),
+    )
       .then((index) => {
         if (!cancelled) setDocumentIndex(index);
       })

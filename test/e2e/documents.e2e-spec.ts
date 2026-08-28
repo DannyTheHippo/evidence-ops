@@ -162,13 +162,15 @@ describe('Documents (e2e)', () => {
   // needs many rows to exist, not real ingested content.
   const seedDocumentWithVersion = async (
     title: string,
-    overrides: { ingestionStatus?: DocumentVersionIngestionStatus } = {},
+    overrides: { ingestionStatus?: DocumentVersionIngestionStatus; tenantId?: string } = {},
   ) => {
+    const { tenantId: overrideTenantId, ...versionOverrides } = overrides;
+    const docTenantId = overrideTenantId ?? tenantId;
     const document = await documentModel.create({
       title,
       sourceKind: 'txt',
       mimeType: 'text/plain',
-      tenantId,
+      tenantId: docTenantId,
     });
     const version = await documentVersionModel.create({
       documentId: document._id,
@@ -176,8 +178,8 @@ describe('Documents (e2e)', () => {
       sha256: createHash('sha256').update(title).digest('hex'),
       sizeBytes: 1,
       storageKey: `seed-${title}`,
-      tenantId,
-      ...overrides,
+      tenantId: docTenantId,
+      ...versionOverrides,
     });
     document.currentVersionId = version._id;
     await document.save();
@@ -628,6 +630,78 @@ describe('Documents (e2e)', () => {
     expect(body.docs.length).toBeGreaterThan(0);
   });
 
+  describe('GET /documents sort', () => {
+    it('returns 400 for a sort field outside the declared allowlist', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/documents')
+        .query({ sort: 'mimeType' })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 400 for a sortDir outside asc/desc', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/documents')
+        .query({ sort: 'title', sortDir: 'ascending' })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('sorts by createdAt descending by default, and lets the caller switch to title ascending', async () => {
+      const sortTenant = await registerTestUser(app, {
+        email: 'documents-sort-e2e@example.com',
+        password: 'correct-horse-battery',
+      });
+
+      // `createdAt` stamped explicitly, out of title order — sequential in-memory creates can
+      // land in the same millisecond, which would make the default-sort assertion below flaky.
+      const bDoc = await seedDocumentWithVersion('Sort E2E B', { tenantId: sortTenant.tenantId });
+      const cDoc = await seedDocumentWithVersion('Sort E2E C', { tenantId: sortTenant.tenantId });
+      const aDoc = await seedDocumentWithVersion('Sort E2E A', { tenantId: sortTenant.tenantId });
+      await documentModel.updateOne(
+        { _id: bDoc._id },
+        { createdAt: new Date('2026-01-01T00:00:00.000Z') },
+      );
+      await documentModel.updateOne(
+        { _id: cDoc._id },
+        { createdAt: new Date('2026-01-02T00:00:00.000Z') },
+      );
+      await documentModel.updateOne(
+        { _id: aDoc._id },
+        { createdAt: new Date('2026-01-03T00:00:00.000Z') },
+      );
+
+      const defaultResponse = await request(getTestServer(app))
+        .get('/api/v1/documents')
+        .set('Cookie', sortTenant.cookie);
+      const defaultBody = defaultResponse.body as { docs: DocumentBody[]; count: number };
+
+      expect(defaultResponse.status).toBe(200);
+      // A carries the latest stamped createdAt, B the earliest — newest-first (the default)
+      // orders them A, C, B.
+      expect(defaultBody.docs.map((doc) => doc.title)).toEqual([
+        'Sort E2E A',
+        'Sort E2E C',
+        'Sort E2E B',
+      ]);
+
+      const titleAscResponse = await request(getTestServer(app))
+        .get('/api/v1/documents')
+        .query({ sort: 'title', sortDir: 'asc' })
+        .set('Cookie', sortTenant.cookie);
+      const titleAscBody = titleAscResponse.body as { docs: DocumentBody[]; count: number };
+
+      expect(titleAscResponse.status).toBe(200);
+      expect(titleAscBody.docs.map((doc) => doc.title)).toEqual([
+        'Sort E2E A',
+        'Sort E2E B',
+        'Sort E2E C',
+      ]);
+    });
+  });
+
   describe('GET /documents ingestionStatus filter', () => {
     // The filter is a direct DB predicate on the CURRENT version's ingestionStatus, not a slice
     // of a fixed-size "newest N" page — seeding well over 100 newer documents proves a failure
@@ -782,6 +856,158 @@ describe('Documents (e2e)', () => {
       expect(polledBody.count).toBeGreaterThan(20);
       expect(body.docs.length).toBeGreaterThan(0);
       expect(frame.data).toEqual(polled.body);
+    });
+  });
+
+  describe('GET /documents/versions/lookup', () => {
+    interface VersionLookupBody {
+      versionId: string;
+      documentId: string;
+      documentTitle: string;
+      versionNumber: number;
+      sourceKind: string;
+      withdrawn: boolean;
+    }
+
+    it('rejects an unauthenticated request', async () => {
+      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Lookup Auth' });
+      const versionId = (uploaded.body as DocumentBody).currentVersion.id;
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/documents/versions/lookup')
+        .query({ versionIds: versionId });
+
+      expect(response.status).toBe(401);
+    });
+
+    it('resolves a requested version id to its document, exposing the exact key set of all six fields', async () => {
+      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Lookup Resolved' });
+      const documentBody = uploaded.body as DocumentBody;
+      const versionId = documentBody.currentVersion.id;
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/documents/versions/lookup')
+        .query({ versionIds: versionId })
+        .set('Cookie', cookie);
+      const body = response.body as { docs: VersionLookupBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.count).toBe(1);
+      expect(body.docs).toEqual([
+        {
+          versionId,
+          documentId: documentBody.id,
+          documentTitle: 'Lookup Resolved',
+          versionNumber: 1,
+          sourceKind: 'xlsx',
+          withdrawn: false,
+        },
+      ]);
+      // Asserting the exact key set is the only gate that catches a response-DTO field missing
+      // @Expose() — such a field is silently dropped from the payload with no error anywhere.
+      expect(Object.keys(body.docs[0]).sort()).toEqual(
+        [
+          'versionId',
+          'documentId',
+          'documentTitle',
+          'versionNumber',
+          'sourceKind',
+          'withdrawn',
+        ].sort(),
+      );
+    });
+
+    it('resolves both the comma-separated and repeated-param forms of versionIds identically', async () => {
+      const first = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Lookup Multi A' });
+      const second = await upload(memo, 'valuation-memo.pdf', 'application/pdf', {
+        title: 'Lookup Multi B',
+      });
+      const versionIdA = (first.body as DocumentBody).currentVersion.id;
+      const versionIdB = (second.body as DocumentBody).currentVersion.id;
+
+      const commaSeparated = await request(getTestServer(app))
+        .get(`/api/v1/documents/versions/lookup?versionIds=${versionIdA},${versionIdB}`)
+        .set('Cookie', cookie);
+
+      const repeatedParam = await request(getTestServer(app))
+        .get('/api/v1/documents/versions/lookup')
+        .query({ versionIds: [versionIdA, versionIdB] })
+        .set('Cookie', cookie);
+
+      expect(commaSeparated.status).toBe(200);
+      expect(repeatedParam.status).toBe(200);
+      const idsFrom = (res: typeof commaSeparated) =>
+        (res.body as { docs: VersionLookupBody[] }).docs.map((doc) => doc.versionId).sort();
+      expect(idsFrom(commaSeparated)).toEqual([versionIdA, versionIdB].sort());
+      expect(idsFrom(repeatedParam)).toEqual([versionIdA, versionIdB].sort());
+    });
+
+    it('resolves a soft-withdrawn version with withdrawn: true rather than dropping it', async () => {
+      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Lookup Withdrawn' });
+      const versionId = (uploaded.body as DocumentBody).currentVersion.id;
+
+      await documentVersionModel.updateOne(
+        { _id: versionId },
+        { withdrawnAt: new Date(), withdrawnReason: 'source-file-absent' },
+      );
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/documents/versions/lookup')
+        .query({ versionIds: versionId })
+        .set('Cookie', cookie);
+      const body = response.body as { docs: VersionLookupBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.docs[0].withdrawn).toBe(true);
+    });
+
+    // The designed contract, not an error path: a stale or cross-tenant id must not poison a
+    // whole page of citations, and a cross-tenant id must stay indistinguishable from a
+    // nonexistent one — 200 with a shorter `docs` array, never a 404.
+    it('silently omits an unknown id and a cross-tenant id — 200 with fewer docs than requested, never a 404', async () => {
+      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Lookup Partial' });
+      const resolvableVersionId = (uploaded.body as DocumentBody).currentVersion.id;
+
+      const crossTenantUploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, {
+        title: 'Lookup Cross Tenant',
+      });
+      const crossTenantVersionId = (crossTenantUploaded.body as DocumentBody).currentVersion.id;
+      await documentVersionModel.updateOne(
+        { _id: crossTenantVersionId },
+        { tenantId: 'other-tenant' },
+      );
+
+      const unknownVersionId = new Types.ObjectId().toString();
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/documents/versions/lookup')
+        .query({ versionIds: [resolvableVersionId, crossTenantVersionId, unknownVersionId] })
+        .set('Cookie', cookie);
+      const body = response.body as { docs: VersionLookupBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.count).toBe(1);
+      expect(body.docs.map((doc) => doc.versionId)).toEqual([resolvableVersionId]);
+    });
+
+    it('returns 400 for a malformed version id', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/documents/versions/lookup')
+        .query({ versionIds: 'not-an-object-id' })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 400 for more than 100 requested ids', async () => {
+      const tooMany = Array.from({ length: 101 }, () => new Types.ObjectId().toString());
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/documents/versions/lookup')
+        .query({ versionIds: tooMany })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
     });
   });
 

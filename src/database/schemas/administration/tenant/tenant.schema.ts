@@ -24,6 +24,17 @@ export class Tenant extends AuditableDocument {
 
   @Prop({ type: String, required: true, trim: true })
   name: string;
+
+  /**
+   * `UsersService`'s admin-count guard increments this by one, inside its own transaction, on
+   * every write that could reduce the tenant's admin count. The value itself is never read — only
+   * the write is: `$inc` always registers a write intent, unlike a `$set` MongoDB is free to skip
+   * when it would not change the stored value, so this is what gives two concurrent guarded writes
+   * in the same tenant a document to collide on. No default needed at the document level; `$inc`
+   * on a field that does not yet exist creates it starting from zero.
+   */
+  @Prop({ type: Number, required: false })
+  adminGuardEpoch?: number;
 }
 
 export const TenantSchema = SchemaFactory.createForClass(Tenant);
