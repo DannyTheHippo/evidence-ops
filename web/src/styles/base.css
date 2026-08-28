@@ -56,7 +56,7 @@ a:hover {
   position: absolute;
   top: var(--space-2);
   left: var(--space-2);
-  z-index: 1000;
+  z-index: var(--z-skip-link);
   padding: var(--space-2) var(--space-4);
   background: var(--surface);
   color: var(--ink);

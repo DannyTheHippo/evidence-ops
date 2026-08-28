@@ -257,7 +257,7 @@
    against the print block's (0,1,1) — and media queries add none — so on paper they would beat the
    print rules outright rather than tying and losing on source order, taking the repeating table
    header with them and stacking every row into a full-width card. */
-@media screen and (max-width: 768px) {
+@media screen and (max-width: 767px) {
   .grid:has(td[data-label]) thead {
     display: none;
   }
@@ -332,12 +332,6 @@
   width: 7px;
   height: 7px;
   flex: none;
-  background: currentColor;
-}
-.badge-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
   background: currentColor;
 }
 .badge--neutral {
@@ -544,11 +538,6 @@
   border-color: var(--status-caution-line);
   color: var(--status-caution-ink);
 }
-.notice--ok {
-  background: var(--status-verified-bg);
-  border-color: var(--status-verified-line);
-  color: var(--status-verified-ink);
-}
 /* A notice tint is translucent, so it darkens whatever surface it sits on and
    stacks with any tint already there. --muted falls below 4.5:1 on that
    composite; --ink-dim clears it on every surface a notice appears over. */
@@ -700,7 +689,7 @@
   position: absolute;
   right: 0;
   top: calc(100% + var(--space-2));
-  z-index: 20;
+  z-index: var(--z-popover);
   min-width: 12rem;
   display: flex;
   flex-direction: column;
@@ -742,7 +731,7 @@
   position: fixed;
   right: var(--space-6);
   bottom: var(--space-6);
-  z-index: 100;
+  z-index: var(--z-overlay);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);

@@ -168,11 +168,11 @@
 
 .topbar {
   flex: none;
-  z-index: 100;
+  z-index: var(--z-chrome);
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  height: 56px;
+  height: var(--topbar-height);
   padding: 0 var(--space-6);
   background: var(--surface);
   border-bottom: 1px solid var(--hairline);

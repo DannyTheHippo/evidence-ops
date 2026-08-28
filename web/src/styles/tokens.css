@@ -93,6 +93,9 @@
   --shadow-pop: 0 2px 6px rgba(16, 20, 28, 0.08), 0 12px 32px rgba(16, 20, 28, 0.16);
   --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--signal);
   --ledger-bar-height: 8px;
+  /* .topbar's fixed height — the one control-scale dimension that lives outside the Controls
+     group below, since it sizes the chrome bar itself rather than an individual control inside it. */
+  --topbar-height: 56px;
 
   /* Controls — `--control-h` is shared by `.btn`, `.field input` and `.select`, so a button and a
      field standing on the same row render at the same height; `--control-h-sm` is the compact
@@ -112,12 +115,38 @@
   --motion-pulse: 1.6s;
   --motion-enter: 0.3s;
 
+  /* Stacking — named by layer role rather than raw order, so a call site never has to guess which
+     token it wants. --z-chrome and --z-overlay both resolve to 100 today, but they are not the same
+     layer: .topbar is an in-flow flex item, so its z-index only orders it against .shell-main's
+     other child (the scrolling .container) inside that local stacking context; .toast-stack is
+     `position: fixed` and lives outside `.shell` entirely (see base.css's #root comment), so it
+     stacks within the viewport-level context alongside `.shell` itself instead. The two contexts
+     never compete for the same paint order — the shared number is a coincidence in the source, not
+     a shared layer, so each keeps its own token rather than being folded into one. */
+  --z-popover: 20;
+  --z-chrome: 100;
+  --z-overlay: 100;
+  --z-skip-link: 1000;
+
   /* Provenance rail */
   --rail-width: 2px;
   --rail-node-size: 8px;
   --rail-line-idle: var(--hairline-strong);
   --rail-line-verified: var(--status-verified-ink);
   --rail-line-degraded: var(--status-caution-ink);
+
+  /* Breakpoints — documentation only; a custom property cannot appear inside a @media prelude, so
+     this register exists for the styles-contract test to check the six stylesheets against, not for
+     a media query to reference. The SPA has exactly three viewport breakpoints:
+       1023px — .sidebar collapses to a 64px icon rail (shell.css)
+       767px  — .sidebar hides behind the drawer's .menu-toggle (shell.css); primitives.css's
+                stacked-table transform switches here too, kept on `screen and (max-width: 767px)`
+                so a printed page's own sub-768px page box never matches it
+       560px  — phone-width tightening: topbar, container, toast-stack, rail-node padding
+     Plus one container query independent of viewport width — `@container answer (min-width: 880px)`
+     in rail.css — which widens the apparatus citation grid off the card's own inline size, not the
+     viewport, since a persisted sidebar-collapse state can swing that width with no viewport change
+     to observe. */
 }
 
 @media screen and (prefers-color-scheme: dark) {
