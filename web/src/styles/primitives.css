@@ -422,6 +422,68 @@
   margin-bottom: var(--space-5);
 }
 
+/* ── Sortable header ─────────────────────────────────────────────────────── */
+
+/* `SortableHeaderCell`'s clickable content. A plain button reset to read as the header text it
+   replaces, sized to the same uppercase label the surrounding `.grid thead th` already sets — the
+   button inherits that styling rather than repeating it, and only adds the pointer affordance and
+   the gap before its direction chevron. */
+.th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  background: transparent;
+  color: inherit;
+  border: none;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+.th-sort:hover {
+  color: var(--ink);
+}
+
+/* ── Sort select ─────────────────────────────────────────────────────────── */
+
+/* Modifier for a `Select` standing in for column-sort controls on a narrow layout where a
+   `SortableHeaderCell` row is not available (a stacked table has no header row to click). Shares
+   the field/select box model above; this only trims the width so it doesn't stretch full-width
+   beside the rest of a `.control-row`. */
+.sort-select {
+  max-width: 16rem;
+}
+
+/* ── Split view ──────────────────────────────────────────────────────────── */
+
+/* Two-pane layout for a queue-and-detail or reader page. `--ratio` modifiers below set the desktop
+   column widths only; the panes themselves are never conditionally rendered, so collapsing to one
+   column at 1023px is a grid-template change and nothing else — both panes stay mounted and
+   reachable at every width, `primary` first in source order. */
+.split-view {
+  display: grid;
+  gap: var(--space-6);
+  align-items: start;
+}
+.split-view--queue {
+  grid-template-columns: 320px 1fr;
+}
+.split-view--even {
+  grid-template-columns: 1fr 1fr;
+}
+.split-view--reader {
+  grid-template-columns: 1fr 320px;
+}
+.split-view-pane {
+  min-width: 0;
+}
+@media (max-width: 1023px) {
+  .split-view {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ── Field / Select ──────────────────────────────────────────────────────── */
 
 .field {
