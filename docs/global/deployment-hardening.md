@@ -35,18 +35,22 @@ cookie and a PAT respectively, in the clear. Do it only behind the TLS edge belo
 ## Profiles keep the unauthenticated surfaces out of a routine bring-up
 
 ```sh
-docker compose up -d mongo                      # database alone, for tests and the eval
-docker compose --profile full up -d             # the application stack: migrate, api, worker, mcp, web
-docker compose --profile observability up -d    # prometheus
-docker compose --profile temporal up -d         # temporal server + its postgres, no UI
-docker compose --profile temporal-ui up -d      # the UI, bringing the server with it
+docker compose up -d mongo                                    # database alone, for tests and the eval
+docker compose --profile full up -d --wait --wait-timeout 180  # migrate, api, worker, mcp, web
+docker compose --profile observability up -d                  # prometheus
+docker compose --profile temporal up -d                       # temporal server + its postgres, no UI
+docker compose --profile temporal-ui up -d                    # the UI, bringing the server with it
 ```
+
+`--wait` is what makes the `full` bring-up fail rather than report success while `migrate` is
+failing behind it — see [Bring-up](pilot-runbook.md#bring-up) in the runbook for what it does and
+does not guarantee, and confirm `migrate`'s own exit code rather than trusting `up`'s alone.
 
 `full` starts neither Prometheus nor the Temporal UI. Both read across every tenant and neither has
 a login, so each is asked for by name. Combine profiles to get both at once:
 
 ```sh
-docker compose --profile full --profile observability up -d
+docker compose --profile full --profile observability up -d --wait --wait-timeout 180
 ```
 
 ## Database authentication
@@ -97,8 +101,8 @@ It is inert while no credential is supplied.
 ### Enabling it on a fresh volume
 
 ```sh
-docker compose --profile full down -v
-docker compose --profile full up -d
+docker compose --profile full down -v --remove-orphans
+docker compose --profile full up -d --wait --wait-timeout 180
 ```
 
 `down -v` destroys the corpus, the audit log and the search indexes. `0001-baseline.ts` blocks
@@ -115,7 +119,7 @@ docker compose exec mongo mongosh --quiet --eval \
 ```
 
 Then write the three files above and recreate the stack (`docker compose --profile full up -d
---force-recreate`) so `mongod` restarts with authentication enabled.
+--force-recreate --wait --wait-timeout 180`) so `mongod` restarts with authentication enabled.
 
 ### Verifying
 
@@ -235,7 +239,7 @@ ignored entirely.
 The falsifiable check on all of the above, run on the host after a bring-up:
 
 ```sh
-docker compose --profile full up -d
+docker compose --profile full up -d --wait --wait-timeout 180
 sudo lsof -nP -iTCP -sTCP:LISTEN | grep -E '3001|3002|7233|8090|8233|9090|27018'   # macOS
 ss -tlnp | grep -E '3001|3002|7233|8090|8233|9090|27018'                          # Linux
 ```

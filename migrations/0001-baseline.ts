@@ -1,5 +1,8 @@
 import type { CreateIndexesOptions, Db, IndexDirection, SearchIndexDescription } from 'mongodb';
-import { waitForSearchIndexReady } from '../src/features/evidence/retrieval/search-index-readiness.util';
+import {
+  createSearchIndexesWhenReady,
+  waitForSearchIndexReady,
+} from '../src/features/evidence/retrieval/search-index-readiness.util';
 
 // Exported for `search-indexes.integration-spec.ts` and `mongo-hybrid.store.integration-spec.ts`,
 // which assert against the exact collection/index names this migration creates rather than
@@ -429,9 +432,13 @@ export const up = async (db: Db): Promise<void> => {
       { upsert: true },
     );
 
-  await db
-    .collection(EVIDENCE_CHUNKS_COLLECTION)
-    .createSearchIndexes([searchIndex, buildVectorIndex()]);
+  // Waits for the Search Index Management service rather than assuming it is up: `mongod` accepts
+  // every other command in this migration seconds before it can reach `mongot`, so on the first
+  // boot of a fresh volume the index build is the one step that can arrive too early.
+  await createSearchIndexesWhenReady(db, EVIDENCE_CHUNKS_COLLECTION, [
+    searchIndex,
+    buildVectorIndex(),
+  ]);
 
   // Both builds run concurrently on the server; wait for each so `up()` never reports success while
   // an index is still building — a migration that "succeeds" early hands the next reader a store

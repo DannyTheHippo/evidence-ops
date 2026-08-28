@@ -350,8 +350,8 @@ everything the host loop runs — `mongo`, Temporal (`temporal` + `temporal-post
 
 ```bash
 cp .env.example .env   # then set JWT_SECRET, the model-provider key, and VOYAGE_API_KEY
-docker compose --profile full up -d
-docker compose ps      # wait for api, worker, mcp, web healthy/running
+docker compose --profile full up -d --wait --wait-timeout 180
+docker compose ps -a migrate   # must read "Exited (0)" — anything else and the stack did not come up
 ```
 
 `cp .env.example .env` is not optional here: the containerized stack defaults to
@@ -368,16 +368,31 @@ healthy **and** on `migrate` completing successfully before they start — the s
 `0001-baseline.ts` builds take tens of seconds on a fresh volume, and starting the API against
 an unindexed store would silently match nothing rather than fail loudly.
 
+**Plain `up -d` returns exit code 0 even when `migrate` fails.** Compose does not propagate a
+one-shot dependency's failure to the bring-up command's own exit status, so `api`, `worker`, `mcp`
+and `web` can sit in `Created` forever while the command that started them reports success. `--wait`
+(`docker compose up --help`: "Wait for services to be running|healthy") is what turns that into a
+failing command instead — a service gated on a failed `migrate` never reaches `running`, so the wait
+cannot succeed and `up` exits non-zero once `--wait-timeout` elapses. The help text does not spell
+out the exact exit-code contract for that path, so treat a non-zero `up` as the strong signal it is,
+but confirm `migrate` directly rather than trusting the exit code alone: `docker compose ps -a
+migrate` must read `Exited (0)`. `--wait-timeout 180` bounds the wait at three minutes — enough
+headroom for `0001-baseline.ts`'s tens-of-seconds index build on a fresh volume without the bring-up
+command hanging indefinitely.
+
 Two things about this path are unverified rather than silently assumed: the `temporal` service's
 healthcheck (`tctl --address temporal:7233 cluster health`) has not been exercised against a running
 container in this environment, and the pinned `temporalio/auto-setup`/`temporalio/ui` image tags
 have not been checked against a registry. Confirm both on first `up` before relying on this path.
 
 **Reclaim memory by taking containers down.** `down` (no `-v`) removes containers while leaving the
-named volumes — and with them the ingested corpus — intact:
+named volumes — and with them the ingested corpus — intact. `--remove-orphans` removes any container
+whose service definition no longer exists in `docker-compose.yml` — without it, a container for a
+service you deleted from the file keeps running (and keeps the project network open) until removed
+by hand:
 
 ```bash
-docker compose --profile full down
+docker compose --profile full down --remove-orphans
 ```
 
 To drop one piece rather than the whole project, name the services instead of a profile, which is
@@ -722,7 +737,7 @@ migration, not just restarting the app.
 evidence-ops-mongo` because the replica-set config persisted in the volume records that name; a
 fresh random hostname on recreate leaves the node unable to become primary, which surfaces as
 `Error connecting to Search Index Management service`. A set `_id` cannot be reconfigured, so
-recovery is `docker compose down -v` and a re-run of the migrations.
+recovery is `docker compose down -v --remove-orphans` and a re-run of the migrations.
 
 ## Scripts
 

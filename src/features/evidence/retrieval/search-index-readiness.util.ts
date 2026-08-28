@@ -1,4 +1,4 @@
-import { Db, ObjectId } from 'mongodb';
+import { Db, ObjectId, type SearchIndexDescription } from 'mongodb';
 
 /**
  * `$listSearchIndexes` document shape. The driver's public `ListSearchIndexesCursor` type only
@@ -14,6 +14,12 @@ interface SearchIndexStatusDocument {
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
+
+/** Budget for the Search Index Management service to accept connections. Generous relative to the
+ * few seconds it takes on a warm host, because the wait is paid once on a fresh volume and the
+ * alternative to waiting is a failed deploy. */
+const DEFAULT_SERVICE_TIMEOUT_MS = 120_000;
+const DEFAULT_SERVICE_RETRY_INTERVAL_MS = 2_000;
 
 /**
  * Thrown when an Atlas Search / Vector Search index never reports `READY` + `queryable` within
@@ -81,6 +87,81 @@ export async function waitForSearchIndexReady(
     }
 
     await sleep(pollIntervalMs);
+  }
+}
+
+/**
+ * Thrown when the Search Index Management service never becomes reachable within the budget. The
+ * message names the wait so an operator can tell a slow start from a service that is not coming up
+ * at all, which are different problems with different fixes.
+ */
+export class SearchIndexServiceUnavailableError extends Error {
+  constructor(waitedMs: number, lastMessage: string) {
+    super(
+      `Search Index Management service was still unreachable after ${waitedMs}ms — last error: ${lastMessage}`,
+    );
+    this.name = 'SearchIndexServiceUnavailableError';
+  }
+}
+
+/**
+ * `mongod` proxies search-index commands to `mongot`, and reports this when it cannot reach it.
+ * Matched on the message because the server returns no distinguishing error code for it: every
+ * variant of this condition carries the service's name, and no other failure on this path does.
+ * Over-matching here would retry a genuine error for the full budget rather than failing fast, so
+ * the predicate is deliberately narrow.
+ */
+function isSearchServiceUnreachable(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('Search Index Management service');
+}
+
+/**
+ * Creates search indexes once the service that builds them is reachable.
+ *
+ * `mongod` and `mongot` start independently: a node is a writable primary, and answers every other
+ * command, several seconds before `createSearchIndexes` stops failing with "Error connecting to
+ * Search Index Management service". A container healthcheck cannot close that window — the cheap
+ * probes for it are answered by `mongod` without ever reaching `mongot`, so they go green early, and
+ * the only faithful probe is this call itself. So the operation that needs the service waits for it,
+ * rather than a health signal predicting it.
+ *
+ * FAILURE DIRECTION — fails CLOSED. Only the unreachable-service condition is retried; every other
+ * error propagates on the first attempt, and exhausting the budget throws
+ * {@link SearchIndexServiceUnavailableError} rather than returning. A migration that skipped its
+ * indexes and reported success would leave a store that answers every query with nothing.
+ *
+ * Retrying is safe because the service is unreachable *before* any index is created, so a retried
+ * attempt never encounters one it made itself on a previous pass.
+ */
+export async function createSearchIndexesWhenReady(
+  db: Db,
+  collectionName: string,
+  indexes: readonly SearchIndexDescription[],
+  options: { timeoutMs?: number; retryIntervalMs?: number } = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_SERVICE_TIMEOUT_MS;
+  const retryIntervalMs = options.retryIntervalMs ?? DEFAULT_SERVICE_RETRY_INTERVAL_MS;
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+
+  for (;;) {
+    try {
+      await db.collection(collectionName).createSearchIndexes([...indexes]);
+      return;
+    } catch (error) {
+      if (!isSearchServiceUnreachable(error)) {
+        throw error;
+      }
+
+      if (Date.now() >= deadline) {
+        throw new SearchIndexServiceUnavailableError(
+          Date.now() - startedAt,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+
+      await sleep(retryIntervalMs);
+    }
   }
 }
 

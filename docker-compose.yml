@@ -143,6 +143,13 @@ services:
       # search was unreachable, so every dependent service started against a broken database.
       # `isWritablePrimary` is the property callers actually need: migrations, GridFS writes and
       # `$rankFusion` all require a primary.
+      #
+      # This deliberately does NOT attest that search is usable. mongod and mongot start
+      # independently, and mongod is a writable primary several seconds before `createSearchIndexes`
+      # succeeds; no read-only probe closes that gap, because the cheap ones answer from mongod
+      # without reaching mongot and the faithful one is the write itself. Search readiness is
+      # therefore waited for by the operation that needs it — see `createSearchIndexesWhenReady` in
+      # `migrations/0001-baseline.ts` — rather than predicted here.
       test:
         [
           "CMD",

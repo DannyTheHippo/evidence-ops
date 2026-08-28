@@ -1,8 +1,10 @@
 import { Db, ObjectId } from 'mongodb';
 import {
   createSearchChunkCountProbe,
+  createSearchIndexesWhenReady,
   createVectorChunkProbe,
   SearchIndexNotReadyError,
+  SearchIndexServiceUnavailableError,
   waitForIndexConvergence,
   waitForSearchIndexReady,
 } from '../../../../src/features/evidence/retrieval/search-index-readiness.util';
@@ -299,5 +301,88 @@ describe('createVectorChunkProbe', () => {
     );
 
     await expect(probe()).resolves.toBe(false);
+  });
+});
+
+/**
+ * Mocks the chain `createSearchIndexesWhenReady` calls:
+ * `db.collection(name).createSearchIndexes(indexes)`. Returns the mock so each test can assert how
+ * many attempts were made — the retry behaviour is the whole point, so a test that only checked the
+ * resolved value would pass whether or not any retry happened.
+ */
+function createMockDbWithCreateSearchIndexes(impl: jest.Mock): {
+  db: Db;
+  createSearchIndexes: jest.Mock;
+} {
+  const collection = jest.fn().mockReturnValue({ createSearchIndexes: impl });
+  return { db: { collection } as unknown as Db, createSearchIndexes: impl };
+}
+
+const UNREACHABLE = new Error('Error connecting to Search Index Management service.');
+const INDEXES = [{ name: 'idx', definition: { mappings: { dynamic: true } } }];
+
+describe('createSearchIndexesWhenReady', () => {
+  afterEach(() => jest.resetAllMocks());
+
+  it('should create the indexes on the first attempt when the service is already reachable', async () => {
+    const { db, createSearchIndexes } = createMockDbWithCreateSearchIndexes(
+      jest.fn().mockResolvedValue(['idx']),
+    );
+
+    await createSearchIndexesWhenReady(db, 'evidence_chunks', INDEXES);
+
+    expect(createSearchIndexes).toHaveBeenCalledTimes(1);
+    expect(createSearchIndexes).toHaveBeenCalledWith(INDEXES);
+  });
+
+  it('should retry while the search service is unreachable and succeed once it comes up', async () => {
+    const { db, createSearchIndexes } = createMockDbWithCreateSearchIndexes(
+      jest
+        .fn()
+        .mockRejectedValueOnce(UNREACHABLE)
+        .mockRejectedValueOnce(UNREACHABLE)
+        .mockResolvedValue(['idx']),
+    );
+
+    await createSearchIndexesWhenReady(db, 'evidence_chunks', INDEXES, { retryIntervalMs: 0 });
+
+    expect(createSearchIndexes).toHaveBeenCalledTimes(3);
+  });
+
+  it('should propagate an unrelated error on the first attempt rather than retrying it', async () => {
+    const other = new Error('index already exists');
+    const { db, createSearchIndexes } = createMockDbWithCreateSearchIndexes(
+      jest.fn().mockRejectedValue(other),
+    );
+
+    await expect(
+      createSearchIndexesWhenReady(db, 'evidence_chunks', INDEXES, { retryIntervalMs: 0 }),
+    ).rejects.toBe(other);
+    expect(createSearchIndexes).toHaveBeenCalledTimes(1);
+  });
+
+  it('should throw SearchIndexServiceUnavailableError once the budget is exhausted, never resolve', async () => {
+    const { db, createSearchIndexes } = createMockDbWithCreateSearchIndexes(
+      jest.fn().mockRejectedValue(UNREACHABLE),
+    );
+
+    await expect(
+      createSearchIndexesWhenReady(db, 'evidence_chunks', INDEXES, {
+        timeoutMs: 0,
+        retryIntervalMs: 0,
+      }),
+    ).rejects.toBeInstanceOf(SearchIndexServiceUnavailableError);
+    expect(createSearchIndexes).toHaveBeenCalledTimes(1);
+  });
+
+  it('should name the wait and the underlying error so a slow start is distinguishable from a dead service', async () => {
+    const { db } = createMockDbWithCreateSearchIndexes(jest.fn().mockRejectedValue(UNREACHABLE));
+
+    await expect(
+      createSearchIndexesWhenReady(db, 'evidence_chunks', INDEXES, {
+        timeoutMs: 0,
+        retryIntervalMs: 0,
+      }),
+    ).rejects.toThrow(/still unreachable after \d+ms — last error: .*Search Index Management/);
   });
 });

@@ -67,12 +67,26 @@ refuses outright and names exactly what is missing.
 ## Bring-up
 
 ```bash
-docker compose --profile full up -d
+docker compose --profile full up -d --wait --wait-timeout 180
+docker compose ps -a migrate   # must read "Exited (0)" — anything else and the stack did not come up
 ```
 
 **`--profile full` is required.** `docker-compose.yml` gates every application service behind a
 profile; the only service with none is `mongo`. Omitting `--profile full` starts `mongo` alone and
 nothing else — no error, just a stack that looks like it came up and did not.
+
+**Plain `up -d` returns exit code 0 even when `migrate` fails.** `api`, `worker` and `mcp` depend on
+`migrate` via `condition: service_completed_successfully`; if `migrate` exits non-zero none of them
+ever leaves `Created`, and Compose does not propagate that failure to the bring-up command's own
+exit status — the operator sees success and a dead stack. `--wait` (`docker compose up --help`:
+"Wait for services to be running|healthy") is the fix: a service gated on a failed `migrate` can
+never reach `running`, so the wait cannot succeed and `up` exits non-zero once `--wait-timeout`
+elapses. The help text does not spell out the exact exit-code contract on that path, so treat a
+non-zero `up` as the strong signal it is, but do not rely on the exit code alone — `docker compose
+ps -a migrate` reading `Exited (0)` is the direct check, and it is what the second command above
+does. `--wait-timeout 180` bounds the wait at three minutes so a bring-up that cannot succeed fails
+loudly instead of hanging — see Migrations below for why the first bring-up on a fresh volume can
+legitimately take tens of seconds of that budget.
 
 What the stack publishes to the host, every port bound to `127.0.0.1`:
 
@@ -168,7 +182,8 @@ it beyond `mongo` being healthy.
 
 If `migrate` exits non-zero, the application services never start — `docker compose ps` shows them
 waiting on a dependency that failed rather than crash-looping. `docker compose logs migrate` has
-the failing migration's error.
+the failing migration's error. This is the failure the `--wait` flag in [Bring-up](#bring-up) exists
+to surface as a failing command instead of a silent one.
 
 ## Verification
 
@@ -411,7 +426,8 @@ MONGO_DB_URI="mongodb://localhost:<published-port>/evidence-ops?directConnection
 ```bash
 npm run backup:mongo -- /path/outside/the/repo/pre-upgrade.gz
 git pull
-docker compose --profile full up -d --build
+docker compose --profile full up -d --build --wait --wait-timeout 180
+docker compose ps -a migrate   # must read "Exited (0)" — anything else and the upgrade did not land
 ```
 
 Back up first — an upgrade that includes a migration is not reversible by re-deploying the old
@@ -419,7 +435,8 @@ image once the migration has run. `--build` forces every image, including `migra
 from the new source; because `migrate`'s image changes, Compose recreates that one-shot container
 and re-runs it before the application services (gated on `service_completed_successfully`) start on
 the new code. There is no separate manual migration step for an upgrade any more than there is for
-the first bring-up.
+the first bring-up. `--wait` is what fails this command when the new migration breaks — see
+[Bring-up](#bring-up) for what it guarantees and what it does not.
 
 **Never run `docker compose down -v`** as part of an upgrade or for any other reason short of the
 stale-replica-set recovery the README's [Gotchas](../../README.md#gotchas) section documents — it
