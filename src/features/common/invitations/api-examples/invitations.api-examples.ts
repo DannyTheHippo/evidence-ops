@@ -56,7 +56,7 @@ export const invitationsApiExamples: Record<string, ApiResponseOptions> = {
   },
   forbidden: {
     status: HttpStatus.FORBIDDEN,
-    description: 'Only an admin may mint or list invitations.',
+    description: 'Only an admin may mint, list, revoke or resend invitations.',
     examples: {
       example: {
         summary: 'Insufficient role',
@@ -64,6 +64,25 @@ export const invitationsApiExamples: Record<string, ApiResponseOptions> = {
           statusCode: HttpStatus.FORBIDDEN,
           message: 'Insufficient role for this action',
           error: 'Forbidden',
+        },
+      },
+    },
+  },
+  revoked: {
+    status: HttpStatus.NO_CONTENT,
+    description:
+      'The invitation was revoked. Both verify and accept refuse its token from here on.',
+  },
+  notFound: {
+    status: HttpStatus.NOT_FOUND,
+    description: 'Invitation does not exist for this tenant, or is already accepted or revoked.',
+    examples: {
+      example: {
+        summary: 'Unknown invitation',
+        value: {
+          statusCode: HttpStatus.NOT_FOUND,
+          message: "Invitation '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+          error: 'Not Found',
         },
       },
     },

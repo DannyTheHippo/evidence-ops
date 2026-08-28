@@ -9,7 +9,10 @@ import {
   InvitationsService,
   INVITATION_TTL_DAYS,
 } from '../../../../src/features/common/invitations/invitations.service';
-import { InvitationEmailAlreadyRegisteredException } from '../../../../src/features/common/invitations/exceptions/invitations.exception';
+import {
+  InvitationEmailAlreadyRegisteredException,
+  InvitationNotFoundException,
+} from '../../../../src/features/common/invitations/exceptions/invitations.exception';
 import { DEFAULT_PAGINATION_LIMIT } from '../../../../src/shared/constants/pagination-defaults.constant';
 import { UserRole } from '../../../../src/shared/enums/user-role.enum';
 import { AuditService } from '../../../../src/shared/services/audit/audit.service';
@@ -186,6 +189,25 @@ describe('InvitationsService', () => {
 
       expect(result.docs[0].acceptedAt).toBe(acceptedAt);
     });
+
+    it('should expose revokedAt on a revoked invitation, rather than filtering it out of the list', async () => {
+      const revokedAt = new Date('2026-07-03T00:00:00.000Z');
+      mockInvitationModel.find.mockResolvedValueOnce([buildMockInvitation({ revokedAt })]);
+      mockInvitationModel.countDocuments.mockResolvedValueOnce(1);
+
+      const result = await service.list(
+        { skip: 0, limit: DEFAULT_PAGINATION_LIMIT },
+        actorId,
+        'tenant-a',
+      );
+
+      expect(mockInvitationModel.find).toHaveBeenCalledWith(
+        { tenantId: 'tenant-a' },
+        null,
+        expect.objectContaining({ skip: 0, limit: DEFAULT_PAGINATION_LIMIT }),
+      );
+      expect(result.docs[0].revokedAt).toBe(revokedAt);
+    });
   });
 
   describe('verify', () => {
@@ -246,6 +268,17 @@ describe('InvitationsService', () => {
       expect(result).toBeNull();
     });
 
+    it('should fail closed for a revoked invitation', async () => {
+      const token = buildPresentableToken();
+      mockInvitationModel.findOne.mockResolvedValueOnce(
+        buildMockInvitation({ tokenHash: hashOf(token), revokedAt: new Date() }),
+      );
+
+      const result = await service.verify(token);
+
+      expect(result).toBeNull();
+    });
+
     it('should fail closed for an expired invitation', async () => {
       const token = buildPresentableToken();
       mockInvitationModel.findOne.mockResolvedValueOnce(
@@ -286,7 +319,12 @@ describe('InvitationsService', () => {
 
       expect(result).toBe(true);
       expect(mockInvitationModel.findOneAndUpdate).toHaveBeenCalledWith(
-        { _id: invitationId.toString(), tenantId: 'tenant-a', acceptedAt: { $exists: false } },
+        {
+          _id: invitationId.toString(),
+          tenantId: 'tenant-a',
+          acceptedAt: { $exists: false },
+          revokedAt: { $exists: false },
+        },
         { $set: { acceptedAt: expect.any(Date) as Date } },
       );
       expect(mockAuditService.record).toHaveBeenCalledWith({
@@ -318,6 +356,83 @@ describe('InvitationsService', () => {
         { _id: invitationId.toString(), tenantId: 'tenant-a' },
         { $unset: { acceptedAt: '' } },
       );
+    });
+  });
+
+  describe('revoke', () => {
+    it('should refuse a malformed invitation id without touching the database', async () => {
+      await expect(service.revoke('not-an-object-id', actorId, 'tenant-a')).rejects.toBeInstanceOf(
+        InvitationNotFoundException,
+      );
+      expect(mockInvitationModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('should refuse a missing, foreign-tenant, or already-accepted invitation with the same not-found message', async () => {
+      mockInvitationModel.findOneAndUpdate.mockResolvedValueOnce(null);
+
+      await expect(
+        service.revoke(invitationId.toString(), actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(InvitationNotFoundException);
+      expect(mockAuditService.record).not.toHaveBeenCalled();
+    });
+
+    it('should mark a pending invitation revoked, scoped to its tenant, and record an audit event', async () => {
+      mockInvitationModel.findOneAndUpdate.mockResolvedValueOnce(buildMockInvitation());
+
+      await service.revoke(invitationId.toString(), actorId, 'tenant-a');
+
+      expect(mockInvitationModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: invitationId.toString(), tenantId: 'tenant-a', acceptedAt: { $exists: false } },
+        { $set: { revokedAt: expect.any(Date) as Date } },
+      );
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'invitations.revoked',
+        actorId,
+        subject: { entityType: 'Invitation', entityId: invitationId.toString() },
+        tenantId: 'tenant-a',
+      });
+    });
+  });
+
+  describe('resend', () => {
+    it('should refuse a malformed invitation id without touching the database', async () => {
+      await expect(service.resend('not-an-object-id', actorId, 'tenant-a')).rejects.toBeInstanceOf(
+        InvitationNotFoundException,
+      );
+      expect(mockInvitationModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('should refuse a missing, foreign-tenant, already-accepted, or already-revoked invitation with the same not-found message', async () => {
+      mockInvitationModel.findOneAndUpdate.mockResolvedValueOnce(null);
+
+      await expect(
+        service.resend(invitationId.toString(), actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(InvitationNotFoundException);
+      expect(mockAuditService.record).not.toHaveBeenCalled();
+    });
+
+    it('should rotate the token for a pending, live invitation and record an audit event', async () => {
+      mockInvitationModel.findOneAndUpdate.mockResolvedValueOnce(buildMockInvitation());
+
+      const result = await service.resend(invitationId.toString(), actorId, 'tenant-a');
+
+      expect(mockInvitationModel.findOneAndUpdate).toHaveBeenCalledWith(
+        {
+          _id: invitationId.toString(),
+          tenantId: 'tenant-a',
+          acceptedAt: { $exists: false },
+          revokedAt: { $exists: false },
+        },
+        { $set: { tokenHash: expect.any(String) as string, expiresAt: expect.any(Date) as Date } },
+      );
+      expect(result.token.startsWith('eo_inv_')).toBe(true);
+      expect(result.email).toBe('colleague@example.com');
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'invitations.resent',
+        actorId,
+        subject: { entityType: 'Invitation', entityId: invitationId.toString() },
+        tenantId: 'tenant-a',
+      });
     });
   });
 });

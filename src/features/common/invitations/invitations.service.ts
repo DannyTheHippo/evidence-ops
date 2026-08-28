@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import {
   Invitation,
   InvitationDocument,
@@ -12,7 +12,10 @@ import { UserRole } from '../../../shared/enums/user-role.enum';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
-import { InvitationEmailAlreadyRegisteredException } from './exceptions/invitations.exception';
+import {
+  InvitationEmailAlreadyRegisteredException,
+  InvitationNotFoundException,
+} from './exceptions/invitations.exception';
 
 const TOKEN_PREFIX = 'eo_inv_';
 const TOKEN_RANDOM_BYTES = 32;
@@ -50,6 +53,7 @@ export interface InvitationResult {
   readonly role: UserRole;
   readonly expiresAt: Date;
   readonly acceptedAt?: Date;
+  readonly revokedAt?: Date;
   readonly createdAt: Date;
 }
 
@@ -146,12 +150,12 @@ export class InvitationsService {
   }
 
   /**
-   * Fails CLOSED at every step: a malformed token, an unrecognized hash, an expired or an
-   * already-redeemed invitation all return `null` rather than an identity — never throws.
-   * Read-only: this checks whether a token is currently valid, it does not consume it. Consumption
-   * happens in `accept`, which `AuthService.registerWithInvitation` calls once it has reserved a
-   * user id but before it creates the user, so two concurrent redemptions of the same token cannot
-   * both proceed to `create`.
+   * Fails CLOSED at every step: a malformed token, an unrecognized hash, an expired, revoked, or
+   * already-redeemed invitation all return `null` rather than an identity — never throws. Read-only:
+   * this checks whether a token is currently valid, it does not consume it. Consumption happens in
+   * `accept`, which `AuthService.registerWithInvitation` calls once it has reserved a user id but
+   * before it creates the user, so two concurrent redemptions of the same token cannot both proceed
+   * to `create`.
    */
   async verify(presentedToken: string): Promise<VerifiedInvitation | null> {
     if (presentedToken.length !== TOKEN_LENGTH || !presentedToken.startsWith(TOKEN_PREFIX)) {
@@ -165,6 +169,9 @@ export class InvitationsService {
     }
 
     if (invitation.acceptedAt) {
+      return null;
+    }
+    if (invitation.revokedAt) {
       return null;
     }
     if (invitation.expiresAt.getTime() < Date.now()) {
@@ -181,15 +188,20 @@ export class InvitationsService {
 
   /**
    * Atomically reserves an invitation for the given user, scoped to its own tenant. The filter
-   * only matches a pending invitation — `acceptedAt` unset — so a second concurrent redemption of
-   * the same token finds nothing to update and gets `false` back, refused before it ever attempts
-   * to create a user, rather than racing both attempts through to the unique email index and
-   * surfacing as an unhandled 500. Returns `false` for a stale, foreign-tenant, or already-redeemed
-   * invitation id.
+   * only matches a pending, unrevoked invitation — `acceptedAt` and `revokedAt` both unset — so a
+   * second concurrent redemption of the same token finds nothing to update and gets `false` back,
+   * refused before it ever attempts to create a user, rather than racing both attempts through to
+   * the unique email index and surfacing as an unhandled 500. Returns `false` for a stale,
+   * foreign-tenant, revoked, or already-redeemed invitation id.
    */
   async accept(invitationId: string, userId: string, tenantId: string): Promise<boolean> {
     const reserved = await this.invitationModel.findOneAndUpdate(
-      { _id: invitationId, tenantId, acceptedAt: { $exists: false } },
+      {
+        _id: invitationId,
+        tenantId,
+        acceptedAt: { $exists: false },
+        revokedAt: { $exists: false },
+      },
       { $set: { acceptedAt: new Date() } },
     );
     if (!reserved) {
@@ -219,6 +231,86 @@ export class InvitationsService {
     );
   }
 
+  /**
+   * Kills an outstanding invitation inside its live window, so `verify` and `accept` refuse its
+   * token from this point on — not a soft-delete, the row still expires off its own `expiresAt`
+   * either way (the durable record of what happened lives in `audit_events`). Idempotent: revoking
+   * an already-revoked invitation just re-stamps `revokedAt`. Scoped by `tenantId`, so a foreign
+   * tenant's id, an already-accepted invitation, and an id that was never minted all throw the same
+   * `InvitationNotFoundException` — none distinguishable from another.
+   */
+  async revoke(id: string, actorId: string, tenantId: string): Promise<void> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new InvitationNotFoundException(`Invitation '${id}' not found`);
+    }
+
+    const invitation = await this.invitationModel.findOneAndUpdate(
+      { _id: id, tenantId, acceptedAt: { $exists: false } },
+      { $set: { revokedAt: new Date() } },
+    );
+    if (!invitation) {
+      throw new InvitationNotFoundException(`Invitation '${id}' not found`);
+    }
+
+    await this.auditService.record({
+      action: 'invitations.revoked',
+      actorId,
+      subject: { entityType: 'Invitation', entityId: id },
+      tenantId,
+    });
+
+    this.logger.debug(`Revoked invitation '${id}'`);
+  }
+
+  /**
+   * Rotates the invitation's token, following `mint`'s own hashing, expiry and generation rather
+   * than a second path: the previous plaintext token was never persisted, so the old link stops
+   * working the moment this succeeds — there is nothing to fall back to. Only a pending, unrevoked
+   * invitation can be resent; a foreign-tenant id, an already-accepted or already-revoked
+   * invitation, and an id that was never minted all throw the same `InvitationNotFoundException`.
+   */
+  async resend(id: string, actorId: string, tenantId: string): Promise<MintedInvitationResult> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new InvitationNotFoundException(`Invitation '${id}' not found`);
+    }
+
+    const token = `${TOKEN_PREFIX}${randomBytes(TOKEN_RANDOM_BYTES).toString('base64url')}`;
+    const tokenHash = this.hash(token);
+    const expiresAt = new Date(Date.now() + INVITATION_TTL_DAYS * MS_PER_DAY);
+
+    const invitation = await this.invitationModel.findOneAndUpdate(
+      {
+        _id: id,
+        tenantId,
+        acceptedAt: { $exists: false },
+        revokedAt: { $exists: false },
+      },
+      { $set: { tokenHash, expiresAt } },
+    );
+    if (!invitation) {
+      throw new InvitationNotFoundException(`Invitation '${id}' not found`);
+    }
+
+    await this.auditService.record({
+      action: 'invitations.resent',
+      actorId,
+      subject: { entityType: 'Invitation', entityId: id },
+      tenantId,
+    });
+
+    this.logger.debug(`Resent invitation '${id}', rotating its token`);
+
+    // `token` is the only place the plaintext ever appears — not persisted, not logged above.
+    return {
+      id: invitation._id.toString(),
+      email: invitation.email,
+      role: invitation.role,
+      token,
+      expiresAt,
+      createdAt: invitation.createdAt,
+    };
+  }
+
   /** `timingSafeEqual` throws on unequal-length buffers rather than returning `false` — sha256 hex
    *  digests are always 64 characters on both sides in practice, but the length check guards that
    *  precondition explicitly rather than letting a corrupt row crash verification instead of just
@@ -243,6 +335,7 @@ export class InvitationsService {
       role: invitation.role,
       expiresAt: invitation.expiresAt,
       acceptedAt: invitation.acceptedAt,
+      revokedAt: invitation.revokedAt,
       createdAt: invitation.createdAt,
     };
   }

@@ -34,6 +34,13 @@ export class Invitation extends AuditableDocument {
    *  pending; present makes it single-use — a second redemption attempt has nothing left to grant. */
   @Prop({ type: Date })
   acceptedAt?: Date;
+
+  /** Stamped by `InvitationsService.revoke` — an admin killing an outstanding invitation before it
+   *  is redeemed. `verify` and `accept` refuse a revoked token the same way they refuse an expired
+   *  or already-accepted one, so a caller cannot tell which case applied. Not a soft-delete: the
+   *  row still expires off `expiresAt` on its own schedule either way. */
+  @Prop({ type: Date })
+  revokedAt?: Date;
 }
 
 export const InvitationSchema = SchemaFactory.createForClass(Invitation);

@@ -26,6 +26,7 @@ interface InvitationBody {
   role: UserRole;
   expiresAt: string;
   acceptedAt?: string;
+  revokedAt?: string;
   createdAt: string;
 }
 
@@ -168,11 +169,37 @@ describe('Invitations (e2e)', () => {
       expect(listedInvitation).toBeDefined();
       expect(listedInvitation).not.toHaveProperty('token');
       expect(listedInvitation).not.toHaveProperty('tokenHash');
+      // Absent, not null, while the invitation is still pending — see the revoked counterpart
+      // below for the same field once it is populated.
+      expect(listedInvitation).not.toHaveProperty('revokedAt');
       expect(JSON.stringify(listedInvitation)).not.toContain(mintedBody.token);
       expect(Object.keys(listedInvitation as InvitationBody).sort()).toEqual(LIST_INVITATION_KEYS);
 
       const stored = await invitationModel.findById(mintedBody.id);
       expect(JSON.stringify(stored?.toJSON())).not.toContain(mintedBody.token);
+    });
+
+    it('keeps a revoked invitation listed and exposes revokedAt, rather than hiding it', async () => {
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/invitations')
+        .set('Cookie', adminCookie)
+        .send({ email: 'colleague-listed-revoked@example.com', role: UserRole.Member });
+      const mintedBody = minted.body as MintedInvitationBody;
+
+      const revokeResponse = await request(getTestServer(app))
+        .delete(`/api/v1/invitations/${mintedBody.id}`)
+        .set('Cookie', adminCookie);
+      expect(revokeResponse.status).toBe(204);
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/invitations')
+        .set('Cookie', adminCookie);
+      const body = response.body as { docs: InvitationBody[]; count: number };
+
+      const listedInvitation = body.docs.find((doc) => doc.id === mintedBody.id);
+      expect(listedInvitation).toBeDefined();
+      expect(typeof listedInvitation?.revokedAt).toBe('string');
+      expect(new Date(listedInvitation?.revokedAt as string).getTime()).not.toBeNaN();
     });
 
     it('excludes a row belonging to a different tenant', async () => {
@@ -265,6 +292,157 @@ describe('Invitations (e2e)', () => {
       const identity = await invitationsService.verify('eo_inv_never-minted-fixture');
 
       expect(identity).toBeNull();
+    });
+
+    it('refuses a revoked token', async () => {
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/invitations')
+        .set('Cookie', adminCookie)
+        .send({ email: 'colleague-verify-revoked@example.com', role: UserRole.Member });
+      const mintedBody = minted.body as MintedInvitationBody;
+      await invitationModel.updateOne({ _id: mintedBody.id }, { revokedAt: new Date() });
+
+      const identity = await invitationsService.verify(mintedBody.token);
+
+      expect(identity).toBeNull();
+    });
+  });
+
+  describe('DELETE /invitations/:id', () => {
+    it('rejects an unauthenticated request', async () => {
+      const response = await request(getTestServer(app)).delete(
+        '/api/v1/invitations/65f1c2e4a1b2c3d4e5f6a7b8',
+      );
+
+      expect(response.status).toBe(401);
+    });
+
+    it('returns 403 when the caller is not an admin', async () => {
+      const response = await request(getTestServer(app))
+        .delete('/api/v1/invitations/65f1c2e4a1b2c3d4e5f6a7b8')
+        .set('Cookie', memberCookie);
+
+      expect(response.status).toBe(403);
+    });
+
+    it('returns 404 for an unknown invitation id', async () => {
+      const response = await request(getTestServer(app))
+        .delete('/api/v1/invitations/65f1c2e4a1b2c3d4e5f6a7b8')
+        .set('Cookie', adminCookie);
+
+      expect(response.status).toBe(404);
+    });
+
+    it('returns 404 for a different tenant’s invitation', async () => {
+      const other = await registerTestUser(app, {
+        email: 'invitations-revoke-other-tenant-e2e@example.com',
+        password: 'correct-horse-battery',
+      });
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/invitations')
+        .set('Cookie', other.cookie)
+        .send({ email: 'colleague-revoke-other-tenant@example.com', role: UserRole.Member });
+      const mintedBody = minted.body as MintedInvitationBody;
+
+      const response = await request(getTestServer(app))
+        .delete(`/api/v1/invitations/${mintedBody.id}`)
+        .set('Cookie', adminCookie);
+
+      expect(response.status).toBe(404);
+    });
+
+    it('revokes an outstanding invitation, refusing both verify and accept afterwards', async () => {
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/invitations')
+        .set('Cookie', adminCookie)
+        .send({ email: 'colleague-revoke@example.com', role: UserRole.Member });
+      const mintedBody = minted.body as MintedInvitationBody;
+
+      const revokeResponse = await request(getTestServer(app))
+        .delete(`/api/v1/invitations/${mintedBody.id}`)
+        .set('Cookie', adminCookie);
+
+      expect(revokeResponse.status).toBe(204);
+
+      const identity = await invitationsService.verify(mintedBody.token);
+      expect(identity).toBeNull();
+
+      const registerResponse = await request(getTestServer(app))
+        .post('/api/v1/auth/register')
+        .send({ password: 'correct-horse-battery', invitationToken: mintedBody.token });
+
+      expect(registerResponse.status).toBe(400);
+    });
+  });
+
+  describe('POST /invitations/:id/resend', () => {
+    it('rejects an unauthenticated request', async () => {
+      const response = await request(getTestServer(app)).post(
+        '/api/v1/invitations/65f1c2e4a1b2c3d4e5f6a7b8/resend',
+      );
+
+      expect(response.status).toBe(401);
+    });
+
+    it('returns 403 when the caller is not an admin', async () => {
+      const response = await request(getTestServer(app))
+        .post('/api/v1/invitations/65f1c2e4a1b2c3d4e5f6a7b8/resend')
+        .set('Cookie', memberCookie);
+
+      expect(response.status).toBe(403);
+    });
+
+    it('returns 404 for an unknown invitation id', async () => {
+      const response = await request(getTestServer(app))
+        .post('/api/v1/invitations/65f1c2e4a1b2c3d4e5f6a7b8/resend')
+        .set('Cookie', adminCookie);
+
+      expect(response.status).toBe(404);
+    });
+
+    it('returns 404 for a revoked invitation, refusing to resurrect it', async () => {
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/invitations')
+        .set('Cookie', adminCookie)
+        .send({ email: 'colleague-resend-revoked@example.com', role: UserRole.Member });
+      const mintedBody = minted.body as MintedInvitationBody;
+      await invitationModel.updateOne({ _id: mintedBody.id }, { revokedAt: new Date() });
+
+      const response = await request(getTestServer(app))
+        .post(`/api/v1/invitations/${mintedBody.id}/resend`)
+        .set('Cookie', adminCookie);
+
+      expect(response.status).toBe(404);
+    });
+
+    it('rotates the token, exposing the same key set as mint, and invalidates the previous link', async () => {
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/invitations')
+        .set('Cookie', adminCookie)
+        .send({ email: 'colleague-resend@example.com', role: UserRole.Member });
+      const mintedBody = minted.body as MintedInvitationBody;
+
+      const resendResponse = await request(getTestServer(app))
+        .post(`/api/v1/invitations/${mintedBody.id}/resend`)
+        .set('Cookie', adminCookie);
+      const resentBody = resendResponse.body as MintedInvitationBody;
+
+      expect(resendResponse.status).toBe(201);
+      expect(Object.keys(resentBody).sort()).toEqual(MINTED_INVITATION_KEYS);
+      expect(resentBody.id).toBe(mintedBody.id);
+      expect(resentBody.token).not.toBe(mintedBody.token);
+
+      const password = 'correct-horse-battery';
+
+      const oldTokenAttempt = await request(getTestServer(app))
+        .post('/api/v1/auth/register')
+        .send({ password, invitationToken: mintedBody.token });
+      expect(oldTokenAttempt.status).toBe(400);
+
+      const newTokenAttempt = await request(getTestServer(app))
+        .post('/api/v1/auth/register')
+        .send({ password, invitationToken: resentBody.token });
+      expect(newTokenAttempt.status).toBe(201);
     });
   });
 });

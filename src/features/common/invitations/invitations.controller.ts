@@ -1,9 +1,11 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
+  Param,
   Post,
   Query,
   UnauthorizedException,
@@ -81,5 +83,46 @@ export class InvitationsController {
     );
 
     return { docs: docs.map((doc) => toResponseDto(InvitationResponseDto, doc)), count };
+  }
+
+  @Delete(':id')
+  @Version('1')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(RolesGuard)
+  @RequireRole(UserRole.Admin)
+  @ApiResponse(invitationsApiExamples.revoked)
+  @ApiResponse(invitationsApiExamples.notFound)
+  @ApiResponse(invitationsApiExamples.forbidden)
+  async revoke(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedRequest['user'],
+  ): Promise<void> {
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    await this.invitationsService.revoke(id, user.userId, user.tenantId);
+  }
+
+  @Post(':id/resend')
+  @Version('1')
+  @HttpCode(HttpStatus.CREATED)
+  @UseGuards(RolesGuard)
+  @RequireRole(UserRole.Admin)
+  @ApiResponse(invitationsApiExamples.minted)
+  @ApiResponse(invitationsApiExamples.notFound)
+  @ApiResponse(invitationsApiExamples.forbidden)
+  async resend(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedRequest['user'],
+  ): Promise<MintedInvitationResponseDto> {
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    return toResponseDto(
+      MintedInvitationResponseDto,
+      await this.invitationsService.resend(id, user.userId, user.tenantId),
+    );
   }
 }

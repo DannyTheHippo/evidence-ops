@@ -751,6 +751,9 @@ export interface Invitation {
   role: UserRole;
   expiresAt: string;
   acceptedAt?: string;
+  // Absent means the invitation is still live. A revoked invitation stays in the list rather than
+  // being filtered out, so this is what tells the UI its token no longer works.
+  revokedAt?: string;
   createdAt: string;
 }
 
@@ -776,6 +779,18 @@ export function listInvitations(pagination?: {
   if (pagination?.limit !== undefined) query.set('limit', String(pagination.limit));
   const qs = query.toString();
   return request<WithCount<Invitation>>(`/invitations${qs ? `?${qs}` : ''}`);
+}
+
+// Kills an outstanding invitation inside its live window — both verify and accept refuse its
+// token from this point on.
+export async function revokeInvitation(id: string): Promise<void> {
+  await request<void>(`/invitations/${id}`, { method: 'DELETE' });
+}
+
+// Rotates the invitation's token. Only a hash of the previous token was ever stored, so the old
+// link stops working the moment this call succeeds — there is no way to recover or reactivate it.
+export function resendInvitation(id: string): Promise<MintedInvitation> {
+  return request<MintedInvitation>(`/invitations/${id}/resend`, { method: 'POST' });
 }
 
 // ── Users ────────────────────────────────────────────────────────────────

@@ -39,6 +39,17 @@ export class InvitationResponseDto {
 
   @Expose()
   @ApiProperty({
+    example: '2026-07-03T00:00:00.000Z',
+    description:
+      'When this invitation was revoked. Absent means it is still live. A revoked invitation ' +
+      'stays in this list — it is not deleted or filtered out — so its token stopping working is ' +
+      'visible rather than silent.',
+    required: false,
+  })
+  revokedAt?: Date;
+
+  @Expose()
+  @ApiProperty({
     example: '2026-07-01T00:00:00.000Z',
     description: 'Invitation creation timestamp.',
   })

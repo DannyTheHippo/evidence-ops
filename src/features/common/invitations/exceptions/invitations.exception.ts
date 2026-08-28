@@ -9,3 +9,12 @@ export class InvitationEmailAlreadyRegisteredException extends BaseException {
     super(message, HttpStatus.CONFLICT, cause);
   }
 }
+
+/** Thrown by `revoke` and `resend` for a malformed id, a missing row, a foreign-tenant row, or a
+ *  row already accepted or revoked — the same message and status in every case, so a cross-tenant
+ *  id reads identically to one that was never minted. */
+export class InvitationNotFoundException extends BaseException {
+  constructor(message: string, cause?: unknown) {
+    super(message, HttpStatus.NOT_FOUND, cause);
+  }
+}
