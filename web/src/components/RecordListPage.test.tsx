@@ -40,12 +40,50 @@ describe('RecordListPage', () => {
     expect(screen.getByText('Fetching widgets…')).toBeInTheDocument();
   });
 
-  it('renders only the error region for an error status', () => {
-    renderWithStatus({ kind: 'error', message: 'Failed to load widgets' });
+  it('renders only the alert for a blank status with an error', () => {
+    render(
+      <RecordListPage {...baseProps} status={{ kind: 'blank' }} error="Failed to load widgets">
+        <p>Body</p>
+      </RecordListPage>,
+    );
 
     const alert = screen.getByRole('alert');
     expect(alert).toHaveTextContent('Failed to load widgets');
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByText('Body')).not.toBeInTheDocument();
+  });
+
+  it('renders the alert alongside the ready body on a refresh error, keeping existing rows', () => {
+    render(
+      <RecordListPage {...baseProps} status={{ kind: 'ready' }} error="Failed to refresh widgets">
+        <p>Body</p>
+      </RecordListPage>,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Failed to refresh widgets');
+    expect(screen.getByText('Body')).toBeInTheDocument();
+  });
+
+  it('renders the alert alongside the empty state when a filter apply fails on an already-empty result', () => {
+    render(
+      <RecordListPage
+        {...baseProps}
+        status={{ kind: 'empty', title: 'No widgets yet' }}
+        error="Failed to apply filter"
+      >
+        <p>Body</p>
+      </RecordListPage>,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Failed to apply filter');
+    expect(screen.getByText('No widgets yet')).toBeInTheDocument();
+  });
+
+  it('renders no body region for a blank status without an error', () => {
+    renderWithStatus({ kind: 'blank' });
+
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByText('Body')).not.toBeInTheDocument();
   });
 
@@ -109,5 +147,25 @@ describe('RecordListPage', () => {
     );
 
     expect(screen.queryByText('Filter form')).not.toBeInTheDocument();
+  });
+
+  it('renders the footer slot after the status region, under every status kind', () => {
+    const statuses: RecordListStatus[] = [
+      { kind: 'loading' },
+      { kind: 'blank' },
+      { kind: 'empty', title: 'No widgets yet' },
+      { kind: 'ready' },
+    ];
+
+    for (const status of statuses) {
+      const { unmount } = render(
+        <RecordListPage {...baseProps} status={status} footer={<p>Pager</p>}>
+          <p>Body</p>
+        </RecordListPage>,
+      );
+
+      expect(screen.getByText('Pager')).toBeInTheDocument();
+      unmount();
+    }
   });
 });
