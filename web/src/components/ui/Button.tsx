@@ -4,8 +4,8 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
   size?: 'md' | 'sm';
   children: ReactNode;
-  // Not typed by ButtonHTMLAttributes — declared explicitly so IconButton can forward its own
-  // ref through to this component's underlying DOM node.
+  // Not typed by ButtonHTMLAttributes — declared explicitly so a caller can reach this
+  // component's underlying DOM node, e.g. to move focus onto it after a state change.
   ref?: Ref<HTMLButtonElement>;
 }
 

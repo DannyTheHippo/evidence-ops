@@ -488,7 +488,8 @@
   border-color: var(--signal-line);
 }
 .field input[aria-invalid='true'],
-.field textarea[aria-invalid='true'] {
+.field textarea[aria-invalid='true'],
+.select[aria-invalid='true'] {
   border-color: var(--status-reject-line);
 }
 /* Declared last among the field/select state rules so it wins any specificity tie against hover
