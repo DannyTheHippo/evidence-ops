@@ -10,6 +10,7 @@ import { CsrfOriginMiddleware } from './features/common/auth/middlewares/csrf-or
 import { HealthModule } from './features/common/health/health.module';
 import { InfoModule } from './features/common/info/info.module';
 import { InvitationsModule } from './features/common/invitations/invitations.module';
+import { UsersModule } from './features/common/users/users.module';
 import { ApprovalsModule } from './features/evidence/approvals/approvals.module';
 import { ConflictsModule } from './features/evidence/conflicts/conflicts.module';
 import { DocumentsModule } from './features/evidence/documents/documents.module';
@@ -84,6 +85,7 @@ class ThrottlingModule {}
     HealthModule,
     InfoModule,
     InvitationsModule,
+    UsersModule,
     DocumentsModule,
     IngestionModule,
     FactsModule,

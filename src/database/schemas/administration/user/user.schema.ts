@@ -41,3 +41,7 @@ export const UserSchema = SchemaFactory.createForClass(User);
  * operator co-tenanting path moves an existing user rather than creating a second row for them.
  */
 UserSchema.index({ email: 1 }, { unique: true, name: 'users_email_unique' });
+
+/** Backs `UsersService.list`'s tenant-scoped, newest-first membership listing — same shape as
+ *  `invitations_tenantId_createdAt`. */
+UserSchema.index({ tenantId: 1, createdAt: -1 }, { name: 'users_tenantId_createdAt' });
