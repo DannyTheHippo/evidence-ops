@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FakeEventSource } from '../test/fake-event-source';
@@ -375,6 +375,10 @@ describe('AskPage', () => {
 
     await screen.findByText('queued');
 
+    // The stream is opened by a passive effect, which flushes after the commit that renders
+    // 'queued' — so the text appearing does not mean the EventSource exists yet. Waiting for the
+    // instance is both what makes this deterministic and the assertion that one was opened at all.
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
     const [source] = FakeEventSource.instances;
     expect(source.url).toBe('/api/v1/answers/answer-7/events');
 
