@@ -184,6 +184,44 @@ export class UsersService {
     this.logger.debug(`Removed user '${id}' from tenant '${tenantId}'`);
   }
 
+  /**
+   * Raises the target user's session epoch by exactly one — the same driver-level `$inc` as
+   * `scripts/lib/revoke-user-sessions.ts`, never a client-supplied value, so this can only move
+   * the epoch forward and can never send it backwards to un-revoke a token already invalidated.
+   * `JwtAuthGuard` and `ApiKeysService.verify` both compare a caller's stored epoch against this
+   * row on every request, so one raise refuses every cookie session and every API key this user
+   * holds that predates it.
+   *
+   * Scoped to `tenantId` exactly like `changeRole`/`remove`, and refuses with the same
+   * `UserNotFoundException` a caller gets for an id that does not exist at all — a cross-tenant id
+   * is not distinguishable from a missing one.
+   */
+  async revokeSessions(id: string, actorId: string, tenantId: string): Promise<UserSummaryResult> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new UserNotFoundException(`User '${id}' not found`);
+    }
+
+    const revoked = await this.userModel.findOneAndUpdate(
+      { _id: id, tenantId },
+      { $inc: { tokenVersion: 1 } },
+      { returnDocument: 'after' },
+    );
+    if (!revoked) {
+      throw new UserNotFoundException(`User '${id}' not found`);
+    }
+
+    await this.auditService.record({
+      action: 'users.sessions-revoked',
+      actorId,
+      subject: { entityType: 'User', entityId: id },
+      tenantId,
+    });
+
+    this.logger.debug(`Revoked sessions for user '${id}' in tenant '${tenantId}'`);
+
+    return this.toResult(revoked);
+  }
+
   private async hasRemainingAdmin(tenantId: string): Promise<boolean> {
     const adminCount = await this.userModel.countDocuments({ tenantId, role: UserRole.Admin });
     return adminCount > 0;

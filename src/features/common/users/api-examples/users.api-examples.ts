@@ -34,6 +34,19 @@ export const usersApiExamples: Record<string, ApiResponseOptions> = {
     status: HttpStatus.NO_CONTENT,
     description: 'The member was removed from the tenant.',
   },
+  sessionsRevoked: {
+    status: HttpStatus.OK,
+    description:
+      'Signs the member out of every browser session and disables every API key they hold — ' +
+      'raising their session epoch invalidates both, since API keys are checked against the same ' +
+      'epoch as session cookies.',
+    examples: {
+      example: {
+        summary: 'Sessions revoked',
+        value: exampleUser,
+      },
+    },
+  },
   notFound: {
     status: HttpStatus.NOT_FOUND,
     description: 'User does not exist in this tenant.',

@@ -329,4 +329,103 @@ describe('Users (e2e)', () => {
       expect(remainingAdmins).toBeGreaterThanOrEqual(1);
     });
   });
+
+  describe('POST /users/:id/revoke-sessions', () => {
+    it('rejects an unauthenticated request', async () => {
+      const response = await request(getTestServer(app)).post(
+        `/api/v1/users/${memberUserId}/revoke-sessions`,
+      );
+
+      expect(response.status).toBe(401);
+    });
+
+    it('returns 403 when the caller is not an admin', async () => {
+      const response = await request(getTestServer(app))
+        .post(`/api/v1/users/${memberUserId}/revoke-sessions`)
+        .set('Cookie', memberCookie);
+
+      expect(response.status).toBe(403);
+    });
+
+    it('returns 404 for an id that does not exist in this tenant', async () => {
+      const response = await request(getTestServer(app))
+        .post('/api/v1/users/000000000000000000000000/revoke-sessions')
+        .set('Cookie', adminCookie);
+
+      expect(response.status).toBe(404);
+    });
+
+    it('returns 404 for a member belonging to a different tenant', async () => {
+      const other = await registerTestUser(app, {
+        email: 'users-revoke-cross-tenant-e2e@example.com',
+        password,
+      });
+
+      const response = await request(getTestServer(app))
+        .post(`/api/v1/users/${other.userId}/revoke-sessions`)
+        .set('Cookie', adminCookie);
+
+      expect(response.status).toBe(404);
+    });
+
+    /**
+     * The property that matters: a revoked cookie stops authenticating anywhere, while a peer in
+     * the same tenant is unaffected. Asserting only that `tokenVersion` incremented would prove the
+     * write, not the revocation itself — this proves the guard that reads it back refuses.
+     */
+    it('invalidates the target’s existing session while leaving a peer’s session working', async () => {
+      const target = await registerTestUser(
+        app,
+        { email: 'users-revoke-target-e2e@example.com', password },
+        { role: 'member', tenantId },
+      );
+      const peer = await registerTestUser(
+        app,
+        { email: 'users-revoke-peer-e2e@example.com', password },
+        { role: 'member', tenantId },
+      );
+
+      const response = await request(getTestServer(app))
+        .post(`/api/v1/users/${target.userId}/revoke-sessions`)
+        .set('Cookie', adminCookie);
+      const body = response.body as UserBody;
+
+      expect(response.status).toBe(200);
+      expect(body.id).toBe(target.userId);
+      expect(Object.keys(body).sort()).toEqual(USER_KEYS);
+
+      const revokedProbe = await request(getTestServer(app))
+        .get('/api/v1/auth/me')
+        .set('Cookie', target.cookie);
+      expect(revokedProbe.status).toBe(401);
+
+      const peerProbe = await request(getTestServer(app))
+        .get('/api/v1/auth/me')
+        .set('Cookie', peer.cookie);
+      expect(peerProbe.status).toBe(200);
+    });
+
+    it('moves the epoch forward again on a second revocation rather than reassigning it', async () => {
+      const target = await registerTestUser(
+        app,
+        { email: 'users-revoke-twice-e2e@example.com', password },
+        { role: 'member', tenantId },
+      );
+
+      const before = await userModel.findById(target.userId);
+
+      await request(getTestServer(app))
+        .post(`/api/v1/users/${target.userId}/revoke-sessions`)
+        .set('Cookie', adminCookie);
+      const afterFirst = await userModel.findById(target.userId);
+
+      await request(getTestServer(app))
+        .post(`/api/v1/users/${target.userId}/revoke-sessions`)
+        .set('Cookie', adminCookie);
+      const afterSecond = await userModel.findById(target.userId);
+
+      expect(afterFirst?.tokenVersion).toBe((before?.tokenVersion ?? 0) + 1);
+      expect(afterSecond?.tokenVersion).toBe((before?.tokenVersion ?? 0) + 2);
+    });
+  });
 });

@@ -343,4 +343,45 @@ describe('UsersService', () => {
       );
     });
   });
+
+  describe('revokeSessions', () => {
+    it('should refuse a malformed id without touching the database', async () => {
+      await expect(
+        service.revokeSessions('not-an-object-id', actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(UserNotFoundException);
+      expect(mockUserModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('should refuse when no member matches the id in this tenant', async () => {
+      mockUserModel.findOneAndUpdate.mockResolvedValueOnce(null);
+
+      await expect(
+        service.revokeSessions(userId.toString(), actorId, 'tenant-a'),
+      ).rejects.toBeInstanceOf(UserNotFoundException);
+    });
+
+    it('should raise the epoch by an increment, scoped to the tenant, and record an audit event', async () => {
+      mockUserModel.findOneAndUpdate.mockResolvedValueOnce(buildMockUser({ tokenVersion: 1 }));
+
+      const result = await service.revokeSessions(userId.toString(), actorId, 'tenant-a');
+
+      expect(mockUserModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: userId.toString(), tenantId: 'tenant-a' },
+        { $inc: { tokenVersion: 1 } },
+        { returnDocument: 'after' },
+      );
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'users.sessions-revoked',
+        actorId,
+        subject: { entityType: 'User', entityId: userId.toString() },
+        tenantId: 'tenant-a',
+      });
+      expect(result).toEqual({
+        id: userId.toString(),
+        email: 'colleague@example.com',
+        role: UserRole.Member,
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      });
+    });
+  });
 });

@@ -7,6 +7,7 @@ import {
   HttpStatus,
   Param,
   Patch,
+  Post,
   Query,
   UnauthorizedException,
   UseGuards,
@@ -93,5 +94,27 @@ export class UsersController {
     }
 
     await this.usersService.remove(id, user.userId, user.tenantId);
+  }
+
+  @Post(':id/revoke-sessions')
+  @Version('1')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(RolesGuard)
+  @RequireRole(UserRole.Admin)
+  @ApiResponse(usersApiExamples.sessionsRevoked)
+  @ApiResponse(usersApiExamples.notFound)
+  @ApiResponse(usersApiExamples.forbidden)
+  async revokeSessions(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedRequest['user'],
+  ): Promise<UserResponseDto> {
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    return toResponseDto(
+      UserResponseDto,
+      await this.usersService.revokeSessions(id, user.userId, user.tenantId),
+    );
   }
 }

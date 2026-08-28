@@ -778,6 +778,41 @@ export function listInvitations(pagination?: {
   return request<WithCount<Invitation>>(`/invitations${qs ? `?${qs}` : ''}`);
 }
 
+// ── Users ────────────────────────────────────────────────────────────────
+
+export interface User {
+  id: string;
+  email: string;
+  role: UserRole;
+  createdAt: string;
+}
+
+export function listUsers(pagination?: {
+  skip?: number;
+  limit?: number;
+}): Promise<WithCount<User>> {
+  const query = new URLSearchParams();
+  if (pagination?.skip !== undefined) query.set('skip', String(pagination.skip));
+  if (pagination?.limit !== undefined) query.set('limit', String(pagination.limit));
+  const qs = query.toString();
+  return request<WithCount<User>>(`/users${qs ? `?${qs}` : ''}`);
+}
+
+export function changeUserRole(id: string, role: UserRole): Promise<User> {
+  return request<User>(`/users/${id}/role`, { method: 'PATCH', ...jsonBody({ role }) });
+}
+
+export async function removeUser(id: string): Promise<void> {
+  await request<void>(`/users/${id}`, { method: 'DELETE' });
+}
+
+/** Signs the member out of every browser session and disables every API key they hold — raising
+ * their session epoch invalidates both, since `ApiKeysService.verify` checks a key's stored epoch
+ * against the same `User.tokenVersion` a session cookie is checked against. */
+export function revokeUserSessions(id: string): Promise<User> {
+  return request<User>(`/users/${id}/revoke-sessions`, { method: 'POST' });
+}
+
 // ── Canonical entities ───────────────────────────────────────────────────
 
 /** Whether a harvested alias resolves (`applied`), is recorded but inert (`proposed`), or has been
