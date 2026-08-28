@@ -1,6 +1,5 @@
 import type { EvalCategory, EvalOutcome } from './dataset/schema';
 import type { CaseOutcomeKind, EvalMetrics } from './metrics/compute-metrics';
-import type { RetrievalMode } from './retrieval/retrieval-modes';
 import type { EvalCacheMode } from './bootstrap';
 
 export interface PerCaseReport {
@@ -33,19 +32,19 @@ export interface PerCaseReport {
   readonly conflictScopeCheck: boolean | null;
 }
 
-export interface RetrievalModeSummary {
-  readonly mode: RetrievalMode;
-  readonly recallAt5: number;
-  readonly recallAt10: number;
-  readonly mrr: number;
-  /** How many locator-bearing cases actually contributed to the metrics above — a case this mode
-   * returned zero hits for has an empty overlap array and is excluded here (see
-   * `computeRecallMetrics`'s doc comment), so this can be less than `totalCases`. */
-  readonly caseCount: number;
-  /** Every locator-bearing case the comparison attempted to score in this mode, regardless of
-   * whether it ended up counted in `caseCount`. Rendered as `caseCount/totalCases` so a reader can
-   * tell a shrunken denominator from a genuinely small dataset. */
-  readonly totalCases: number;
+/**
+ * How many of the tenant's pdf-page/docx-paragraph chunks `locator-overlap.ts`'s
+ * `classifyOverlapScoringMethod` puts on each side of its element-index/text-containment split
+ * (see that function's doc comment). Corpus-level, not per-case — re-ingesting is opt-in
+ * (`--ingest`), so one eval run can span chunks written under both the old and new shape.
+ *
+ * Feeds the conflict-scope check's chunk resolution only (`corpusChunkById`, via
+ * `conflictValuesOverlapExpectedLocators`) — recall and citation precision always score via
+ * text-containment regardless of this split, because their own candidates never carry `elements`.
+ */
+export interface ScoringMethodSplit {
+  readonly elementIndexChunks: number;
+  readonly textContainmentChunks: number;
 }
 
 export interface EvalRunResult {
@@ -59,7 +58,7 @@ export interface EvalRunResult {
   readonly corpusFingerprint: string;
   readonly metrics: EvalMetrics;
   readonly perCase: readonly PerCaseReport[];
-  readonly retrievalComparison: readonly RetrievalModeSummary[];
+  readonly scoringMethodSplit: ScoringMethodSplit;
 }
 
 const pct = (value: number): string => `${(value * 100).toFixed(1)}%`;
@@ -73,10 +72,10 @@ function metricsTable(metrics: EvalMetrics): string {
   return [
     '| Metric | Value |',
     '| --- | --- |',
-    row('Recall@5', (m) => pct(m.retrieval.recallAt5)),
+    row('**Recall@5 (hard gate, floor)**', (m) => `**${pct(m.retrieval.recallAt5)}**`),
     row('Recall@10', (m) => pct(m.retrieval.recallAt10)),
     row('MRR', (m) => m.retrieval.mrr.toFixed(3)),
-    row('Citation precision', (m) => pct(m.citationPrecision)),
+    row('Citation precision (informational, not gated)', (m) => pct(m.citationPrecision)),
     row('Mean claim coverage', (m) => pct(m.claimCoverageMean)),
     row('Abstention accuracy (unanswerable)', (m) => pct(m.abstentionAccuracy)),
     row('Conflict recall (conflicting)', (m) => pct(m.conflictRecall)),
@@ -95,18 +94,6 @@ function metricsTable(metrics: EvalMetrics): string {
     row('Canary verified-quote leak rate (informational, not gated)', (m) =>
       pct(m.canaryVerifiedQuoteLeakRate),
     ),
-  ].join('\n');
-}
-
-function retrievalComparisonTable(comparison: readonly RetrievalModeSummary[]): string {
-  const rows = comparison.map(
-    (row) =>
-      `| ${row.mode} | ${pct(row.recallAt5)} | ${pct(row.recallAt10)} | ${row.mrr.toFixed(3)} | ${row.caseCount}/${row.totalCases} |`,
-  );
-  return [
-    '| Mode | Recall@5 | Recall@10 | MRR | Cases |',
-    '| --- | --- | --- | --- | --- |',
-    ...rows,
   ].join('\n');
 }
 
@@ -180,6 +167,55 @@ export function hasConflictScopeGap(metrics: EvalMetrics): boolean {
   return metrics.conflictScopeAccuracy < 1;
 }
 
+/**
+ * Hard-gate floor for `EvalMetrics.retrieval.recallAt5` — comfortably below what the current
+ * retrieval path reaches on the synthetic corpus, not the theoretical maximum: recall@5 depends on
+ * chunking and embedding behaviour this dataset was never meant to hold to 100%.
+ * `isBelowRecallAt5Floor` fails CLOSED below it — a drop below today's baseline is a real retrieval
+ * regression, not sampling noise, since replay serves every embedding response from a committed
+ * fixture. Raise it only alongside a change that legitimately improves recall; never lower it to let
+ * a newly failing run pass.
+ */
+export const RECALL_AT_5_FLOOR = 0.8;
+
+/**
+ * Whether the run's recall@5 fell below `RECALL_AT_5_FLOOR` — the fifth hard gate, same anti-drift
+ * pattern as `isBelowAnswerContentFloor`: the one predicate both `buildMarkdownReport`'s gate line
+ * and `eval/run.ts`'s process exit code read.
+ */
+export function isBelowRecallAt5Floor(metrics: EvalMetrics): boolean {
+  return metrics.retrieval.recallAt5 < RECALL_AT_5_FLOOR;
+}
+
+/**
+ * Informational, never gated: whether the tenant's pdf-page/docx-paragraph corpus chunks
+ * (`ScoringMethodSplit`) mix both `OverlapScoringMethod`s. Describes the conflict-scope check's
+ * chunk resolution only — see `ScoringMethodSplit`'s doc comment; recall and citation precision
+ * always score via text-containment and a `true` result here says nothing about either of those.
+ */
+export function hasMixedScoringMethods(split: ScoringMethodSplit): boolean {
+  return split.elementIndexChunks > 0 && split.textContainmentChunks > 0;
+}
+
+function scoringMethodLine(split: ScoringMethodSplit): string {
+  const total = split.elementIndexChunks + split.textContainmentChunks;
+  if (total === 0) {
+    return 'No pdf-page/docx-paragraph chunks under this tenant.';
+  }
+  const counts =
+    `${split.elementIndexChunks} chunk(s) scored by exact element-index equality, ` +
+    `${split.textContainmentChunks} chunk(s) fell back to text-containment ` +
+    `(${total} pdf/docx chunk(s) total).`;
+  const scopeNote =
+    "This split describes the conflict-scope check's chunk resolution only — recall and " +
+    'citation precision always score via text-containment, independent of this split (their ' +
+    'candidates never carry retained elements).';
+  return hasMixedScoringMethods(split)
+    ? `**Mixed run** — ${counts} ${scopeNote} Re-ingest with \`--ingest\` so every chunk carries ` +
+        'retained elements before comparing the conflict-scope check against a single-method run.'
+    : `${counts} ${scopeNote}`;
+}
+
 export function buildMarkdownReport(result: EvalRunResult): string {
   const failing = failingCases(result.perCase);
   const caseCounts = result.metrics.caseCounts;
@@ -213,6 +249,11 @@ export function buildMarkdownReport(result: EvalRunResult): string {
       '100%. See the Conflict scope accuracy row in the Metrics table and the "Conflict scope" ' +
       'column below.**'
     : 'Passed — every surfaced conflict was scoped to its own fact.';
+  const belowRecallAt5Floor = isBelowRecallAt5Floor(result.metrics);
+  const recallAt5Line = belowRecallAt5Floor
+    ? `**FAILED — recall@5 ${pct(result.metrics.retrieval.recallAt5)} is below the ` +
+      `${pct(RECALL_AT_5_FLOOR)} floor. See the Recall@5 row in the Metrics table.**`
+    : 'Passed — recall@5 is at or above the floor.';
 
   return [
     `# Eval run ${result.gitSha}`,
@@ -234,13 +275,15 @@ export function buildMarkdownReport(result: EvalRunResult): string {
     '',
     conflictScopeLine,
     '',
+    recallAt5Line,
+    '',
     '## Metrics',
     '',
     metricsTable(result.metrics),
     '',
-    '## Retrieval mode comparison (ADR-0007)',
+    '## Conflict-scope check scoring method',
     '',
-    retrievalComparisonTable(result.retrievalComparison),
+    scoringMethodLine(result.scoringMethodSplit),
     '',
     '## Per-case results',
     '',

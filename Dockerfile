@@ -33,17 +33,10 @@ COPY ./migrate-mongo-config.js ./
 COPY ./migrations ./migrations
 COPY ./package.json ./
 
-# `OtlpFileSpanExporter`'s constructor calls `mkdirSync(process.cwd()/artifacts/traces)`
-# unconditionally, and everything COPYed above is root-owned — so under `USER node` the
-# instrumentation below would throw before the app ever started. Created and chowned here rather
-# than made conditional, so the container and the host loop run the identical code path.
-RUN mkdir -p /app/artifacts/traces && chown -R node:node /app/artifacts
-
 USER node
 
 EXPOSE 3000
-# `--import ./dist/instrumentation.js` mirrors the `start:prod` script. Without it the process
-# starts fine and emits nothing: no http/express/mongoose spans, and the compose-wired
-# `OTEL_EXPORTER_OTLP_ENDPOINT` is inert. That is a silent failure — the container is healthy,
-# Jaeger is simply empty — which is why it survived until a trace was actually looked for.
+# `--import ./dist/instrumentation.js` mirrors the `start:prod` script and registers the
+# Prometheus metric reader. Without it the process starts fine and exports no metrics, so its
+# Prometheus scrape target never comes up.
 ENTRYPOINT ["node", "--import", "./dist/instrumentation.js", "dist/main.js"]

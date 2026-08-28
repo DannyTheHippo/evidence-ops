@@ -180,7 +180,7 @@ const VECTOR_PROBE_NUM_CANDIDATES = 50;
 /**
  * Builds a `ConvergenceProbe` for the lexical (`$search`) index: counts chunks the index actually
  * returns for `documentVersionId`, converged once that count reaches `expectedChunkCount`. Filters
- * on `documentVersionId` alone (mapped as `objectId` — see `migrations/0003-search-indexes.ts`)
+ * on `documentVersionId` alone (mapped as `objectId` — see `migrations/0001-baseline.ts`)
  * rather than a specific chunk id, because the search index mapping never indexes Mongo's `_id`
  * field — there is nothing to filter a single known chunk by.
  *

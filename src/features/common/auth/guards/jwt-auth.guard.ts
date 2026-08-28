@@ -7,10 +7,13 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { isProdLike } from '../../../../config/environment/environment.config';
 import { TypedConfigService } from '../../../../config/environment/typed-config.service';
 import { DEFAULT_TENANT_ID } from '../../../../database/constants/tenant.constant';
+import { User, UserDocument } from '../../../../database/schemas/administration/user/user.schema';
 import { IS_PUBLIC_ROUTE } from '../../../../shared/decorators/public-route.decorator';
 import { AlsContext } from '../../../../shared/types/als-context.type';
 import { AuthenticatedRequest } from '../../../../shared/types/authenticated-request.type';
@@ -24,6 +27,9 @@ export class JwtAuthGuard implements CanActivate {
     private readonly jwtService: JwtService,
     private readonly reflector: Reflector,
     private readonly config: TypedConfigService,
+
+    @InjectModel(User.name)
+    private readonly userModel: Model<UserDocument>,
 
     @Inject(AsyncLocalStorage)
     private readonly als: AsyncLocalStorage<AlsContext>,
@@ -73,6 +79,37 @@ export class JwtAuthGuard implements CanActivate {
       // oracle for which tenant id is the demo one. Below prod-like, `'default'` is the valid seeded
       // dev tenant and must keep working.
       if (isProdLike(this.config.app.env) && payload.tenantId === DEFAULT_TENANT_ID) {
+        throw new UnauthorizedException('Invalid or expired token');
+      }
+
+      // FAILS CLOSED — this is an authentication gate, so every uncertain outcome is a refusal.
+      // The `User` row is the authority on identity, never the token: a token is a snapshot of the
+      // row at login and JWT_EXPIRES_IN is 7 days with no refresh, so without this comparison a
+      // demoted admin keeps Admin (and can mint a fresh Admin invitation that outlives the token),
+      // and a re-tenanted user keeps reading the old tenant's evidence, for up to a week. Matches
+      // `ApiKeysService.verify`, which reads `role`/`tenantId` from the row for the same reason.
+      //
+      // Every claim minted in `AuthService.login` is compared, not a chosen subset: each one lands
+      // in `request.user` below and is trusted downstream, so a claim left uncompared is a claim
+      // that survives its own revocation. A missing row is a refusal too — a deleted account must
+      // not keep transacting on a token that is still structurally valid. The `catch` below turns a
+      // Mongo failure here into the same 401, so an unreachable database refuses rather than admits.
+      //
+      // `typeof` rather than a truthiness check: `tokenVersion` is 0 for every account that has
+      // never had its epoch raised, and `!payload.tokenVersion` would lock all of them out. A token
+      // signed before this claim existed carries `undefined` and is refused, which is the deliberate
+      // one-time session invalidation on deploy.
+      const user = await this.userModel.findById(payload.sub);
+      if (
+        !user ||
+        typeof payload.tokenVersion !== 'number' ||
+        payload.tokenVersion !== user.tokenVersion ||
+        payload.role !== user.role ||
+        payload.tenantId !== user.tenantId ||
+        payload.email !== user.email
+      ) {
+        // Same generic message as every other refusal in this guard, so no caller can tell which
+        // attribute changed and use the difference as an oracle.
         throw new UnauthorizedException('Invalid or expired token');
       }
 

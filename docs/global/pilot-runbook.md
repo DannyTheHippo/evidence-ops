@@ -1,7 +1,8 @@
 # Pilot Runbook
 
 Operating a single-host pilot deployment: bring-up, migrations, verification, backup/restore,
-tenant purge, joining an existing tenant, upgrades, and the alert-rule table. This is the single-host Docker
+tenant purge, joining an existing tenant, revoking one user's sessions, upgrades, and the alert-rule
+table. This is the single-host Docker
 Compose path, not a cloud deployment — see [What a cloud deployment would add](#what-a-cloud-deployment-would-add)
 for what is deliberately not built.
 
@@ -9,8 +10,11 @@ for what is deliberately not built.
 
 There is one compose file, `docker-compose.yml`, and one env file, `.env`. `.env` is short by
 design: the secrets (`JWT_SECRET`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `VOYAGE_API_KEY`), the
-one spend ceiling that bounds what those keys can spend (`MODEL_SPEND_DAILY_LIMIT_USD`), and
-`MODEL_PROVIDER`. `.env.example` is the copy-and-fill reference and lists exactly that set. `api`,
+one spend ceiling that bounds what those keys can spend (`MODEL_SPEND_DAILY_LIMIT_USD`),
+`MODEL_PROVIDER`, and the optional `MONGO_AUTH` database-credential prefix — empty by default, which
+leaves Mongo unauthenticated (`deployment-hardening.md` § Database authentication turns it on, and
+`threat-model.md` §14 states what the default posture means). `.env.example` is the copy-and-fill
+reference and lists exactly that set. `api`,
 `worker` and `mcp` each load `.env` with `required: false`, so a missing file does not fail `up`;
 the application's own config validation catches what actually matters (below).
 
@@ -32,9 +36,9 @@ Two mechanics decide which value a container actually sees, and they point in op
   keys `.env.example` lists.
 
 A handful of values are written literally inline, with no `${}` around them, and are therefore not
-overridable at all: `MONGO_DB_URI`, `MONGO_MEMORY_SERVER`, `TEMPORAL_ADDRESS`,
-`OTEL_EXPORTER_OTLP_ENDPOINT`, and `mcp`'s `MCP_PORT`. These are in-network addresses and
-container-internal ports; a value set for any of them in `.env` is ignored.
+overridable at all: `MONGO_DB_URI`, `MONGO_MEMORY_SERVER`, `TEMPORAL_ADDRESS`, and `mcp`'s `MCP_PORT`.
+These are in-network addresses and container-internal ports; a value set for any of them in `.env`
+is ignored.
 
 `environmentSchema`'s `superRefine` (`src/config/environment/environment.config.ts`) is where the
 application refuses to boot. The anchor sets `NODE_ENV: ${NODE_ENV:-production}`, and under
@@ -70,30 +74,36 @@ docker compose --profile full up -d
 profile; the only service with none is `mongo`. Omitting `--profile full` starts `mongo` alone and
 nothing else — no error, just a stack that looks like it came up and did not.
 
-What the stack publishes to the host:
+What the stack publishes to the host, every port bound to `127.0.0.1`:
 
-| Service       | Host port                   | Notes                                     |
-| ------------- | --------------------------- | ----------------------------------------- |
-| `mongo`       | `${MONGO_HOST_PORT:-27018}` | No authentication.                        |
-| `api`         | `${API_HOST_PORT:-3001}`    | `/api/v1/...` and `/docs` directly.       |
-| `mcp`         | `${MCP_HOST_PORT:-3002}`    | `POST /mcp`, PAT-authenticated.           |
-| `web`         | `${WEB_HOST_PORT:-8090}`    | nginx, plain HTTP.                        |
-| `jaeger`      | 16686 (UI), 4318 (OTLP)     | No authentication.                        |
-| `prometheus`  | 9090                        | No authentication.                        |
-| `temporal`    | 7233                        | gRPC frontend, no authentication.         |
-| `temporal-ui` | 8233                        | Full workflow history, no authentication. |
+| Service       | Host port                   | Notes                                                          |
+| ------------- | --------------------------- | -------------------------------------------------------------- |
+| `mongo`       | `${MONGO_HOST_PORT:-27018}` | No authentication unless enabled; loopback only, no override.   |
+| `api`         | `${API_HOST_PORT:-3001}`    | `/api/v1/...` and `/docs` directly; loopback only, no override. |
+| `mcp`         | `${MCP_HOST_PORT:-3002}`    | `POST /mcp`, PAT-authenticated. `MCP_BIND_ADDRESS` widens it.   |
+| `web`         | `${WEB_HOST_PORT:-8090}`    | nginx, plain HTTP. `WEB_BIND_ADDRESS` widens it.                |
+| `prometheus`  | 9090                        | No authentication. `--profile observability`, not `full`.       |
+| `temporal`    | 7233                        | gRPC frontend, no authentication.                               |
+| `temporal-ui` | 8233                        | Full workflow history, no authentication. `--profile temporal-ui`, not `full`. |
 
 Mongo publishes 27018 rather than 27017, matching `environment.config.ts`'s dev-default
 `MONGO_DB_URI` and `migrate-mongo-config.js`'s fallback, so a host-run process that falls back to
 its own default reaches the deployed database instead of connecting nowhere. Overriding
 `MONGO_HOST_PORT` breaks that agreement until `MONGO_DB_URI` is overridden to match.
 
-Apart from the MCP surface's personal access tokens, nothing in front of these ports authenticates
-anything, and nothing in this repository bounds who can reach them: there is no firewall rule, no
-bastion, no authenticating reverse proxy, and no host-binding restriction anywhere in the compose
-file. Anyone who can reach the host on those ports can read traces, metrics and Temporal workflow
-history, talk to the API, and connect to Mongo. Bounding that reach is entirely the operator's
-concern.
+Apart from the session cookie and the MCP surface's personal access tokens, nothing in front of these
+ports authenticates anything: anyone who can reach them reads metrics and Temporal workflow history,
+and connects to Mongo. (There are no traces to read — this stack runs no tracing; see
+`threat-model.md` §6.) What bounds that reach is the loopback bind on every publish above —
+so on a single host the surface is empty until an operator widens it, and there is still no firewall
+rule, bastion or authenticating proxy in this repository. `WEB_BIND_ADDRESS`/`MCP_BIND_ADDRESS` are
+the two widening knobs, and both publish plaintext HTTP, so they belong behind the TLS edge in
+`deployment-hardening.md` — which also covers enabling database authentication and the reachability
+scan that proves the bind actually held.
+
+Prometheus and the Temporal UI are not in `full`: each reads across every tenant with no login, so
+each is started by name (`--profile observability`, `--profile temporal-ui`) rather than arriving
+with the application stack.
 
 The application services are the exception — no metrics port is published. `src/instrumentation.ts`
 offsets one shared `METRICS_PORT` per process, so `api` binds 9464 inside its own container,
@@ -101,10 +111,10 @@ offsets one shared `METRICS_PORT` per process, so `api` binds 9464 inside its ow
 job in `observability/prometheus/prometheus.yml`, and `alert-rules.yml` covers the MCP target's
 liveness with `McpDown` exactly as it covers the worker's with `WorkerDown`.
 
-`docker compose ps` should show `mongo`, `prometheus`, `temporal` and `api` healthy, `migrate`
-exited `0`, and `worker`, `mcp`, `web` and `temporal-ui` running (those four declare no
-healthcheck, so `running` is as much as Compose reports for them) — see Migrations below for what
-blocks that.
+`docker compose ps` should show `mongo`, `temporal` and `api` healthy, `migrate` exited `0`, and
+`worker`, `mcp` and `web` running (those three declare no healthcheck, so `running` is as much as
+Compose reports for them) — see Migrations below for what blocks that. `prometheus` and
+`temporal-ui` appear only when their own profiles are enabled alongside `full`.
 
 ## The MCP surface
 
@@ -147,10 +157,10 @@ in the `full` profile (`command: npm run migrate:up`), gated on `mongo` reportin
 (`depends_on: migrate: condition: service_completed_successfully`). Bringing the stack up with the
 command above runs migrations automatically, in order, before any application process starts.
 
-`0003-search-indexes.ts` is the one worth watching: it creates the `$search`/`$vectorSearch`
-indexes and then blocks until Atlas reports both `READY` and `queryable`, which takes tens of
-seconds on a fresh volume. `api` staying in a "starting" state for that long during first bring-up
-is expected, not a hang.
+`0001-baseline.ts` is the one worth watching: it creates the `$search`/`$vectorSearch`
+indexes (along with every collection and every other index) and then blocks until Atlas reports both
+`READY` and `queryable`, which takes tens of seconds on a fresh volume. `api` staying in a "starting"
+state for that long during first bring-up is expected, not a hang.
 
 `migrate` has its own `environment:` block rather than the shared anchor, setting `MONGO_DB_URI`
 inline to the in-network mongo address. It loads no env file at all, so nothing needs to be set for
@@ -252,16 +262,22 @@ means only collections present in the archive are dropped and replaced; a live c
 archive does not mention is left alone.
 
 `--drop` also drops each restored collection's Atlas Search indexes, and the restored `migrations`
-changelog already records `0003-search-indexes` as applied, so a plain `migrate:up` afterward
-no-ops and retrieval silently returns zero rows. The script checks for this itself — after a
-`--yes` restore it counts `evidence_chunks`'s search indexes via `$listSearchIndexes` and, if the
-count is zero, prints the recovery it expects you to run:
+changelog already records `0001-baseline` as applied, so a plain `migrate:up` afterward no-ops and
+retrieval silently returns zero rows. The script checks for this itself — after a `--yes` restore it
+counts `evidence_chunks`'s search indexes via `$listSearchIndexes` and, if the count is zero, prints
+the recovery it expects you to run:
 
 ```bash
 docker compose exec -T mongo mongosh evidence-ops --eval \
-  'db.migrations.deleteOne({fileName: /0003-search-indexes/})'
+  'db.migrations.deleteOne({fileName: /0001-baseline/})'
 npm run migrate:up
 ```
+
+Clearing that row re-runs the entire baseline migration, not just the search-index build — safely,
+because the rest of what it does is idempotent against a store that already has everything but the
+search indexes: every `createIndex` call no-ops against an index that already carries the same name
+and key pattern, and the tenant registry write is an upsert. `createSearchIndexes` is the one step
+that actually does new work, which is exactly the step this recovery needs.
 
 Both lines work against a default bring-up. The first goes through `docker compose exec` and is
 port-independent. The second runs on the host: `migrate-mongo-config.js` loads `.env` and otherwise
@@ -336,21 +352,46 @@ user's `api_keys` rows, and nothing else. The keys move so they stay listable an
 their owner after the move; they also act in the new tenant from that point on, so review whether
 the moved user should still hold them. It never touches `role`, so a user who arrives already
 holding `UserRole.Admin` — every self-registered account does, per
-[ADR-0014](../adr/0014-tenant-provisioning-and-default-tenant-demotion.md) — keeps that role after
+[ADR-0013](../adr/0013-tenant-provisioning-and-default-tenant-demotion.md) — keeps that role after
 the move, landing as a second admin of the target tenant rather than a member; use an invitation
 instead when the target role should be `member`. It also leaves the vacated tenant's own `tenants`
 registry row behind; if the moved user was that tenant's only member, the row becomes an orphaned,
 empty tenant. `tenant-purge.ts --tenant <vacatedTenantId>` covers cleaning that up, since the
 registry row itself carries a matching `tenantId` field.
 
+## Revoking one user's sessions
+
+`User.tokenVersion` is the session epoch every credential carries — minted into each JWT and into
+each personal access token at issue, and compared against the row on every request
+(`jwt-auth.guard.ts`, `api-keys.service.ts`). Raising it refuses every live browser session and
+every personal access token that user holds, immediately, with no other attribute of the account
+touched. Reach for it when a credential is suspected compromised or a departing user's access needs
+to end now, rather than waiting out `JWT_EXPIRES_IN` (7 days).
+
+```bash
+npm run user:revoke-sessions -- --user <email>
+```
+
+`scripts/revoke-user-sessions.ts` refuses rather than guesses: an email with no matching row is
+reported and nothing changes. The write is a single atomic increment against the row it already
+located — never a value the caller supplies — so repeated invocations only ever move the epoch
+forward, never set it to an arbitrary number.
+
+What the user experiences: every open browser tab and every personal access token they hold stops
+authenticating on its next request, each refused with the guard's generic `401`. The account's
+role and tenant are untouched. Signing in again mints a fresh session at the new epoch and works
+immediately; a refused personal access token has no revive path — the user mints a new one after
+signing back in.
+
 ### Host-invoked scripts
 
-`tenant-purge.ts` and `co-tenant-user.ts` connect to Mongo directly from the host over TCP. They
-are not containerized and the runtime image does not contain them — the `Dockerfile`'s `runtime`
-stage copies `node_modules`, `dist`, `migrations`, `migrate-mongo-config.js` and `package.json`,
-not `scripts/`. Running either means a repo checkout on the host with dependencies installed.
+`tenant-purge.ts`, `co-tenant-user.ts`, and `revoke-user-sessions.ts` connect to Mongo directly from
+the host over TCP. They are not containerized and the runtime image does not contain them — the
+`Dockerfile`'s `runtime` stage copies `node_modules`, `dist`, `migrations`,
+`migrate-mongo-config.js` and `package.json`, not `scripts/`. Running any of them means a repo
+checkout on the host with dependencies installed.
 
-Both fall back to `mongodb://localhost:27018/evidence-ops?directConnection=true` when
+All three fall back to `mongodb://localhost:27018/evidence-ops?directConnection=true` when
 `MONGO_DB_URI` is unset, which is the port `mongo` publishes by default — so against a default
 bring-up they connect to the deployed database with no environment prefix at all. Two things break
 that agreement, and both are fixed by passing the URI explicitly:
@@ -384,6 +425,34 @@ the first bring-up.
 stale-replica-set recovery the README's [Gotchas](../../README.md#gotchas) section documents — it
 drops the `mongo` data volume and every document ingested.
 
+### Upgrades that sign everyone out
+
+A migration can carry a **session epoch** — a counter stamped into every credential and compared on
+every request. `User.tokenVersion` and each `ApiKey.tokenVersion` are `0`-defaulting fields
+established in `migrations/0001-baseline.ts`, applied and verified against a real `mongod` along
+with the rest of the migration chain.
+
+The compose path above is safe by construction: `migrate` completes before any application process
+starts, so no request is ever served by code that expects an epoch against rows that do not carry
+one. **A deployment that starts the API without running migrations first is not safe** — every login
+then mints a credential the guard cannot match, and the failure is total rather than partial: nobody
+can sign in, and every existing personal access token stops verifying. If you run the API outside
+this compose stack, run `npm run migrate:up` to completion first and confirm it exited zero.
+
+Expect an epoch-bearing upgrade to **sign every browser session out once**. That is the intended
+one-time cost, not a fault. Personal access tokens are unaffected by a schema-introduction upgrade
+of this kind: `ApiKey.tokenVersion` defaults to `0` alongside a freshly-defaulted user row, so the
+two never diverge on their own — only [an operator raising a specific user's
+epoch](#revoking-one-users-sessions) or a future migration that bumps the default would move them
+apart. The signal that separates the expected invalidation from a real break is the post-deploy 401
+rate:
+a spike that decays as users sign back in is the migration; a rate that stays elevated is not.
+Background on how `tokenVersion` moves a credential is in `threat-model.md` § 13.
+
+Separately, a migration that rewrites derived keys — `0034-nfkc-group-keys` re-computes the
+grouping key on every extracted fact and conflict — **is not reversible by redeploying the old
+image**, which is why the backup above is the first command and not the last.
+
 ## Alert rules
 
 One row per rule in `observability/prometheus/alert-rules.yml`, mounted read-only into the
@@ -395,7 +464,7 @@ One row per rule in `observability/prometheus/alert-rules.yml`, mounted read-onl
 | `McpDown`             | Prometheus has not scraped `evidence-ops-mcp` for over a minute.                     | The MCP container crashed or stopped answering. Every MCP client integration is dark; the SPA and REST surfaces are unaffected, which is why it is `warning` — nobody inside the product notices. | `docker compose ps mcp`, then `docker compose logs mcp`.                                                                                                |
 | `WorkflowFailures`    | A durable workflow run was recorded as failed.                                       | At pilot volume there is no defensible noise floor for this counter — any sustained failure rate is a real incident.        | Check the Temporal UI (`localhost:8233`) for the failed run's history and stack trace, then `docker compose logs worker` for the activity that raised.  |
 | `GroundingRejectSpike`| The grounding gate is dropping claims well above its own recent 2-hour baseline.     | The failure most invisible to users — an answer still comes back, just with more of it cut for lacking a citation.          | Break down recent drops by the `rule` attribute (the four-value `GroundingViolationKind`) to see whether one violation kind dominates, then check for a recent source or model change. |
-| `EmptyRetrievals`     | Retrieval has returned zero chunks more than isolated no-evidence questions explain. | A broken index, a corpus that stopped ingesting, or tenant scoping excluding everything.                                    | Confirm the `$search`/`$vectorSearch` indexes report `READY` (`0003-search-indexes.ts`), then check whether the most recent ingestion runs actually completed. |
+| `EmptyRetrievals`     | Retrieval has returned zero chunks more than isolated no-evidence questions explain. | A broken index, a corpus that stopped ingesting, or tenant scoping excluding everything.                                    | Confirm the `$search`/`$vectorSearch` indexes report `READY` (`0001-baseline.ts`), then check whether the most recent ingestion runs actually completed. |
 | `ApprovalTimeouts`    | An approval gate timed out with no human decision.                                   | An operational fact about a person, not a technical error — a pending conflict resolution went unattended.                  | Check who the approval was routed to and whether they are unavailable, then decide whether to re-route it or extend the wait for that tenant.           |
 
 ## What a cloud deployment would add
@@ -410,10 +479,12 @@ present:
 - **Secret management.** Every credential sits in `.env`, a plaintext file on the host readable by
   anything with host filesystem access. There is no vault, no rotation, and no audit trail for who
   read or changed it.
-- **Network boundary.** Every published port in the table above is bound on the host, Mongo and the
-  Temporal UI included, and only the MCP surface authenticates callers at all. A firewall, a
-  bastion, or an authenticating reverse proxy is assumed to exist around this stack and is defined
-  nowhere in it.
+- **Network boundary.** Every published port in the table above binds `127.0.0.1`, which is the
+  whole of the boundary: Mongo and the Temporal UI included, and only the MCP surface authenticates
+  callers at all. A firewall, a bastion, or an authenticating reverse proxy is assumed to exist
+  around this stack and is defined nowhere in it —
+  [`deployment-hardening.md`](./deployment-hardening.md) gives a reference edge to build one from,
+  not one this repository operates.
 - **TLS termination.** `web/nginx.conf` listens on plain HTTP (`:80`) only, the MCP surface serves
   plain HTTP too, and the compose defaults for `CORS_ORIGIN`/`URL` are `http://localhost:8090`.
   Nothing in this stack terminates TLS; a reverse proxy or load balancer doing that in front of it

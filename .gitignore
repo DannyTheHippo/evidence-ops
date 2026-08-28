@@ -9,13 +9,21 @@ web/dist
 # Generated
 /migrations/data/temp/
 
+# Written by `createSwaggerConfig` on every local boot, from a build that applies the
+# `@nestjs/swagger` CLI plugin. The document the SPA's types are generated from is the committed
+# `web/src/api/openapi.json`, emitted by `npm run openapi:generate`; keeping this local-boot copy
+# tracked would make the two overwrite each other in turn.
+/openapi.json
+
 # Logs
 logs
 *.log
 
-# OTLP span files — OTEL_CAPTURE_MODEL_CONTENT can attach document text to a span, so an
-# accidental commit here is a disclosure risk, not just noise (see otlp-file-span.exporter.ts).
-/artifacts/traces/
+# The benchmark eval lane (`eval/run.ts`'s `--lane benchmark`) runs against a corpus outside the
+# synthetic fixtures under `fixtures/data-room/` — its cache and results are excluded wholesale, not
+# by file extension, so a cache entry or a results row that embeds a client document's content can
+# never reach a commit even if the lane's directory layout changes later.
+/eval/benchmark/
 
 # Eval results recorded against a dirty working tree. `eval/run.ts` names its output by git sha and
 # suffixes `-dirty` when the tree has uncommitted changes, so every run during development writes a

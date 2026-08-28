@@ -127,7 +127,7 @@ async function buildStore(
       { provide: EMBEDDING_PROVIDER, useValue: embeddingProvider },
       {
         provide: TypedConfigService,
-        useValue: getMockTypedConfig({ retrieval: { fusion, limit: 12 } }),
+        useValue: getMockTypedConfig({ retrieval: { fusion, limit: 12, scoreFloor: 0 } }),
       },
     ],
   }).compile();

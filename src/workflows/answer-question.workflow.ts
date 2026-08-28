@@ -31,13 +31,16 @@ const synthesisActivities = proxyActivities<Pick<Activities, 'synthesizeAnswer'>
   retry: {
     maximumAttempts: 2,
     // The spend ceiling and the pricing table are facts a retry cannot change mid-workflow, and
-    // a schema-invalid model response recurs for the same prompt. A tenant's daily ceiling does
-    // not rise mid-workflow either, and a request with no tenant is refused identically on every
+    // a schema-invalid model response recurs for the same prompt. A response that stopped at the
+    // output cap or the context window recurs identically against the same (or a longer) prompt,
+    // so it joins the same set rather than the transient one. A tenant's daily ceiling does not
+    // rise mid-workflow either, and a request with no tenant is refused identically on every
     // retry, so both spend-guard failures join the same non-retryable set.
     nonRetryableErrorTypes: [
       'ModelBudgetExceededError',
       'UnknownModelPricingError',
       'ModelSchemaValidationError',
+      'ModelOutputTruncatedError',
       'TenantSpendLimitExceededError',
       'ModelRequestMissingTenantError',
     ],

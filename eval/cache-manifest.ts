@@ -10,8 +10,8 @@ export interface CacheManifest {
  * Duck-typed on `.code`, not `instanceof Error` — same realm gap `caching-model.provider.ts`'s
  * `isNotFoundError` documents (Node's `fs/promises` errors fail `instanceof Error` under this
  * project's Jest realm even though `.code` is set correctly). Duplicated rather than imported: that
- * helper is private to its module, and this repo's convention (ADR-0007, `retrieval-modes.ts`) is a
- * small duplicated helper with a note over reaching across a module boundary for one function.
+ * helper is private to its module, and this repo's convention (ADR-0007) is a small duplicated
+ * helper with a note over reaching across a module boundary for one function.
  */
 function isNotFoundError(error: unknown): boolean {
   return (

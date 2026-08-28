@@ -13,6 +13,9 @@ const existingEntity = {
   id: 'entity-1',
   canonicalName: 'Northgate Plaza',
   aliases: ['Northgate', 'Northgate Shopping Center'],
+  // The dialog edits operator-authored aliases only; harvested ones are read from documents and
+  // are not part of what it submits.
+  harvestedAliases: [],
   createdAt: '2026-07-01T00:00:00.000Z',
 };
 

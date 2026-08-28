@@ -349,6 +349,45 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       expect(body.docs.some((doc) => doc.id === rejected._id.toString())).toBe(true);
       expect(body.count).toBe(body.docs.length);
     });
+
+    // Regression: a `timed_out` row (`ApprovalsService.expire`, called from `resolveConflict`'s
+    // timeout branch) leaves the pending inbox exactly as `approved`/`rejected` already do — it
+    // must not linger there offering a decision on a workflow execution that no longer exists to
+    // wake. Also the `@Expose()` check for `state: 'timed_out'`: a field missing `@Expose()` is
+    // silently dropped from the payload with no error, no warning, no type failure — asserting the
+    // exact key set is the only gate that catches it.
+    it('excludes a timed-out approval from the default pending inbox, but returns it filtered by state=timed_out', async () => {
+      const timedOut = await approvalModel.create({
+        subject: { entityType: 'Conflict', entityId: new Types.ObjectId() },
+        action: 'resolve_conflict',
+        summary: 'No human answered before the 24-hour window elapsed.',
+        workflowId: 'wf-timed-out-1',
+        state: 'timed_out',
+        tenantId,
+      });
+
+      const defaultResponse = await request(getTestServer(app))
+        .get('/api/v1/approvals')
+        .set('Cookie', cookie);
+      const defaultBody = defaultResponse.body as { docs: ApprovalBody[]; count: number };
+      expect(defaultBody.docs.some((doc) => doc.id === timedOut._id.toString())).toBe(false);
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/approvals')
+        .query({ state: 'timed_out' })
+        .set('Cookie', cookie);
+      const body = response.body as { docs: ApprovalBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      const listed = body.docs.find((doc) => doc.id === timedOut._id.toString());
+      expect(listed).toBeDefined();
+      expect(listed?.state).toBe('timed_out');
+      // A timeout is never a decision — decidedBy/decidedAt/decisionReason stay entirely absent,
+      // the same "fresh row" key set `GET /approvals` already asserts for a `pending` row.
+      expect(Object.keys(listed as object).sort()).toEqual(
+        ['id', 'subject', 'action', 'summary', 'workflowId', 'state', 'createdAt'].sort(),
+      );
+    });
   });
 
   describe('POST /approvals/:id/decision', () => {
@@ -424,6 +463,42 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
         .send({ decision: 'approved' });
 
       expect(response.status).toBe(409);
+    });
+
+    // Regression: this is the integrity property the whole fix exists for. A `timed_out` row
+    // belongs to a workflow execution that has already exited — the decision here has nothing left
+    // to signal, and must be refused before it is ever persisted, not merely fail to wake anything
+    // afterward.
+    it('returns 409 for a timed-out approval, persisting no decision and writing no audit row', async () => {
+      const timedOut = await approvalModel.create({
+        subject: { entityType: 'Conflict', entityId: new Types.ObjectId() },
+        action: 'resolve_conflict',
+        summary: 'No human answered before the 24-hour window elapsed.',
+        workflowId: 'wf-timed-out-2',
+        state: 'timed_out',
+        tenantId,
+      });
+      const eventsBefore = await auditEventModel.countDocuments({
+        action: 'approvals.decided',
+        'subject.entityId': timedOut._id,
+      });
+
+      const response = await request(getTestServer(app))
+        .post(`/api/v1/approvals/${timedOut._id.toString()}/decision`)
+        .set('Cookie', adminCookie)
+        .send({ decision: 'approved' });
+
+      expect(response.status).toBe(409);
+
+      const stored = await approvalModel.findById(timedOut._id);
+      expect(stored?.state).toBe('timed_out');
+      expect(stored?.decidedBy).toBeUndefined();
+
+      const eventsAfter = await auditEventModel.countDocuments({
+        action: 'approvals.decided',
+        'subject.entityId': timedOut._id,
+      });
+      expect(eventsAfter).toBe(eventsBefore);
     });
 
     it('decides an approval with no workflowId, persisting the decision without signalling', async () => {

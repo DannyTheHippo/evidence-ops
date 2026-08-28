@@ -196,7 +196,7 @@ export const requestResolutionToolDefinition: ModelToolDefinition = {
  * it did not — matching what `RequestConflictResolutionRequestDto`'s REST path already shows a
  * reviewer. `origin: 'mcp'` is a fixed literal, not read from `context`: it names this handler as
  * the caller, so the approver sees a proposal that reached the workflow through the AI-reachable
- * surface rather than an interactive session, per ADR-0016 § Approvals.
+ * surface rather than an interactive session, per ADR-0014 § Approvals.
  */
 export function buildRequestResolutionTool(conflictsService: ConflictsService): ToolDefinition {
   return {

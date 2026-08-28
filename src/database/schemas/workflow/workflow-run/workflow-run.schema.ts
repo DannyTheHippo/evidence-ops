@@ -15,6 +15,9 @@ export const WORKFLOW_RUN_STATUSES: readonly WorkflowRunStatus[] = [
  * Which workflow a run projects. Covers only the workflows that actually record a run row —
  * `answer-question` and `ingest-document-version` run without one. `workflowId` is a bare
  * `randomUUID()`, so this is the only field carrying what a run *is*.
+ *
+ * `'rescan-conflicts'` is no longer a workflow this codebase starts. Kept in this closed union
+ * for existing rows that carry it; no current code path writes it.
  */
 export type WorkflowRunType = 'resolve-conflict' | 'sync-source' | 'rescan-conflicts';
 

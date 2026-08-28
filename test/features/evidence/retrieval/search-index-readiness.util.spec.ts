@@ -199,8 +199,8 @@ describe('createSearchChunkCountProbe', () => {
     );
 
     await expect(probe()).resolves.toBe(true);
-    // The search index mapping declares `documentVersionId` as `objectId` (`migrations/0003-
-    // search-indexes.ts`) — a raw string filter value matches nothing, so this must coerce via
+    // The search index mapping declares `documentVersionId` as `objectId`
+    // (`migrations/0001-baseline.ts`) — a raw string filter value matches nothing, so this must coerce via
     // `new ObjectId(...)` rather than pass the hex string straight through.
     expect(aggregate).toHaveBeenCalledWith([
       {
@@ -267,8 +267,8 @@ describe('createVectorChunkProbe', () => {
     );
 
     await expect(probe()).resolves.toBe(true);
-    // Only `tenantId` is declared a `filter` field on the vector index mapping (`migrations/0003-
-    // search-indexes.ts`), and the vector path itself is `embedding` — a regression on either
+    // Only `tenantId` is declared a `filter` field on the vector index mapping
+    // (`migrations/0001-baseline.ts`), and the vector path itself is `embedding` — a regression on either
     // means this probe never converges (see this util's own `createVectorChunkProbe` doc comment).
     expect(aggregate).toHaveBeenCalledWith([
       {

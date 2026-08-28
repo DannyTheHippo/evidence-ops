@@ -7,12 +7,13 @@ import type {
   EmbeddingRequest,
 } from '../../src/providers/embedding/embedding-provider.interface';
 import { SpendGuardEmbeddingProvider } from '../../src/providers/embedding/spend-guard-embedding.provider';
+import { CachingModelProvider } from '../../src/providers/model/caching-model.provider';
 import type { CachingModelProviderOptions } from '../../src/providers/model/caching-model.provider';
 import { FakeModelProvider } from '../../src/providers/model/fake-model.provider';
 import type { ModelRequest } from '../../src/providers/model/model-provider.interface';
 import type { TenantSpendService } from '../../src/providers/model/spend/tenant-spend.service';
-import { TracingModelProvider } from '../../src/providers/model/tracing-model.provider';
 import { createEmbeddingProvider, createModelProvider } from '../../src/providers/providers.module';
+import { modelCostHistogram } from '../../src/providers/telemetry/domain-metrics';
 import type { Telemetry } from '../../src/providers/telemetry/telemetry.interface';
 import type { AlsContext } from '../../src/shared/types/als-context.type';
 import { getMockTypedConfig } from '../utils/get-mock-typed-config';
@@ -22,6 +23,10 @@ describe('createModelProvider', () => {
   let anthropic: FakeModelProvider;
   let openai: FakeModelProvider;
   let telemetry: Telemetry;
+  // Held separately, and asserted on directly, rather than through `telemetry.event` — `Telemetry`
+  // declares `event` with method syntax, so referencing it off `telemetry` trips
+  // `@typescript-eslint/unbound-method` (the access could lose its `this` binding).
+  let telemetryEvent: jest.Mock;
 
   const noLedgerSpendService = {} as TenantSpendService;
 
@@ -41,7 +46,12 @@ describe('createModelProvider', () => {
     cacheDir = await mkdtemp(join(tmpdir(), 'evidence-ops-model-provider-'));
     anthropic = new FakeModelProvider();
     openai = new FakeModelProvider();
-    telemetry = { event: jest.fn() };
+    telemetryEvent = jest.fn();
+    telemetry = { event: telemetryEvent };
+    // `modelCostHistogram` is a module-scope singleton (not a fresh instance per test like
+    // `telemetry`/`anthropic`/`openai` above), so a `jest.spyOn` in an individual test would
+    // otherwise return the same mock — and its accumulated call history — across every test here.
+    jest.spyOn(modelCostHistogram, 'record').mockClear();
   });
 
   afterEach(async () => {
@@ -51,7 +61,9 @@ describe('createModelProvider', () => {
 
   it('routes to the anthropic base by default', async () => {
     // dailyLimitUsd: 0 disables SpendGuard's ledger so this test can stay focused on routing.
-    const config = getMockTypedConfig({ spend: { dailyLimitUsd: 0 } });
+    const config = getMockTypedConfig({
+      spend: { dailyLimitUsd: 0, ingestDailyLimitUsd: undefined },
+    });
     anthropic.enqueueResult({ output: 'anthropic-answer' });
 
     const provider = createModelProvider(
@@ -72,7 +84,7 @@ describe('createModelProvider', () => {
   it('routes to the openai base when MODEL_PROVIDER=openai', async () => {
     const config = getMockTypedConfig({
       model: { provider: 'openai' },
-      spend: { dailyLimitUsd: 0 },
+      spend: { dailyLimitUsd: 0, ingestDailyLimitUsd: undefined },
     });
     openai.enqueueResult({ output: 'openai-answer' });
 
@@ -91,8 +103,13 @@ describe('createModelProvider', () => {
     expect(anthropic.calls).toHaveLength(0);
   });
 
-  it('wraps the base in TracingModelProvider without changing the outer decorator', () => {
-    const config = getMockTypedConfig({ spend: { dailyLimitUsd: 0 } });
+  // Still `CachingModelProvider` even after adding `Metrics` to the chain — `Metrics` sits inside
+  // `Caching`, not outside it (see the next two tests for why). This only pins the outer type;
+  // it does not prove `Metrics` is in the chain at all, which the two tests below do.
+  it('wraps the base in CachingModelProvider as the outermost decorator', () => {
+    const config = getMockTypedConfig({
+      spend: { dailyLimitUsd: 0, ingestDailyLimitUsd: undefined },
+    });
 
     const provider = createModelProvider(
       anthropic,
@@ -103,7 +120,7 @@ describe('createModelProvider', () => {
       config,
     );
 
-    expect(provider).toBeInstanceOf(TracingModelProvider);
+    expect(provider).toBeInstanceOf(CachingModelProvider);
   });
 
   it('keeps SpendGuard inside Caching — a cached replay never reserves spend twice', async () => {
@@ -132,6 +149,37 @@ describe('createModelProvider', () => {
     expect(anthropic.calls).toHaveLength(1);
     expect(spendService.reserve).toHaveBeenCalledTimes(1);
   });
+
+  it('keeps Metrics inside Caching — a cached replay records no cost and emits no event', async () => {
+    const config = getMockTypedConfig({
+      spend: { dailyLimitUsd: 0, ingestDailyLimitUsd: undefined },
+    });
+    anthropic.enqueueResult({ output: 'anthropic-answer', costUsd: 0.042 });
+    const costHistogramSpy = jest.spyOn(modelCostHistogram, 'record');
+
+    const provider = createModelProvider(
+      anthropic,
+      openai,
+      noLedgerSpendService,
+      cacheOptions('record'),
+      telemetry,
+      config,
+    );
+
+    await provider.generate(request);
+    expect(costHistogramSpy).toHaveBeenCalledTimes(1);
+    expect(telemetryEvent).toHaveBeenCalledTimes(2); // start, success
+
+    costHistogramSpy.mockClear();
+    telemetryEvent.mockClear();
+
+    const second = await provider.generate(request);
+
+    expect(second.output).toBe('anthropic-answer');
+    expect(anthropic.calls).toHaveLength(1);
+    expect(costHistogramSpy).not.toHaveBeenCalled();
+    expect(telemetryEvent).not.toHaveBeenCalled();
+  });
 });
 
 describe('createEmbeddingProvider', () => {
@@ -153,7 +201,9 @@ describe('createEmbeddingProvider', () => {
   });
 
   it('wraps the base in SpendGuardEmbeddingProvider, with no cache in front of it', () => {
-    const config = getMockTypedConfig({ spend: { dailyLimitUsd: 0 } });
+    const config = getMockTypedConfig({
+      spend: { dailyLimitUsd: 0, ingestDailyLimitUsd: undefined },
+    });
     const noLedgerSpendService = {} as TenantSpendService;
 
     const provider = createEmbeddingProvider(

@@ -117,12 +117,53 @@ describe('SpendGuardModelProvider', () => {
       50,
     );
     spendService.reserve.mockRejectedValueOnce(
-      new TenantSpendLimitExceededError('tenant-a', 1, 50),
+      new TenantSpendLimitExceededError('tenant-a', 1, 50, windowStart),
     );
 
     await expect(provider.generate(request)).rejects.toBeInstanceOf(TenantSpendLimitExceededError);
     expect(inner.calls).toHaveLength(0);
     expect(spendService.release).not.toHaveBeenCalled();
     expect(spendService.settle).not.toHaveBeenCalled();
+  });
+
+  it('should reserve a fact_extraction call against the ingest sub-ceiling when one is configured', async () => {
+    const provider = new SpendGuardModelProvider(
+      inner,
+      spendService as unknown as TenantSpendService,
+      50,
+      40,
+    );
+    inner.enqueueResult({ output: 'extracted', costUsd: 0.1 });
+
+    await provider.generate({ ...request, taskClass: 'fact_extraction' });
+
+    expect(spendService.reserve).toHaveBeenCalledWith('tenant-a', 1, 40);
+  });
+
+  it('should keep reserving a fact_extraction call against the full ceiling when no ingest sub-ceiling is configured', async () => {
+    const provider = new SpendGuardModelProvider(
+      inner,
+      spendService as unknown as TenantSpendService,
+      50,
+    );
+    inner.enqueueResult({ output: 'extracted', costUsd: 0.1 });
+
+    await provider.generate({ ...request, taskClass: 'fact_extraction' });
+
+    expect(spendService.reserve).toHaveBeenCalledWith('tenant-a', 1, 50);
+  });
+
+  it('should reserve a non-ingest task class against the full ceiling even when an ingest sub-ceiling is configured', async () => {
+    const provider = new SpendGuardModelProvider(
+      inner,
+      spendService as unknown as TenantSpendService,
+      50,
+      40,
+    );
+    inner.enqueueResult({ output: 'Paris', costUsd: 0.1 });
+
+    await provider.generate({ ...request, taskClass: 'claim_verification' });
+
+    expect(spendService.reserve).toHaveBeenCalledWith('tenant-a', 1, 50);
   });
 });

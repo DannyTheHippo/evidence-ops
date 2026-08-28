@@ -1,3 +1,4 @@
+import { UnauthorizedException } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
@@ -52,6 +53,7 @@ describe('ApiKeysService', () => {
     revokedAt: undefined,
     lastUsedAt: undefined,
     createdAt: new Date('2026-07-01T00:00:00.000Z'),
+    tokenVersion: 0,
     ...overrides,
   });
 
@@ -60,6 +62,7 @@ describe('ApiKeysService', () => {
     email: 'user@example.com',
     tenantId: 'tenant-a',
     role: UserRole.Member,
+    tokenVersion: 0,
     ...overrides,
   });
 
@@ -76,6 +79,10 @@ describe('ApiKeysService', () => {
     }).compile();
 
     service = module.get<ApiKeysService>(ApiKeysService);
+    // `mint` reads the caller's row for the session epoch it stamps onto the key. Set as the
+    // fallback so the cases that care about a specific row still queue their own with
+    // `mockResolvedValueOnce`, which takes precedence.
+    mockUserModel.findById.mockResolvedValue(buildMockUser());
   });
 
   afterEach(() => {
@@ -132,13 +139,45 @@ describe('ApiKeysService', () => {
       expect(Math.abs(createCall.expiresAt.getTime() - expectedMs)).toBeLessThan(5000);
     });
 
-    it('should refuse minting once the caller’s active key count reaches the cap', async () => {
-      mockApiKeyModel.countDocuments.mockResolvedValueOnce(MAX_ACTIVE_KEYS_PER_USER);
+    it('should refuse minting, and remove the row it just wrote, once the caller is over the cap', async () => {
+      mockApiKeyModel.create.mockResolvedValueOnce(buildMockApiKey());
+      mockApiKeyModel.countDocuments.mockResolvedValueOnce(MAX_ACTIVE_KEYS_PER_USER + 1);
 
       await expect(
         service.mint({ name: 'One too many', actorId, tenantId: 'tenant-a' }),
       ).rejects.toBeInstanceOf(ApiKeyLimitExceededException);
-      expect(mockApiKeyModel.create).not.toHaveBeenCalled();
+      // Compensating delete names this call's own row, so a refusal cannot take a concurrent
+      // mint's key with it.
+      expect(mockApiKeyModel.deleteOne).toHaveBeenCalledWith({ _id: apiKeyId });
+      expect(mockAuditService.record).not.toHaveBeenCalled();
+    });
+
+    it('should mint the key that lands exactly on the cap', async () => {
+      mockApiKeyModel.create.mockResolvedValueOnce(buildMockApiKey());
+      mockApiKeyModel.countDocuments.mockResolvedValueOnce(MAX_ACTIVE_KEYS_PER_USER);
+
+      await expect(
+        service.mint({ name: 'The last one', actorId, tenantId: 'tenant-a' }),
+      ).resolves.toEqual(expect.objectContaining({ id: apiKeyId.toString() }));
+      expect(mockApiKeyModel.deleteOne).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The whole of the fix: a count taken before the insert is a read another writer invalidates
+     * before this one writes, so two concurrent mints both read nine and both insert. Counting
+     * after the insert makes each writer's own row visible to its own check. Asserted as call
+     * order rather than as an outcome, because the outcome of the racing pair is what this
+     * ordering produces — no mocked model can interleave two calls to prove it directly.
+     */
+    it('should count the caller’s active keys only after writing its own row', async () => {
+      mockApiKeyModel.create.mockResolvedValueOnce(buildMockApiKey());
+      mockApiKeyModel.countDocuments.mockResolvedValueOnce(1);
+
+      await service.mint({ name: 'CI integration', actorId, tenantId: 'tenant-a' });
+
+      expect(mockApiKeyModel.create.mock.invocationCallOrder[0]).toBeLessThan(
+        mockApiKeyModel.countDocuments.mock.invocationCallOrder[0],
+      );
     });
 
     it('should scope the active key count by tenant, user, and non-revoked, unexpired status', async () => {
@@ -154,6 +193,29 @@ describe('ApiKeysService', () => {
           revokedAt: { $exists: false },
         }),
       );
+    });
+
+    it('should stamp the caller’s current session epoch onto the key', async () => {
+      mockUserModel.findById.mockResolvedValueOnce(buildMockUser({ tokenVersion: 4 }));
+      mockApiKeyModel.countDocuments.mockResolvedValueOnce(0);
+      mockApiKeyModel.create.mockResolvedValueOnce(buildMockApiKey({ tokenVersion: 4 }));
+
+      await service.mint({ name: 'CI integration', actorId, tenantId: 'tenant-a' });
+
+      expect(mockUserModel.findById).toHaveBeenCalledWith(actorId);
+      expect(mockApiKeyModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ tokenVersion: 4 }),
+      );
+    });
+
+    // Fails CLOSED: no row means no epoch to issue against, so no key is written at all.
+    it('should refuse to mint when the caller’s user row is gone', async () => {
+      mockUserModel.findById.mockResolvedValueOnce(null);
+
+      await expect(
+        service.mint({ name: 'CI integration', actorId, tenantId: 'tenant-a' }),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(mockApiKeyModel.create).not.toHaveBeenCalled();
     });
   });
 
@@ -367,6 +429,37 @@ describe('ApiKeysService', () => {
 
       expect(mockUserModel.findById).toHaveBeenCalledWith(userId);
       expect(result?.role).toBe(UserRole.Admin);
+    });
+
+    /**
+     * The revocation lever `User.tokenVersion` is: raising it refuses every credential minted
+     * before the raise, personal access tokens included. Without this the epoch would move only
+     * the browser session and leave the MCP surface's only credential working.
+     */
+    it('should fail closed once the user’s session epoch has moved past the key’s', async () => {
+      const token = buildPresentableToken();
+      mockApiKeyModel.findOne.mockResolvedValueOnce(
+        buildMockApiKey({ tokenHash: hashOf(token), tokenVersion: 0 }),
+      );
+      mockUserModel.findById.mockResolvedValueOnce(buildMockUser({ tokenVersion: 1 }));
+
+      const result = await service.verify(token);
+
+      expect(result).toBeNull();
+    });
+
+    // A key row predating the epoch field makes no claim about when it was issued, so it cannot be
+    // shown to postdate a raise — refused rather than matched by a pair of absent values.
+    it('should fail closed for a key row carrying no epoch at all', async () => {
+      const token = buildPresentableToken();
+      mockApiKeyModel.findOne.mockResolvedValueOnce(
+        buildMockApiKey({ tokenHash: hashOf(token), tokenVersion: undefined }),
+      );
+      mockUserModel.findById.mockResolvedValueOnce(buildMockUser({ tokenVersion: undefined }));
+
+      const result = await service.verify(token);
+
+      expect(result).toBeNull();
     });
   });
 });

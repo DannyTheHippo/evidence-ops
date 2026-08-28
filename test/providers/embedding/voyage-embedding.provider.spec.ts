@@ -22,6 +22,7 @@ const DEFAULT_VOYAGE_CONFIG = {
   model: 'voyage-4',
   dimensions: 1024 as const,
   requestsPerMinute: 3,
+  queryRequestsPerMinute: 3,
   maxRetries: 5,
   maxRetryWaitMs: 300_000,
   requestTimeoutMs: 30_000,
@@ -355,6 +356,23 @@ describe('VoyageEmbeddingProvider', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     // 60000ms / 3 rpm = 20000ms between request slots.
     expect(clock.sleepCalls).toContain(20_000);
+  });
+
+  // Regression: a single shared `nextAllowedAt` slot meant a backfill saturating the `document`
+  // pace would delay every `query` call behind it, past `retrieveEvidence`'s 30s timeout.
+  it('should not delay a query embed behind a document pacer already saturated with requests', async () => {
+    const provider = buildProvider({ requestsPerMinute: 3, queryRequestsPerMinute: 3 });
+    fetchMock.mockResolvedValue(buildResponse(['a']));
+
+    // Exhausts the `document` slot several requests deep.
+    await provider.embed({ inputs: ['a'], inputType: 'document' });
+    await provider.embed({ inputs: ['a'], inputType: 'document' });
+    await provider.embed({ inputs: ['a'], inputType: 'document' });
+    clock.sleepCalls.length = 0;
+
+    await provider.embed({ inputs: ['a'], inputType: 'query' });
+
+    expect(clock.sleepCalls).not.toContain(20_000);
   });
 
   it('should report token usage summed across every batch', async () => {

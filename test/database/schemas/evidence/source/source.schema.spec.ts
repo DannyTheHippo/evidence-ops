@@ -137,7 +137,7 @@ describe('Source schema', () => {
       expect(error?.errors.sourceClass).toBeDefined();
     });
 
-    it('requires path, sha256, sizeBytes, mtimeMs, and documentId on each fileStates entry', () => {
+    it('requires path, sizeBytes, and mtimeMs on each fileStates entry', () => {
       const source = new SourceModel({
         name: 'Local inbox',
         kind: 'local-folder',
@@ -148,10 +148,32 @@ describe('Source schema', () => {
       const error = source.validateSync();
 
       expect(error?.errors['fileStates.0.path']).toBeDefined();
-      expect(error?.errors['fileStates.0.sha256']).toBeDefined();
       expect(error?.errors['fileStates.0.sizeBytes']).toBeDefined();
       expect(error?.errors['fileStates.0.mtimeMs']).toBeDefined();
-      expect(error?.errors['fileStates.0.documentId']).toBeDefined();
+    });
+
+    // A placeholder entry — a file `SourcesService.syncOneFile` discovered but never turned into a
+    // `Document` — has no `sha256` and no `documentId` to give: nothing was ever ingested, so there
+    // is nothing to hash or link. See `SourceFileState`'s own doc comment.
+    it('accepts a fileStates entry with no sha256 or documentId', () => {
+      const source = new SourceModel({
+        name: 'Local inbox',
+        kind: 'local-folder',
+        path: './inbox',
+        tenantId: 'tenant-a',
+        fileStates: [
+          {
+            path: 'inbox/legacy-export.xls',
+            sizeBytes: 4096,
+            mtimeMs: 1_700_000_000_000,
+            lastError: "Could not resolve a document type for 'legacy-export.xls'",
+          },
+        ],
+      });
+
+      const error = source.validateSync();
+
+      expect(error).toBeUndefined();
     });
   });
 
@@ -195,6 +217,33 @@ describe('Source schema', () => {
       });
       expect(found?.tenantId).toBe('tenant-a');
       expect(found?.sourceClass).toBe('unclassified');
+    });
+
+    it('persists and rehydrates a placeholder fileStates entry with no sha256 or documentId', async () => {
+      const created = await SourceModel.create({
+        name: 'Local inbox',
+        kind: 'local-folder',
+        path: './inbox',
+        tenantId: 'tenant-a',
+        fileStates: [
+          {
+            path: 'inbox/legacy-export.xls',
+            sizeBytes: 4096,
+            mtimeMs: 1_700_000_000_000,
+            lastError: "Could not resolve a document type for 'legacy-export.xls'",
+          },
+        ],
+      });
+
+      const found = await SourceModel.findById(created._id);
+      const plain = found?.toObject();
+
+      expect(plain?.fileStates).toHaveLength(1);
+      expect(plain?.fileStates[0].sha256).toBeUndefined();
+      expect(plain?.fileStates[0].documentId).toBeUndefined();
+      expect(plain?.fileStates[0].lastError).toBe(
+        "Could not resolve a document type for 'legacy-export.xls'",
+      );
     });
 
     it('persists and rehydrates an explicit sourceClass', async () => {

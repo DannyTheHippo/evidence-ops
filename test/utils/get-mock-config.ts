@@ -22,6 +22,9 @@ export const getMockConfig = (): EnvironmentConfig => ({
   auth: {
     jwtSecret: 'test-jwt-secret-at-least-32-chars-0000',
     jwtExpiresIn: '7d',
+    credentialWindowMs: 900_000,
+    credentialIpLimit: 10,
+    credentialEmailLimit: 5,
   },
 
   throttle: {
@@ -37,6 +40,7 @@ export const getMockConfig = (): EnvironmentConfig => ({
     apiKey: undefined,
     model: 'claude-sonnet-5',
     timeoutMs: 60000,
+    factExtractionModel: undefined,
   },
 
   openai: {
@@ -51,6 +55,7 @@ export const getMockConfig = (): EnvironmentConfig => ({
     model: 'voyage-4',
     dimensions: 1024,
     requestsPerMinute: 3,
+    queryRequestsPerMinute: 3,
     maxRetries: 5,
     maxRetryWaitMs: 300000,
     requestTimeoutMs: 30000,
@@ -65,11 +70,10 @@ export const getMockConfig = (): EnvironmentConfig => ({
   retrieval: {
     fusion: 'server',
     limit: 12,
+    scoreFloor: 0,
   },
 
   telemetry: {
-    otlpEndpoint: 'http://localhost:4318',
-    captureModelContent: false,
     serviceName: undefined,
     metricsPort: 9464,
   },
@@ -81,10 +85,12 @@ export const getMockConfig = (): EnvironmentConfig => ({
 
   extraction: {
     chunkConcurrency: 2,
+    aliasHarvestAutoApply: false,
   },
 
   spend: {
     dailyLimitUsd: 50,
+    ingestDailyLimitUsd: undefined,
   },
 
   mcp: {

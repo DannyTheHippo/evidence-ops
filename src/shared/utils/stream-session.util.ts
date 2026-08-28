@@ -107,7 +107,7 @@ export function acquireStreamSlot(
 }
 
 // Per-process, keyed by an actor+subject pair. Evicted the same way `McpServerService
-// .applyFixedWindow` evicts its rate-limit windows — a full sweep on every call — so this stays
+// .applyRollingWindow` evicts its rate-limit charges — a full sweep on every call — so this stays
 // bounded to keys seen within the last `windowMs`, not to every actor+subject pair the process has
 // ever recorded a view for.
 const lastRecordedStreamViews = new Map<string, number>();

@@ -1,10 +1,29 @@
 import type { XlsxCellLocator } from '../../../../database/schemas/evidence/evidence-chunk/evidence-locator.type';
+import { decodeTextBuffer, encodingFidelityReasons } from '../decode-text-buffer';
 import { MalformedCsvException } from '../exceptions/ingestion.exception';
 import type { DocumentParser, ParsedDocument, ParsedElement } from './parsed-element.type';
 import { sanitizeEvidenceText } from '../sanitize-evidence-text';
 
 // Bump whenever a change here could shift the cell coordinates a stored citation points at.
-const EXTRACTOR_VERSION = 'csv-rfc4180-1';
+// Encoding detection (`decodeTextBuffer`) and delimiter sniffing (`sniffDelimiter`) can each move
+// a coordinate on their own: a wrong encoding shifts every cell's text, and a semicolon-delimited
+// row that gets sniffed splits into columns a single-field row would not.
+const EXTRACTOR_VERSION = 'csv-rfc4180-3';
+
+// The only delimiter this sniff ever swaps the constructor's own default for — never applied when
+// the constructor delimiter is a tab, since TSV's separator is unambiguous from its MIME type.
+const SNIFFABLE_DELIMITER = ';';
+
+// How many leading non-empty lines the sniff samples. Large enough to reject a false positive from
+// one stray semicolon in prose, small enough to stay cheap on a huge file.
+const DELIMITER_SNIFF_SAMPLE_LINES = 5;
+
+function countOutsideQuotedSpans(line: string, char: string): number {
+  // Quoted-span removal here is a sniff, not a parse — good enough to keep a comma or semicolon
+  // inside a quoted field from inflating either candidate's count, without running the full
+  // character-scanning tokenizer twice.
+  return line.replace(/"(?:[^"]|"")*"/g, '').split(char).length - 1;
+}
 
 // Every element this parser emits carries this constant in place of a real sheet name — a parser
 // only ever receives a Buffer, never the original filename, so there is no name to derive one
@@ -50,12 +69,13 @@ export class CsvParser implements DocumentParser {
   // throw from `tokenize` into a promise rejection, matching `DocumentParser.parse`'s contract.
   parse(content: Buffer): Promise<ParsedDocument> {
     return Promise.resolve().then(() => {
-      let text = content.toString('utf-8');
-      if (text.charCodeAt(0) === 0xfeff) {
-        text = text.slice(1);
-      }
+      // `decodeTextBuffer` strips any BOM and resolves the encoding from the bytes themselves —
+      // a spreadsheet's "CSV UTF-8" export can carry a UTF-8 BOM over a cp1252 body. This parser
+      // never touches the raw buffer itself.
+      const { text, encoding } = decodeTextBuffer(content);
+      const delimiter = this.delimiter === ',' ? this.sniffDelimiter(text) : this.delimiter;
 
-      const rows = this.tokenize(text);
+      const rows = this.tokenize(text, delimiter);
 
       const elements: ParsedElement[] = [];
       rows.forEach((row, rowIndex) => {
@@ -79,8 +99,49 @@ export class CsvParser implements DocumentParser {
         });
       });
 
-      return { elements, extractorVersion: EXTRACTOR_VERSION };
+      return {
+        elements,
+        extractorVersion: EXTRACTOR_VERSION,
+        reducedFidelityReasons: encodingFidelityReasons(encoding),
+      };
     });
+  }
+
+  /**
+   * Only ever consulted when the constructor delimiter is `,` — a European export that actually
+   * uses `;` reads as `text/csv`, never as a distinct MIME `resolveUploadKind` could route to a
+   * differently-configured instance, so the ambiguity has to be resolved from content instead.
+   *
+   * Semicolon wins only when every sampled line carries the exact same nonzero semicolon count and
+   * that count strictly exceeds the highest comma count among the same lines — consistency, not a
+   * bare majority vote, so a single stray semicolon in ordinary prose ("Site A; 5.25% cap rate")
+   * cannot flip an otherwise comma-delimited file. A tie, an inconsistent semicolon count across
+   * rows, or a comma count that already matches or beats it all fall back to the constructor's own
+   * default.
+   */
+  private sniffDelimiter(text: string): string {
+    const sampleLines = text
+      .split(/\r\n|\r|\n/)
+      .filter((line) => line.length > 0)
+      .slice(0, DELIMITER_SNIFF_SAMPLE_LINES);
+    if (sampleLines.length === 0) {
+      return this.delimiter;
+    }
+
+    const semicolonCounts = sampleLines.map((line) =>
+      countOutsideQuotedSpans(line, SNIFFABLE_DELIMITER),
+    );
+    const maxCommaCount = Math.max(
+      ...sampleLines.map((line) => countOutsideQuotedSpans(line, this.delimiter)),
+    );
+
+    const [firstSemicolonCount] = semicolonCounts;
+    const consistentSemicolons =
+      firstSemicolonCount > 0 && semicolonCounts.every((count) => count === firstSemicolonCount);
+
+    return consistentSemicolons && firstSemicolonCount > maxCommaCount
+      ? SNIFFABLE_DELIMITER
+      : this.delimiter;
   }
 
   /**
@@ -92,8 +153,11 @@ export class CsvParser implements DocumentParser {
    * unquoted field, a character following a closed quote other than a delimiter/newline, or a
    * quoted field still open at EOF. A guessed row is worse than no row for a citation-backed
    * answer, so none of these are repaired leniently.
+   *
+   * `delimiter` is the sniffed/constructor-default field separator for this call, not necessarily
+   * `this.delimiter` — see `parse`'s `sniffDelimiter` call.
    */
-  private tokenize(text: string): string[][] {
+  private tokenize(text: string, delimiter: string): string[][] {
     const rows: string[][] = [];
     let row: string[] = [];
     let field = '';
@@ -130,7 +194,7 @@ export class CsvParser implements DocumentParser {
         continue;
       }
 
-      if (state === 'closed' && char !== this.delimiter && char !== '\r' && char !== '\n') {
+      if (state === 'closed' && char !== delimiter && char !== '\r' && char !== '\n') {
         throw new MalformedCsvException(
           `Unexpected character after a closing quote at offset ${i}`,
         );
@@ -141,7 +205,7 @@ export class CsvParser implements DocumentParser {
         i += 1;
       } else if (char === '"' && state === 'unquoted') {
         throw new MalformedCsvException(`Unexpected quote inside an unquoted field at offset ${i}`);
-      } else if (char === this.delimiter) {
+      } else if (char === delimiter) {
         endField();
         i += 1;
       } else if (char === '\r' || char === '\n') {

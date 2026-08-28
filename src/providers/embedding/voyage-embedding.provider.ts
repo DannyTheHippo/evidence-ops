@@ -100,8 +100,14 @@ function describeFetchFailure(error: unknown): string {
 export class VoyageEmbeddingProvider implements EmbeddingProvider {
   readonly info: EmbeddingProviderInfo;
 
-  /** Epoch ms of the earliest time the next request may fire; reserved synchronously in `pace`. */
-  private nextAllowedAt = 0;
+  /**
+   * Epoch ms of the earliest time the next request of each `inputType` may fire, reserved
+   * synchronously in `pace`. Kept as two independent slots, not one shared clock: `document`
+   * (ingest) and `query` (`retrieveEvidence`) are paced against separate budgets so a backfill
+   * saturating the `document` slot can never delay a `query` call behind it — `retrieveEvidence`
+   * times out at 30s, well inside the interval a shared 3 RPM pacer could impose.
+   */
+  private nextAllowedAt: Record<EmbeddingInputType, number> = { document: 0, query: 0 };
 
   constructor(
     private readonly config: TypedConfigService,
@@ -122,8 +128,9 @@ export class VoyageEmbeddingProvider implements EmbeddingProvider {
       return { embeddings: [], usage: { totalTokens: 0 } };
     }
 
-    // Sequential, not `Promise.all`: pacing reserves one shared `nextAllowedAt` slot per request,
-    // and concurrent batches would race that read-modify-write. Fine at 3 RPM — see `pace`.
+    // Sequential, not `Promise.all`: pacing reserves one `nextAllowedAt[request.inputType]` slot
+    // per request, and concurrent batches of the same inputType would race that
+    // read-modify-write. Fine at 3 RPM — see `pace`.
     const batches = chunk(request.inputs, MAX_INPUTS_PER_REQUEST);
     const results: EmbeddingResult[] = [];
     for (const batch of batches) {
@@ -157,7 +164,7 @@ export class VoyageEmbeddingProvider implements EmbeddingProvider {
     let waitedMs = 0;
 
     for (let attempt = 0; ; attempt++) {
-      await this.pace();
+      await this.pace(inputType);
 
       let response: Response | undefined;
       let failureMessage: string | undefined;
@@ -227,19 +234,27 @@ export class VoyageEmbeddingProvider implements EmbeddingProvider {
    * is enough; a token bucket only earns its complexity under bursty concurrent traffic, which a
    * single provider instance never generates (`embed` itself is sequential; see there).
    *
+   * Paced per `inputType` against its own rate (`requestsPerMinute` for `document`,
+   * `queryRequestsPerMinute` for `query`) and its own slot in `nextAllowedAt`, so pacing one
+   * never delays the other.
+   *
    * The slot is reserved synchronously, before the `await`, so two overlapping `embedBatch` calls
-   * on the same instance can't both read the same `nextAllowedAt` and burst together.
+   * of the same `inputType` on the same instance can't both read the same `nextAllowedAt[inputType]`
+   * and burst together.
    */
-  private async pace(): Promise<void> {
-    const rpm = this.config.voyage.requestsPerMinute;
+  private async pace(inputType: EmbeddingInputType): Promise<void> {
+    const rpm =
+      inputType === 'query'
+        ? this.config.voyage.queryRequestsPerMinute
+        : this.config.voyage.requestsPerMinute;
     if (rpm <= 0) {
       return;
     }
 
     const intervalMs = 60_000 / rpm;
     const now = this.clock.now();
-    const slot = Math.max(this.nextAllowedAt, now);
-    this.nextAllowedAt = slot + intervalMs;
+    const slot = Math.max(this.nextAllowedAt[inputType], now);
+    this.nextAllowedAt[inputType] = slot + intervalMs;
 
     const waitMs = slot - now;
     if (waitMs > 0) {

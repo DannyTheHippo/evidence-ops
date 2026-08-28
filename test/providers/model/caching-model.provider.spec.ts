@@ -6,6 +6,18 @@ import { ModelReplayCacheMissError } from '../../../src/providers/model/errors/m
 import { FakeModelProvider } from '../../../src/providers/model/fake-model.provider';
 import type { ModelRequest } from '../../../src/providers/model/model-provider.interface';
 
+/**
+ * A test double whose `resolveModel` names a different model per `taskClass`, simulating
+ * `AnthropicModelProvider`'s per-taskClass routing — `FakeModelProvider` deliberately implements
+ * no `resolveModel` (it stands in for every provider that has no per-taskClass routing), so this
+ * subclass is the only way to exercise the forwarding this cache key depends on.
+ */
+class RoutingModelProvider extends FakeModelProvider {
+  resolveModel(taskClass: ModelRequest['taskClass']): string {
+    return taskClass === 'fact_extraction' ? 'claude-haiku-4-5-20251001' : this.info.model;
+  }
+}
+
 describe('CachingModelProvider', () => {
   let cacheDir: string;
   let inner: FakeModelProvider;
@@ -108,5 +120,24 @@ describe('CachingModelProvider', () => {
     expect(first.output).toBe('Paris');
     expect(second.output).toBe('Paris');
     expect(inner.calls).toHaveLength(1);
+  });
+
+  // Regression for the exact collision the routing brief warns about: `taskClass` is not itself
+  // part of `computeCacheKey`'s input, so a request differing only in `taskClass` hashes
+  // identically to another *unless* the resolved model — which does depend on `taskClass` for a
+  // routing-aware delegate — is threaded into the key. Without `resolveModel` forwarded through
+  // this decorator, the second call below would wrongly replay the first call's cached response.
+  it('should call through separately for requests the delegate routes to different models, never sharing one cache entry across models', async () => {
+    const routingInner = new RoutingModelProvider();
+    const provider = new CachingModelProvider(routingInner, { mode: 'record', cacheDir });
+    routingInner.enqueueResult({ output: 'sonnet-answer' });
+    routingInner.enqueueResult({ output: 'haiku-answer' });
+
+    const sonnetResult = await provider.generate({ ...request, taskClass: 'qa_answer' });
+    const haikuResult = await provider.generate({ ...request, taskClass: 'fact_extraction' });
+
+    expect(sonnetResult.output).toBe('sonnet-answer');
+    expect(haikuResult.output).toBe('haiku-answer');
+    expect(routingInner.calls).toHaveLength(2);
   });
 });

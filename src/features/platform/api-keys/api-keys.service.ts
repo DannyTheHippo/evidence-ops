@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Model, Types } from 'mongoose';
@@ -75,8 +75,17 @@ export class ApiKeysService implements TokenVerifier {
     this.logger.init(ApiKeysService.name);
   }
 
+  /**
+   * Stamps the minting user's current session epoch onto the key, which is what `verify` compares
+   * on every call. Fails CLOSED on a missing `User` row: the row was live when `JwtAuthGuard`
+   * admitted this request, so its absence means the account went away mid-request and there is no
+   * epoch to issue the key against.
+   */
   async mint(input: MintApiKeyInput): Promise<MintedApiKeyResult> {
-    await this.assertUnderActiveKeyCap(input.actorId, input.tenantId);
+    const user = await this.userModel.findById(input.actorId);
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
 
     const token = `${TOKEN_PREFIX}${randomBytes(TOKEN_RANDOM_BYTES).toString('base64url')}`;
     const tokenHash = this.hash(token);
@@ -90,7 +99,10 @@ export class ApiKeysService implements TokenVerifier {
       tokenPrefix,
       name: input.name,
       expiresAt,
+      tokenVersion: user.tokenVersion,
     });
+
+    await this.assertUnderActiveKeyCap(apiKey, input.actorId, input.tenantId);
 
     await this.auditService.record({
       action: 'api-keys.minted',
@@ -166,10 +178,16 @@ export class ApiKeysService implements TokenVerifier {
 
   /**
    * Fails CLOSED at every step: a malformed token, an unrecognized hash, a revoked or expired
-   * key, or a key whose user row no longer exists all return `null` rather than an identity —
-   * never throws. `role` and `tenantId` are read from the `User` row on this call, never from the
-   * key itself: a role persisted on the token would let a demoted user keep elevated access until
-   * the token expired.
+   * key, a key whose user row no longer exists, and a key whose session epoch no longer matches
+   * that row all return `null` rather than an identity — never throws. `role` and `tenantId` are
+   * read from the `User` row on this call, never from the key itself: a role persisted on the
+   * token would let a demoted user keep elevated access until the token expired.
+   *
+   * The epoch comparison is what makes `User.tokenVersion` a revocation lever over every credential
+   * an account holds rather than only its browser session. A non-numeric epoch on the key — a row
+   * written before the field existed — is refused for the same reason `JwtAuthGuard` refuses a
+   * token carrying no epoch claim: a key that makes no statement about when it was issued cannot be
+   * shown to predate a raise.
    */
   async verify(presentedToken: string): Promise<VerifiedIdentity | null> {
     if (presentedToken.length !== TOKEN_LENGTH || !presentedToken.startsWith(TOKEN_PREFIX)) {
@@ -190,7 +208,11 @@ export class ApiKeysService implements TokenVerifier {
     }
 
     const user = await this.userModel.findById(apiKey.userId);
-    if (!user) {
+    if (
+      !user ||
+      typeof apiKey.tokenVersion !== 'number' ||
+      apiKey.tokenVersion !== user.tokenVersion
+    ) {
       return null;
     }
 
@@ -225,9 +247,29 @@ export class ApiKeysService implements TokenVerifier {
     return new Date(Date.now() + this.config.apiKeys.defaultTtlDays * MS_PER_DAY);
   }
 
-  /** Fails CLOSED: throws rather than minting once the user's active (non-revoked, unexpired) key
-   *  count reaches `MAX_ACTIVE_KEYS_PER_USER`. */
-  private async assertUnderActiveKeyCap(actorId: string, tenantId: string): Promise<void> {
+  /**
+   * Fails CLOSED: removes the key just written and throws, rather than leaving the user above
+   * `MAX_ACTIVE_KEYS_PER_USER` active (non-revoked, unexpired) keys.
+   *
+   * Counted AFTER the insert, with the new key included, because a count taken before it is a
+   * read whose answer another writer can invalidate before this one writes: two concurrent mints
+   * both read nine, both decide they are under the cap, and both insert. Counting afterwards makes
+   * each writer's own row visible to its own check, so at most one of a concurrent pair can see a
+   * count within the cap. A cap spanning many documents cannot be expressed as a conditional write
+   * on one of them the way `ApprovalsService.decide`'s state guard is, and the expiry half of the
+   * predicate is a moving window that no maintained counter field could stay true to.
+   *
+   * Both writers of a racing pair may refuse — each seeing the other's row — leaving the user below
+   * the cap rather than above it. That is the direction this must err in: a credential cap that
+   * over-refuses costs a retry, and one that over-admits is a compromised account holding more live
+   * credentials than the platform agreed to issue. The compensating delete removes only this
+   * call's own row, named by `_id`, so a concurrent refusal cannot take another mint's key with it.
+   */
+  private async assertUnderActiveKeyCap(
+    minted: ApiKeyDocument,
+    actorId: string,
+    tenantId: string,
+  ): Promise<void> {
     const activeCount = await this.apiKeyModel.countDocuments({
       tenantId,
       userId: new Types.ObjectId(actorId),
@@ -235,9 +277,10 @@ export class ApiKeysService implements TokenVerifier {
       $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $gt: new Date() } }],
     });
 
-    if (activeCount >= MAX_ACTIVE_KEYS_PER_USER) {
+    if (activeCount > MAX_ACTIVE_KEYS_PER_USER) {
+      await this.apiKeyModel.deleteOne({ _id: minted._id });
       throw new ApiKeyLimitExceededException(
-        `User '${actorId}' already has ${activeCount} active API keys, the maximum allowed`,
+        `User '${actorId}' already has ${MAX_ACTIVE_KEYS_PER_USER} active API keys, the maximum allowed`,
       );
     }
   }

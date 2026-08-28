@@ -38,6 +38,7 @@ const documentDetail = {
     sha256: 'a'.repeat(64),
     sizeBytes: 100,
     ingestionStatus: 'completed',
+    reducedFidelityReasons: [],
     createdAt: new Date().toISOString(),
   },
   versions: [
@@ -47,6 +48,7 @@ const documentDetail = {
       sha256: 'a'.repeat(64),
       sizeBytes: 100,
       ingestionStatus: 'completed',
+      reducedFidelityReasons: [],
       createdAt: new Date().toISOString(),
     },
   ],

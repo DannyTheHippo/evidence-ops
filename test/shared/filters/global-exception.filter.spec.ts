@@ -5,16 +5,22 @@ import { Test } from '@nestjs/testing';
 import { TypedConfigService } from '../../../src/config/environment/typed-config.service';
 import { GlobalExceptionFilter } from '../../../src/shared/filters/global-exception.filter';
 import { NodeEnv } from '../../../src/shared/enums/global/node-env.enum';
+import { AppLogger } from '../../../src/shared/services/logger/logger.service';
+import { getMockLogger } from '../../utils/get-mock-logger';
 import { getMockTypedConfig } from '../../utils/get-mock-typed-config';
 
 describe('GlobalExceptionFilter', () => {
+  const mockLogger = getMockLogger();
+
   /**
    * Returns `status`/`json` as standalone locals rather than properties on a `response` object:
    * asserting on `response.status` reads as an unbound method reference off that object and trips
    * `@typescript-eslint/unbound-method`. The locals are the exact same `jest.fn()` instances the
    * filter invokes, so assertions on them are equally strong.
    */
-  const buildHost = (): {
+  const buildHost = (
+    headersSent = false,
+  ): {
     host: ArgumentsHost;
     status: jest.Mock<{ json: typeof json }, [number]>;
     json: jest.Mock<void, [Record<string, unknown>]>;
@@ -22,7 +28,7 @@ describe('GlobalExceptionFilter', () => {
     const json = jest.fn<void, [Record<string, unknown>]>();
     const status = jest.fn<{ json: typeof json }, [number]>().mockReturnValue({ json });
     const host = {
-      switchToHttp: () => ({ getResponse: () => ({ status, json }) }),
+      switchToHttp: () => ({ getResponse: () => ({ status, json, headersSent }) }),
     } as unknown as ArgumentsHost;
 
     return { host, status, json };
@@ -36,7 +42,11 @@ describe('GlobalExceptionFilter', () => {
     });
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [GlobalExceptionFilter, { provide: TypedConfigService, useValue: config }],
+      providers: [
+        GlobalExceptionFilter,
+        { provide: TypedConfigService, useValue: config },
+        { provide: AppLogger, useValue: mockLogger },
+      ],
     }).compile();
 
     return module.get(GlobalExceptionFilter);
@@ -175,6 +185,82 @@ describe('GlobalExceptionFilter', () => {
       expect(() => filter.catch(exception, host)).not.toThrow();
       const [body] = json.mock.calls[0];
       expect(body).not.toHaveProperty('cause');
+    });
+  });
+
+  describe('server-side logging', () => {
+    it('should log a 500-status exception', async () => {
+      const filter = await buildFilter(NodeEnv.TEST);
+      const { host } = buildHost();
+      const exception = new Error('a very specific internal detail');
+
+      filter.catch(exception, host);
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.stringContaining('a very specific internal detail'),
+        exception.stack,
+      );
+    });
+
+    it('should log a thrown non-Error value', async () => {
+      const filter = await buildFilter(NodeEnv.TEST);
+      const { host } = buildHost();
+
+      filter.catch('a thrown string', host);
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.stringContaining('a thrown string'),
+        undefined,
+      );
+    });
+
+    it('should not log a routine 4xx HttpException', async () => {
+      const filter = await buildFilter(NodeEnv.TEST);
+      const { host } = buildHost();
+      const exception = new HttpException('Not found', HttpStatus.NOT_FOUND);
+
+      filter.catch(exception, host);
+
+      expect(mockLogger.error).not.toHaveBeenCalled();
+    });
+
+    it('should log a 5xx HttpException', async () => {
+      const filter = await buildFilter(NodeEnv.TEST);
+      const { host } = buildHost();
+      const exception = new HttpException('Upstream unavailable', HttpStatus.BAD_GATEWAY);
+
+      filter.catch(exception, host);
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.stringContaining('Upstream unavailable'),
+        exception.stack,
+      );
+    });
+  });
+
+  describe('headersSent guard', () => {
+    it('should not write to a response whose headers are already sent', async () => {
+      const filter = await buildFilter(NodeEnv.TEST);
+      const { host, status, json } = buildHost(true);
+      const exception = new Error('boom');
+
+      expect(() => filter.catch(exception, host)).not.toThrow();
+
+      expect(status).not.toHaveBeenCalled();
+      expect(json).not.toHaveBeenCalled();
+      // The log line is independent of whether a response can still be written.
+      expect(mockLogger.error).toHaveBeenCalled();
+    });
+
+    it('should write normally when headers have not been sent', async () => {
+      const filter = await buildFilter(NodeEnv.TEST);
+      const { host, status, json } = buildHost(false);
+      const exception = new Error('boom');
+
+      filter.catch(exception, host);
+
+      expect(status).toHaveBeenCalledWith(HttpStatus.INTERNAL_SERVER_ERROR);
+      expect(json).toHaveBeenCalled();
     });
   });
 });

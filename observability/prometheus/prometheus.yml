@@ -1,6 +1,6 @@
 # Mounted read-only into the `prometheus` service (docker-compose.yml) at
 # /etc/prometheus/prometheus.yml. Targets use container DNS names on `evidence_ops_net`, the same
-# pattern `MONGO_DB_URI`/`TEMPORAL_ADDRESS`/`OTEL_EXPORTER_OTLP_ENDPOINT` use in docker-compose.yml.
+# pattern `MONGO_DB_URI`/`TEMPORAL_ADDRESS` use in docker-compose.yml.
 global:
   scrape_interval: 15s
   evaluation_interval: 15s

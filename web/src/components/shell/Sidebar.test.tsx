@@ -65,24 +65,6 @@ describe('Sidebar', () => {
     expect(screen.queryByRole('link', { name: 'Invitations' })).not.toBeInTheDocument();
   });
 
-  it('shows the Resolution Rules link to an admin and hides it from a member', () => {
-    const { rerender } = renderSidebar({ isAdmin: true });
-    expect(screen.getByRole('link', { name: 'Resolution Rules' })).toBeInTheDocument();
-
-    rerender(
-      <MemoryRouter initialEntries={['/']}>
-        <Sidebar
-          isAdmin={false}
-          drawerOpen={false}
-          onCloseDrawer={() => {}}
-          collapsed={false}
-          onToggleCollapsed={() => {}}
-        />
-      </MemoryRouter>,
-    );
-    expect(screen.queryByRole('link', { name: 'Resolution Rules' })).not.toBeInTheDocument();
-  });
-
   it('renders the drawer nav inside a dialog once open', () => {
     renderSidebar({ drawerOpen: true });
 

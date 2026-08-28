@@ -33,7 +33,10 @@ export class AnswerResponseDto {
   @ApiProperty({
     required: false,
     description:
-      "The model-authored outcome, present only once runStatus is 'completed'. One of kind: 'answered' | 'insufficient_evidence' | 'conflicting_evidence'.",
+      "The gate-verified outcome, present only once runStatus is 'completed'. For kind: " +
+      "'answered', claims are the survivors of server-side grounding verification, never the " +
+      "model's raw, unverified claim set. One of kind: 'answered' | 'insufficient_evidence' | " +
+      "'conflicting_evidence'.",
     example: {
       kind: 'answered',
       claims: [{ statement: 'The cap rate is approximately 6.10%.', citations: [] }],

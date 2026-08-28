@@ -36,23 +36,12 @@ import {
   ExtractedFactSchema,
   type ExtractedFactDocument,
 } from '../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
-import {
-  MetricPack,
-  MetricPackSchema,
-  type MetricPackDocument,
-} from '../../src/database/schemas/evidence/metric-pack/metric-pack.schema';
-import {
-  MetricPolicy,
-  MetricPolicySchema,
-  type MetricPolicyDocument,
-} from '../../src/database/schemas/evidence/metric-policy/metric-policy.schema';
 import type { ApprovalDocument } from '../../src/database/schemas/workflow/approval/approval.schema';
 import { ConflictsService } from '../../src/features/evidence/conflicts/conflicts.service';
 import { CanonicalEntityService } from '../../src/features/evidence/facts/canonical-entity.service';
 import { FactsService } from '../../src/features/evidence/facts/facts.service';
-import { MetricPacksService } from '../../src/features/evidence/facts/metric-packs.service';
-import { MetricPoliciesService } from '../../src/features/evidence/facts/metric-policies.service';
 import { PASS_COUNT } from '../../src/features/evidence/facts/prose-fact-extractor';
+import type { EmailAttachmentService } from '../../src/features/evidence/ingestion/email-attachment.service';
 import { IngestionService } from '../../src/features/evidence/ingestion/ingestion.service';
 import { ParserRegistry } from '../../src/features/evidence/ingestion/parser.registry';
 import { PdfParser } from '../../src/features/evidence/ingestion/parsers/pdf.parser';
@@ -107,8 +96,6 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
   let extractedFactModel: Model<ExtractedFactDocument>;
   let conflictModel: Model<ConflictDocument>;
   let canonicalEntityModel: Model<CanonicalEntityDocument>;
-  let metricPackModel: Model<MetricPackDocument>;
-  let metricPolicyModel: Model<MetricPolicyDocument>;
 
   beforeAll(async () => {
     connection = await mongoose.createConnection(MONGO_DB_URI).asPromise();
@@ -141,14 +128,6 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
       CanonicalEntity.name,
       CanonicalEntitySchema,
     ) as unknown as Model<CanonicalEntityDocument>;
-    metricPackModel = connection.model(
-      MetricPack.name,
-      MetricPackSchema,
-    ) as unknown as Model<MetricPackDocument>;
-    metricPolicyModel = connection.model(
-      MetricPolicy.name,
-      MetricPolicySchema,
-    ) as unknown as Model<MetricPolicyDocument>;
   });
 
   afterAll(async () => {
@@ -160,8 +139,6 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
         extractedFactModel.deleteMany({ tenantId: TENANT_ID }),
         conflictModel.deleteMany({ tenantId: TENANT_ID }),
         canonicalEntityModel.deleteMany({ tenantId: TENANT_ID }),
-        metricPackModel.deleteMany({ tenantId: TENANT_ID }),
-        metricPolicyModel.deleteMany({ tenantId: TENANT_ID }),
       ]);
       await connection.close();
     }
@@ -175,12 +152,20 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
     const logger = getMockLogger() as unknown as AppLogger;
     const auditService = { record: jest.fn() } as unknown as AuditService;
 
+    // This lane ingests only `.xlsx` and `.pdf`, so no version reaches the email-container branch.
+    // A stub stands in rather than pulling `DocumentsService` and its whole model set into this
+    // graph; the assertion below is that it stays untouched.
+    const emailAttachmentService = {
+      unwrapAttachments: jest.fn(),
+    } as unknown as EmailAttachmentService;
+
     const ingestionService = new IngestionService(
       documentVersionModel,
       evidenceChunkModel,
       documentStore,
       embeddingProvider,
       parserRegistry,
+      emailAttachmentService,
       connection,
       logger,
     );
@@ -189,24 +174,15 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
     // about ingestion, extraction, and conflict detection, not entity canonicalization.
     const canonicalEntityService = new CanonicalEntityService(
       canonicalEntityModel,
+      extractedFactModel,
       auditService,
       logger,
     );
-    // This pipeline never activates a pack — it only reads the code default via `resolveActive` —
-    // so a real WorkflowEngine/WorkflowRunsService is unneeded for `MetricPacksService` either; the
-    // fake and a minimal stub satisfy the constructor without pulling Temporal or another Mongo
-    // model into this integration lane. Built once, here, and reused below by `ConflictsService`.
+    // This pipeline never resolves a conflict — it only detects one — so a fake and a minimal stub
+    // satisfy `ConflictsService`'s constructor without pulling Temporal or another Mongo model into
+    // this integration lane.
     const workflowEngine = new FakeWorkflowEngine();
     const workflowRunsService = { create: jest.fn() } as unknown as WorkflowRunsService;
-    // No `MetricPack` row is seeded for this tenant, so extraction resolves to the code default
-    // `CRE_PACK_V1` — the same ontology this pipeline exercised before packs existed.
-    const metricPacksService = new MetricPacksService(
-      metricPackModel,
-      workflowEngine,
-      workflowRunsService,
-      auditService,
-      logger,
-    );
     const factsService = new FactsService(
       documentVersionModel,
       evidenceChunkModel,
@@ -215,25 +191,12 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
       modelProvider,
       parserRegistry,
       canonicalEntityService,
-      metricPacksService,
       getMockTypedConfig(),
       logger,
     );
-    // This pipeline never resolves a conflict — it only detects one — so the same
-    // `workflowEngine`/`workflowRunsService` fakes built above for `MetricPacksService` satisfy
-    // `ConflictsService`'s constructor too. `requestResolution`'s pending-approval guard is likewise
-    // never exercised, so `approvalModel` is the same kind of unused-but-required stub.
+    // `requestResolution`'s pending-approval guard is never exercised by this pipeline, so
+    // `approvalModel` is an unused-but-required stub.
     const approvalModel = { exists: jest.fn() } as unknown as Model<ApprovalDocument>;
-    // No tenant rows are seeded in `metric_policies` either, and no `MetricPack` row is seeded for
-    // this tenant either (same `metricPacksService` above), so this resolves to the code default
-    // `CRE_PACK_V1`'s own defaults — the same byte-identical-to-today behaviour `MetricPoliciesService
-    // .resolveForTenant`'s own doc comment guarantees.
-    const metricPoliciesService = new MetricPoliciesService(
-      metricPolicyModel,
-      metricPacksService,
-      auditService,
-      logger,
-    );
     const conflictsService = new ConflictsService(
       extractedFactModel,
       conflictModel,
@@ -242,8 +205,6 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
       approvalModel,
       workflowEngine,
       workflowRunsService,
-      metricPoliciesService,
-      metricPacksService,
       auditService,
       logger,
     );
@@ -337,7 +298,7 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
           output: {
             facts: [
               {
-                entity: 'Northgate Business Park',
+                entityQuote: 'Northgate Business Park',
                 metric: 'cap_rate',
                 // Derives to '2025-03' via `derivePeriodFromDateText` — must match the period the
                 // xlsx extractor derives from comps.xlsx's Sale Date column for this same row, or

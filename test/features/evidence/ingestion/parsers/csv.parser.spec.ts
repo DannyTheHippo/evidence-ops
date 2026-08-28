@@ -33,7 +33,7 @@ describe('CsvParser', () => {
           kind: 'xlsx-cell',
           sheetName: 'CSV',
           cell: 'B2',
-          extractorVersion: 'csv-rfc4180-1',
+          extractorVersion: 'csv-rfc4180-3',
         },
         headingPath: [],
       });
@@ -93,10 +93,10 @@ describe('CsvParser', () => {
 
       const result = await parser.parse(buffer);
 
-      expect(result.extractorVersion).toBe('csv-rfc4180-1');
+      expect(result.extractorVersion).toBe('csv-rfc4180-3');
       expect(result.elements.length).toBeGreaterThan(0);
       for (const element of result.elements) {
-        expect(element.locator.extractorVersion).toBe('csv-rfc4180-1');
+        expect(element.locator.extractorVersion).toBe('csv-rfc4180-3');
         expect(element.headingPath).toEqual([]);
       }
     });
@@ -138,6 +138,126 @@ describe('CsvParser', () => {
       const buffer = Buffer.from('"abc"def\n');
 
       await expect(parser.parse(buffer)).rejects.toBeInstanceOf(MalformedCsvException);
+    });
+  });
+
+  describe('parse — delimiter sniffing (text/csv only)', () => {
+    let parser: CsvParser;
+
+    beforeEach(() => {
+      parser = new CsvParser(',', ['text/csv']);
+    });
+
+    it('should split a semicolon-delimited European export into columns rather than one column per row', async () => {
+      const buffer = Buffer.from('Name;Amount\nAcme;100\nBeta;200\n');
+
+      const result = await parser.parse(buffer);
+
+      expect(findCellElement(result.elements, 'A2')?.text).toBe('Acme');
+      expect(findCellElement(result.elements, 'B2')?.text).toBe('100');
+      expect(findCellElement(result.elements, 'A3')?.text).toBe('Beta');
+      expect(findCellElement(result.elements, 'B3')?.text).toBe('200');
+    });
+
+    it('should not sniff semicolon on a TSV instance — tab is unambiguous from its own MIME type', async () => {
+      const tsvParser = new CsvParser('\t', ['text/tab-separated-values']);
+      const buffer = Buffer.from('Name;Notes\tAmount\nAcme;Site\t100\n');
+
+      const result = await tsvParser.parse(buffer);
+
+      // The semicolon stays part of the first field's text — only tab ever splits this instance.
+      expect(findCellElement(result.elements, 'A2')?.text).toBe('Acme;Site');
+      expect(findCellElement(result.elements, 'B2')?.text).toBe('100');
+    });
+
+    it('should not flip to semicolon when only one sampled row carries a stray semicolon — inconsistent count stays comma', async () => {
+      const buffer = Buffer.from('Name,Notes\nAcme,Cap rate; 5.25%\nBeta,Cap rate 6.10%\n');
+
+      const result = await parser.parse(buffer);
+
+      // Still comma-delimited: the semicolon is part of B2's own text, not a column boundary.
+      expect(findCellElement(result.elements, 'B2')?.text).toBe('Cap rate; 5.25%');
+      expect(findCellElement(result.elements, 'C2')).toBeUndefined();
+    });
+
+    it('should not flip to semicolon when its count only ties the comma count — comma wins a tie', async () => {
+      const buffer = Buffer.from('A,B;C\nD,E;F\n');
+
+      const result = await parser.parse(buffer);
+
+      // Comma still splits the row; the semicolon stays inside the second field.
+      expect(findCellElement(result.elements, 'A1')?.text).toBe('A');
+      expect(findCellElement(result.elements, 'B1')?.text).toBe('B;C');
+    });
+  });
+
+  describe('parse — encoding detection', () => {
+    it('should decode a windows-1252 CSV, mapping a byte in the 0x80-0x9F range through the cp1252 table', async () => {
+      const parser = new CsvParser(',', ['text/csv']);
+      // "A,Tenant's Notes" with the windows-1252 right-single-quote byte (0x92) standing in for
+      // the apostrophe — not a valid UTF-8 sequence on its own.
+      const buffer = Buffer.from([...Buffer.from('A,Tenant'), 0x92, ...Buffer.from('s Notes\n')]);
+
+      const result = await parser.parse(buffer);
+
+      expect(findCellElement(result.elements, 'B1')?.text).toBe('Tenant’s Notes');
+      expect(result.reducedFidelityReasons).toEqual([expect.stringContaining('windows-1252')]);
+    });
+
+    it('should decode a UTF-16LE CSV carrying its BOM', async () => {
+      const parser = new CsvParser(',', ['text/csv']);
+      const content = Buffer.concat([
+        Buffer.from([0xff, 0xfe]),
+        Buffer.from('Name,Amount\nAcme,100\n', 'utf16le'),
+      ]);
+
+      const result = await parser.parse(content);
+
+      expect(findCellElement(result.elements, 'A2')?.text).toBe('Acme');
+      expect(findCellElement(result.elements, 'B2')?.text).toBe('100');
+      expect(result.reducedFidelityReasons).toEqual([expect.stringContaining('utf-16le')]);
+    });
+
+    it('should decode a windows-1252 CSV behind a UTF-8 BOM exactly as it decodes the same bytes unmarked, flag included', async () => {
+      const parser = new CsvParser(',', ['text/csv']);
+      // What a spreadsheet's "CSV UTF-8" export produces over a legacy cp1252 body: 0x92 is the
+      // right single quote, 0x97 the em-dash. Trusting the BOM would store U+FFFD for both.
+      const body = Buffer.from([
+        ...Buffer.from('A,Tenant'),
+        0x92,
+        ...Buffer.from('s Notes '),
+        0x97,
+        ...Buffer.from(' Q3\n'),
+      ]);
+      const declared = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), body]);
+
+      const result = await parser.parse(declared);
+
+      expect(findCellElement(result.elements, 'B1')?.text).toBe('Tenant’s Notes — Q3');
+      expect(result.reducedFidelityReasons).toEqual([expect.stringContaining('windows-1252')]);
+      expect(result).toEqual(await parser.parse(body));
+    });
+
+    it('should report no reduced-fidelity reason for a UTF-8 BOM over genuine UTF-8 content', async () => {
+      const parser = new CsvParser(',', ['text/csv']);
+      const content = Buffer.concat([
+        Buffer.from([0xef, 0xbb, 0xbf]),
+        Buffer.from('Name,Notes\nAcme,Tenant’s Notes — Q3\n', 'utf8'),
+      ]);
+
+      const result = await parser.parse(content);
+
+      expect(findCellElement(result.elements, 'B2')?.text).toBe('Tenant’s Notes — Q3');
+      expect(result.reducedFidelityReasons).toBeUndefined();
+    });
+
+    it('should report no reduced-fidelity reason for an ordinary UTF-8 CSV', async () => {
+      const parser = new CsvParser(',', ['text/csv']);
+      const buffer = Buffer.from('Name,Amount\nAcme,100\n');
+
+      const result = await parser.parse(buffer);
+
+      expect(result.reducedFidelityReasons).toBeUndefined();
     });
   });
 });

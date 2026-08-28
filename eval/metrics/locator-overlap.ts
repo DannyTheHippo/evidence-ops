@@ -13,6 +13,14 @@ export interface OverlapCandidateChunk {
   readonly filename: string;
   readonly text: string;
   readonly locator: EvidenceLocator;
+  /**
+   * The chunk's retained constituent-element locators (`EvidenceChunk.elements`), each with its
+   * own text — populated when the caller has them (a chunk read straight off `evidenceChunkModel`),
+   * absent when it does not (a chunk resolved through `RetrievedChunk`, which does not carry this
+   * field). `chunkOverlapsLocator` uses them for an exact page/paragraph-index match when present,
+   * and falls back to text containment when they are not.
+   */
+  readonly elements?: readonly { locator: EvidenceLocator; text: string }[];
 }
 
 interface CellAddress {
@@ -86,17 +94,22 @@ function rangesOverlap(rangeA: string, rangeB: string): boolean {
  * rectangle intersection between the dataset's cell-or-range and the chunk's declared range
  * (`rangesOverlap`, below) is exact and cheap.
  *
- * `pdf-page`/`docx-paragraph` cannot use the equivalent equality check: `chunker.ts`'s
- * `anchorLocator` anchors a multi-element chunk to only its *first* page/paragraph (see that
- * function's doc comment), so a chunk whose text runs from page 2 into page 4 still reports
- * `page: 2`. Equality would silently undercount recall for exactly the chunks a token-budget
- * window is likely to produce. Instead this resolves the dataset locator's own text (the same
- * parsers ingestion used, via `resolveLocatorText`) and checks whether that text is actually
- * present in the chunk — `locateQuote`'s normalized containment, the same check
- * `GroundingGateService` uses to verify a citation's quote against its cited chunk, applied here to
- * a whole element instead of a citation-length excerpt. This is a bound worth stating (see
- * `docs/adr/0007-eval-replay-cache.md`): it is a text-containment approximation of span overlap,
- * not a byte-range intersection.
+ * `pdf-page`/`docx-paragraph` takes one of two paths, chosen by whether `chunk.elements` is
+ * populated:
+ *
+ * - **With retained element locators** (a chunk read straight off `evidenceChunkModel`, carrying
+ *   `EvidenceChunk.elements`): page/paragraph-index equality against *every* element the chunk
+ *   spans, not only `chunk.locator`'s anchor — `chunker.ts`'s `anchorLocator` names only the
+ *   chunk's *first* spanned element (see that function's doc comment), so equality against the
+ *   anchor alone would silently undercount recall for exactly the multi-page/multi-paragraph
+ *   chunks a token-budget window is likely to produce.
+ * - **Without them** (a chunk resolved through `RetrievedChunk`, which carries no per-element
+ *   retention): this resolves the dataset locator's own text (the same parsers ingestion used, via
+ *   `resolveLocatorText`) and checks whether that text is actually present in the chunk —
+ *   `locateQuote`'s normalized containment, the same check `GroundingGateService` uses to verify a
+ *   citation's quote against its cited chunk, applied here to a whole element instead of a
+ *   citation-length excerpt. A text-containment approximation of span overlap, not a byte-range
+ *   intersection (see `docs/adr/0007-eval-replay-cache.md` for that bound).
  */
 export async function chunkOverlapsLocator(
   chunk: OverlapCandidateChunk,
@@ -122,6 +135,15 @@ export async function chunkOverlapsLocator(
     return false;
   }
 
+  if (chunk.elements && chunk.elements.length > 0) {
+    return chunk.elements.some((element) =>
+      locator.kind === 'pdf-page'
+        ? element.locator.kind === 'pdf-page' && element.locator.page === locator.page
+        : element.locator.kind === 'docx-paragraph' &&
+          element.locator.paragraphIndex === locator.paragraphIndex,
+    );
+  }
+
   const expectedText = await resolveLocatorText(locator);
   if (expectedText.trim() === '') {
     return false;
@@ -145,4 +167,31 @@ export async function chunkOverlapsAnyLocator(
     }
   }
   return false;
+}
+
+export type OverlapScoringMethod = 'element-index' | 'text-containment';
+
+/**
+ * Which of `chunkOverlapsLocator`'s two pdf-page/docx-paragraph paths ONE chunk would take: exact
+ * element-index equality when it carries retained elements, text-containment fallback when it does
+ * not (a row ingested before that field existed). This classifies a chunk's own path — it does NOT
+ * classify how a run's recall or citation precision were scored: `eval/run.ts`'s
+ * `retrievedOverlaps`/`citationOverlaps` candidates are built without `elements` (mirroring
+ * `RetrievedChunk`, which has no such field), so recall and citation precision always score via
+ * text-containment, independent of what this function returns for any given chunk. What this DOES
+ * feed is the corpus-level split `eval/run.ts` computes over the tenant's pdf-page/docx-paragraph
+ * chunks (which do carry `elements`) for the conflict-scope check's chunk resolution
+ * (`conflictValuesOverlapExpectedLocators`, via `corpusChunkById`) — `eval/report.ts` renders that
+ * split so a mixed corpus stays visible there. Never called for an `xlsx-cell` locator —
+ * `chunkOverlapsLocator`'s xlsx path is always the structural range-intersection check
+ * (`rangesOverlap`), neither of these two.
+ *
+ * "element-index" is directional, not exact: a prose chunk's leading `elements` entry can be an
+ * overlap tail borrowed from the previous chunk (`chunkProseRun`'s `flush`), so index equality can
+ * score a hit for a page the chunk holds only that borrowed tail of, not the page's own content.
+ */
+export function classifyOverlapScoringMethod(
+  chunk: Pick<OverlapCandidateChunk, 'elements'>,
+): OverlapScoringMethod {
+  return chunk.elements && chunk.elements.length > 0 ? 'element-index' : 'text-containment';
 }

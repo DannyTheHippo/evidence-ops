@@ -24,6 +24,15 @@ export interface ParsedElement {
    * citation must be resolvable without re-parsing; this copy is for the chunker's convenience.
    */
   readonly headingPath: readonly string[];
+
+  /**
+   * `true` only for an `xlsx-cell` element the merge-propagation pass re-emitted onto a cell
+   * covered by a merge — never on the merge's own master cell, and never on any other format's
+   * elements. Citation resolution and header/entity/period lookups still need this element; only a
+   * fact-minting loop that walks every cell in a row needs to skip it, or a merge spanning several
+   * metric columns mints one identical fact per column instead of one (`xlsx-fact-extractor.ts`).
+   */
+  readonly mergeCovered?: true;
 }
 
 export interface ParsedDocument {
@@ -34,6 +43,13 @@ export interface ParsedDocument {
    * another, and this is what lets that be detected instead of silently mis-resolving.
    */
   readonly extractorVersion: string;
+
+  /**
+   * Reasons this parse is known to have lost fidelity (e.g. a layout the parser cannot
+   * reconstruct correctly). Absent or empty when a parser has no such signal to report —
+   * `IngestionService` treats both the same as "no reduced-fidelity reasons".
+   */
+  readonly reducedFidelityReasons?: readonly string[];
 }
 
 export interface DocumentParser {

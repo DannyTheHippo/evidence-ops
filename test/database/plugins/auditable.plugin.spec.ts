@@ -93,4 +93,83 @@ describe('auditablePlugin', () => {
     expect(doc.createdBy).toBeUndefined();
     expect(doc.updatedBy).toBeUndefined();
   });
+
+  it('stamps updatedBy via updateOne, leaving createdBy from the original creator untouched', async () => {
+    const creatorId = new Types.ObjectId().toString();
+    const editorId = new Types.ObjectId().toString();
+
+    const created = await runAs(creatorId, () =>
+      TestModel.create({ email: 'update-one@example.com' }),
+    );
+
+    await runAs(editorId, () =>
+      TestModel.updateOne({ _id: created._id }, { email: 'update-one-changed@example.com' }).exec(),
+    );
+
+    const updated = await TestModel.findById(created._id).exec();
+    expect(updated?.createdBy?.toString()).toBe(creatorId);
+    expect(updated?.updatedBy?.toString()).toBe(editorId);
+  });
+
+  it('stamps updatedBy via updateMany across every matched document', async () => {
+    const creatorId = new Types.ObjectId().toString();
+    const editorId = new Types.ObjectId().toString();
+
+    await runAs(creatorId, () =>
+      TestModel.create([
+        { email: 'update-many-1@example.com' },
+        { email: 'update-many-2@example.com' },
+      ]),
+    );
+
+    await runAs(editorId, () =>
+      TestModel.updateMany(
+        { email: { $in: ['update-many-1@example.com', 'update-many-2@example.com'] } },
+        { $set: { email: 'update-many-changed@example.com' } },
+      ).exec(),
+    );
+
+    const updated = await TestModel.find({
+      email: 'update-many-changed@example.com',
+    }).exec();
+    expect(updated).toHaveLength(2);
+    expect(updated.every((doc) => doc.updatedBy?.toString() === editorId)).toBe(true);
+  });
+
+  it('stamps createdBy on the document an updateOne upsert creates', async () => {
+    const userId = new Types.ObjectId().toString();
+
+    await runAs(userId, () =>
+      TestModel.updateOne(
+        { email: 'upserted@example.com' },
+        { email: 'upserted@example.com' },
+        { upsert: true },
+      ).exec(),
+    );
+
+    const created = await TestModel.findOne({ email: 'upserted@example.com' }).exec();
+    expect(created?.createdBy?.toString()).toBe(userId);
+    expect(created?.updatedBy?.toString()).toBe(userId);
+  });
+
+  it('stamps createdBy and updatedBy on every document inserted via insertMany', async () => {
+    const userId = new Types.ObjectId().toString();
+
+    const docs = await runAs(userId, () =>
+      TestModel.insertMany([
+        { email: 'insert-many-1@example.com' },
+        { email: 'insert-many-2@example.com' },
+      ]),
+    );
+
+    expect(docs.every((doc) => doc.createdBy?.toString() === userId)).toBe(true);
+    expect(docs.every((doc) => doc.updatedBy?.toString() === userId)).toBe(true);
+  });
+
+  it('leaves createdBy/updatedBy unset on insertMany with no ALS context — fail-open contract', async () => {
+    const docs = await TestModel.insertMany([{ email: 'insert-many-no-context@example.com' }]);
+
+    expect(docs[0].createdBy).toBeUndefined();
+    expect(docs[0].updatedBy).toBeUndefined();
+  });
 });

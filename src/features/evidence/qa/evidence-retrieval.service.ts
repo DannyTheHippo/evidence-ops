@@ -11,7 +11,10 @@ import {
   RETRIEVAL_STORE,
   type RetrievalStore,
 } from '../../../providers/retrieval/retrieval-store.interface';
-import { emptyRetrievalCounter } from '../../../providers/telemetry/domain-metrics';
+import {
+  emptyRetrievalCounter,
+  scoreFloorRejectedAllCounter,
+} from '../../../providers/telemetry/domain-metrics';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import { RETRIEVAL_OVER_FETCH_MULTIPLIER } from '../retrieval/retrieval.constant';
 import type { RetrievedChunk } from './types/retrieved-chunk.type';
@@ -53,7 +56,7 @@ export class EvidenceRetrievalService {
     // chunks would come back as zero results with no signal that anything was dropped. Over-fetch
     // and filter here instead, where the withdrawn set is already known from the version lookup
     // below.
-    const hits = await this.retrievalStore.search<HybridRetrievalHitMetadata>({
+    const rawHits = await this.retrievalStore.search<HybridRetrievalHitMetadata>({
       text: input.questionText,
       filter: { tenantId: input.tenantId },
       // `RETRIEVAL_OVER_FETCH_MULTIPLIER` widens both the store's candidate pool and the
@@ -64,8 +67,31 @@ export class EvidenceRetrievalService {
       limit: this.config.retrieval.limit * RETRIEVAL_OVER_FETCH_MULTIPLIER,
     });
 
+    // Veto gate over answer availability: fails CLOSED toward abstention, not open toward
+    // synthesis. A hit whose fused score does not clear the floor (including a `NaN` score, which
+    // fails every comparison) is dropped here, before a chunk is built or a synthesis call is
+    // made — an answer produced over evidence that failed its own relevance measurement is worse
+    // than one withheld. Every hit `RetrievalStore.search` returns carries a strictly positive
+    // fused RRF score (a `1 / (60 + rank)` contribution from at least one pipeline), so a floor of
+    // 0 clears every hit and drops none.
+    const hits = rawHits.filter((hit) => hit.score >= this.config.retrieval.scoreFloor);
+
     if (hits.length === 0) {
       emptyRetrievalCounter.add(1);
+      // The store returned candidates but every one of them scored below the configured floor —
+      // operationally distinct from the corpus itself having nothing relevant, and worth its own
+      // signal so a misconfigured floor doesn't read the same as genuine zero-retrieval.
+      if (rawHits.length > 0) {
+        // No question text here: `warn` reaches shipped log aggregation (unlike the `debug` line
+        // below), and the question is user-authored content about a client's confidential data
+        // room. `AppLogger.warn` still prefixes the correlation id, which is enough to pair this
+        // line up with the `debug` line below in a log search when the raw text is genuinely
+        // needed for triage.
+        this.logger.warn(
+          `Score floor ${this.config.retrieval.scoreFloor} rejected all ${rawHits.length} hit(s) returned for this question`,
+        );
+        scoreFloorRejectedAllCounter.add(1);
+      }
       return [];
     }
 

@@ -71,6 +71,20 @@ describe('DocumentVersion schema', () => {
       expect(version.validateSync()).toBeUndefined();
     });
 
+    it('defaults reducedFidelityReasons to an empty array', () => {
+      const version = new DocumentVersionModel({
+        documentId: new mongoose.Types.ObjectId(),
+        versionNumber: 1,
+        sha256: SHA256_FIXTURE,
+        sizeBytes: 1024,
+        storageKey: 's3://bucket/key',
+        tenantId: 'tenant-a',
+      });
+
+      expect(version.reducedFidelityReasons).toEqual([]);
+      expect(version.validateSync()).toBeUndefined();
+    });
+
     it('rejects an ingestionStatus outside the enum', () => {
       const version = new DocumentVersionModel({
         documentId: new mongoose.Types.ObjectId(),

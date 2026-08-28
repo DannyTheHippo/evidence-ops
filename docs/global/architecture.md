@@ -17,25 +17,44 @@ All three read the same Mongo (`mongodb/mongodb-atlas-local`), which is where hy
 lives: `$search` + `$vectorSearch` fused by `$rankFusion`
 (`src/providers/retrieval/mongo-hybrid.store.ts`).
 
+## The scale this is built for, and what has actually been measured
+
+**Single host, single Mongo, single replica of every process.** There is no sharding, no second
+datastore, no load balancer, and no story for a second `worker` beyond Temporal's own concurrency
+inside the one process (`pilot-runbook.md` § What a cloud deployment would add). Two in-memory
+controls encode that assumption structurally rather than by convention: the MCP surface's rate
+limiters and the SSE connection caps are per-process `Map`s, correct for one replica and wrong the
+moment a second exists.
+
+**No corpus size has been measured, and this document states no document ceiling.** The largest
+corpus ever ingested here is the nine-file synthetic fixture — 19 chunks and 74 facts
+([ADR-0024](../adr/0024-what-the-first-measurements-say.md)). Nothing
+has been timed at engagement scale: not ingestion throughput, not `$rankFusion` latency as
+`evidence_chunks` grows, not the vector index's build time or memory footprint. A reader deciding
+whether this design holds for a given corpus should treat every number in this document as a
+description of the mechanism, never as a capacity figure. The corpus benchmark that would produce
+real ones is deferred to its own cycle; every measurement in ADR-0024 is bounded to the nine-file
+corpus for exactly that reason.
+
 ## System shape
 
 ```mermaid
 flowchart TB
   subgraph SPA["SPA — web/"]
-    Pages["LoginPage / DataRoomPage / SourcesPage / AskPage /<br/>ConflictsPage / ApprovalsPage / ApiKeysPage / AuditEventsPage /<br/>MeasuresPage / CanonicalEntitiesPage"]
+    Pages["LoginPage / InvitePage / HomePage / DataRoomPage / SourcesPage /<br/>SourceDetailPage / AskPage / AnswersPage / AnswerDetailPage / SearchPage /<br/>ConflictsPage / ApprovalsPage / RunsPage / WorkflowRunPage /<br/>ApiKeysPage / AuditEventsPage / InvitationsPage / CanonicalEntitiesPage"]
     Client["api/client.ts — relative base '/api/v1',<br/>HttpOnly session cookie, no client-held credential"]
     Pages --> Client
   end
 
   subgraph API["API process — src/main.ts"]
     Guards["PreAuthThrottlerGuard (global APP_GUARD, IP-keyed, ahead of auth)<br/>JwtAuthGuard (global APP_GUARD, deny-by-default)<br/>UserThrottlerGuard (global APP_GUARD, user-keyed)<br/>ValidationPipe (whitelist + forbidNonWhitelisted)"]
-    Ctrls["DocumentsController / SourcesController / QaController /<br/>ConflictsController / ApiKeysController / AuthController /<br/>MeasuresController / CanonicalEntitiesController /<br/>RetrievalController / WorkflowRunsController /<br/>MetricPacksController / MetricPackPreviewController /<br/>MetricPoliciesController / TenantMetricsController"]
-    ApiSvc["DocumentsService · SourcesService · QaService ·<br/>ConflictsService · ApiKeysService · MeasuresService · CanonicalEntityService ·<br/>RetrievalService · WorkflowRunsService · MetricPacksService ·<br/>MetricPoliciesService · TenantMetricsService"]
+    Ctrls["DocumentsController / SourcesController / QaController /<br/>ConflictsController / ApprovalsController / ApiKeysController /<br/>AuthController / InvitationsController / AuditEventsController /<br/>CanonicalEntitiesController / RetrievalController /<br/>WorkflowRunsController / HealthController / InfoController"]
+    ApiSvc["DocumentsService · SourcesService · QaService ·<br/>ConflictsService · ApprovalsService · ApiKeysService ·<br/>AuthService · InvitationsService · AuditEventsService ·<br/>CanonicalEntityService · RetrievalService · WorkflowRunsService"]
     Guards --> Ctrls --> ApiSvc
   end
 
   subgraph Mcp["MCP process — src/mcp/main.ts"]
-    Pat["PatTokenVerifier + fixed-window rate limit — both fail closed"]
+    Pat["PatTokenVerifier + rolling-window rate limits — both fail closed"]
     Chokepoint["ToolExecutorService (own registry)<br/>steps: mcp-read · mcp-mutate · mcp-ask · mcp-verify"]
     Pat --> Chokepoint
   end
@@ -50,14 +69,12 @@ flowchart TB
       WF2["answerQuestion:<br/>retrieve → synthesize → groundingCheck → persist"]
       WF3["resolveConflict:<br/>loadConflict → requestApproval → await signal → record"]
       WF4["syncSource:<br/>runSourceSync → sleep → continueAsNew"]
-      WF5["rescanConflicts:<br/>scanForConflictsByMetrics → retractConflicts"]
     end
     Acts["activities.ts — every side effect lives here"]
     WF1 -. "proxyActivities (type-only import)" .-> Acts
     WF2 -. "proxyActivities (type-only import)" .-> Acts
     WF3 -. "proxyActivities (type-only import)" .-> Acts
     WF4 -. "proxyActivities (type-only import)" .-> Acts
-    WF5 -. "proxyActivities (type-only import)" .-> Acts
   end
 
   subgraph Services["Nest services (shared by the API, worker and MCP DI graphs)"]
@@ -70,13 +87,13 @@ flowchart TB
   end
 
   subgraph Providers["Providers — src/providers/**"]
-    Model["MODEL_PROVIDER = Tracing(Caching(SpendGuard(base)))<br/>base selected by MODEL_PROVIDER env"]
+    Model["MODEL_PROVIDER = Caching(Metrics(SpendGuard(base)))<br/>base selected by MODEL_PROVIDER env"]
     Embed["EMBEDDING_PROVIDER = Voyage"]
     Store["RETRIEVAL_STORE = MongoHybridRetrievalStore"]
     Docs["DOCUMENT_STORE = GridFS"]
     Conn["SOURCE_CONNECTOR = LocalFolderSourceConnector"]
     Engine["WORKFLOW_ENGINE = TemporalWorkflowEngine"]
-    Tel["TELEMETRY = LoggerTelemetry (OTel tracing and metrics are separate — src/instrumentation.ts)"]
+    Tel["TELEMETRY = LoggerTelemetry (OTel metrics are separate — src/instrumentation.ts)"]
     Appr["APPROVAL_CHANNEL = MongoApprovalChannel (real: consumed by resolveConflict)"]
   end
 
@@ -127,6 +144,37 @@ mongoose without pulling mongoose into the workflow bundle.
 activities that call a model; `retrieveEvidence` and the ingestion path call the embedding provider.
 The grounding check is an activity too, but a pure one — no model, no network, no database read
 beyond the scoped fact/conflict lookups it is handed.
+
+### What "deterministic" covers, and what it does not
+
+The word appears throughout this document and means exactly three things, none of which is the
+answer:
+
+- **Chunk identity.** The same bytes produce the same chunk ids, the same content hash and the same
+  locators (`compute-chunk-id.ts`, `chunker.ts`).
+- **The citation check.** `verifyClaim` and `GroundingGateService` call no model and issue no
+  network request; the same claim against the same retrieved chunks always grades the same way.
+- **The outcome contract.** `answered` / `insufficient_evidence` / `conflicting_evidence` is
+  computed server-side from the gate's result, and the model has no schema field to author it into.
+- **Workflow replay.** `src/workflows/**` is a pure function of its own history, which is what the
+  fence above enforces.
+
+**The answer is not deterministic, and neither is the fact set.** Synthesis and fact extraction are
+model calls; `EvidenceRetrievalService` sits on an ANN index that is free to reorder near-equal
+candidates. The same question over the same corpus can return different claims, different citations
+and a different set of detected conflicts on the next run. Three-pass majority agreement narrows the
+extraction spread and does not close it, and the eval replay cache makes a *measurement*
+reproducible rather than the pipeline deterministic. **The size of that spread has now been
+measured, across four passes over the nine-file corpus with query embeddings replayed from cache.**
+Retrieval is not where it comes from: all 35 cases returned a byte-identical ranked list, including
+rank order, on every pass, and recall@5 came back 73.1% on all four — a stable property of the
+system, not a draw from a distribution. The spread that does exist sits downstream of retrieval, in
+which claims a pass drafts and which subset of an identical retrieved list it cites: two of 22
+safety-outcome questions flipped their abstention decision across the four passes, and only 69.2% of
+answered questions cited an identical citation set, against pre-registered bars of zero flips and
+90%. [ADR-0024](../adr/0024-what-the-first-measurements-say.md) records the run in full. This is
+`n = 4` on nine self-authored files, not a distribution, and it says nothing about drift a live
+(non-replayed) embedding call would introduce.
 
 ## The answer path, and where the gate sits
 
@@ -182,13 +230,13 @@ for the other two streams and the controls shared across all three.
 
 | Token               | Bound to                                  | Real? |
 | ------------------- | ----------------------------------------- | ----- |
-| `MODEL_PROVIDER`    | `TracingModelProvider(CachingModelProvider(SpendGuardModelProvider(base)))`, `base` = `AnthropicModelProvider` or `OpenAiModelProvider` | Real. See [Model provider selection and the spend ceiling](#model-provider-selection-and-the-spend-ceiling). Cache mode is `'off'` by default — record/replay is a call-site decision made by `eval/bootstrap.ts`, not a boot-time one. |
+| `MODEL_PROVIDER`    | `CachingModelProvider(MetricsModelProvider(SpendGuardModelProvider(base)))`, `base` = `AnthropicModelProvider` or `OpenAiModelProvider` | Real. See [Model provider selection and the spend ceiling](#model-provider-selection-and-the-spend-ceiling). Cache mode is `'off'` by default — record/replay is a call-site decision made by `eval/bootstrap.ts`, not a boot-time one. |
 | `EMBEDDING_PROVIDER`| `VoyageEmbeddingProvider`                 | Real. |
 | `RETRIEVAL_STORE`   | `MongoHybridRetrievalStore`               | Real. |
 | `DOCUMENT_STORE`    | `GridFsDocumentStore`                     | Real. |
-| `SOURCE_CONNECTOR`  | `LocalFolderSourceConnector`              | Real. One connector implementation today; the seam (ADR-0012) is what a second one plugs into. |
+| `SOURCE_CONNECTOR`  | `LocalFolderSourceConnector`              | Real. One connector implementation today; the seam (ADR-0011) is what a second one plugs into. |
 | `WORKFLOW_ENGINE`   | `TemporalWorkflowEngine`                  | Real. Overridden back to `FakeWorkflowEngine` in `test/utils/create-test-app.ts` so no e2e dials a live server. |
-| `TELEMETRY`         | `LoggerTelemetry`                         | Real, for structured events — but separate from tracing and metrics. OpenTelemetry itself is wired independently in `src/instrumentation.ts` (http/express/mongoose instrumentations, spans to Jaeger and `artifacts/traces/`, plus a Prometheus metric reader); `TELEMETRY` is not that pipeline, it is a logger the two coexist alongside. |
+| `TELEMETRY`         | `LoggerTelemetry`                         | Real, for structured events — but separate from metrics. OpenTelemetry is wired independently in `src/instrumentation.ts`, which registers a `PrometheusExporter` and nothing else: there is no tracer, no span exporter and no distributed tracing anywhere in this codebase. `TELEMETRY` is not that pipeline, it is a logger the two coexist alongside. |
 | `APPROVAL_CHANNEL`  | `MongoApprovalChannel`                    | Real, and consumed: the `resolveConflict` workflow (`src/workflows/resolve-conflict.workflow.ts`) requests an approval through it and blocks on `getApprovalDecision` until a human decides. |
 
 `FakeModelProvider`, `FakeEmbeddingProvider`, `FakeRetrievalStore`, and `FakeDocumentStore` also
@@ -202,13 +250,15 @@ testable without booting the Mongoose-backed graph) picks the base provider from
 `AnthropicModelProvider` — and wraps it in a fixed chain:
 
 ```text
-TracingModelProvider( CachingModelProvider( SpendGuardModelProvider( base ) ) )
+CachingModelProvider( MetricsModelProvider( SpendGuardModelProvider( base ) ) )
 ```
 
 The order is load-bearing in one direction. **SpendGuard sits inside Caching**, so a replay-cache
 hit never reaches it and never consumes budget. Inverted, every cached replay would reserve and
 settle money that was never spent, and an eval run replaying hundreds of cached calls would exhaust
-a tenant's daily ceiling for free.
+a tenant's daily ceiling for free. `MetricsModelProvider` sits inside Caching for the same reason:
+it records `evidence_ops.model.cost_usd` and the `model.request.*` structured events, and a replay
+that never spent money must not report a cost.
 
 The three decorators take a `ModelProvider`/`Telemetry` positionally rather than through an
 `@Inject()`-tagged constructor, which is why they are assembled by a factory rather than bound with
@@ -254,7 +304,7 @@ scoping happens **inside** each input pipeline, never as a `$match` on the fused
 after fusion would rank a candidate set that includes other tenants' evidence and then discard most
 of it, changing which chunks reach the final top-k.
 
-Index definitions live in `migrations/0003-search-indexes.ts`; the store duplicates the index names
+Index definitions live in `migrations/0001-baseline.ts`; the store duplicates the index names
 rather than importing them (`tsconfig.build.json` scopes `rootDir` to `src`), and
 `test/features/evidence/retrieval/search-indexes.integration-spec.ts` is what keeps the two
 definitions honest against a live server.
@@ -299,31 +349,31 @@ signal why. Withdrawal is retrieval exclusion, not deletion: a withdrawn version
 stay retained so a past `Answer` can still be explained and `ResolutionBacktestService` can still
 replay a resolution that cited them. The separate, admin-gated hard-delete path
 (`DocumentsController.remove`) exists for an operator who wants the bytes actually gone. See
-[`0024-evidence-lifecycle-and-withdrawal.md`](../adr/0024-evidence-lifecycle-and-withdrawal.md) for
+[`0021-evidence-lifecycle-and-withdrawal.md`](../adr/0021-evidence-lifecycle-and-withdrawal.md) for
 the full design, including the guard thresholds and the accepted costs.
 
-## Metric packs: versioned detection config
+## The metric ontology, and the provenance stamp on every row it judged
 
-Conflict detection and survivorship no longer read a single hardcoded ontology. Every tenant
-resolves a `MetricPackData` (`MetricPacksService.resolveActive`) — either its own authored, activated
-`MetricPack` row, or the code default `CRE_PACK_V1`, which re-exports `metric-ontology.ts`'s
-`METRIC_ONTOLOGY` byte-identically under the pack shape. Both extraction (`FactsService.extractFacts`)
-and detection (`ConflictsService.scanForConflicts`/`scanForConflictsByMetrics`) resolve the active
-pack once per call and stamp the resulting `packId`/`packVersion` onto every `ExtractedFact`/`Conflict`
-they write, so a row always says which pack's tolerance and units judged it.
+Conflict detection and survivorship read one built-in ontology: `METRIC_ONTOLOGY` in
+`src/features/evidence/facts/metric-ontology.ts`, identified by the constants `ACTIVE_PACK_ID`
+(`'cre'`) and `ACTIVE_PACK_VERSION` (`1`). It defines each metric's aliases, canonical unit, unit
+conversion factors, agreement tolerance, and the source-authority order survivorship policy applies.
 
-Authoring is a three-step admin lifecycle — `MetricPacksController`'s `createDraft` → `publish` →
-`activate` — not a direct field edit. `publish` refuses a draft that would silently drop a parent
-metric without acknowledgement, or that changes a surviving metric's canonical unit or any unit's
-conversion factor: a tolerance edit only governs the *next* scan and is safe to version, but a unit
-factor is re-applied to every historical fact on every scan, so an edit there would silently
-reinterpret history rather than just steer the future. `activate` scopes its rescan to exactly the
-metric ids `diffDetectionRelevantMetrics` reports changed — a labels-or-aliases-only version starts no
-rescan at all — and `MetricPackPreviewController` (`ConflictsModule`, routed under the same
-`/metric-packs` prefix as `MetricPacksController` to avoid a module cycle) exposes the identical diff
-as a preview before any version is ever activated. See
-[`0025-versioned-metric-packs.md`](../adr/0025-versioned-metric-packs.md) for the full design,
-including why tolerance and unit arithmetic are versioned asymmetrically.
+**There is no operator-authoring surface for it, and there is deliberately no longer one.** No
+draft/publish/activate lifecycle, no per-tenant metric override, no activation preview, and no
+rescan workflow — the three collections that once backed them are not part of the schema at all:
+`migrations/0001-baseline.ts` never creates them. Changing the ontology is a code change that ships
+through the normal gate, not a runtime configuration act.
+
+What survives is the provenance stamp, and it is the part that matters for reading a stored row.
+`FactsService.extractFacts` and `ConflictsService.scanForConflicts` stamp
+`packId`/`packVersion` onto every `ExtractedFact` and `Conflict` they write, alongside
+`Conflict.magnitudeUnit` — so a row records which ontology's tolerance and units judged it, and a
+stored magnitude records the unit it is expressed in rather than relying on a collection-wide
+convention. When the ontology constant moves, `ConflictsService.list` marks a row whose stamp no
+longer matches as `ConflictResponseDto.stale` with a `staleReason` naming both versions. A stale row
+stays in the list, shown and labelled — never hidden, and never silently reinterpreted under an
+ontology that was not in force when it was detected.
 
 ## Live updates: Server-Sent Events
 
@@ -341,7 +391,7 @@ their subject's `runStatus` reaches `completed` or `failed`, and carry no indepe
 beyond that — a run that never reaches a terminal status holds its slot until the client disconnects.
 `streamList` (`documents/events`) has no terminal status of its own to close on, so it alone also
 carries a bare `SseConfig.maxStreamLifetimeMs` ceiling. See
-[`0019-stream-lifecycle-and-throttle-keying.md`](../adr/0019-stream-lifecycle-and-throttle-keying.md)
+[`0017-stream-lifecycle-and-throttle-keying.md`](../adr/0017-stream-lifecycle-and-throttle-keying.md)
 for the per-route reasoning and `threat-model.md` §9 for the residual risk this leaves.
 
 ## The MCP surface
@@ -366,11 +416,16 @@ mode and both answer 405.
    the request is refused. There is no cookie fallback — this surface has no browser session to read
    one from. The resulting `ToolExecutionContext` is built entirely from the verified token; nothing
    in it comes from the request body.
-2. A fixed-window rate limiter, per verified `actorId`, against `MCP_RATE_LIMIT_PER_MINUTE`. It is
-   charged per JSON-RPC request present in the body rather than per HTTP POST, because the SDK
-   dispatches every request inside a batch array — a flat per-POST charge would let one call trigger
-   an arbitrary number of tool executions for one unit of budget. Counters are in-memory and
-   per-process: correct for a single replica, wrong for horizontal scale-out.
+2. A rolling-window rate limiter, per verified `actorId`, against `MCP_RATE_LIMIT_PER_MINUTE`, and
+   ahead of it a second one per caller IP against `MCP_PRE_AUTH_IP_RATE_LIMIT_MAX_REQUESTS` that
+   runs before the token lookup. The budget holds over every window-length interval, not only over
+   consecutive ones, so a budget spent at the end of one interval is not returned at the start of
+   the next. The actor-keyed limiter is charged per JSON-RPC request present in the body rather than
+   per HTTP POST, because the SDK dispatches every request inside a batch array — a flat per-POST
+   charge would let one call trigger an arbitrary number of tool executions for one unit of budget.
+   Both are in-memory and per-process: correct for a single replica, wrong for horizontal scale-out.
+   The IP one keys on `req.ip`, so it depends on the `trust proxy` hop count `createMcpHttpApp` sets
+   (`docs/global/deployment-hardening.md`).
 
 **Five tools, four steps.** `tools/list` advertises `search_evidence`, `get_answer`,
 `request_resolution`, `ask_evidence`, and `verify_claims` (the last three withheld when the
@@ -416,12 +471,13 @@ only thing gating who reaches it.
 
 ## Metrics and alerting
 
-Tracing answers what happened in one request. It has no notion of a rate crossing a threshold, and
-the failures this system is built around — a claim dropped by the gate, an empty retrieval, an
-approval nobody answered — each produce a response that looks normal to the caller. What separates
-routine from broken is the rate, so those live in metrics.
+Metrics are the whole of this system's observability: there is no distributed tracing, no tracer and
+no span exporter anywhere in the codebase. That is the right trade for the failures this system is
+built around — a claim dropped by the gate, an empty retrieval, an approval nobody answered — because
+each of them produces a response that looks entirely normal to the caller. A per-request trace would
+show one of those and call it fine; what separates routine from broken is the rate.
 
-`src/instrumentation.ts` runs a `PrometheusExporter` alongside the trace exporters, on
+`src/instrumentation.ts` runs a `PrometheusExporter` and nothing else, on
 `METRICS_PORT`. All three processes share that one variable and derive a distinct port from it by a
 per-service offset keyed on `OTEL_SERVICE_NAME` — API, worker one above, MCP two above — rather than
 each needing an env var of its own that could drift out of sync.
@@ -438,7 +494,7 @@ two exporters on one port where the loser is silent.
 | `evidence_ops.retrieval.empty`        | `EvidenceRetrievalService.retrieve` returning no chunks |
 | `evidence_ops.workflow_run.failed`    | `IngestionService`'s failure recording                 |
 | `evidence_ops.approval.timeout`       | `ConflictsService.recordResolution`'s `timed_out` branch |
-| `evidence_ops.model.cost_usd`         | `TracingModelProvider.generate`, per call (histogram)   |
+| `evidence_ops.model.cost_usd`         | `MetricsModelProvider.generate`, per call (histogram)   |
 
 The meter is module-scope and resolves to the OTel API's no-op provider until a real SDK starts, so
 these are inert rather than conditional in a test — there is no test-only branch anywhere in that
@@ -467,17 +523,13 @@ counters gain a `_total` suffix, so `evidence_ops.grounding.claims_dropped` is q
   executes through.
 - `docs/adr/0006-model-access-behind-a-decorated-provider.md` — why model access sits behind a
   decorator chain rather than a direct SDK call.
-- `docs/adr/0012-source-connector-seam.md` — the connector seam behind `SOURCE_CONNECTOR`.
-- `docs/adr/0015-agentic-retrieval-mode.md` — superseded; the removed multi-turn retrieval loop's
-  design rationale, kept as a historical record.
-- `docs/adr/0016-mcp-server-surface.md` — the MCP surface, its four steps (amended by ADR-0023,
+- `docs/adr/0011-source-connector-seam.md` — the connector seam behind `SOURCE_CONNECTOR`.
+- `docs/adr/0014-mcp-server-surface.md` — the MCP surface, its four steps (amended by ADR-0020,
   which added `mcp-ask`/`mcp-verify` to the original two), and why approvals are not reachable from
   it.
-- `docs/adr/0017-survivorship-policy.md` — the deterministic rules that propose a conflict winner.
-- `docs/adr/0018-metrics-and-alerting-shape.md` — the six signals and why there are not more.
-- `docs/adr/0019-stream-lifecycle-and-throttle-keying.md` — the three SSE streams' shared controls
+- `docs/adr/0015-survivorship-policy.md` — the deterministic rules that propose a conflict winner.
+- `docs/adr/0016-metrics-and-alerting-shape.md` — the six signals and why there are not more.
+- `docs/adr/0017-stream-lifecycle-and-throttle-keying.md` — the three SSE streams' shared controls
   and the one that is not shared.
-- `docs/adr/0024-evidence-lifecycle-and-withdrawal.md` — sync absence guards, soft withdrawal, and
+- `docs/adr/0021-evidence-lifecycle-and-withdrawal.md` — sync absence guards, soft withdrawal, and
   the scanned-PDF quarantine state.
-- `docs/adr/0025-versioned-metric-packs.md` — versioned metric packs, the `rescanConflicts` workflow,
-  and why tolerance is editable but unit arithmetic is not.

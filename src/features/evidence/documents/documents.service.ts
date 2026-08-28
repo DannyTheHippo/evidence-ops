@@ -27,6 +27,7 @@ import {
   MIN_CONFLICTING_FACTS,
 } from '../../../database/schemas/evidence/conflict/conflict.schema';
 import type {
+  DocumentEmailOrigin,
   DocumentSourceClass,
   DocumentSourceKind,
 } from '../../../database/schemas/evidence/document/document.schema';
@@ -69,6 +70,7 @@ import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import type { IngestDocumentVersionInput } from '../../../workflows/types';
 import {
   AMBIGUOUS_UPLOAD_MIME_TYPES,
+  contentMatchesDeclaredKind,
   DOCUMENTS_STREAM_INTERVAL_MS,
   MIME_TYPE_TO_SOURCE_KIND,
   resolveUploadKind,
@@ -82,12 +84,14 @@ import { DocumentVersionResponseDto } from './dtos/response/document-version.res
 import { DocumentWithVersionsResponseDto } from './dtos/response/document-with-versions.response.dto';
 import { EvidenceChunkResponseDto } from './dtos/response/evidence-chunk.response.dto';
 import {
+  ContentTypeMismatchException,
   DocumentNotFoundException,
   DocumentVersionNotFoundException,
   MissingFileException,
   UnresolvableContentTypeException,
   UnsupportedContentTypeException,
 } from './exceptions/documents.exception';
+import { neutralizeForDisplay } from '../ingestion/sanitize-evidence-text';
 import { sanitizeDownloadFilename } from './sanitize-download-filename.util';
 import type { UploadedFileLike } from './types/uploaded-file.type';
 
@@ -115,6 +119,9 @@ interface UploadResult {
 interface UploadSourceOptions {
   sourceClass?: DocumentSourceClass;
   sourceId?: Types.ObjectId;
+  /** Set only by `EmailAttachmentService`, which creates a document out of a part it unwrapped from
+   * an `.eml`. Recorded on the document as provenance — see `DocumentEmailOrigin`. */
+  emailOrigin?: DocumentEmailOrigin;
 }
 
 /**
@@ -196,6 +203,18 @@ export class DocumentsService {
         `Unsupported content type '${file.mimetype}' for file '${file.originalname}'`,
       );
     }
+
+    // Second half of the same input gate, still before any I/O: `resolveUploadKind` only ever
+    // looked at the declared MIME and filename, both of which the client controls. A magic-byte
+    // sniff of the actual bytes closes the gap it can't — a PDF named 'report.txt' and sent as
+    // 'text/plain' resolves to `txt` above and would otherwise be stored under a canonical
+    // 'text/plain' MIME that launders the lie for every downstream consumer.
+    if (!contentMatchesDeclaredKind(file.buffer, sourceKind)) {
+      throw new ContentTypeMismatchException(
+        `File '${file.originalname}' was declared as content type '${file.mimetype}' (resolved to '${sourceKind}'), but its bytes do not match that format`,
+      );
+    }
+
     // The canonical MIME for the resolved kind, not the browser's raw `file.mimetype` — this is
     // what gets persisted and stored, so the parser registry's exact-match lookup
     // (`ParserRegistry.resolve`) never has to learn about a browser's lie either.
@@ -630,16 +649,15 @@ export class DocumentsService {
     if (factIds.length > 0) {
       // Every conflict referencing one of this document's facts gets its `factIds` pruned here,
       // regardless of status: a `resolved`/`dismissed` conflict's `factIds` must keep resolving to
-      // live `ExtractedFact`s exactly as much as an `open` one's, since both are read by the same
-      // `ConflictsService.list`/`ResolutionBacktestService.scoreConflict` paths. Not scoped to
-      // `status: 'open'` — the query can no longer take the `status` segment of the
-      // `conflicts_tenantId_status_factIds` compound index (migration 0006), but this is the
-      // rare document-delete path, not a per-request hot path. `updatePipeline: true` is REQUIRED,
-      // not decorative: Mongoose 9 refuses an array update without it (`Cannot pass an array to
-      // query updates unless the 'updatePipeline' option is set`), which surfaces as a 500 on
-      // DELETE, not a type error. A mocked model accepts the two-argument call happily, so the
-      // unit spec below asserts this third argument explicitly — that assertion is the only thing
-      // standing between a passing suite and a broken endpoint.
+      // live `ExtractedFact`s exactly as much as an `open` one's, since both are read by
+      // `ConflictsService.list`. Not scoped to `status: 'open'` — the query can no longer take the
+      // `status` segment of the `conflicts_tenantId_status_factIds` compound index (migration
+      // 0006), but this is the rare document-delete path, not a per-request hot path.
+      // `updatePipeline: true` is REQUIRED, not decorative: Mongoose 9 refuses an array update
+      // without it (`Cannot pass an array to query updates unless the 'updatePipeline' option is
+      // set`), which surfaces as a 500 on DELETE, not a type error. A mocked model accepts the
+      // two-argument call happily, so the unit spec below asserts this third argument explicitly
+      // — that assertion is the only thing standing between a passing suite and a broken endpoint.
       await this.conflictModel.updateMany(
         { tenantId, factIds: { $in: factIds } },
         [{ $set: { factIds: { $setDifference: ['$factIds', factIds] } } }],
@@ -794,6 +812,7 @@ export class DocumentsService {
       tenantId,
       ...(source?.sourceClass ? { sourceClass: source.sourceClass } : {}),
       ...(source?.sourceId ? { sourceId: source.sourceId } : {}),
+      ...(source?.emailOrigin ? { emailOrigin: source.emailOrigin } : {}),
     });
 
     // See the identical GridFS metadata comment in `addVersion` above.
@@ -865,6 +884,11 @@ export class DocumentsService {
        * the status is anything other than `'failed'`, and JSON omits the key entirely then.
        */
       ingestionFailureReason: version.ingestionFailureReason,
+      // Same hand-built-mapping trap as `ingestionFailureReason` above: `@Expose()` alone cannot
+      // surface a field this method never puts on the object it returns. Populated at ingest
+      // (`IngestionService`/parser fidelity checks); this is only where it becomes visible to an
+      // operator rather than sitting unread on the stored document.
+      reducedFidelityReasons: version.reducedFidelityReasons,
       createdAt: version.createdAt,
     };
   }
@@ -872,7 +896,11 @@ export class DocumentsService {
   private toChunkDto(chunk: EvidenceChunkDocument): EvidenceChunkResponseDto {
     return {
       id: chunk._id,
-      text: chunk.text,
+      // The stored chunk stays byte-faithful to its source (`sanitizeEvidenceText`'s own
+      // guarantee); this is the human-viewer boundary where display-only neutralization —
+      // stripping control/bidi/zero-width characters — belongs instead, per
+      // `neutralizeForDisplay`'s own doc comment.
+      text: neutralizeForDisplay(chunk.text),
       tokenCount: chunk.tokenCount,
       locator: chunk.locator,
     };

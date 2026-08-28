@@ -97,7 +97,7 @@ export interface VerifyClaimsResult {
  * verifier located supporting evidence for the claim and mechanically checked the citation and
  * every number the claim states against it) and, just as plainly, what it does not mean: not a
  * claim of truth, and no check here confirms the cited evidence covers the whole statement — only
- * that it overlaps it (`docs/adr/0023-attestation-surface.md` § Known bounds, bound 3).
+ * that it overlaps it (`docs/adr/0020-attestation-surface.md` § Known bounds, bound 3).
  */
 export const VERIFY_CLAIMS_ADVISORY =
   'A "grounded" verdict means an independent verifier located supporting evidence for this claim ' +

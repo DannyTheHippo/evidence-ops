@@ -4,7 +4,7 @@
   exercised by the canary security suite, and **wired to one production caller**: the MCP surface
   (`McpServerService`, `src/mcp/`), the only class in the codebase that injects it. `DenyAllAuthzHook`
   remains the default binding; a module opts into `StepPolicyAuthzHook` by re-providing the service
-  and the hook together — see ADR-0016
+  and the hook together — see ADR-0014
 - **Date:** 2026-08-10
 - **Supersedes:** —
 
@@ -108,7 +108,7 @@ Nothing has to be retrofitted under pressure once the first real tool shows up.
 the alternative (designing authz alongside the first tool, under the pressure of shipping that
 tool's actual functionality) is how permission checks end up as an afterthought.
 
-**No longer deferred.** `StepPolicyAuthzHook` (ADR-0016) is now a real `ToolAuthzHook`
+**No longer deferred.** `StepPolicyAuthzHook` (ADR-0014) is now a real `ToolAuthzHook`
 implementation, and `McpModule` re-provides `ToolExecutorService` bound to it rather than to the
 deny-all default. Three tools are registered — `search_evidence`, `get_answer`,
 `request_resolution` — through `McpServerService`, which calls `ToolExecutorService.execute`

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   decideApproval,
@@ -31,12 +31,14 @@ const STATE_OPTIONS: { value: ApprovalState; label: string }[] = [
   { value: 'pending', label: 'Pending' },
   { value: 'approved', label: 'Approved' },
   { value: 'rejected', label: 'Rejected' },
+  { value: 'timed_out', label: 'Timed out' },
 ];
 
-const stateTone: Record<ApprovalState, 'caution' | 'verified' | 'rejected'> = {
+const stateTone: Record<ApprovalState, 'caution' | 'verified' | 'rejected' | 'neutral'> = {
   pending: 'caution',
   approved: 'verified',
   rejected: 'rejected',
+  timed_out: 'neutral',
 };
 
 /** The value `conflict.proposedWinnerFactId` points at, formatted for display — undefined when
@@ -69,6 +71,13 @@ function ApprovalRow({
   const [viewingRun, setViewingRun] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const winnerLabel = conflict ? conflictWinnerLabel(conflict) : undefined;
+  // Blocks a double submit between the click and the re-render that disables the dialog's own
+  // buttons — `disabled={deciding}` alone only takes effect once React has committed it, the same
+  // reasoning `AskPage.tsx`'s `submitInFlightRef` documents. A stale `pending` row rendered after
+  // another tab already decided it is a live Approve/Reject button aimed at a decided approval;
+  // the server's own `state: 'pending'` guard (`ApprovalsService.decide`) still rejects the second
+  // write, but this stops the SPA from firing it at all.
+  const submitInFlightRef = useRef(false);
 
   function closeDialog() {
     setPendingDecision(null);
@@ -77,6 +86,8 @@ function ApprovalRow({
   }
 
   async function decide(decision: ApprovalDecision) {
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     setDeciding(true);
     setError(null);
     try {
@@ -94,6 +105,7 @@ function ApprovalRow({
       setError(err instanceof Error ? err.message : 'Failed to record decision');
     } finally {
       setDeciding(false);
+      submitInFlightRef.current = false;
     }
   }
 
@@ -255,15 +267,23 @@ export default function ApprovalsPage() {
   const sessionResolved = session.status !== 'loading';
 
   useEffect(() => {
+    let cancelled = false;
+
     listApprovals({ skip, limit: PAGE_SIZE, state: appliedState })
       .then(({ docs, count: total }) => {
+        if (cancelled) return;
         setApprovals(docs);
         setCount(total);
         setError(null);
       })
       .catch((err: unknown) => {
+        if (cancelled) return;
         setError(err instanceof Error ? err.message : 'Failed to load approvals');
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, [skip, appliedState]);
 
   function handleFilter(e: FormEvent<HTMLFormElement>) {

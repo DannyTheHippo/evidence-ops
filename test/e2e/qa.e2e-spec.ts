@@ -299,6 +299,60 @@ describe('QA and Conflicts (e2e)', () => {
       expect(body.verificationReport).toEqual(verificationReport);
     });
 
+    // Pins the response-boundary neutralization property: a bidi-override and a zero-width
+    // character in a citation quote reach the wire display-neutralized in both the flattened
+    // `citations` field and the nested `outcome.claims[].citations[].quote` it duplicates, while
+    // the document actually persisted in Mongo — re-read independently of the request under test —
+    // stays byte-faithful, exactly as `neutralizeForDisplay`'s own storage-vs-display contract
+    // requires.
+    it('neutralizes a bidi-override and zero-width character in a citation quote for display, while storage stays byte-faithful', async () => {
+      const rightToLeftOverride = String.fromCharCode(0x202e);
+      const zeroWidthSpace = String.fromCharCode(0x200b);
+      const rawQuote = `NOI $1,234,567${zeroWidthSpace} was reported${rightToLeftOverride}.`;
+      const neutralizedQuote = 'NOI $1,234,567 was reported.';
+      const citation: Citation = {
+        docVersionId: 'version-1',
+        sha256: 'a'.repeat(64),
+        chunkId: 'chunk-1',
+        locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 3 },
+        quote: rawQuote,
+      };
+      const seeded = await answerModel.create({
+        tenantId,
+        questionText: 'What is the NOI?',
+        runStatus: 'completed',
+        outcome: {
+          kind: 'answered',
+          claims: [{ statement: 'The NOI is $1,234,567.', citations: [citation] }],
+        },
+        claims: [{ statement: 'The NOI is $1,234,567.', citations: [citation] }],
+        claimCoverage: 1,
+        verificationReport: { verifiedClaimCount: 1, totalClaimCount: 1, droppedClaims: [] },
+        retrievedChunkIds: ['chunk-1'],
+      });
+
+      const response = await request(getTestServer(app))
+        .get(`/api/v1/answers/${seeded._id.toString()}`)
+        .set('Cookie', cookie);
+      const body = response.body as AnswerBody;
+
+      expect(response.status).toBe(200);
+      const bodyCitations = body.citations as Citation[];
+      expect(bodyCitations[0].quote).toBe(neutralizedQuote);
+      const bodyOutcome = body.outcome as { claims: Array<{ citations: Citation[] }> };
+      expect(bodyOutcome.claims[0].citations[0].quote).toBe(neutralizedQuote);
+
+      // Re-read straight from Mongo, independent of the request above — the persisted document
+      // still carries the raw bidi-override and zero-width bytes untouched by the response
+      // boundary's display neutralization.
+      const stored = await answerModel.findById(seeded._id);
+      expect(stored?.claims[0]?.citations[0]?.quote).toBe(rawQuote);
+      if (stored?.outcome?.kind !== 'answered') {
+        throw new Error('expected an answered outcome');
+      }
+      expect(stored.outcome.claims[0].citations[0].quote).toBe(rawQuote);
+    });
+
     // Regression for the "conflicting_evidence unreachable" gap (ADR-0004 bound 9): `reasonCode`
     // is a new field on `outcome` for `insufficient_evidence` — an exact `toEqual` here is the
     // only gate that would catch it silently missing `@Expose()` (it would not: `outcome` passes

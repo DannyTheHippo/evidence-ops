@@ -1,12 +1,18 @@
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
+import { normalizeEntityName } from '../../../../src/database/schemas/evidence/canonical-entity/canonical-entity.schema';
 import type { EvidenceLocator } from '../../../../src/database/schemas/evidence/evidence-chunk/evidence-locator.type';
+import type { FactKey } from '../../../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import { groupKey } from '../../../../src/features/evidence/conflicts/detect-conflicts';
 import type {
   AnsweredOutcome,
   Citation,
   Claim,
 } from '../../../../src/features/evidence/qa/contracts/answer.contract';
-import { GroundingGateService } from '../../../../src/features/evidence/qa/grounding-gate.service';
+import {
+  factKeysMatch,
+  GroundingGateService,
+} from '../../../../src/features/evidence/qa/grounding-gate.service';
 import type { RetrievedChunk } from '../../../../src/features/evidence/qa/types/retrieved-chunk.type';
 import type { GroundingCellFact } from '../../../../src/features/evidence/qa/verify-claim';
 import { groundingClaimsDroppedCounter } from '../../../../src/providers/telemetry/domain-metrics';
@@ -360,5 +366,133 @@ describe('GroundingGateService', () => {
 
     expect(report.outcomeKind).toBe('conflicting_evidence');
     expect(report.conflictingFactKey).toEqual(factKeyOne);
+  });
+});
+
+describe('factKeysMatch', () => {
+  const keyFor = (entity: string): FactKey => ({ entity, metric: 'cap_rate', period: '2025-03' });
+  const withChar = (template: string, codePoint: number) =>
+    template.replace('_', String.fromCodePoint(codePoint));
+
+  it('should match entities that are equal after normalizeEntityName folds them', () => {
+    expect(factKeysMatch(keyFor('Acme'), keyFor('  ACME  '))).toBe(true);
+  });
+
+  it('should key through the same normalization groupKey (detect-conflicts.ts) uses', () => {
+    expect(factKeysMatch(keyFor('Acme  Tower'), keyFor(normalizeEntityName('Acme  Tower')))).toBe(
+      true,
+    );
+  });
+
+  // The normalization class, swept rather than sampled — mirrors `groupKey`'s own sweep in
+  // `detect-conflicts.spec.ts`, since both functions are contracted to fold entities identically.
+  // A single spacing or compatibility character that survives one fold and not the other makes this
+  // gate refuse a fact key that grouping already treats as the same entity.
+  describe('names that differ only by a fold normalizeEntityName performs', () => {
+    it('should match on every Unicode space-separator code point, including the ones NFKC leaves alone', () => {
+      const spaceSeparators: string[] = [];
+      for (let codePoint = 0; codePoint <= 0x10ffff; codePoint += 1) {
+        const char = String.fromCodePoint(codePoint);
+        if (/\p{Zs}/u.test(char)) {
+          spaceSeparators.push(char);
+        }
+      }
+      // Pinned, not sampled: a Unicode revision that adds a space separator must fail here so the
+      // new code point is checked against this normalization rather than reaching it unexamined.
+      expect(spaceSeparators).toHaveLength(17);
+
+      for (const separator of spaceSeparators) {
+        const rendered = `Acme${separator}${separator}Tower`;
+        expect([
+          separator.codePointAt(0),
+          factKeysMatch(keyFor(rendered), keyFor('Acme Tower')),
+        ]).toEqual([separator.codePointAt(0), true]);
+      }
+    });
+
+    it.each([
+      ['fullwidth letters a PDF text layer emits', 'Ａｃｍｅ Ｔｏｗｅｒ'],
+      ['a compatibility ligature', 'Oﬃce Tower'],
+      ['a no-break space', withChar('Acme_Tower', 0x00a0)],
+      ['an ideographic space', withChar('Acme_Tower', 0x3000)],
+      ['a narrow no-break space', withChar('Acme_Tower', 0x202f)],
+      ['an Ogham space mark, which NFKC leaves alone', withChar('Acme_Tower', 0x1680)],
+      ['a superscript digit', withChar('Acme Tower_', 0x00b2)],
+      ['a Roman numeral', withChar('Acme Tower _', 0x2171)],
+      ['mixed casing and a whitespace run', '  ACME \t Tower  '],
+    ])('should match %s against its plain-ASCII form', (_description, rendered) => {
+      expect(factKeysMatch(keyFor(rendered), keyFor(normalizeEntityName(rendered)))).toBe(true);
+    });
+  });
+
+  // The other half of the class: folding too much would match two entities that were never the
+  // same. `factKeysMatch` inherits this refusal from `normalizeEntityName` rather than enforcing it
+  // itself, so the sweep asserts the inherited behavior stays in place.
+  it.each([
+    ['Acme Tower', 'Acme Towers'],
+    ['Acme Tower', 'AcmeTower'],
+    ['Acme Tower', 'Acme-Tower'],
+    ['Acme Tower', 'Acme Tower II'],
+    ['Northgate Business Park', 'Northgate Bus. Park'],
+  ])('should NOT match %p and %p', (left, right) => {
+    expect(factKeysMatch(keyFor(left), keyFor(right))).toBe(false);
+  });
+
+  it('should require metric to match exactly, even when entity matches', () => {
+    expect(
+      factKeysMatch(
+        { entity: 'Acme', metric: 'cap_rate', period: '2025-03' },
+        { entity: 'Acme', metric: 'sale_price', period: '2025-03' },
+      ),
+    ).toBe(false);
+  });
+
+  it('should require period to match exactly, even when entity matches', () => {
+    expect(
+      factKeysMatch(
+        { entity: 'Acme', metric: 'cap_rate', period: '2025-03' },
+        { entity: 'Acme', metric: 'cap_rate', period: '2025-04' },
+      ),
+    ).toBe(false);
+  });
+
+  // The closing assertion for the class: agreement with `groupKey`, an independent implementation
+  // of the same fold, rather than agreement with the normalization this function itself now calls.
+  // A pool covering every fold variant exercised above plus every "kept apart" pair, compared
+  // pairwise so a future change to either function's normalization is caught here even if it never
+  // touches this file.
+  it('should agree with groupKey on every pair drawn from the fold-and-distinct pool', () => {
+    const pool = [
+      'Acme Tower',
+      '  ACME  ',
+      'Ａｃｍｅ Ｔｏｗｅｒ',
+      'Oﬃce Tower',
+      withChar('Acme_Tower', 0x00a0),
+      withChar('Acme_Tower', 0x3000),
+      withChar('Acme_Tower', 0x202f),
+      withChar('Acme_Tower', 0x1680),
+      withChar('Acme Tower_', 0x00b2),
+      withChar('Acme Tower _', 0x2171),
+      '  ACME \t Tower  ',
+      'Acme Towers',
+      'AcmeTower',
+      'Acme-Tower',
+      'Acme Tower II',
+      'Northgate Business Park',
+      'Northgate Bus. Park',
+    ];
+    const groupKeyFor = (entity: string) =>
+      groupKey({ entity, metric: 'cap_rate', period: '2025-03' });
+
+    for (const left of pool) {
+      for (const right of pool) {
+        const expected = groupKeyFor(left) === groupKeyFor(right);
+        expect([left, right, factKeysMatch(keyFor(left), keyFor(right))]).toEqual([
+          left,
+          right,
+          expected,
+        ]);
+      }
+    }
   });
 });

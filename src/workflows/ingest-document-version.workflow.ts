@@ -6,6 +6,13 @@ import {
   workflowInfo,
 } from '@temporalio/workflow';
 import type { Activities } from '../worker/activities';
+import {
+  EXTRACT_FACTS_NON_RETRYABLE_ERROR_TYPES,
+  INGEST_HEARTBEAT_TIMEOUT_MS,
+  INGEST_NON_RETRYABLE_ERROR_TYPES,
+  INGEST_SCHEDULE_TO_CLOSE_TIMEOUT_MS,
+  INGEST_START_TO_CLOSE_TIMEOUT_MS,
+} from './ingest-retry-policy';
 import type {
   ApprovalDecisionSignal,
   IngestDocumentVersionInput,
@@ -23,22 +30,18 @@ import type {
 // after the lease has moved on is a safe, cheap no-op rather than a double-write, so this group
 // tolerates the same retry budget the original single-activity workflow used.
 const ingestActivities = proxyActivities<Pick<Activities, 'ingestDocumentVersion'>>({
-  startToCloseTimeout: '2 minutes',
-  scheduleToCloseTimeout: '10 minutes',
+  startToCloseTimeout: INGEST_START_TO_CLOSE_TIMEOUT_MS,
+  scheduleToCloseTimeout: INGEST_SCHEDULE_TO_CLOSE_TIMEOUT_MS,
+  // Paired with the heartbeats `ingestDocumentVersion` (`src/worker/activities.ts`) emits: a
+  // heartbeat with no timeout declared here is inert, and a timeout with no heartbeats fails every
+  // healthy attempt. Both halves or neither. See `INGEST_HEARTBEAT_TIMEOUT_MS`.
+  heartbeatTimeout: INGEST_HEARTBEAT_TIMEOUT_MS,
   retry: {
     maximumAttempts: 3,
-    // A missing tenantId never appears by retrying (`requireTenantId` in `activities.ts`), and
-    // Voyage's own errors here are deterministic for a given input: no configured API key and a
-    // malformed embeddings response shape both recur unchanged on the next attempt. A scanned
-    // PDF's missing text layer (`EmptyPdfTextLayerException`, `pdf.parser.ts`) is exactly as
-    // deterministic — the same bytes parse to the same empty result every time — so retrying only
-    // delays reaching `IngestionService`'s `'needs-ocr'` terminal state, never changes the outcome.
-    nonRetryableErrorTypes: [
-      'MissingTenantId',
-      'VoyageApiKeyMissingError',
-      'VoyageInvalidResponseError',
-      'EmptyPdfTextLayerException',
-    ],
+    // Classification and its reasoning live in `ingest-retry-policy.ts`, which
+    // `test/workflows/ingest-retry-policy.spec.ts` checks against the exception classes the
+    // ingestion feature actually exports.
+    nonRetryableErrorTypes: [...INGEST_NON_RETRYABLE_ERROR_TYPES],
   },
 });
 
@@ -55,19 +58,23 @@ const factsActivities = proxyActivities<Pick<Activities, 'extractFacts'>>({
   scheduleToCloseTimeout: '10 minutes',
   retry: {
     maximumAttempts: 2,
-    // A missing tenantId never appears by retrying (`requireTenantId` in `activities.ts`); the
-    // spend ceiling and the pricing table are facts a retry cannot change mid-workflow, and a
-    // schema-invalid model response recurs for the same prose chunk. A tenant's daily spend
-    // ceiling does not rise mid-workflow either, and a request with no tenant is refused
-    // identically on every retry, so both spend-guard failures join the same non-retryable set.
-    nonRetryableErrorTypes: [
-      'MissingTenantId',
-      'ModelBudgetExceededError',
-      'UnknownModelPricingError',
-      'ModelSchemaValidationError',
-      'TenantSpendLimitExceededError',
-      'ModelRequestMissingTenantError',
-    ],
+    // Classification and its reasoning live in `ingest-retry-policy.ts`.
+    nonRetryableErrorTypes: [...EXTRACT_FACTS_NON_RETRYABLE_ERROR_TYPES],
+  },
+});
+
+// One Mongo compare-and-set (`IngestionService.recordFactExtractionFailure`), idempotent — a
+// version already moved to `facts-failed` no longer matches the `completed` predicate, so a retry
+// after a crash between "write succeeded" and "activity reported complete" is a no-op rather than
+// a second write. Same cheap-to-retry budget every other pure-Mongo group in this file gets.
+const factsFailureActivities = proxyActivities<Pick<Activities, 'recordFactExtractionFailure'>>({
+  startToCloseTimeout: '10 seconds',
+  scheduleToCloseTimeout: '1 minute',
+  retry: {
+    maximumAttempts: 5,
+    // A missing tenantId never appears by retrying (`requireTenantId` in `activities.ts`), and a
+    // version id that names no row never starts naming one.
+    nonRetryableErrorTypes: ['MissingTenantId', 'DocumentVersionNotFoundException'],
   },
 });
 
@@ -146,7 +153,27 @@ async function runIngestPipeline(
   tenantId: string,
 ): Promise<IngestDocumentVersionResult> {
   const result = await ingestActivities.ingestDocumentVersion(documentVersionId, tenantId);
-  const factsResult = await factsActivities.extractFacts(documentVersionId, tenantId);
+
+  let factsResult;
+  try {
+    factsResult = await factsActivities.extractFacts(documentVersionId, tenantId);
+  } catch (error) {
+    // The ingest itself succeeded, so the version is `completed` and its chunks are searchable —
+    // a state that claims the product knows what is in a document it has extracted nothing from.
+    // `recordFactExtractionFailure` moves it to `facts-failed` so the two are distinguishable.
+    try {
+      await factsFailureActivities.recordFactExtractionFailure(
+        documentVersionId,
+        tenantId,
+        error instanceof Error ? error.message : String(error),
+      );
+    } catch {
+      // The recording is bookkeeping around the real failure. Swallowed so the extraction error
+      // below is what the workflow fails with, never one raised while recording it.
+    }
+    throw error;
+  }
+
   await conflictsActivities.scanForConflicts(tenantId, factsResult.factKeys);
   return result;
 }

@@ -16,6 +16,7 @@ const version: DocumentVersion = {
   sha256: 'a'.repeat(64),
   sizeBytes: 100,
   ingestionStatus: 'completed',
+  reducedFidelityReasons: [],
   createdAt: new Date().toISOString(),
 };
 
@@ -76,6 +77,33 @@ describe('VersionRow', () => {
 
     expect(screen.getByText('failed')).toBeInTheDocument();
     expect(screen.getByText('DOCX parse failed: unsupported OOXML part')).toBeInTheDocument();
+  });
+
+  it('names every fidelity reason on a version ingested with known fidelity loss', () => {
+    renderRow({
+      ...version,
+      reducedFidelityReasons: [
+        'Document has 3 page(s) with no extractable text; falling back to OCR-only extraction',
+        'Header row on sheet "Summary" was ambiguous; column names were inferred',
+      ],
+    });
+
+    expect(screen.getByText('reduced fidelity').className).toContain('badge--possible');
+    expect(
+      screen.getByText(
+        'Document has 3 page(s) with no extractable text; falling back to OCR-only extraction',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Header row on sheet "Summary" was ambiguous; column names were inferred'),
+    ).toBeInTheDocument();
+  });
+
+  it('says nothing about fidelity on a version with no known fidelity loss', () => {
+    renderRow();
+
+    expect(screen.queryByText('reduced fidelity')).not.toBeInTheDocument();
+    expect(screen.queryByText(/fidelity/i)).not.toBeInTheDocument();
   });
 
   it('expands to a chunks drill-in, tracking its state in aria-expanded', async () => {

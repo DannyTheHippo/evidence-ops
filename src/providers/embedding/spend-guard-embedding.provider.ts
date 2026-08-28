@@ -25,8 +25,11 @@ export function estimateEmbeddingTokens(inputs: readonly string[]): number {
 
 /**
  * Enforces a tenant's daily spend ceiling around a delegate `EmbeddingProvider`, reusing the same
- * `TenantSpendService` ledger `SpendGuardModelProvider` reserves against — one combined daily
- * ceiling per tenant across model and embedding spend, not a second one.
+ * `TenantSpendService` ledger `SpendGuardModelProvider` reserves against — one combined ledger per
+ * tenant across model and embedding spend, not a second one. `dailyLimitUsd` bounds every
+ * reservation; `document` (ingest) embeds additionally reserve against `ingestDailyLimitUsd` when
+ * one is configured, so a backfill can never crowd out the headroom `query` embeds depend on — see
+ * `limitUsdFor`.
  *
  * `dailyLimitUsd <= 0` disables the ceiling — the one deliberate fail-OPEN path here, mirroring
  * `TenantSpendService.reserve`'s own disable convention.
@@ -54,6 +57,11 @@ export class SpendGuardEmbeddingProvider implements EmbeddingProvider {
     private readonly spendService: TenantSpendService,
     private readonly dailyLimitUsd: number,
     private readonly als: AsyncLocalStorage<AlsContext>,
+    // Sub-ceiling for `document` (ingest) embeds only — see `SpendGuardModelProvider`'s identical
+    // parameter for why this mirrors the model-spend split. `undefined` (the default) reserves
+    // ingest embeds against the full `dailyLimitUsd`, same as before this parameter existed.
+    // `query` embeds always reserve against `dailyLimitUsd`.
+    private readonly ingestDailyLimitUsd?: number,
   ) {}
 
   get info(): EmbeddingProviderInfo {
@@ -74,11 +82,8 @@ export class SpendGuardEmbeddingProvider implements EmbeddingProvider {
       this.inner.info.model,
       estimateEmbeddingTokens(request.inputs),
     );
-    const windowStart = await this.spendService.reserve(
-      tenantId,
-      estimatedCostUsd,
-      this.dailyLimitUsd,
-    );
+    const limitUsd = this.limitUsdFor(request.inputType);
+    const windowStart = await this.spendService.reserve(tenantId, estimatedCostUsd, limitUsd);
 
     let result: EmbeddingResult;
     try {
@@ -91,5 +96,14 @@ export class SpendGuardEmbeddingProvider implements EmbeddingProvider {
     const actualCostUsd = computeVoyageCostUsd(this.inner.info.model, result.usage.totalTokens);
     await this.spendService.settle(tenantId, windowStart, estimatedCostUsd, actualCostUsd);
     return result;
+  }
+
+  /** `document` is the only ingest inputType; `query` is interactive and always reserves against
+   * the full `dailyLimitUsd`. */
+  private limitUsdFor(inputType: EmbeddingRequest['inputType']): number {
+    if (inputType === 'document' && this.ingestDailyLimitUsd !== undefined) {
+      return this.ingestDailyLimitUsd;
+    }
+    return this.dailyLimitUsd;
   }
 }

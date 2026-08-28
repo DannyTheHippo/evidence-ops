@@ -17,6 +17,7 @@ import {
   takeWhile,
   timer,
 } from 'rxjs';
+import { TypedConfigService } from '../../../config/environment/typed-config.service';
 import { User, UserDocument } from '../../../database/schemas/administration/user/user.schema';
 import {
   WorkflowRun,
@@ -48,7 +49,10 @@ import { ApprovalResponseDto } from '../approvals/dtos/response/approval.respons
 import type { ListWorkflowRunsRequestDto } from './dtos/request/list-workflow-runs.request.dto';
 import { WorkflowRunResponseDto } from './dtos/response/workflow-run.response.dto';
 import { WorkflowRunNotFoundException } from './exceptions/workflow-runs.exception';
-import { WORKFLOW_RUN_STREAM_INTERVAL_MS } from './workflow-runs.constant';
+import {
+  WORKFLOW_RUN_ENGINE_STATUS_CACHE_MS,
+  WORKFLOW_RUN_STREAM_INTERVAL_MS,
+} from './workflow-runs.constant';
 
 export interface CreateWorkflowRunInput {
   readonly workflowId: string;
@@ -79,6 +83,15 @@ type WorkflowRunStreamEvent =
 
 @Injectable()
 export class WorkflowRunsService {
+  // Keyed by Temporal `workflowId`, shared across every concurrent `peekRun` caller — see
+  // `getLiveStatus`'s own doc comment. `getLiveStatus` sweeps every expired entry before each
+  // lookup, so this stays bounded to runs within their current cache window rather than
+  // accumulating one entry per workflowId the process has ever polled.
+  private readonly liveStatusCache = new Map<
+    string,
+    { readonly expiresAt: number; readonly statusPromise: Promise<WorkflowRunStatus | undefined> }
+  >();
+
   constructor(
     @InjectModel(WorkflowRun.name)
     private readonly workflowRunModel: Model<WorkflowRunDocument>,
@@ -90,6 +103,7 @@ export class WorkflowRunsService {
     private readonly workflowEngine: WorkflowEngine,
 
     private readonly approvalsService: ApprovalsService,
+    private readonly config: TypedConfigService,
     private readonly auditService: AuditService,
     private readonly logger: AppLogger,
   ) {
@@ -157,17 +171,55 @@ export class WorkflowRunsService {
       throw new WorkflowRunNotFoundException(`WorkflowRun '${id}' not found`);
     }
 
-    let liveStatus: WorkflowRunStatus = run.status;
-    try {
-      const handle = await this.workflowEngine.status(run.workflowId);
-      liveStatus = handle.status;
-    } catch (error) {
-      this.logger.warn(
-        `Could not refresh live status for workflow run '${id}' (workflow '${run.workflowId}'): ${(error as Error).message}`,
-      );
+    const liveStatus = await this.getLiveStatus(run.workflowId, id);
+
+    return this.toResult(run, liveStatus ?? run.status);
+  }
+
+  /**
+   * Throttled, coalesced front for `WorkflowEngine.status()`. Evicts every `liveStatusCache` entry
+   * that has already expired before looking `workflowId` up — mirrors `McpServerService
+   * .applyFixedWindow`'s identical sweep-before-lookup shape for the same reason: a map keyed by a
+   * high-cardinality identity (here, every workflow run ever polled) must stay bounded to entries
+   * within their current window rather than accumulating one per key the process has ever seen. A
+   * cache hit returns the in-flight or already-settled call for this `workflowId` without touching
+   * the engine again; a miss issues one new call and caches it — resolved or rejected — for
+   * `WORKFLOW_RUN_ENGINE_STATUS_CACHE_MS`, so every concurrent `peekRun` caller for the same run
+   * (parallel `streamRun` ticks, parallel open tabs, a `findById` landing mid-window) shares that
+   * one call instead of each issuing its own. FAILS OPEN on the engine call, same direction as
+   * `peekRun`'s own doc comment: `undefined` tells the caller to fall back to the durable row's
+   * status rather than surfacing an error, and the failure is logged once per cache window rather
+   * than once per caller.
+   */
+  private getLiveStatus(workflowId: string, runId: string): Promise<WorkflowRunStatus | undefined> {
+    const now = Date.now();
+    for (const [cachedWorkflowId, entry] of this.liveStatusCache) {
+      if (entry.expiresAt <= now) {
+        this.liveStatusCache.delete(cachedWorkflowId);
+      }
     }
 
-    return this.toResult(run, liveStatus);
+    const cached = this.liveStatusCache.get(workflowId);
+    if (cached) {
+      return cached.statusPromise;
+    }
+
+    const statusPromise = this.workflowEngine
+      .status(workflowId)
+      .then((handle) => handle.status)
+      .catch((error: unknown) => {
+        this.logger.warn(
+          `Could not refresh live status for workflow run '${runId}' (workflow '${workflowId}'): ${(error as Error).message}`,
+        );
+        return undefined;
+      });
+
+    this.liveStatusCache.set(workflowId, {
+      expiresAt: now + WORKFLOW_RUN_ENGINE_STATUS_CACHE_MS,
+      statusPromise,
+    });
+
+    return statusPromise;
   }
 
   /**
@@ -273,6 +325,11 @@ export class WorkflowRunsService {
           SSE_REAUTH_INTERVAL_MS,
         ),
       ),
+      // Absolute ceiling on a single connection, independent of every other terminal condition
+      // here: a run wedged short of a terminal status, and a client that never disconnects, would
+      // otherwise hold one of the user's `SSE_MAX_CONNECTIONS_PER_USER` slots for as long as the
+      // process lives — past the session cookie's own expiry.
+      takeUntil(timer(this.config.sse.maxStreamLifetimeMs)),
       // Inclusive, and evaluated on the MERGED stream (not just `run$`) so completing here also
       // tears down the independent `approvals$` and heartbeat$ timers — see
       // `QaService.streamAnswer`'s identical reasoning for why a per-branch takeWhile would leave

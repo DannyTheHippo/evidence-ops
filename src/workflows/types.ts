@@ -145,27 +145,3 @@ export interface ApprovalDecisionSignal {
 export interface SyncSourceWorkflowInput {
   readonly sourceId: string;
 }
-
-/**
- * `metricIds` are the ids `diffDetectionRelevantMetrics` (`facts/diff-metric-packs.ts`) reported
- * changed between the tenant's previously active pack and the version `MetricPacksService.activate`
- * just promoted — never the tenant's whole metric set, so an activation that only relabels a metric
- * or adds an alias starts no rescan at all (an empty diff never reaches this workflow; the caller
- * skips starting it entirely). A plain string array, not `MetricPackData`/`MetricDefinition`
- * imports, for the same determinism-fence reason every other field in this file stays a plain type.
- */
-export interface RescanConflictsWorkflowInput {
-  readonly tenantId: string;
-  readonly metricIds: readonly string[];
-}
-
-/**
- * Deliberately a thin summary, matching `AnswerQuestionResult`'s own "thin summary, not a mirror"
- * reasoning above — a caller wanting the individual conflicts created or retracted reads
- * `GET /conflicts` for the tenant; this only reports the totals one rescan produced.
- */
-export interface RescanConflictsWorkflowResult {
-  readonly conflictsCreated: number;
-  readonly conflictsRetracted: number;
-  readonly skippedFactCount: number;
-}

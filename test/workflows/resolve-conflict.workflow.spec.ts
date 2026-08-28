@@ -5,6 +5,7 @@ interface ActivityStubs {
   loadConflict: jest.Mock;
   requestConflictApproval: jest.Mock;
   getApprovalDecision: jest.Mock;
+  expireApproval: jest.Mock;
   recordConflictResolution: jest.Mock;
 }
 
@@ -34,6 +35,7 @@ jest.mock('@temporalio/workflow', () => {
     loadConflict: jest.fn(),
     requestConflictApproval: jest.fn(),
     getApprovalDecision: jest.fn(),
+    expireApproval: jest.fn(),
     recordConflictResolution: jest.fn(),
   };
   return {
@@ -201,16 +203,30 @@ describe('resolveConflict', () => {
     expect(result).toEqual({ conflictId: 'conflict-1', outcome: 'rejected' });
   });
 
-  it('should record a timed_out outcome and not resolve, without reading the decision, when condition times out', async () => {
+  it('should expire the Approval row and record a timed_out outcome, without reading the decision, when condition times out', async () => {
     condition.mockResolvedValue(false);
+    activityStubs.expireApproval.mockResolvedValue(undefined);
     activityStubs.recordConflictResolution.mockResolvedValue({
       conflictId: 'conflict-1',
       outcome: 'timed_out',
+    });
+    const callOrder: string[] = [];
+    activityStubs.expireApproval.mockImplementationOnce(() => {
+      callOrder.push('expireApproval');
+      return Promise.resolve();
+    });
+    activityStubs.recordConflictResolution.mockImplementationOnce(() => {
+      callOrder.push('recordConflictResolution');
+      return Promise.resolve({ conflictId: 'conflict-1', outcome: 'timed_out' });
     });
 
     const result = await resolveConflict(input);
 
     expect(activityStubs.getApprovalDecision).not.toHaveBeenCalled();
+    // Regression: the durable `Approval` row must leave `pending` too, not only the `Conflict`
+    // record — otherwise a human could still decide a row this dead workflow can no longer wake.
+    expect(activityStubs.expireApproval).toHaveBeenCalledWith('approval-1', 'acme-corp');
+    expect(callOrder).toEqual(['expireApproval', 'recordConflictResolution']);
     expect(activityStubs.recordConflictResolution).toHaveBeenCalledWith({
       conflictId: 'conflict-1',
       outcome: 'timed_out',

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { EvidenceLocator } from '../../../database/schemas/evidence/evidence-chunk/evidence-locator.type';
+import { CHUNKER_VERSION } from './chunker';
 
 export interface ComputeChunkIdInput {
   readonly tenantId: string;
@@ -37,10 +38,13 @@ export interface ComputeChunkIdInput {
  * byte-identical content still collide — this only scopes the id by tenant, not by document. See
  * `docs/adr/0007-eval-replay-cache.md` for where that bound is recorded.
  *
- * `locator` carries `extractorVersion` (see `evidence-locator.type.ts`), so bumping a parser
- * rotates every id it touches. That is deliberate, not a gap: a parser upgrade can shift the
- * offsets/boundaries a citation pins, which is a genuinely different piece of evidence, and a
- * stable id across that change would let a citation silently point at coordinates a newer parser
+ * Two version stamps sit in the hash, one per stage that decides what a chunk is. `locator` carries
+ * `extractorVersion` (see `evidence-locator.type.ts`), so bumping a parser rotates every id it
+ * touches; `CHUNKER_VERSION` covers the stage after it, because the chunker contributes no
+ * coordinate to a locator and can still change a chunk's text and boundaries under an unchanged one
+ * (a page element split into several pieces keeps that page's locator, and the first piece keeps
+ * ordinal 0). Both are deliberate, not a gap: either change makes an id name a different piece of
+ * evidence, and a stable id across one would let a citation silently point at a span that stage
  * never actually produced.
  *
  * `ordinal` alone already guarantees uniqueness within one ingest (`chunkElements` emits a plain
@@ -69,7 +73,9 @@ export function computeChunkId(input: ComputeChunkIdInput): string {
 
   const canonicalLocator = stableStringify(locator);
   return createHash('sha256')
-    .update(`${tenantId}:${documentVersionSha256}:${ordinal}:${canonicalLocator}`)
+    .update(
+      `${tenantId}:${documentVersionSha256}:${ordinal}:${CHUNKER_VERSION}:${canonicalLocator}`,
+    )
     .digest('hex');
 }
 

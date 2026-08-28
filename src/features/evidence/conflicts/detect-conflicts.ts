@@ -1,12 +1,9 @@
+import { normalizeEntityName } from '../../../database/schemas/evidence/canonical-entity/canonical-entity.schema';
 import type {
   FactKey,
   FactValue,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
-// The pack schema's `MetricDefinition` (`id: string`), not `metric-ontology.ts`'s own
-// (`id: MetricId`) — `ConflictsService` calls this against a tenant's resolved `MetricPackData`,
-// which a tenant-authored pack can define metric ids for that `METRIC_IDS` never enumerates.
-import type { MetricDefinition } from '../../../database/schemas/evidence/metric-pack/metric-pack.schema';
-import { findMetricById } from '../facts/metric-ontology';
+import { findMetricById, type MetricDefinition } from '../facts/metric-ontology';
 import { isConflictingPair, normalizeFactValue } from './normalize-fact-value';
 
 export interface FactForConflictScan {
@@ -24,9 +21,11 @@ export interface ConflictCandidate {
   readonly magnitudeUnit: string;
 }
 
-/** A fact `normalizeFactValue` could not convert to its metric's canonical unit, dropped from
- * conflict detection rather than aborting the scan — see `normalize-fact-value.ts`'s own
- * failure-direction comment. Carries the whole fact (mirrors `RejectedFactCandidate` in
+/** A fact conflict detection cannot measure: `normalizeFactValue` has no conversion for its unit,
+ * or its canonical value is not a finite number. Dropped from the scan rather than aborting it —
+ * see `normalize-fact-value.ts`'s own failure-direction comment, and `detectConflicts`'s own
+ * comment on why a non-finite value must not be compared. Carries the whole fact (mirrors
+ * `RejectedFactCandidate` in
  * `prose-fact-extractor.ts`) so a caller can log or report the metric, unit, and fact id without
  * this module re-deriving them from a separate reason string. */
 export interface SkippedFact {
@@ -39,13 +38,15 @@ export interface DetectConflictsResult {
   readonly skipped: SkippedFact[];
 }
 
-/** `entity` is free text an extractor read off a document, so it is compared trimmed and
- * lowercased ("Northgate Business Park" vs "northgate business park") — `metric` and `period` are
- * both already canonical (a metric id from the ontology, a period from `derivePeriodFromDateText`)
- * and compared exactly. Exported so `ConflictsService` can key its idempotency check
- * (already-open conflicts) the same way this function keys its grouping. */
+/** `entity` is free text an extractor read off a document, so it is compared through
+ * `normalizeEntityName` — the same function the `CanonicalEntity` registry normalises with, so a
+ * name that resolves to a registry entry and a name that is keyed here fold identically, and a PDF
+ * text layer's fullwidth or double-spaced rendering of "Acme Tower" stops being its own group.
+ * `metric` and `period` are both already canonical (a metric id from the ontology, a period key
+ * from `parsePeriod`) and compared exactly. Exported so `ConflictsService` can key its idempotency
+ * check (already-open conflicts) the same way this function keys its grouping. */
 export function groupKey(factKey: FactKey): string {
-  return `${factKey.entity.trim().toLowerCase()}::${factKey.metric}::${factKey.period}`;
+  return `${normalizeEntityName(factKey.entity)}::${factKey.metric}::${factKey.period}`;
 }
 
 /**
@@ -60,10 +61,11 @@ export function groupKey(factKey: FactKey): string {
  * exists to avoid (see `normalize-fact-value.ts`'s failure-direction comment for why it returns
  * `undefined` rather than throwing).
  *
- * A fact whose unit `normalizeFactValue` cannot convert is dropped from its group (recorded in
- * `skipped`) rather than aborting the whole scan. If dropping it leaves the group with fewer than
- * two normalizable facts, the remaining fact(s) have nothing left to disagree with and the group
- * is skipped without emitting a `ConflictCandidate`.
+ * A fact whose unit `normalizeFactValue` cannot convert, and a fact whose canonical value is not a
+ * finite number, are both dropped from their group (recorded in `skipped`) rather than aborting the
+ * whole scan. If dropping one leaves the group with fewer than two normalizable facts, the
+ * remaining fact(s) have nothing left to disagree with and the group is skipped without emitting a
+ * `ConflictCandidate`.
  *
  * `magnitude` is the canonical-unit spread across the *whole* (normalizable) group (max − min),
  * not just the pair that exceeded tolerance — with three or more facts sharing a key, the conflict
@@ -100,6 +102,22 @@ export function detectConflicts(
         skipped.push({
           fact,
           reason: `Metric '${metric.id}' does not define a conversion for unit '${fact.value.unit}'`,
+        });
+        continue;
+      }
+      // Fails toward skipped, never toward agreement. Every tolerance comparison in
+      // `isConflictingPair` is a `>`, and `>` against a `NaN` — which `Infinity - Infinity` and
+      // `difference / base` with a non-finite base both produce — is `false`, so one non-finite
+      // value in a group reads as "these figures agree" and closes a real disagreement invisibly.
+      // For an absolute-tolerance metric the mirror failure applies: a conflict with an infinite
+      // magnitude, which BSON stores as a double and `JSON.stringify` serializes as `null`.
+      // Dropping the fact instead leaves the group measured only by the facts that can be
+      // measured, and `ConflictsService.findRetractableConflicts` excludes a skipped group from
+      // retraction, so an already-open conflict cannot be closed by one unmeasurable fact either.
+      if (!Number.isFinite(canonical)) {
+        skipped.push({
+          fact,
+          reason: `Fact value '${fact.value.amount} ${fact.value.unit}' does not convert to a finite ${metric.canonicalUnit} value for metric '${metric.id}'`,
         });
         continue;
       }

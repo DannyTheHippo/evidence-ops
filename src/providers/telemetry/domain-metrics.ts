@@ -1,11 +1,10 @@
 import { metrics } from '@opentelemetry/api';
 
 /**
- * Module-scope meter, matching `tracing-model.provider.ts`'s module-scope `tracer`: safe to call
- * before `instrumentation.ts`'s `NodeSDK.start()` registers a real `MeterProvider` (or in a test
- * that never does) — the OTel API's default global `MeterProvider` returns no-op instruments, so
- * every counter/histogram below is a silent no-op until a real SDK is running, with no test-only
- * branch anywhere in this file or its callers.
+ * Module-scope meter: safe to call before `instrumentation.ts`'s `NodeSDK.start()` registers a
+ * real `MeterProvider` (or in a test that never does) — the OTel API's default global
+ * `MeterProvider` returns no-op instruments, so every counter/histogram below is a silent no-op
+ * until a real SDK is running, with no test-only branch anywhere in this file or its callers.
  *
  * Every attribute recorded through an instrument below is drawn from a small, fixed set of values
  * (an outcome kind, a rule name, a provider name) — never a tenant id, user id, document id, or
@@ -31,6 +30,16 @@ export const emptyRetrievalCounter = meter.createCounter('evidence_ops.retrieval
   description: 'Retrieval calls that returned zero chunks.',
 });
 
+/** `EvidenceRetrievalService.retrieve` calls where the store returned at least one hit but
+ *  `config.retrieval.scoreFloor` dropped every one of them. Distinct from
+ *  `emptyRetrievalCounter`, which also fires here (the call still returns zero chunks) but
+ *  cannot on its own distinguish "nothing matched" from "a misconfigured floor rejected
+ *  everything that matched" — a sustained rise here points at the floor, not the corpus. */
+export const scoreFloorRejectedAllCounter = meter.createCounter(
+  'evidence_ops.retrieval.score_floor_rejected_all',
+  { description: 'Retrieval calls where the score floor dropped every hit the store returned.' },
+);
+
 /** A durable workflow run recorded as failed — currently `IngestionService`'s ingestion-workflow
  *  failure recording only, since the answer-question workflow deliberately never hand-rolls a
  *  failed row of its own (Temporal is that run's system of record; see
@@ -47,8 +56,8 @@ export const approvalTimeoutCounter = meter.createCounter('evidence_ops.approval
   description: 'Approval gates that timed out with no human decision.',
 });
 
-/** `TracingModelProvider.generate`'s per-call spend — the same figure it already attaches to its
- *  own span (`EVIDENCE_ATTRIBUTES.COST_USD`). `provider`/`taskClass` are both small, fixed sets
+/** Per-call model spend, recorded by `MetricsModelProvider` on every call that actually reaches
+ *  the base provider. `provider`/`taskClass` are both small, fixed sets
  *  (`ModelProviderInfo.provider`, `TaskClass`). */
 export const modelCostHistogram = meter.createHistogram('evidence_ops.model.cost_usd', {
   description: 'Per-call model cost in USD.',

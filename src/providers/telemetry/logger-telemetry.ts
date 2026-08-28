@@ -5,9 +5,8 @@ import type { Telemetry, TelemetryEvent } from './telemetry.interface';
 /**
  * Correlation ids are already threaded through `AppLogger` via AsyncLocalStorage
  * (`CorrelationMiddleware` + `AsyncLocalStorageMiddleware`); this class only has to log, not
- * re-derive them. Events named `*.error` (see `TracingModelProvider`) log at error level so
- * failures surface in log-level filters without every caller having to know which telemetry
- * events represent a failure.
+ * re-derive them. Events named `*.error` log at error level so failures surface in log-level
+ * filters without every caller having to know which telemetry events represent a failure.
  */
 @Injectable()
 export class LoggerTelemetry implements Telemetry {

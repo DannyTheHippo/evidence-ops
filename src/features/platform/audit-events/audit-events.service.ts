@@ -39,7 +39,7 @@ export class AuditEventsService {
 
   /**
    * Tenant-scoped read of the audit log. `action`/`entityType`/`entityId` are not part of the
-   * `{ tenantId: 1, createdAt: -1 }` index this rides (`0011-tenant-leading-indexes.ts`), so a
+   * `{ tenantId: 1, createdAt: -1 }` index this rides (`migrations/0001-baseline.ts`), so a
    * filtered call scans the tenant's slice rather than seeking straight to matching rows —
    * accepted at this corpus size, not an oversight.
    *

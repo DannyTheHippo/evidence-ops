@@ -16,30 +16,11 @@ import {
   ExtractedFact,
   ExtractedFactSchema,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
-import {
-  MetricPack,
-  MetricPackSchema,
-} from '../../../database/schemas/evidence/metric-pack/metric-pack.schema';
-import {
-  MetricPolicy,
-  MetricPolicySchema,
-} from '../../../database/schemas/evidence/metric-policy/metric-policy.schema';
-import {
-  TenantMetric,
-  TenantMetricSchema,
-} from '../../../database/schemas/evidence/tenant-metric/tenant-metric.schema';
 import { ProvidersModule } from '../../../providers/providers.module';
 import { IngestionModule } from '../ingestion/ingestion.module';
-import { WorkflowRunsModule } from '../workflow-runs/workflow-runs.module';
 import { CanonicalEntitiesController } from './canonical-entities.controller';
 import { CanonicalEntityService } from './canonical-entity.service';
 import { FactsService } from './facts.service';
-import { MetricPacksController } from './metric-packs.controller';
-import { MetricPacksService } from './metric-packs.service';
-import { MetricPoliciesController } from './metric-policies.controller';
-import { MetricPoliciesService } from './metric-policies.service';
-import { TenantMetricsController } from './tenant-metrics.controller';
-import { TenantMetricsService } from './tenant-metrics.service';
 
 @Module({
   imports: [
@@ -48,45 +29,18 @@ import { TenantMetricsService } from './tenant-metrics.service';
       { name: DocumentVersion.name, schema: DocumentVersionSchema },
       { name: EvidenceChunk.name, schema: EvidenceChunkSchema },
       { name: ExtractedFact.name, schema: ExtractedFactSchema },
-      { name: MetricPack.name, schema: MetricPackSchema },
-      { name: MetricPolicy.name, schema: MetricPolicySchema },
-      { name: TenantMetric.name, schema: TenantMetricSchema },
     ]),
     ProvidersModule,
     // Only for its exported `ParserRegistry` — fact extraction re-parses a version's bytes itself
     // rather than depending on `IngestionService`, since it needs the raw `ParsedElement`s (for
     // deterministic xlsx facts, and for narrowing a prose fact's locator past its chunk's anchor).
     IngestionModule,
-    // For `WorkflowRunsService` — `MetricPacksService.activate` records the `rescan-conflicts`
-    // `WorkflowRun` projection the same way `SourcesService.requestSync` does for its own workflow.
-    // No cycle back: `WorkflowRunsModule` imports only `ProvidersModule` and `ApprovalsModule`,
-    // neither of which imports `FactsModule`.
-    WorkflowRunsModule,
   ],
-  controllers: [
-    CanonicalEntitiesController,
-    MetricPacksController,
-    MetricPoliciesController,
-    TenantMetricsController,
-  ],
+  controllers: [CanonicalEntitiesController],
   // Exported as well as registered: `FactsService` depends on `CanonicalEntityService` to
   // canonicalize an extracted fact's entity, but the registry is also reachable via DI on its own,
-  // the same way `FactsService` is. `MetricPacksService`/`MetricPoliciesService`/
-  // `TenantMetricsService` are exported for the same reason — reachable on their own by a future
-  // caller without depending on `FactsService`.
-  providers: [
-    CanonicalEntityService,
-    FactsService,
-    MetricPacksService,
-    MetricPoliciesService,
-    TenantMetricsService,
-  ],
-  exports: [
-    CanonicalEntityService,
-    FactsService,
-    MetricPacksService,
-    MetricPoliciesService,
-    TenantMetricsService,
-  ],
+  // the same way `FactsService` is.
+  providers: [CanonicalEntityService, FactsService],
+  exports: [CanonicalEntityService, FactsService],
 })
 export class FactsModule {}

@@ -16,7 +16,6 @@ import {
   ExtractedFactDocument,
   type FactKey,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
-import type { MetricPackData } from '../../../database/schemas/evidence/metric-pack/metric-pack.schema';
 import {
   MODEL_PROVIDER,
   type ModelProvider,
@@ -32,7 +31,8 @@ import { ParserRegistry } from '../ingestion/parser.registry';
 import type { ParsedElement } from '../ingestion/parsers/parsed-element.type';
 import { CanonicalEntityService } from './canonical-entity.service';
 import { DocumentVersionNotFoundException } from './exceptions/facts.exception';
-import { MetricPacksService } from './metric-packs.service';
+import { harvestParentheticalAliases } from './harvest-parenthetical-aliases';
+import { ACTIVE_PACK_ID, ACTIVE_PACK_VERSION, METRIC_ONTOLOGY } from './metric-ontology';
 import { extractProseFacts, type ProseFactExtractionResult } from './prose-fact-extractor';
 import { findXlsxRegionChunk, parseRowFromCellAddress } from './resolve-xlsx-fact-chunk';
 import { extractXlsxFacts, type FactCandidate } from './xlsx-fact-extractor';
@@ -55,6 +55,15 @@ export interface FactsExtractionResult {
   readonly factKeys: readonly FactKey[];
 }
 
+/** A candidate ready to persist: tied to the chunk it came from, and with its `factKey.entity`
+ * already resolved against the tenant's `CanonicalEntity` registry — the shape both the
+ * spreadsheet and the prose path converge on, whichever point in their own pipeline that
+ * resolution happened at. */
+type CanonicalizedCandidate = FactCandidate & {
+  readonly chunkId: string;
+  readonly entityMatched: boolean;
+};
+
 @Injectable()
 export class FactsService {
   constructor(
@@ -76,8 +85,6 @@ export class FactsService {
     private readonly parserRegistry: ParserRegistry,
 
     private readonly canonicalEntityService: CanonicalEntityService,
-
-    private readonly metricPacksService: MetricPacksService,
 
     private readonly config: TypedConfigService,
 
@@ -149,22 +156,39 @@ export class FactsService {
       );
     }
 
-    // Resolved once per extraction, not once per branch: both the xlsx and prose paths detect
-    // against the same tenant's ontology, and every fact this call inserts stamps `packId`/
-    // `packVersion` from this same resolution, so detection and attribution never disagree about
-    // which pack was in force.
-    const pack = await this.metricPacksService.resolveActive(tenantId);
-
     const parser = this.parserRegistry.resolve(stored.contentType);
     const parsed = await parser.parse(stored.content);
 
+    // Ahead of candidate building, so that with auto-application on, a definition this document
+    // states resolves the facts this same document produces.
+    await this.harvestAliases(parsed.elements, version._id, tenantId);
+
     const isSpreadsheet = parsed.elements[0]?.locator.kind === 'xlsx-cell';
-    let candidates: (FactCandidate & { chunkId: string })[];
+    let candidates: CanonicalizedCandidate[];
     let skippedChunkCount = 0;
     if (isSpreadsheet) {
-      candidates = await this.buildXlsxCandidates(version._id, parsed.elements, tenantId, pack);
+      const xlsx = await this.buildXlsxCandidates(version._id, parsed.elements, tenantId);
+      // The deterministic path resolves entities here, at the end of extraction, because it has no
+      // agreement step to run ahead of: one lookup covers the whole sheet. The prose path resolves
+      // earlier — inside `extractProseFacts`, before its passes are compared — since agreement is
+      // keyed on the entity name. Both go through `CanonicalEntityService.resolveMany`, so neither
+      // can resolve an entity differently from the other.
+      candidates = await this.canonicalizeCandidateEntities(xlsx.candidates, tenantId);
+      // Recorded before the empty-candidates return below: an ambiguous header or an unresolvable
+      // cell unit is a fidelity signal about the sheet itself, independent of whether any row went
+      // on to produce a fact. `$addToSet`/`$each` rather than `$set` — `reducedFidelityReasons` may
+      // already carry `IngestionService.finalizeCompletion`'s parser-time entries (extraction always
+      // runs after ingestion completes; `ingest-document-version.workflow.ts` awaits `ingestVersion`
+      // before `extractFacts`), and appending rather than overwriting means this write is correct
+      // regardless of which pipeline stage's reasons land first.
+      if (xlsx.reducedFidelityReasons.length > 0) {
+        await this.documentVersionModel.updateOne(
+          { _id: version._id, tenantId },
+          { $addToSet: { reducedFidelityReasons: { $each: [...xlsx.reducedFidelityReasons] } } },
+        );
+      }
     } else {
-      const prose = await this.buildProseCandidates(version._id, parsed.elements, tenantId, pack);
+      const prose = await this.buildProseCandidates(version._id, parsed.elements, tenantId);
       candidates = prose.candidates;
       skippedChunkCount = prose.skippedChunkCount;
     }
@@ -174,21 +198,17 @@ export class FactsService {
       return { factsCreated: 0, alreadyExtracted: false, skippedChunkCount, factKeys: [] };
     }
 
-    // Both branches above converge here before a single canonicalization pass, so the xlsx and
-    // prose paths cannot drift into resolving entities differently from one another.
-    const canonicalizedCandidates = await this.canonicalizeCandidateEntities(candidates, tenantId);
-
     try {
       await this.extractedFactModel.insertMany(
-        canonicalizedCandidates.map((candidate) => ({
+        candidates.map((candidate) => ({
           factKey: candidate.factKey,
           groupKeyNormalized: groupKey(candidate.factKey),
           value: candidate.value,
           rawText: candidate.rawText,
           confidence: candidate.confidence,
           extractionMethod: candidate.extractionMethod,
-          packId: pack.packId,
-          packVersion: pack.version,
+          packId: ACTIVE_PACK_ID,
+          packVersion: ACTIVE_PACK_VERSION,
           chunkId: candidate.chunkId,
           documentVersionId: version._id,
           locator: candidate.locator,
@@ -203,15 +223,52 @@ export class FactsService {
     }
 
     this.logger.debug(
-      `Document version '${documentVersionId}' produced ${canonicalizedCandidates.length} facts`,
+      `Document version '${documentVersionId}' produced ${candidates.length} facts`,
     );
 
     return {
-      factsCreated: canonicalizedCandidates.length,
+      factsCreated: candidates.length,
       alreadyExtracted: false,
       skippedChunkCount,
-      factKeys: canonicalizedCandidates.map((candidate) => candidate.factKey),
+      factKeys: candidates.map((candidate) => candidate.factKey),
     };
+  }
+
+  /**
+   * Files the parenthetical alias definitions this version's own text states — `Northgate Business
+   * Park (the "Property")` — against the tenant's registry, each with the quote and locator it was
+   * read from.
+   *
+   * Runs on every version, spreadsheet or prose, and costs no inference:
+   * `harvestParentheticalAliases` is a pure function over already-parsed text, so this path makes
+   * no model call regardless of what the document contains.
+   *
+   * Fails OPEN. A registry write that throws is logged and swallowed, because harvesting enriches
+   * the registry while the method it runs inside exists to extract facts — losing an alias costs a
+   * name that stays unresolved, losing the facts costs the document. `EXTRACTION_ALIAS_HARVEST_
+   * AUTO_APPLY` decides whether what is recorded resolves or only sits as a proposal; it is off by
+   * default, so this call changes no grouping until an operator enables it.
+   */
+  private async harvestAliases(
+    elements: readonly ParsedElement[],
+    versionId: Types.ObjectId,
+    tenantId: string,
+  ): Promise<void> {
+    try {
+      const recorded = await this.canonicalEntityService.recordHarvestedAliases(
+        harvestParentheticalAliases(elements),
+        tenantId,
+        versionId,
+        this.config.extraction.aliasHarvestAutoApply,
+      );
+      this.logger.debug(
+        `Document version '${versionId.toString()}' contributed ${recorded} harvested alias(es) to the registry`,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Alias harvesting failed for document version '${versionId.toString()}': ${String(error)}`,
+      );
+    }
   }
 
   /**
@@ -223,6 +280,10 @@ export class FactsService {
    * every candidate regardless of how many facts this document produced. An unmatched name is
    * never dropped or guessed at: `factKey.entity` stays exactly as extracted and `entityMatched`
    * records the miss so a human can find the registry's gap later.
+   *
+   * The spreadsheet path's resolution step. The prose path resolves through the same service
+   * inside `extractProseFacts`, one chunk at a time, because agreement between that chunk's
+   * extraction passes is keyed on the resolved entity name and so cannot wait until here.
    */
   private async canonicalizeCandidateEntities<T extends { factKey: FactKey }>(
     candidates: readonly T[],
@@ -294,8 +355,10 @@ export class FactsService {
     versionId: Types.ObjectId,
     elements: readonly ParsedElement[],
     tenantId: string,
-    pack: MetricPackData,
-  ): Promise<(FactCandidate & { chunkId: string })[]> {
+  ): Promise<{
+    readonly candidates: (FactCandidate & { chunkId: string })[];
+    readonly reducedFidelityReasons: readonly string[];
+  }> {
     const chunks = await this.evidenceChunkModel.find({ documentVersionId: versionId, tenantId });
     if (chunks.length === 0) {
       throw new InternalServerErrorException(
@@ -303,13 +366,11 @@ export class FactsService {
       );
     }
 
-    // `extractXlsxFacts`'s `rejected` list (a candidate whose parsed unit isn't declared by its
-    // own metric) is not consumed here: with today's ontology every display parser only ever
-    // emits a unit its metric declares (see xlsx-fact-extractor.ts's own doc comments), so
-    // `rejected` is always empty for real input — a log statement gated on it would be dead code
-    // in this 100%-coverage-gated file. `extractXlsxFacts`'s own test suite (a synthetic,
-    // deliberately misconfigured ontology) is where that branch is exercised.
-    const { accepted } = extractXlsxFacts(elements, pack.metrics);
+    // `extractXlsxFacts`'s own `reducedFidelityReasons` already folds in both header ambiguity and
+    // any `rejected` candidate (a parsed unit its metric doesn't declare, or — with
+    // `strictPercentUnitResolution` — a percent-vs-ratio cell it refused to guess at) — this method
+    // only has to pass the array through to its own caller.
+    const { accepted, reducedFidelityReasons } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
 
     const candidates: (FactCandidate & { chunkId: string })[] = [];
     for (const candidate of accepted) {
@@ -331,16 +392,15 @@ export class FactsService {
       }
       candidates.push({ ...candidate, chunkId: containingChunk._id });
     }
-    return candidates;
+    return { candidates, reducedFidelityReasons };
   }
 
   private async buildProseCandidates(
     versionId: Types.ObjectId,
     elements: readonly ParsedElement[],
     tenantId: string,
-    pack: MetricPackData,
   ): Promise<{
-    readonly candidates: (FactCandidate & { chunkId: string })[];
+    readonly candidates: CanonicalizedCandidate[];
     readonly skippedChunkCount: number;
   }> {
     const chunks = await this.evidenceChunkModel.find({ documentVersionId: versionId, tenantId });
@@ -365,16 +425,19 @@ export class FactsService {
           chunkLocator: chunk.locator,
           sourceElements: elements,
           modelProvider: this.modelProvider,
-          ontology: pack.metrics,
+          ontology: METRIC_ONTOLOGY,
           tenantId,
+          resolveEntities: (rawNames) =>
+            this.canonicalEntityService.resolveMany(rawNames, tenantId),
         }),
     );
 
-    const candidates: (FactCandidate & { chunkId: string })[] = [];
+    const candidates: CanonicalizedCandidate[] = [];
     let skippedChunkCount = 0;
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
-      const { accepted, rejected, successfulPassCount, skippedForInsufficientPasses } = results[i];
+      const { accepted, rejected, successfulPassCount, skippedForInsufficientPasses, agreement } =
+        results[i];
 
       if (skippedForInsufficientPasses) {
         // Fewer than 2 of the 3 extraction passes returned usable output — majority agreement
@@ -391,6 +454,18 @@ export class FactsService {
       for (const rejection of rejected) {
         this.logger.debug(
           `Dropped fact candidate for chunk '${chunk._id.toString()}': ${rejection.reason}`,
+        );
+      }
+
+      // The prose pipeline's fact-loss counter, and the only place it is observable: a group the
+      // passes proposed but could not agree on leaves no fact and no other trace. Reported per
+      // group at `warn`, like the whole-chunk skip above, because a document producing these
+      // steadily is a document whose facts are being silently lost. Logged only past the skip
+      // branch — when the chunk was skipped outright, every group is dropped by definition and
+      // repeating them here would say nothing the skip warn does not.
+      for (const dropped of agreement.droppedGroups) {
+        this.logger.warn(
+          `Chunk '${chunk._id.toString()}' dropped fact group '${groupKey(dropped.factKey)}': ${dropped.agreeingPasses} of ${dropped.totalPasses} passes agreed`,
         );
       }
       candidates.push(...accepted.map((fact) => ({ ...fact, chunkId: chunk._id })));

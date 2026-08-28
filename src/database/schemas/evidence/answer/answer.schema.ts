@@ -51,8 +51,10 @@ export class Answer extends AuditableDocument {
   outcome?: AnswerContract;
 
   // The server-verified surviving claims after checking each citation's quote against the
-  // actual chunk bytes — NOT a copy of `outcome.claims`. The two can differ: `verificationReport`
-  // explains what was dropped and why, so `claims` here is the trustworthy, queryable set.
+  // actual chunk bytes — the same set `outcome.claims` carries when `outcome.kind` is
+  // `'answered'` (see that field's own doc comment), kept here as its own flat, queryable field
+  // because `outcome.claims` doesn't exist on the other two outcome kinds. `verificationReport`
+  // explains what was dropped and why.
   @Prop({ type: [MongooseSchema.Types.Mixed], default: [] })
   claims: Claim[];
 

@@ -13,9 +13,16 @@ import type { RetrievalHit } from '../../../../src/providers/retrieval/retrieval
 import { RETRIEVAL_STORE } from '../../../../src/providers/retrieval/retrieval-store.interface';
 import { emptyRetrievalCounter } from '../../../../src/providers/telemetry/domain-metrics';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
+import type { MockLogger } from '../../../utils/get-mock-logger';
 import { getMockLogger } from '../../../utils/get-mock-logger';
 import { getMockModel } from '../../../utils/get-mock-model';
 import { getMockTypedConfig } from '../../../utils/get-mock-typed-config';
+
+// Mirrors mongo-hybrid.store.ts's fused-score formula (`sum(weight * (1 / (RRF_K + rank)))`,
+// weight 1 per pipeline, RRF_K=60) so fixtures below exercise the score floor at the scale the
+// real store can actually produce, rather than an arbitrary 0-1 domain it never reaches.
+const RRF_K = 60;
+const rrfScore = (rank: number, pipelines = 1): number => pipelines * (1 / (RRF_K + rank));
 
 function buildHit(overrides: Partial<HybridRetrievalHitMetadata> = {}): RetrievalHit {
   return {
@@ -36,13 +43,14 @@ function buildHit(overrides: Partial<HybridRetrievalHitMetadata> = {}): Retrieva
 describe('EvidenceRetrievalService', () => {
   let service: EvidenceRetrievalService;
   let fakeRetrievalStore: FakeRetrievalStore;
+  let mockLogger: MockLogger;
   const mockDocumentVersionModel = getMockModel();
 
   const buildService = async (
     retrievalOverrides: Partial<ReturnType<typeof getMockTypedConfig>['retrieval']> = {},
   ): Promise<EvidenceRetrievalService> => {
     const config = getMockTypedConfig({
-      retrieval: { fusion: 'server', limit: 12, ...retrievalOverrides },
+      retrieval: { fusion: 'server', limit: 12, scoreFloor: 0, ...retrievalOverrides },
     });
 
     const module: TestingModule = await Test.createTestingModule({
@@ -51,7 +59,7 @@ describe('EvidenceRetrievalService', () => {
         { provide: RETRIEVAL_STORE, useValue: fakeRetrievalStore },
         { provide: getModelToken(DocumentVersion.name), useValue: mockDocumentVersionModel },
         { provide: TypedConfigService, useValue: config },
-        { provide: AppLogger, useValue: getMockLogger() },
+        { provide: AppLogger, useValue: mockLogger },
       ],
     }).compile();
 
@@ -60,6 +68,7 @@ describe('EvidenceRetrievalService', () => {
 
   beforeEach(async () => {
     fakeRetrievalStore = new FakeRetrievalStore();
+    mockLogger = getMockLogger();
     service = await buildService();
   });
 
@@ -78,6 +87,10 @@ describe('EvidenceRetrievalService', () => {
 
     expect(result).toEqual([]);
     expect(mockDocumentVersionModel.find).not.toHaveBeenCalled();
+    // Genuine zero-retrieval (the store returned nothing at all) must not be reported as the
+    // score floor rejecting hits — that warning is reserved for the case where hits existed and
+    // the floor dropped every one of them.
+    expect(mockLogger.warn).not.toHaveBeenCalled();
     expect(emptyRetrievalSpy).toHaveBeenCalledWith(1);
   });
 
@@ -218,6 +231,73 @@ describe('EvidenceRetrievalService', () => {
 
     expect(fakeRetrievalStore.queries[0].limit).toBe(2 * RETRIEVAL_OVER_FETCH_MULTIPLIER);
     expect(result).toHaveLength(2);
+  });
+
+  it('should keep a hit whose score is barely above zero at the default score floor', async () => {
+    const versionId = new Types.ObjectId();
+    const hit = { ...buildHit({ documentVersionId: versionId.toString() }), score: 0.001 };
+    fakeRetrievalStore.setHits([hit]);
+    mockDocumentVersionModel.find.mockResolvedValueOnce([
+      { _id: versionId, sha256: 'a'.repeat(64) },
+    ]);
+
+    const result = await service.retrieve({
+      questionText: 'What is the cap rate?',
+      tenantId: 'default',
+    });
+
+    expect(result).toHaveLength(1);
+  });
+
+  it('should drop hits below the configured score floor without dropping hits at or above it', async () => {
+    const floor = rrfScore(1); // single-pipeline rank-1 contribution: 1 / (60 + 1)
+    service = await buildService({ scoreFloor: floor });
+    const belowVersionId = new Types.ObjectId();
+    const atFloorVersionId = new Types.ObjectId();
+    const aboveVersionId = new Types.ObjectId();
+    fakeRetrievalStore.setHits([
+      // Single-pipeline rank 2 scores below the rank-1 floor.
+      { ...buildHit({ documentVersionId: belowVersionId.toString() }), score: rrfScore(2) },
+      { ...buildHit({ documentVersionId: atFloorVersionId.toString() }), score: floor },
+      // Both pipelines ranking the hit #1 is the highest score the store can ever produce.
+      { ...buildHit({ documentVersionId: aboveVersionId.toString() }), score: rrfScore(1, 2) },
+    ]);
+    mockDocumentVersionModel.find.mockResolvedValueOnce([
+      { _id: atFloorVersionId, sha256: 'a'.repeat(64) },
+      { _id: aboveVersionId, sha256: 'b'.repeat(64) },
+    ]);
+
+    const result = await service.retrieve({
+      questionText: 'What is the cap rate?',
+      tenantId: 'default',
+    });
+
+    expect(result.map((chunk) => chunk.docVersionId).sort()).toEqual(
+      [atFloorVersionId.toString(), aboveVersionId.toString()].sort(),
+    );
+  });
+
+  it('should abstain deterministically and report a distinct score-floor rejection, without querying document versions, when every hit is below the score floor', async () => {
+    service = await buildService({ scoreFloor: rrfScore(1) });
+    const emptyRetrievalSpy = jest.spyOn(emptyRetrievalCounter, 'add');
+    fakeRetrievalStore.setHits([{ ...buildHit(), score: rrfScore(5) }]);
+
+    const result = await service.retrieve({
+      questionText: 'What is the cap rate?',
+      tenantId: 'default',
+    });
+
+    expect(result).toEqual([]);
+    expect(mockDocumentVersionModel.find).not.toHaveBeenCalled();
+    expect(emptyRetrievalSpy).toHaveBeenCalledWith(1);
+    // The store did return a hit — it just failed the floor. That must be distinguishable from
+    // genuine zero-retrieval (see the earlier no-hits test), not folded into the same signal.
+    // The warning carries the floor and the rejected count but never the raw question text —
+    // `warn` reaches shipped log aggregation, unlike the `debug` line that logs the question.
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(`Score floor ${rrfScore(1)} rejected all 1 hit(s)`),
+    );
+    expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('cap rate'));
   });
 
   it('should record an empty retrieval and return no results when every hit in the top-k is withdrawn', async () => {

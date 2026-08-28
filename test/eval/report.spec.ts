@@ -1,11 +1,15 @@
 import {
   ANSWER_CONTENT_ACCURACY_FLOOR,
+  RECALL_AT_5_FLOOR,
   buildMarkdownReport,
   failingCases,
   hasConflictScopeGap,
+  hasMixedScoringMethods,
   hasOwnVoiceLeak,
   isBelowAnswerContentFloor,
+  isBelowRecallAt5Floor,
   type EvalRunResult,
+  type ScoringMethodSplit,
 } from '../../eval/report';
 import type { EvalMetrics } from '../../eval/metrics/compute-metrics';
 
@@ -51,11 +55,7 @@ function baseResult(overrides: Partial<EvalRunResult> = {}): EvalRunResult {
         conflictScopeCheck: null,
       },
     ],
-    retrievalComparison: [
-      { mode: 'lexical', recallAt5: 0.6, recallAt10: 0.7, mrr: 0.5, caseCount: 10, totalCases: 10 },
-      { mode: 'vector', recallAt5: 0.7, recallAt10: 0.8, mrr: 0.6, caseCount: 10, totalCases: 10 },
-      { mode: 'hybrid', recallAt5: 0.8, recallAt10: 0.9, mrr: 0.75, caseCount: 10, totalCases: 10 },
-    ],
+    scoringMethodSplit: { elementIndexChunks: 10, textContainmentChunks: 0 },
     ...overrides,
   };
 }
@@ -88,33 +88,11 @@ describe('buildMarkdownReport', () => {
     expect(markdown).not.toContain('FAILED');
   });
 
-  it('should include the git sha, cache mode, and every retrieval mode row', () => {
+  it('should include the git sha and cache mode', () => {
     const markdown = buildMarkdownReport(baseResult());
 
     expect(markdown).toContain('# Eval run abc1234');
     expect(markdown).toContain('Cache mode: replay');
-    expect(markdown).toContain('| lexical |');
-    expect(markdown).toContain('| vector |');
-    expect(markdown).toContain('| hybrid |');
-  });
-
-  it('should render a retrieval mode row as scored/total so a shrunken denominator is visible', () => {
-    const result = baseResult({
-      retrievalComparison: [
-        {
-          mode: 'lexical',
-          recallAt5: 0.6,
-          recallAt10: 0.7,
-          mrr: 0.5,
-          caseCount: 9,
-          totalCases: 10,
-        },
-      ],
-    });
-
-    const markdown = buildMarkdownReport(result);
-
-    expect(markdown).toContain('| lexical | 60.0% | 70.0% | 0.500 | 9/10 |');
   });
 
   it('should render a per-case row with a FAIL marker for a failing case', () => {
@@ -257,6 +235,92 @@ describe('buildMarkdownReport', () => {
 
     expect(markdown).toContain('**FAILED — conflict scope accuracy 90.0% is below 100%.');
   });
+
+  it('should report the recall@5 floor gate as passed when recall is at the floor', () => {
+    const result = baseResult({
+      metrics: baseMetrics({
+        retrieval: { recallAt5: RECALL_AT_5_FLOOR, recallAt10: 0.9, mrr: 0.75, caseCount: 10 },
+      }),
+    });
+
+    const markdown = buildMarkdownReport(result);
+
+    expect(markdown).toContain('Passed — recall@5 is at or above the floor.');
+    expect(markdown).not.toContain('FAILED');
+  });
+
+  it('should fail the recall@5 floor gate and name the observed rate', () => {
+    const result = baseResult({
+      metrics: baseMetrics({
+        retrieval: {
+          recallAt5: RECALL_AT_5_FLOOR - 0.01,
+          recallAt10: 0.9,
+          mrr: 0.75,
+          caseCount: 10,
+        },
+      }),
+    });
+
+    const markdown = buildMarkdownReport(result);
+
+    expect(markdown).toContain('**FAILED — recall@5');
+    expect(markdown).toContain('is below the');
+  });
+
+  it('should report the scoring method split without a mixed-run warning when every chunk uses one method', () => {
+    const result = baseResult({
+      scoringMethodSplit: { elementIndexChunks: 10, textContainmentChunks: 0 },
+    });
+
+    const markdown = buildMarkdownReport(result);
+
+    expect(markdown).toContain(
+      '10 chunk(s) scored by exact element-index equality, 0 chunk(s) fell back to ' +
+        'text-containment (10 pdf/docx chunk(s) total).',
+    );
+    expect(markdown).not.toContain('Mixed run');
+  });
+
+  it('should flag a mixed-run warning when both scoring methods appear in the same run', () => {
+    const result = baseResult({
+      scoringMethodSplit: { elementIndexChunks: 6, textContainmentChunks: 4 },
+    });
+
+    const markdown = buildMarkdownReport(result);
+
+    expect(markdown).toContain('**Mixed run**');
+    expect(markdown).toContain(
+      '6 chunk(s) scored by exact element-index equality, 4 chunk(s) fell back to ' +
+        'text-containment (10 pdf/docx chunk(s) total).',
+    );
+  });
+
+  it('should report no pdf/docx chunks when the split is empty', () => {
+    const result = baseResult({
+      scoringMethodSplit: { elementIndexChunks: 0, textContainmentChunks: 0 },
+    });
+
+    const markdown = buildMarkdownReport(result);
+
+    expect(markdown).toContain('No pdf-page/docx-paragraph chunks under this tenant.');
+  });
+});
+
+describe('hasMixedScoringMethods', () => {
+  it('should return true when both scoring methods appear in the split', () => {
+    const split: ScoringMethodSplit = { elementIndexChunks: 1, textContainmentChunks: 1 };
+
+    expect(hasMixedScoringMethods(split)).toBe(true);
+  });
+
+  it('should return false when only one scoring method appears in the split', () => {
+    expect(hasMixedScoringMethods({ elementIndexChunks: 1, textContainmentChunks: 0 })).toBe(false);
+    expect(hasMixedScoringMethods({ elementIndexChunks: 0, textContainmentChunks: 1 })).toBe(false);
+  });
+
+  it('should return false when the split is empty', () => {
+    expect(hasMixedScoringMethods({ elementIndexChunks: 0, textContainmentChunks: 0 })).toBe(false);
+  });
 });
 
 describe('failingCases', () => {
@@ -311,5 +375,31 @@ describe('hasConflictScopeGap', () => {
 
   it('should return false when conflict scope accuracy is exactly 1', () => {
     expect(hasConflictScopeGap(baseMetrics({ conflictScopeAccuracy: 1 }))).toBe(false);
+  });
+});
+
+describe('isBelowRecallAt5Floor', () => {
+  it('should return true when recall@5 is below the floor', () => {
+    const metrics = baseMetrics({
+      retrieval: { recallAt5: RECALL_AT_5_FLOOR - 0.01, recallAt10: 0.9, mrr: 0.75, caseCount: 10 },
+    });
+
+    expect(isBelowRecallAt5Floor(metrics)).toBe(true);
+  });
+
+  it('should return false when recall@5 is exactly at the floor', () => {
+    const metrics = baseMetrics({
+      retrieval: { recallAt5: RECALL_AT_5_FLOOR, recallAt10: 0.9, mrr: 0.75, caseCount: 10 },
+    });
+
+    expect(isBelowRecallAt5Floor(metrics)).toBe(false);
+  });
+
+  it('should return false when recall@5 is above the floor', () => {
+    const metrics = baseMetrics({
+      retrieval: { recallAt5: 1, recallAt10: 1, mrr: 1, caseCount: 10 },
+    });
+
+    expect(isBelowRecallAt5Floor(metrics)).toBe(false);
   });
 });

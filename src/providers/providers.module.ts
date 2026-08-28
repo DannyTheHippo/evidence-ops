@@ -22,11 +22,11 @@ import {
   MODEL_CACHE_OPTIONS,
   type CachingModelProviderOptions,
 } from './model/caching-model.provider';
+import { MetricsModelProvider } from './model/metrics-model.provider';
 import { MODEL_PROVIDER, type ModelProvider } from './model/model-provider.interface';
 import { OpenAiModelProvider } from './model/openai-model.provider';
 import { SpendGuardModelProvider } from './model/spend-guard-model.provider';
 import { TenantSpendService } from './model/spend/tenant-spend.service';
-import { TracingModelProvider } from './model/tracing-model.provider';
 import { MongoHybridRetrievalStore } from './retrieval/mongo-hybrid.store';
 import { RETRIEVAL_STORE } from './retrieval/retrieval-store.interface';
 import { LocalFolderSourceConnector } from './source-connector/local-folder-source.connector';
@@ -50,13 +50,29 @@ const MODEL_CACHE_DEFAULT_OPTIONS: CachingModelProviderOptions = {
 
 /**
  * Selects the base `ModelProvider` by `config.model.provider` and wraps it in the standing
- * `Tracing(Caching(SpendGuard(base)))` chain — SpendGuard sits inside Caching deliberately. A
+ * `Caching(Metrics(SpendGuard(base)))` chain — SpendGuard sits inside Caching deliberately. A
  * replay-cache hit costs no money, so it must not consume budget: if SpendGuard wrapped Caching,
  * every cached replay would reserve and settle spend that was never actually spent, and the eval
  * harness — which replays hundreds of cached calls — would exhaust a tenant's daily ceiling for
  * free.
  *
- * `CachingModelProvider`, `SpendGuardModelProvider`, and `TracingModelProvider` take a
+ * `Metrics` sits inside `Caching` for the same reason: `CachingModelProvider` returns a cached
+ * result without ever calling its inner provider, so a decorator wrapping `Caching` from the
+ * outside would observe every replay too. Placed here, `Metrics` only runs on a call that
+ * actually reaches `SpendGuard`/`base` — a live call or a record-mode miss — so a cache hit
+ * records nothing on the cost histogram. Spend is a separate concern, already secured by the
+ * Caching-outside-SpendGuard ordering above: a cache hit never reaches `SpendGuardModelProvider`
+ * either way, regardless of where `Metrics` sits.
+ *
+ * This placement has an accepted cache-observability cost: a record-mode cache write failure, or
+ * a non-`ENOENT` cache read failure (`caching-model.provider.ts`'s `readCacheEntry`/
+ * `writeCacheEntry`), now propagates with no telemetry, because `Metrics` never sees it. A cache
+ * hit also emits no `start`/`success` event, and a cache miss's recorded `durationMs` excludes
+ * the cache I/O around it. None of this is reachable through the DI-wired production path —
+ * `MODEL_CACHE_DEFAULT_OPTIONS.mode` is `'off'` below, making `Caching` a pass-through — so it
+ * only bites the eval harness's record/replay modes, and no error event is added to cover it.
+ *
+ * `CachingModelProvider`, `MetricsModelProvider`, and `SpendGuardModelProvider` take a
  * `ModelProvider`/`Telemetry` interface positionally rather than an `@Inject()`-tagged
  * constructor param, so Nest's reflection-based `useClass` can't resolve them — they're
  * assembled by hand here instead. `AnthropicModelProvider` and `OpenAiModelProvider` both have
@@ -77,26 +93,31 @@ export function createModelProvider(
 ): ModelProvider {
   const base = config.model.provider === 'openai' ? openai : anthropic;
 
-  return new TracingModelProvider(
-    new CachingModelProvider(
-      new SpendGuardModelProvider(base, spendService, config.spend.dailyLimitUsd),
-      cacheOptions,
+  return new CachingModelProvider(
+    new MetricsModelProvider(
+      new SpendGuardModelProvider(
+        base,
+        spendService,
+        config.spend.dailyLimitUsd,
+        config.spend.ingestDailyLimitUsd,
+      ),
+      telemetry,
     ),
-    telemetry,
-    config.telemetry.captureModelContent,
+    cacheOptions,
   );
 }
 
 /**
  * Wraps the real `VoyageEmbeddingProvider` in `SpendGuardEmbeddingProvider` — production has no
  * embedding cache to order the guard against (unlike the model chain's
- * `Tracing(Caching(SpendGuard(base)))`); the only `CachingEmbeddingProvider` in the tree is
+ * `Caching(Metrics(SpendGuard(base)))`); the only `CachingEmbeddingProvider` in the tree is
  * `eval/providers/caching-embedding.provider.ts`, which replaces this token wholesale via
  * `overrideProvider` rather than decorating it, so the eval's free-replay property already holds
  * with no spend guard in that path at all.
  *
- * Reuses `config.spend.dailyLimitUsd` and `TenantSpendService` — one combined daily ceiling per
- * tenant across model and embedding spend, not a second ledger.
+ * Reuses `config.spend.dailyLimitUsd`/`config.spend.ingestDailyLimitUsd` and `TenantSpendService`
+ * — one combined ledger per tenant across model and embedding spend, not a second one; see
+ * `SpendGuardEmbeddingProvider`'s own doc comment for how the ingest sub-ceiling applies within it.
  *
  * Extracted as a plain, exported function for the same unit-testability reason
  * `createModelProvider` is.
@@ -107,7 +128,13 @@ export function createEmbeddingProvider(
   als: AsyncLocalStorage<AlsContext>,
   config: TypedConfigService,
 ): EmbeddingProvider {
-  return new SpendGuardEmbeddingProvider(voyage, spendService, config.spend.dailyLimitUsd, als);
+  return new SpendGuardEmbeddingProvider(
+    voyage,
+    spendService,
+    config.spend.dailyLimitUsd,
+    als,
+    config.spend.ingestDailyLimitUsd,
+  );
 }
 
 @Module({

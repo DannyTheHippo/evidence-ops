@@ -29,19 +29,32 @@ describe('countRateLimitCost', () => {
     expect(countRateLimitCost(batch)).toBe(800);
   });
 
-  it('should not charge for notifications or responses batched alongside requests', () => {
+  it('should count only requests when a batch mixes requests, notifications and responses', () => {
     const batch = [buildRequest(1), buildNotification(), buildResultResponse(2), buildRequest(3)];
 
     expect(countRateLimitCost(batch)).toBe(2);
   });
 
-  it('should cost 0 for a batch containing no requests', () => {
-    const batch = [buildNotification(), buildResultResponse(1)];
+  describe('cost floor — every POST that reaches the limiter costs at least 1', () => {
+    it.each([
+      ['an empty array', []],
+      ['a batch of only notifications', [buildNotification(), buildNotification('other')]],
+      ['a batch of only responses', [buildResultResponse(1), buildResultResponse(2)]],
+      ['a batch mixing notifications and responses', [buildNotification(), buildResultResponse(1)]],
+      ['a non-array body', { not: 'a valid jsonrpc message' }],
+      ['a malformed body', null],
+    ])('should charge at least 1 for %s', (_description, body) => {
+      expect(countRateLimitCost(body)).toBeGreaterThanOrEqual(1);
+    });
 
-    expect(countRateLimitCost(batch)).toBe(0);
-  });
+    it('should floor an all-notification batch at exactly 1', () => {
+      const batch = [buildNotification(), buildResultResponse(1)];
 
-  it('should cost 0 for an empty batch', () => {
-    expect(countRateLimitCost([])).toBe(0);
+      expect(countRateLimitCost(batch)).toBe(1);
+    });
+
+    it('should floor an empty batch at exactly 1', () => {
+      expect(countRateLimitCost([])).toBe(1);
+    });
   });
 });

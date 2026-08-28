@@ -39,32 +39,6 @@ const exampleResolutionRequestedRun = {
   createdAt: '2026-07-01T00:00:00.000Z',
 };
 
-const exampleResolutionBacktest = {
-  results: [
-    {
-      conflictId: '65f1c2e4a1b2c3d4e5f6a7b8',
-      factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
-      verdict: 'agreed',
-      recordedOutcome: 'resolved',
-      recordedWinningFactId: '65f1c2e4a1b2c3d4e5f6a7b9',
-      replayedRuleFired: 'authority',
-      replayedWinningFactId: '65f1c2e4a1b2c3d4e5f6a7b9',
-    },
-    {
-      conflictId: '65f1c2e4a1b2c3d4e5f6a7bc',
-      factKey: { entity: 'Fenwick Logistics Center', metric: 'cap_rate', period: '2025-02' },
-      verdict: 'unscorable',
-      recordedOutcome: 'rejected',
-      unscorableReason: "Outcome 'rejected' recorded no winning fact to score against.",
-    },
-  ],
-  agreed: 11,
-  disagreed: 1,
-  silent: 2,
-  unscorable: 1,
-  agreementRate: 0.9166666666666666,
-};
-
 export const conflictsApiExamples: Record<string, ApiResponseOptions> = {
   list: {
     status: HttpStatus.OK,
@@ -113,18 +87,6 @@ export const conflictsApiExamples: Record<string, ApiResponseOptions> = {
             "Conflict '65f1c2e4a1b2c3d4e5f6a7b8' is 'resolved', not 'open' — it cannot be resolved again",
           error: 'Conflict',
         },
-      },
-    },
-  },
-  resolutionBacktest: {
-    status: HttpStatus.OK,
-    description:
-      "Replays the tenant's current survivorship rules over every conflict that has ever had a " +
-      'resolution attempt, scoring each against what a human actually decided.',
-    examples: {
-      example: {
-        summary: 'Mixed backtest results',
-        value: exampleResolutionBacktest,
       },
     },
   },

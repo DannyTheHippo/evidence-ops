@@ -41,7 +41,7 @@ export interface CaseResult {
   readonly canaryVerifiedQuoteLeaked: boolean;
   /** Whether the case's `expectedAnswerContains` strings all show up in what the case actually
    * produced — measures answer *correctness*, not merely outcome kind, closing the gap
-   * `outcomeMatchesExpectation` (`eval/run.ts`) leaves open. For an `answerable` case this checks
+   * `outcomeMatchesExpectation` (`./outcome-match-check.ts`) leaves open. For an `answerable` case this checks
    * the answer text; for a `conflicting` case (no answer prose to check) it checks the rendered
    * values of the attached conflict instead. `null` — a third state, not `false` — whenever the
    * check does not apply: every category other than `answerable`/`conflicting`, an `answerable`

@@ -19,10 +19,13 @@ set -euo pipefail
 #
 # After a successful restore this verifies Atlas Search indexes on evidence_chunks are present.
 # `--drop` also drops each collection's search indexes, and the restored `migrations` changelog
-# already records migration 0003 (search-index creation) as applied — so a plain `migrate:up`
-# afterward no-ops and retrieval silently returns zero rows until the indexes are rebuilt by
-# hand. This script does not rebuild them automatically; it refuses to report success if they're
-# missing and prints the recovery steps instead.
+# already records the baseline migration (0001-baseline, which builds the search indexes) as
+# applied — so a plain `migrate:up` afterward no-ops and retrieval silently returns zero rows
+# until the indexes are rebuilt by hand. This script does not rebuild them automatically; it
+# refuses to report success if they're missing and prints the recovery steps instead. Clearing
+# the baseline row is safe: re-running it against a store that already has everything but the
+# search indexes is a no-op everywhere else (indexes and the tenant upsert), and only rebuilds
+# what's actually missing.
 
 COMPOSE_SERVICE="mongo"
 CONTAINER_NAME="evidence-ops-mongo"
@@ -85,8 +88,8 @@ SEARCH_INDEX_COUNT="$(docker compose exec -T "$COMPOSE_SERVICE" mongosh --quiet 
 if [[ "$SEARCH_INDEX_COUNT" == "0" ]]; then
   echo "WARNING: restore completed but evidence_chunks has 0 search indexes." >&2
   echo "  retrieval will silently return zero rows until these are rebuilt. Recovery:" >&2
-  echo "  1. docker compose exec -T ${COMPOSE_SERVICE} mongosh ${DB_NAME} --eval 'db.migrations.deleteOne({fileName: /0003-search-indexes/})'" >&2
-  echo "  2. npm run migrate:up" >&2
+  echo "  1. docker compose exec -T ${COMPOSE_SERVICE} mongosh ${DB_NAME} --eval 'db.migrations.deleteOne({fileName: /0001-baseline/})'" >&2
+  echo "  2. npm run migrate:up   # re-runs the whole baseline; safe, everything but the search indexes is already there and no-ops" >&2
   exit 1
 fi
 

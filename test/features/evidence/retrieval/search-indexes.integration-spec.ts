@@ -1,15 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { Db, MongoClient, ObjectId } from 'mongodb';
 import {
-  COLLECTION,
+  EVIDENCE_CHUNKS_COLLECTION as COLLECTION,
   SEARCH_INDEX,
   VECTOR_INDEX,
   resolveVectorDimensions,
-} from '../../../../migrations/0003-search-indexes';
+} from '../../../../migrations/0001-baseline';
 import { waitForSearchIndexReady } from '../../../../src/features/evidence/retrieval/search-index-readiness.util';
 
 /**
- * Proves `migrations/0003-search-indexes.ts` against a real `mongodb/mongodb-atlas-local`
+ * Proves the search indexes `migrations/0001-baseline.ts` creates against a real
+ * `mongodb/mongodb-atlas-local`
  * container — `mongodb-memory-server` (used by unit/e2e specs) cannot serve `$search` or
  * `$vectorSearch`. Requires `docker compose up -d mongo` and `npm run migrate:up` to have
  * already run (`CLAUDE.md` § Validation); this spec asserts against the indexes those steps

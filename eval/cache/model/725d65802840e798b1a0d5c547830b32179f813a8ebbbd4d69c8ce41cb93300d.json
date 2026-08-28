@@ -1,0 +1,1 @@
+{"output":{"facts":[{"entityQuote":"Vantage Fulfillment Co.","metric":"tenant_occupancy_share","periodText":"","observedAtText":"","amount":62,"unit":"percent","quote":"leases 62% of the net rentable area","confidence":0.9}]},"usage":{"inputTokens":93,"outputTokens":176,"cacheCreationInputTokens":0,"cacheReadInputTokens":1493},"costUsd":0.0033669}

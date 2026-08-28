@@ -13,20 +13,23 @@ import type { RetrievalHit, RetrievalQuery, RetrievalStore } from './retrieval-s
 import { COLLECTION, SEARCH_INDEX, VECTOR_INDEX } from './retrieval.constant';
 
 type PipelineName = 'search' | 'vector';
-const PIPELINE_NAMES: readonly PipelineName[] = ['search', 'vector'];
+// Exported so `environment.config.ts`'s mirrored score-ceiling constants can be pinned to these by
+// a test (`test/config/environment.config.spec.ts`) — the config can't import this module directly
+// (this store depends on `TypedConfigService`, which depends on the config's own types).
+export const PIPELINE_NAMES: readonly PipelineName[] = ['search', 'vector'];
 
 // Equal, explicit weighting rather than the server's implicit per-pipeline default of 1: neither
 // pipeline is known in advance to be more trustworthy than the other, and writing the weights out
 // makes that a documented, tunable decision instead of an accident of omission. Revisit once an
 // eval run (`eval/`) has data on which signal actually predicts a correct citation.
-const PIPELINE_WEIGHTS: Record<PipelineName, number> = { search: 1, vector: 1 };
+export const PIPELINE_WEIGHTS: Record<PipelineName, number> = { search: 1, vector: 1 };
 
 // Verified against a live `mongodb/mongodb-atlas-local:8.3.4`: the server's own $rankFusion
 // description string is `sum(weight * (1 / (60 + rank)))`. The app-side fallback below
 // (`searchAppSide`) uses this exact same constant for the exact same reason `PIPELINE_WEIGHTS`
 // is explicit — 'server' and 'app' fusion only mean the same thing experimentally if every knob
 // but the execution site is identical.
-const RRF_K = 60;
+export const RRF_K = 60;
 
 // Each input pipeline pulls a wider candidate pool than the caller's final `limit` so RRF/
 // $rankFusion has enough overlap between the two signals to fuse meaningfully; a pool the same
@@ -96,7 +99,7 @@ interface RawFusionResultDoc extends RawEvidenceChunkDoc {
 
 /**
  * `RetrievalStore` backed by `evidence_chunks_search` (lexical) and `evidence_chunks_vector`
- * (vector) Atlas Search indexes (`migrations/0003-search-indexes.ts`), fused either server-side
+ * (vector) Atlas Search indexes (`migrations/0001-baseline.ts`), fused either server-side
  * via `$rankFusion` or, when `config.retrieval.fusion === 'app'`, by running both searches
  * separately and applying the identical RRF formula in code (`searchAppSide`). Both modes return
  * the same `HybridRetrievalHitMetadata` shape so a caller (and an eval comparing the two modes)

@@ -92,6 +92,17 @@ export interface ModelProvider {
   generate<TSchema extends z.ZodType | undefined = undefined>(
     request: ModelRequest<TSchema>,
   ): Promise<ModelResult<TSchema>>;
+
+  /**
+   * The model `generate` will actually call for a given `taskClass`, resolved without making a
+   * call — a decorator that must know the model *before* deciding whether to call through (the
+   * replay cache key in `CachingModelProvider`) needs this, since `info.model` alone only ever
+   * names the provider's default. Optional: a provider with no per-taskClass routing (every
+   * provider but `AnthropicModelProvider` today) need not implement it, and every decorator falls
+   * back to `info.model` when it is absent, so an implementer that omits this keeps working
+   * exactly as it did before this method existed.
+   */
+  resolveModel?(taskClass: ModelRequest['taskClass']): string;
 }
 
 export const MODEL_PROVIDER = Symbol('MODEL_PROVIDER');

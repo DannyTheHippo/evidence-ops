@@ -1,6 +1,8 @@
 import { z } from 'zod/v4';
+import { validateEnvironment } from '../../../src/config/environment/environment.config';
 import { computeAnthropicCostUsd } from '../../../src/providers/model/anthropic-pricing.table';
 import { ModelBudgetExceededError } from '../../../src/providers/model/errors/model-budget-exceeded.error';
+import { ModelOutputTruncatedError } from '../../../src/providers/model/errors/model-output-truncated.error';
 import { ModelSchemaValidationError } from '../../../src/providers/model/errors/model-schema-validation.error';
 import { UnknownModelPricingError } from '../../../src/providers/model/errors/unknown-model-pricing.error';
 import type { ModelRequest } from '../../../src/providers/model/model-provider.interface';
@@ -81,7 +83,12 @@ describe('AnthropicModelProvider', () => {
 
   it('should read the SDK client timeout from config rather than a hardcoded constant', () => {
     const config = getMockTypedConfig({
-      anthropic: { apiKey: undefined, model: 'claude-sonnet-5', timeoutMs: 15000 },
+      anthropic: {
+        apiKey: undefined,
+        model: 'claude-sonnet-5',
+        timeoutMs: 15000,
+        factExtractionModel: undefined,
+      },
     });
 
     new AnthropicModelProvider(config);
@@ -100,7 +107,12 @@ describe('AnthropicModelProvider', () => {
 
   it('should refuse the call before issuing any request for a model with no pricing entry', async () => {
     const config = getMockTypedConfig({
-      anthropic: { apiKey: undefined, model: 'claude-unpriced', timeoutMs: 60000 },
+      anthropic: {
+        apiKey: undefined,
+        model: 'claude-unpriced',
+        timeoutMs: 60000,
+        factExtractionModel: undefined,
+      },
     });
     const provider = new AnthropicModelProvider(config);
 
@@ -171,11 +183,13 @@ describe('AnthropicModelProvider', () => {
     const schema = z.object({ answer: z.string() });
     const requestWithSchema: ModelRequest<typeof schema> = { ...baseRequest, outputSchema: schema };
 
-    it('should retry exactly once and succeed when the retry output validates', async () => {
+    it('should retry exactly once and succeed when the retry output validates, for a schema failure that is not a truncation', async () => {
       mockCreate
-        .mockResolvedValueOnce(buildMessage('not json', { input_tokens: 10, output_tokens: 5 }))
         .mockResolvedValueOnce(
-          buildMessage('{"answer":"Paris"}', { input_tokens: 20, output_tokens: 8 }),
+          buildMessage('not json', { input_tokens: 10, output_tokens: 5 }, 'end_turn'),
+        )
+        .mockResolvedValueOnce(
+          buildMessage('{"answer":"Paris"}', { input_tokens: 20, output_tokens: 8 }, 'end_turn'),
         );
       const provider = new AnthropicModelProvider(getMockTypedConfig());
 
@@ -250,6 +264,239 @@ describe('AnthropicModelProvider', () => {
       const serializedSchema = JSON.stringify(call.output_config.format.schema);
       expect(serializedSchema).not.toContain('$defs');
       expect(serializedSchema).not.toContain('$ref');
+    });
+  });
+
+  describe('output-cap truncation', () => {
+    const schema = z.object({ answer: z.string() });
+    const requestWithSchema: ModelRequest<typeof schema> = { ...baseRequest, outputSchema: schema };
+
+    it('should throw ModelOutputTruncatedError on a first response that hit max_tokens, without making a second (doomed) call', async () => {
+      mockCreate.mockResolvedValueOnce(
+        buildMessage('{"answ', { output_tokens: 100 }, 'max_tokens'),
+      );
+      const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+      const error = await provider.generate(requestWithSchema).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ModelOutputTruncatedError);
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it('should throw ModelOutputTruncatedError on a retry response that also hit max_tokens', async () => {
+      mockCreate
+        .mockResolvedValueOnce(buildMessage('not json', { output_tokens: 5 }, 'end_turn'))
+        .mockResolvedValueOnce(buildMessage('{"answ', { output_tokens: 100 }, 'max_tokens'));
+      const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+      const error = await provider.generate(requestWithSchema).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ModelOutputTruncatedError);
+      expect(mockCreate).toHaveBeenCalledTimes(2);
+    });
+
+    it('should throw ModelOutputTruncatedError on an unparseable response that stopped for exceeding the context window, advising to reduce the prompt rather than raise maxTokens', async () => {
+      mockCreate.mockResolvedValueOnce(
+        buildMessage('{"answ', { output_tokens: 100 }, 'model_context_window_exceeded'),
+      );
+      const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+      const error = (await provider
+        .generate(requestWithSchema)
+        .catch((e: unknown) => e)) as ModelOutputTruncatedError;
+
+      expect(error).toBeInstanceOf(ModelOutputTruncatedError);
+      expect(error.stopReason).toBe('model_context_window_exceeded');
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+      expect(error.message).not.toContain('Raise maxTokens');
+      expect(error.message).toContain('Reduce the prompt');
+    });
+
+    it('should return a response that parses and validates even though it hit max_tokens — a valid response is valid regardless of why generation stopped', async () => {
+      mockCreate.mockResolvedValueOnce(
+        buildMessage('{"answer":"Paris"}', { output_tokens: 100 }, 'max_tokens'),
+      );
+      const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+      const result = await provider.generate(requestWithSchema);
+
+      expect(result.output).toEqual({ answer: 'Paris' });
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it('should carry the stop reason, maxTokens cap, output token count and raw text as public fields, and state the cap, count and stop reason in the message without embedding the raw output', async () => {
+      mockCreate.mockResolvedValueOnce(buildMessage('{"answ', { output_tokens: 77 }, 'max_tokens'));
+      const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+      const error = (await provider
+        .generate({ ...requestWithSchema, maxTokens: 100 })
+        .catch((e: unknown) => e)) as ModelOutputTruncatedError;
+
+      expect(error.stopReason).toBe('max_tokens');
+      expect(error.maxTokens).toBe(100);
+      expect(error.outputTokens).toBe(77);
+      expect(error.raw).toBe('{"answ');
+      expect(error.message).toContain('100');
+      expect(error.message).toContain('77');
+      expect(error.message).toContain('max_tokens');
+      expect(error.message).not.toMatch(/JSON|schema/i);
+      expect(error.message).not.toContain('{"answ');
+    });
+
+    it("should not throw on a truncated response for the schema-less branch — a truncated free-text answer is the caller's business", async () => {
+      mockCreate.mockResolvedValueOnce(buildMessage('Par', {}, 'max_tokens'));
+      const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+      const result = await provider.generate(baseRequest);
+
+      expect(result.output).toBe('Par');
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not append an empty assistant turn on retry when the first attempt produced no text', async () => {
+      mockCreate
+        .mockResolvedValueOnce(buildMessage('', {}, 'end_turn'))
+        .mockResolvedValueOnce(buildMessage('{"answer":"Paris"}', {}, 'end_turn'));
+      const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+      await provider.generate(requestWithSchema);
+
+      const retryCall = mockCreate.mock.calls[1][0] as {
+        messages: { role: string; content: string }[];
+      };
+      expect(retryCall.messages.some((m) => m.role === 'assistant' && m.content === '')).toBe(
+        false,
+      );
+      expect(retryCall.messages.at(-1)?.role).toBe('user');
+    });
+
+    it('should not append a whitespace-only assistant turn on retry either — there is nothing to echo', async () => {
+      mockCreate
+        .mockResolvedValueOnce(buildMessage('   \n\t', {}, 'end_turn'))
+        .mockResolvedValueOnce(buildMessage('{"answer":"Paris"}', {}, 'end_turn'));
+      const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+      await provider.generate(requestWithSchema);
+
+      const retryCall = mockCreate.mock.calls[1][0] as {
+        messages: { role: string; content: string }[];
+      };
+      expect(retryCall.messages.some((m) => m.role === 'assistant')).toBe(false);
+      expect(retryCall.messages.at(-1)?.role).toBe('user');
+    });
+  });
+
+  describe('cache_control', () => {
+    it('should wrap a present system prompt as a single ephemeral-cache text block, not the plain-string shorthand', async () => {
+      mockCreate.mockResolvedValueOnce(buildMessage('Paris'));
+      const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+      await provider.generate({ ...baseRequest, system: 'You are a careful assistant.' });
+
+      const call = mockCreate.mock.calls[0][0] as { system: unknown };
+      expect(call.system).toEqual([
+        {
+          type: 'text',
+          text: 'You are a careful assistant.',
+          cache_control: { type: 'ephemeral' },
+        },
+      ]);
+    });
+
+    it('should send no system param at all when the request carries none', async () => {
+      mockCreate.mockResolvedValueOnce(buildMessage('Paris'));
+      const provider = new AnthropicModelProvider(getMockTypedConfig());
+
+      await provider.generate(baseRequest);
+
+      const call = mockCreate.mock.calls[0][0] as { system: unknown };
+      expect(call.system).toBeUndefined();
+    });
+  });
+
+  describe('per-taskClass model routing', () => {
+    // The inertness pin: draws its expectation from `validateEnvironment`'s own real defaults,
+    // never from a value this test supplies, so a change to either default would fail it —
+    // verified by temporarily hardcoding `resolveModel` to return the haiku model for
+    // `fact_extraction` and confirming this test fails, then restoring it.
+    it('should route every task class to the real ANTHROPIC_MODEL default when ANTHROPIC_MODEL_FACT_EXTRACTION is unset', () => {
+      const real = validateEnvironment({});
+      expect(real.anthropic.factExtractionModel).toBeUndefined();
+
+      const config = getMockTypedConfig({ anthropic: real.anthropic });
+      const provider = new AnthropicModelProvider(config);
+
+      expect(provider.resolveModel('qa_answer')).toBe(real.anthropic.model);
+      expect(provider.resolveModel('fact_extraction')).toBe(real.anthropic.model);
+      expect(provider.resolveModel('claim_verification')).toBe(real.anthropic.model);
+    });
+
+    it('should route fact_extraction to the configured override, leaving qa_answer and claim_verification pinned to the default', () => {
+      const config = getMockTypedConfig({
+        anthropic: {
+          apiKey: undefined,
+          model: 'claude-sonnet-5',
+          timeoutMs: 60000,
+          factExtractionModel: 'claude-haiku-4-5-20251001',
+        },
+      });
+      const provider = new AnthropicModelProvider(config);
+
+      expect(provider.resolveModel('fact_extraction')).toBe('claude-haiku-4-5-20251001');
+      expect(provider.resolveModel('qa_answer')).toBe('claude-sonnet-5');
+      expect(provider.resolveModel('claim_verification')).toBe('claude-sonnet-5');
+    });
+
+    it('should send the resolved model to the SDK and price costUsd against it, not against info.model', async () => {
+      const config = getMockTypedConfig({
+        anthropic: {
+          apiKey: undefined,
+          model: 'claude-sonnet-5',
+          timeoutMs: 60000,
+          factExtractionModel: 'claude-haiku-4-5-20251001',
+        },
+      });
+      mockCreate.mockResolvedValueOnce(
+        buildMessage('extracted', { input_tokens: 1000, output_tokens: 100 }),
+      );
+      const provider = new AnthropicModelProvider(config);
+
+      const result = await provider.generate({ ...baseRequest, taskClass: 'fact_extraction' });
+
+      expect(mockCreate.mock.calls[0][0]).toMatchObject({ model: 'claude-haiku-4-5-20251001' });
+      const sonnetPrice = computeAnthropicCostUsd('claude-sonnet-5', {
+        inputTokens: 1000,
+        outputTokens: 100,
+        cacheCreation5mInputTokens: 0,
+        cacheCreation1hInputTokens: 0,
+        cacheReadInputTokens: 0,
+      });
+      const haikuPrice = computeAnthropicCostUsd('claude-haiku-4-5-20251001', {
+        inputTokens: 1000,
+        outputTokens: 100,
+        cacheCreation5mInputTokens: 0,
+        cacheCreation1hInputTokens: 0,
+        cacheReadInputTokens: 0,
+      });
+      expect(sonnetPrice).not.toBeCloseTo(haikuPrice, 10);
+      expect(result.costUsd).toBeCloseTo(haikuPrice, 10);
+    });
+
+    it('should refuse a fact_extraction call before issuing any request when the override names a model with no pricing entry', async () => {
+      const config = getMockTypedConfig({
+        anthropic: {
+          apiKey: undefined,
+          model: 'claude-sonnet-5',
+          timeoutMs: 60000,
+          factExtractionModel: 'claude-unpriced',
+        },
+      });
+      const provider = new AnthropicModelProvider(config);
+
+      await expect(
+        provider.generate({ ...baseRequest, taskClass: 'fact_extraction' }),
+      ).rejects.toBeInstanceOf(UnknownModelPricingError);
+      expect(mockCreate).not.toHaveBeenCalled();
     });
   });
 });

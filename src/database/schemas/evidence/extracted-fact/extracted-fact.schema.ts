@@ -69,11 +69,11 @@ export class ExtractedFact extends AuditableDocument {
   extractionMethod: ExtractionMethod;
 
   /**
-   * The metric pack (`metric-ontology.ts`'s `ACTIVE_PACK_ID`/`ACTIVE_PACK_VERSION` until a
-   * resolved `MetricPack` replaces them) in force when this fact was extracted. Required, not
-   * optional: a fact that cannot say which ontology and tolerance produced it resolves against
-   * *some* pack once a pack becomes editable per engagement, quietly and possibly wrongly — the
-   * same reasoning `EvidenceLocator.extractorVersion` documents for a coordinate's extractor.
+   * The metric ontology (`metric-ontology.ts`'s `ACTIVE_PACK_ID`/`ACTIVE_PACK_VERSION`) in force
+   * when this fact was extracted. Required, not optional: a fact that cannot say which ontology
+   * and tolerance produced it would resolve against whatever the ontology happens to be at read
+   * time, quietly and possibly wrongly — the same reasoning `EvidenceLocator.extractorVersion`
+   * documents for a coordinate's extractor.
    */
   @Prop({ type: String, required: true })
   packId: string;

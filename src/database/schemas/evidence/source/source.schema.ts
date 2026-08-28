@@ -44,18 +44,26 @@ export type SourceDocument = HydratedDocument<WithTimestamps<Source>>;
  * bytes were ingested as, so a later sync pass can diff against the version already on record
  * instead of re-deriving that link from scratch.
  *
+ * `documentId` and `sha256` are both absent on a placeholder entry: a file `SourcesService`
+ * discovered but never turned into a `Document` at all — an unresolvable kind, an oversized file,
+ * or a fetch failure on a file with no prior entry. Such a file has nothing a `documentId` could
+ * reference and, for the unresolvable-kind and oversized cases, no bytes were ever read to hash.
+ * `lastError` is always set on a placeholder, which is what `SourcesService.syncOneFile` and
+ * `.toResultWithFileStates` key off instead of a separate status field.
+ *
  * `absentSweeps` and `withdrawnAt` track `SourcesService.runSync`'s two-strike absence guard: a
  * path missing from one sweep's fresh listing increments `absentSweeps` rather than withdrawing
  * immediately, and only a second consecutive absent sweep sets `withdrawnAt`. Both stay populated
  * on a withdrawn entry — every other field keeps its last-known value (`sha256`/`sizeBytes`/
- * `mtimeMs`/`documentId`) so the tombstone still records what the file was before it vanished.
+ * `mtimeMs`/`documentId`) so the tombstone still records what the file was before it vanished. A
+ * placeholder entry's `withdrawnAt` never sets `documentId`.
  */
 export interface SourceFileState {
   path: string;
-  sha256: string;
+  sha256?: string;
   sizeBytes: number;
   mtimeMs: number;
-  documentId: Types.ObjectId;
+  documentId?: Types.ObjectId;
   lastError?: string;
   absentSweeps?: number;
   withdrawnAt?: Date;
@@ -70,10 +78,11 @@ export interface SourceFileState {
 const SourceFileStateSchema = new MongooseSchema<SourceFileState>(
   {
     path: { type: String, required: true },
-    sha256: { type: String, required: true, minlength: 64, maxlength: 64, lowercase: true },
+    // Absent on a placeholder entry — see SourceFileState's own doc comment.
+    sha256: { type: String, minlength: 64, maxlength: 64, lowercase: true },
     sizeBytes: { type: Number, required: true, min: 0 },
     mtimeMs: { type: Number, required: true, min: 0 },
-    documentId: { type: Types.ObjectId, ref: 'Document', required: true },
+    documentId: { type: Types.ObjectId, ref: 'Document' },
     lastError: { type: String },
     absentSweeps: { type: Number, min: 0 },
     withdrawnAt: { type: Date },

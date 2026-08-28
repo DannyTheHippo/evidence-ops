@@ -31,7 +31,7 @@ interface EntityEditorDialogProps {
 
 /** Create/edit authoring surface for one canonical entity, always open — its parent mounts it
  * only while creating or editing, so each open is a fresh instance with fresh state and there is
- * no `open` prop to thread through, matching `RuleEditorDialog`. */
+ * no `open` prop to thread through. */
 export default function EntityEditorDialog({ entity, onClose, onSaved }: EntityEditorDialogProps) {
   const [canonicalName, setCanonicalName] = useState(entity?.canonicalName ?? '');
   const [aliasesText, setAliasesText] = useState(() => aliasesToText(entity?.aliases));

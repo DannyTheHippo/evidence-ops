@@ -23,7 +23,7 @@ pure orchestration that proxies to activities in `src/worker/activities.ts` for 
 (Mongo, model calls, the grounding check). `resolve-conflict` is the one that parks on a durable
 human approval signal with a timeout branch, which is why the approval survives a worker restart.
 
-**The MCP surface is a third process** (ADR-0016): `src/mcp/main.ts` boots `McpModule` on the same
+**The MCP surface is a third process** (ADR-0014): `src/mcp/main.ts` boots `McpModule` on the same
 `WorkerModule` slice pattern and serves stateless Streamable HTTP, authenticated per call by a
 personal access token rather than the SPA's session cookie. It advertises `search_evidence`,
 `get_answer` and `request_resolution`; approval-deciding tools are deliberately absent, because the

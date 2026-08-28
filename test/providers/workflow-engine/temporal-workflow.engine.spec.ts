@@ -68,8 +68,7 @@ describe('TemporalWorkflowEngine', () => {
     await engine.start('b', {});
 
     expect(mockConnectionConnect).toHaveBeenCalledTimes(1);
-    // Regression: a `Client` built fresh per call also builds a fresh OTel plugin (span
-    // processor + exporter) per call, none of them ever shut down.
+    // Regression: a `Client` built fresh per call is never shut down.
     expect(mockClient).toHaveBeenCalledTimes(1);
   });
 

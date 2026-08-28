@@ -31,6 +31,16 @@ export class ApiKey extends AuditableDocument {
   @Prop({ type: String, required: true, trim: true })
   name: string;
 
+  /**
+   * The minting user's `User.tokenVersion` at the moment this key was issued. `ApiKeysService.verify`
+   * compares it against the row on every call, so raising a user's session epoch refuses their
+   * personal access tokens as well as their browser session — without it the epoch is a lever that
+   * moves only half the credentials an account holds. `required`, with no default: a key row whose
+   * epoch is absent carries no claim about when it was issued, and `verify` refuses it.
+   */
+  @Prop({ type: Number, required: true })
+  tokenVersion: number;
+
   @Prop({ type: Date })
   expiresAt?: Date;
 

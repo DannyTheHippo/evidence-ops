@@ -22,6 +22,21 @@ process.env.MONGO_MEMORY_SERVER = 'true';
 process.env.THROTTLE_LIMIT = '30';
 
 /**
+ * Raises only the per-address half of `CredentialThrottleGuard` for e2e, from the production
+ * default of 10.
+ *
+ * Supertest reaches the app from a single loopback address, so every registration and login in a
+ * suite — dozens across the fixtures a file sets up — shares one bucket that a real deployment
+ * would spread across as many addresses as there are users. The production default is asserted by
+ * the environment config's own spec, which this override does not reach.
+ *
+ * `AUTH_CREDENTIAL_EMAIL_LIMIT` is deliberately NOT raised: fixtures use a distinct address per
+ * user, so the shipped value holds throughout, and the burst case in `auth.e2e-spec.ts` proves the
+ * guard against the number production runs.
+ */
+process.env.AUTH_CREDENTIAL_IP_LIMIT = '150';
+
+/**
  * Pins CORS origin for e2e so a developer `.env` (`CORS_ORIGIN` in `.env.example` is the Vite
  * preview port) cannot change what `CsrfOriginMiddleware` accepts. The auth e2e asserts against
  * this value.

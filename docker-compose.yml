@@ -25,14 +25,21 @@ x-app-environment: &app-environment
   # In-network addresses only — never in `.env`, which stays host-loop-relative (localhost:*) so
   # the same secrets file works for `start:dev`/`worker:dev`/`temporal:dev` too. Hyphen,
   # `evidence-ops`: the underscore spelling produces a stray orphan database.
-  MONGO_DB_URI: mongodb://mongo:27017/evidence-ops?directConnection=true
+  #
+  # `MONGO_AUTH` is the credential prefix (`user:pass@`), empty unless a deployment enables
+  # database authentication — the address is the only part of this URI that differs between the
+  # container and the host loop, so the credential is interpolated in rather than the whole URI
+  # being overridden from `.env`, which would carry `localhost` into the container. `authSource`
+  # names where the user is defined and is inert while no credential is supplied; without it the
+  # driver would look for the user in `evidence-ops` rather than `admin`, where the image creates
+  # it. `docs/global/deployment-hardening.md` has the enablement steps.
+  MONGO_DB_URI: mongodb://${MONGO_AUTH:-}mongo:27017/evidence-ops?directConnection=true&authSource=admin
   # Pinned off, never overridable: `true` starts an in-process `mongodb-memory-server` and the
   # container would quietly serve a throwaway database instead of the one beside it.
   MONGO_MEMORY_SERVER: "false"
   TEMPORAL_ADDRESS: temporal:7233
   TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
   TEMPORAL_TASK_QUEUE: ${TEMPORAL_TASK_QUEUE:-evidence-ops}
-  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
   LOG_LEVEL: ${LOG_LEVEL:-info}
   # Both default to localhost, which is wrong for anything served from a real origin: `CORS_ORIGIN`
   # is functional — it is the single origin `enableCors` permits, so a mismatch means the browser
@@ -40,6 +47,12 @@ x-app-environment: &app-environment
   CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:8090}
   URL: ${URL:-http://localhost:8090}
   JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+  # Login and registration only. Raising these buys a caller more bcrypt-at-cost-12 executions per
+  # window on the two unauthenticated routes that run one; the per-email ceiling is the one that
+  # survives an attacker rotating source addresses.
+  AUTH_CREDENTIAL_WINDOW_MS: ${AUTH_CREDENTIAL_WINDOW_MS:-900000}
+  AUTH_CREDENTIAL_IP_LIMIT: ${AUTH_CREDENTIAL_IP_LIMIT:-10}
+  AUTH_CREDENTIAL_EMAIL_LIMIT: ${AUTH_CREDENTIAL_EMAIL_LIMIT:-5}
   THROTTLE_TTL_MS: ${THROTTLE_TTL_MS:-60000}
   THROTTLE_LIMIT: ${THROTTLE_LIMIT:-100}
   MODEL_PROVIDER: ${MODEL_PROVIDER:-anthropic}
@@ -54,9 +67,10 @@ x-app-environment: &app-environment
   OPENAI_TIMEOUT_MS: ${OPENAI_TIMEOUT_MS:-60000}
   RETRIEVAL_FUSION: ${RETRIEVAL_FUSION:-server}
   RETRIEVAL_LIMIT: ${RETRIEVAL_LIMIT:-12}
-  # Off by default: on, spans carry prompt and completion text, which puts evidence content in the
-  # tracing backend and widens the trust boundary to whoever can read traces.
-  OTEL_CAPTURE_MODEL_CONTENT: ${OTEL_CAPTURE_MODEL_CONTENT:-false}
+  # RRF-fused, not a 0-1 similarity score: with the store's two equally weighted pipelines and
+  # RRF_K=60, the highest score any hit can ever reach is 2/61 (~0.0328) — the API refuses to
+  # boot above that ceiling rather than silently abstaining on every question.
+  RETRIEVAL_SCORE_FLOOR: ${RETRIEVAL_SCORE_FLOOR:-0}
   # The api scrapes on this port and the worker on the next one, derived in `instrumentation.ts`
   # from this single value rather than a second variable that could drift from it.
   METRICS_PORT: ${METRICS_PORT:-9464}
@@ -75,6 +89,22 @@ services:
     # volume. Pinning the hostname keeps the name stable across recreates.
     hostname: evidence-ops-mongo
     restart: always
+    env_file:
+      # Database authentication, off unless this file exists. It carries
+      # `MONGODB_INITDB_ROOT_USERNAME`/`MONGODB_INITDB_ROOT_PASSWORD`, which the image reads on
+      # first initialisation of an empty data volume to create that user and start mongod with
+      # authentication enabled. `docs/global/deployment-hardening.md` holds the file's contents, the
+      # two other places the same credential has to appear, and what to do when the volume is
+      # already populated — the user is created at first init only.
+      #
+      # A file, rather than `${VAR:-}` interpolation into `environment:` — an absent file leaves
+      # both variables genuinely unset, while interpolation would set them to the empty string and
+      # leave the image deciding what an empty username means. `required: false` so the default
+      # stack still comes up with no file present.
+      #
+      # Not `.env`: that file holds model-provider keys this container has no reason to hold.
+      - path: .env.mongo-auth.local
+        required: false
     # mem_limit: 1536m. Observed 550.8 MiB resident (2026-08-11, all 9 services healthy) against the
     # 4-document eval fixture set — deliberately NOT tuned down to that number. This is mongod plus a
     # Lucene-backed $search/$vectorSearch index, and both grow with the corpus; 550 MiB is the floor
@@ -86,7 +116,13 @@ services:
       # eval) fall back to that default, so a mismatch here means they connect nowhere while the
       # container looks perfectly healthy. 27017 is the default for every other Mongo project on a
       # machine, which is why neither side uses it. Overridable, but override both together.
-      - "${MONGO_HOST_PORT:-27018}:27017"
+      #
+      # Loopback, with no override knob: this database accepts unauthenticated connections, so the
+      # host's own loopback interface is the whole of its access control. A bare
+      # `${MONGO_HOST_PORT}:27017` publish hands every document in the corpus, every audit row and
+      # every API key hash to anyone who can route to this host. Remote access belongs to an SSH
+      # tunnel, which terminates here as a loopback connection like any other.
+      - "127.0.0.1:${MONGO_HOST_PORT:-27018}:27017"
     volumes:
       - evidence_ops_data:/data/db
       - evidence_ops_config:/data/configdb
@@ -120,40 +156,6 @@ services:
       retries: 12
       start_period: 15s
 
-  jaeger:
-    image: jaegertracing/all-in-one:1.65.0
-    container_name: evidence-ops-jaeger
-    restart: always
-    # mem_limit: 128m. The original figure behind this was 37.5 MiB "idle" (2026-08-11) — measured
-    # moments after start, which turned out to be the wrong thing to measure. all-in-one defaults to
-    # in-memory span storage with NO retention bound, so it grows monotonically with every trace it
-    # receives: after ~13 hours of a running stack it was observed at 123.3 MiB, i.e. 96% of this
-    # limit and still climbing (2026-08-12). Raising the limit would only move the OOM later, so the
-    # bound goes on the thing that actually grows — see MEMORY_MAX_TRACES below. An idle reading of a
-    # monotonically growing process is not a capacity measurement.
-    mem_limit: 128m
-    environment:
-      # Caps retained traces so memory plateaus instead of growing until the kernel intervenes.
-      # 5000 is far more than any demo or eval run produces, and eviction is oldest-first — this is a
-      # local trace viewer, not a retention system, so losing the oldest traces costs nothing.
-      MEMORY_MAX_TRACES: "5000"
-    ports:
-      # UI
-      - "16686:16686"
-      # OTLP HTTP receiver. Exposed to the host because `OTEL_EXPORTER_OTLP_ENDPOINT`'s
-      # `.env.example` default (http://localhost:4318) targets this port for anything running
-      # outside the network — start:dev, worker:dev, temporal:dev. In-network callers (the `api`/
-      # `worker`/`web` containers under the `full` profile) use http://jaeger:4318 instead.
-      - "4318:4318"
-    networks:
-      - evidence_ops_net
-    # Gated separately from `temporal`/`temporal-postgres`/`temporal-ui`: retrieval/eval work needs
-    # neither, so `--profile observability` lets someone bring up tracing alone. Also in `full` so a
-    # fresh-clone demo gets everything with one flag.
-    profiles:
-      - observability
-      - full
-
   prometheus:
     image: prom/prometheus:v3.5.0
     container_name: evidence-ops-prometheus
@@ -166,16 +168,20 @@ services:
     mem_limit: 256m
     volumes:
       # Read-only: this is committed configuration, not writable state. No named volume for
-      # `/prometheus` (the TSDB data dir) — ephemeral by design, the same call `qdrant` below makes
-      # for the same reason: this is alerting infrastructure for a pilot, not a metrics archive, and
-      # losing history on a recreate costs nothing an operator needs back.
+      # `/prometheus` (the TSDB data dir) — ephemeral by design: this is alerting infrastructure for
+      # a pilot, not a metrics archive, and losing history on a recreate costs nothing an operator
+      # needs back.
       - ./observability/prometheus:/etc/prometheus:ro
     ports:
       # UI and API, so the person bringing the stack up can check target health at
       # http://localhost:9090/targets without shelling into the container. Fixed rather than
-      # overridable like `mongo`/`api`/`web`/`qdrant`'s *_HOST_PORT — 9090 is Prometheus's own
-      # default and collision risk is the same low bar `jaeger`'s fixed ports above accept.
-      - "9090:9090"
+      # overridable like `mongo`/`api`/`web`'s *_HOST_PORT — 9090 is Prometheus's own default and
+      # collision risk is low.
+      #
+      # Loopback, with no override knob, for the same reason as `mongo` above: this UI and its
+      # `/api/v1/query` endpoint are unauthenticated, and the series they expose describe request
+      # volumes, error rates and spend for every tenant on the deployment.
+      - "127.0.0.1:9090:9090"
     networks:
       - evidence_ops_net
     healthcheck:
@@ -189,12 +195,13 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
-    # Gated the same way `jaeger` above is: retrieval/eval work needs neither tracing nor metrics, so
-    # `--profile observability` brings up both without the rest of `full`. Must NOT be profile-less —
-    # `docker compose up -d mongo` for a test run must not also start a monitoring stack.
+    # `observability` only, deliberately not `full`: this is an unauthenticated read surface over
+    # every tenant's operational data, so bringing up the application stack must not also start it.
+    # An operator who wants metrics alongside the demo asks for both
+    # (`docker compose --profile full --profile observability up -d`). Must NOT be profile-less
+    # either — `docker compose up -d mongo` for a test run must not start a monitoring stack.
     profiles:
       - observability
-      - full
 
   temporal-postgres:
     image: postgres:16-alpine
@@ -221,6 +228,7 @@ services:
     # depends_on edge, so this carries every profile `temporal` does.
     profiles:
       - temporal
+      - temporal-ui
       - full
 
   temporal:
@@ -246,7 +254,11 @@ services:
     ports:
       # gRPC, published so a host-run `worker:dev`/`start:dev` (the primary dev loop, see README)
       # can point TEMPORAL_ADDRESS at this container instead of `temporal server start-dev`.
-      - "7233:7233"
+      #
+      # Loopback: this frontend takes no credential of its own, and a client that reaches it can
+      # read every workflow's history — questions, conflict payloads, approval decisions — and
+      # signal or terminate runs. The host dev loop it exists for connects over loopback anyway.
+      - "127.0.0.1:7233:7233"
     depends_on:
       temporal-postgres:
         condition: service_healthy
@@ -262,9 +274,11 @@ services:
       retries: 20
       start_period: 15s
     # `temporal-ui` (below) depends_on this service — carries every profile `temporal-ui` does, for
-    # the same shared-profile reason noted on `temporal-postgres` above.
+    # the same shared-profile reason noted on `temporal-postgres` above. The server is useful
+    # without the UI; the UI is meaningless without the server, which is why the edge runs this way.
     profiles:
       - temporal
+      - temporal-ui
       - full
 
   temporal-ui:
@@ -272,8 +286,7 @@ services:
     container_name: evidence-ops-temporal-ui
     restart: always
     # mem_limit: 64m (down from 256m). Observed 25.3 MiB (2026-08-11) — this is a static file server
-    # with no in-memory buffering to size for, so it gets the same tight treatment as `web` below
-    # rather than the headroom `jaeger` needs for span buffering.
+    # with no in-memory buffering to size for, so it gets the same tight treatment as `web` below.
     mem_limit: 64m
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
@@ -281,15 +294,21 @@ services:
     ports:
       # Host port matches the Web UI port `temporal server start-dev` binds in the host dev loop
       # (README "What runs where" / step 5), so http://localhost:8233 is correct either way.
-      - "8233:8080"
+      #
+      # Loopback: this UI carries no login and renders complete workflow histories — every
+      # question asked, every conflict payload, every approval decision, across all tenants.
+      - "127.0.0.1:8233:8080"
     depends_on:
       temporal:
         condition: service_healthy
     networks:
       - evidence_ops_net
+    # Its own profile, in neither `temporal` nor `full`: an unauthenticated window onto every
+    # tenant's workflow history must be asked for by name, not arrive with the server or the demo
+    # stack. `docker compose --profile temporal-ui up -d` brings `temporal` and `temporal-postgres`
+    # with it — both carry this profile too, per the shared-profile rule noted on each.
     profiles:
-      - temporal
-      - full
+      - temporal-ui
 
   migrate:
     build:
@@ -298,8 +317,9 @@ services:
     command: npm run migrate:up
     environment:
       # Hyphen, `evidence-ops` — the underscore spelling (`evidence_ops`) previously produced a
-      # stray orphan database and must not reappear.
-      MONGO_DB_URI: mongodb://mongo:27017/evidence-ops?directConnection=true
+      # stray orphan database and must not reappear. `MONGO_AUTH`/`authSource` per the anchor above:
+      # migrations run as the same database user the application processes do.
+      MONGO_DB_URI: mongodb://${MONGO_AUTH:-}mongo:27017/evidence-ops?directConnection=true&authSource=admin
     depends_on:
       mongo:
         condition: service_healthy
@@ -331,10 +351,12 @@ services:
       # directly and bypasses npm, so without it here both processes report the same default
       # service name and a cross-process trace becomes unreadable.
       OTEL_SERVICE_NAME: evidence-ops-api
-      # Set only here, not on the shared `x-app-environment` anchor: `worker` never boots an HTTP
-      # server (`app.config.ts` never runs there) and `mcp` boots its own bare `express()` app with
-      # no `trust proxy` set at all, so neither reads this. `web` (nginx) is the one hop in front of
-      # this process now that its host-port publish above is loopback-only.
+      # Set per service rather than on the shared `x-app-environment` anchor: `worker` never boots
+      # an HTTP server (`app.config.ts` never runs there) and so never reads this, while `mcp` reads
+      # it from its own interpolation variable (see that service below). `web` (nginx) is the one
+      # hop in front of this process, and its host-port publish above is loopback-only, so no caller
+      # reaches this listener without passing through that hop. Adding the reference edge proxy
+      # (`docs/global/deployment-hardening.md`) puts a second hop in front of it: `TRUST_PROXY_HOPS=2`.
       TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
       # SSE streams are served only by this process. Caps bound how many concurrent streams one
       # tenant or user may hold open, across all three SSE routes. The lifetime only bounds the
@@ -441,6 +463,10 @@ services:
       VOYAGE_MAX_RETRY_WAIT_MS: ${VOYAGE_MAX_RETRY_WAIT_MS:-300000}
       VOYAGE_REQUEST_TIMEOUT_MS: ${VOYAGE_REQUEST_TIMEOUT_MS:-30000}
       EXTRACTION_CHUNK_CONCURRENCY: ${EXTRACTION_CHUNK_CONCURRENCY:-2}
+      # Turning this on makes aliases harvested from documents resolve, which regroups facts across
+      # every version already ingested — enable it deliberately, with conflict counts measured
+      # before and after.
+      EXTRACTION_ALIAS_HARVEST_AUTO_APPLY: ${EXTRACTION_ALIAS_HARVEST_AUTO_APPLY:-false}
       # Container-relative, and nothing mounts a host directory onto it: the local-folder connector
       # reads this path inside the container, so a pilot ingesting from the host needs a bind mount
       # added here as well as a matching path.
@@ -489,6 +515,17 @@ services:
       # Container side fixed, host side overridable — the same split as `api`'s PORT, so an
       # override cannot desynchronise the published mapping from what the process binds.
       MCP_PORT: "3002"
+      # Zero in this stack, unlike `api` above: nothing proxies this listener here — the port below
+      # is published directly — so every `X-Forwarded-For` entry is ignored and `req.ip` is the
+      # socket peer. The pre-auth IP limiter keys on that value, so a hop count higher than the
+      # number of proxies actually in front of this process lets a caller write its own limiter key.
+      #
+      # Its own interpolation variable, deliberately not the `TRUST_PROXY_HOPS` `api` reads: the two
+      # processes sit behind different numbers of proxies under the same edge. The reference proxy
+      # in `docs/global/deployment-hardening.md` is one hop in front of this listener
+      # (`MCP_TRUST_PROXY_HOPS=1`) and two in front of `api`, which it reaches through `web`'s nginx
+      # (`TRUST_PROXY_HOPS=2`). One shared variable would have to be wrong for one of them.
+      TRUST_PROXY_HOPS: ${MCP_TRUST_PROXY_HOPS:-0}
       # Charged per JSON-RPC request found in the body, not per HTTP POST: the SDK dispatches
       # batch arrays, so a per-POST limit would let a single request drive hundreds of tool calls
       # against one decrement.
@@ -510,10 +547,17 @@ services:
       migrate:
         condition: service_completed_successfully
     ports:
-      # Published: an MCP client is by definition outside this network. Nothing here bounds who can
-      # reach it — the surface authenticates every call with a PAT, and restricting network reach
-      # is the operator's concern.
-      - "${MCP_HOST_PORT:-3002}:3002"
+      # Published, because an MCP client is by definition outside this network — but bound to
+      # loopback by default, so reaching it from another host is something a deployment opts into
+      # rather than something it gets for free. Every call is PAT-authenticated, so this is defence
+      # in depth rather than the only control; what it buys is that the unauthenticated surface area
+      # exposed off-host stays empty until someone widens it deliberately.
+      #
+      # `MCP_BIND_ADDRESS=0.0.0.0` is that opt-in, and it is only safe with a TLS-terminating proxy
+      # in front (`docs/deployment/reverse-proxy.md`): this listener speaks plaintext HTTP, so a
+      # PAT crosses the network in the clear otherwise. A deployment that sets it must also set
+      # `TRUST_PROXY_HOPS` to match the proxies actually in front of this process.
+      - "${MCP_BIND_ADDRESS:-127.0.0.1}:${MCP_HOST_PORT:-3002}:3002"
     networks:
       - evidence_ops_net
     profiles:
@@ -529,7 +573,12 @@ services:
       # Overridable for the same reason as `api` and `mongo` above. 80 is free on this machine
       # today, but it is the single most contended host port there is, and a demo that dies on
       # "port is already allocated" is a bad demo.
-      - "${WEB_HOST_PORT:-8090}:80"
+      #
+      # Loopback by default like every other publish in this file, with `WEB_BIND_ADDRESS=0.0.0.0`
+      # as the deliberate opt-in. This is the surface a pilot actually shows people, and it is also
+      # plaintext HTTP carrying the session cookie, so the opt-in belongs behind the TLS-terminating
+      # proxy in `docs/deployment/reverse-proxy.md` rather than on its own.
+      - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_HOST_PORT:-8090}:80"
     depends_on:
       api:
         condition: service_healthy
@@ -537,40 +586,6 @@ services:
       - evidence_ops_net
     profiles:
       - full
-
-  qdrant:
-    image: qdrant/qdrant:v1.19.0
-    container_name: evidence-ops-qdrant
-    restart: always
-    # Measured 2026-08-12: 63 MiB resident idle with the benchmark collection absent (the eval run
-    # creates and drops it per invocation), i.e. ~25% of this limit. Kept at 256m rather than
-    # tightened to the observation: the measurement is of an EMPTY instance, and the headroom covers
-    # the 12-vector collection the benchmark builds plus Qdrant's own segment overhead.
-    mem_limit: 256m
-    ports:
-      # Overridable for the same host-port-collision reason as `mongo`/`api`/`web` above.
-      - "${QDRANT_HOST_PORT:-6333}:6333"
-    # No volume: ephemeral by design. This is benchmark infrastructure, not the retrieval store —
-    # the eval harness recreates and repopulates the collection from the already-embedded
-    # `evidence_chunks` rows on every run, so nothing here needs to survive a recreate.
-    networks:
-      - evidence_ops_net
-    healthcheck:
-      # No curl/wget in this image, but `tools/entrypoint.sh` — the image's own CMD — has the
-      # shebang `#!/usr/bin/env bash` (verified against
-      # github.com/qdrant/qdrant/blob/v1.19.0/tools/entrypoint.sh), so the container could not
-      # start at all without bash present. A bash `/dev/tcp` probe is therefore safe here.
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/6333 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
-    # `full` is the product demo stack and the benchmark's conclusion is that MongoDB stays the
-    # production retrieval store, so this deliberately does NOT carry `full`. Nothing
-    # `depends_on` qdrant, so the shared-profile rule noted on `temporal-postgres`/`temporal`/
-    # `temporal-ui` above does not bind here — this can sit alone in its own profile.
-    profiles:
-      - qdrant
 
 networks:
   evidence_ops_net:

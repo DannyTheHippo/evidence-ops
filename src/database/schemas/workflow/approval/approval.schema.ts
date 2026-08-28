@@ -2,9 +2,14 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types, WithTimestamps } from 'mongoose';
 import { AuditableDocument } from '../../../global/auditable-document/auditable-document.schema';
 
-export type ApprovalState = 'pending' | 'approved' | 'rejected';
+export type ApprovalState = 'pending' | 'approved' | 'rejected' | 'timed_out';
 
-export const APPROVAL_STATES: readonly ApprovalState[] = ['pending', 'approved', 'rejected'];
+export const APPROVAL_STATES: readonly ApprovalState[] = [
+  'pending',
+  'approved',
+  'rejected',
+  'timed_out',
+];
 
 /** `entityType`/`entityId`, not `type`/`id`: mirrors `AuditEventSubject`
  * (`audit-event.schema.ts`) — a nested field literally named `type` is ambiguous with Mongoose's

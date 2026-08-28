@@ -1,0 +1,16 @@
+Return-Path: <dana.okonkwo@meridian-facilities.example>
+From: Dana Okonkwo <dana.okonkwo@meridian-facilities.example>
+To: Analytics Intake <intake@evidence-ops.example>
+Subject: Kestrel Point summary
+Date: Tue, 04 Aug 2026 09:14:00 +0000
+Message-ID: <kestrel-point-q3-2026@meridian-facilities.example>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="evidence-ops-alt-01"
+
+--evidence-ops-alt-01
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<html><body><p>Occupancy held at 94%.</p></body></html>
+
+--evidence-ops-alt-01--

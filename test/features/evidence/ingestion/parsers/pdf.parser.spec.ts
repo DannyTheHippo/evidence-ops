@@ -244,4 +244,132 @@ describe('PdfParser', () => {
       expect(parsed.elements).toEqual([]);
     });
   });
+
+  describe('parse — reduced-fidelity detection', () => {
+    /** Two full column blocks, drawn one after the other rather than interleaved row-by-row —
+     *  each column wraps its own paragraph across several lines, well past
+     *  `MIN_COLUMN_GAP`/`MIN_LINES_PER_COLUMN` apart in x and in line count, so the lines cluster
+     *  around two distinct left edges. */
+    async function buildTwoColumnPdf(): Promise<Buffer> {
+      return new Promise((resolve, reject) => {
+        const doc = new PDFDocument({ size: 'LETTER', autoFirstPage: false });
+        const chunks: Buffer[] = [];
+        doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+        doc.on('end', () => resolve(Buffer.concat(chunks)));
+        doc.on('error', reject);
+        doc.addPage();
+
+        const leftParagraph =
+          'This is the left column of a two column report. It contains several sentences of ' +
+          'prose that wrap across multiple lines within a narrow column width, describing the ' +
+          'first half of the analysis in enough detail to span more than a couple of lines.';
+        const rightParagraph =
+          'This is the right column of the same two column report. It also contains several ' +
+          'sentences of prose that wrap across multiple lines within a narrow column width, ' +
+          'describing the second half of the analysis in similarly full detail.';
+
+        doc.fontSize(11).text(leftParagraph, 72, 100, { width: 200 });
+        doc.fontSize(11).text(rightParagraph, 340, 100, { width: 200 });
+        doc.end();
+      });
+    }
+
+    /** Rows of short cell values placed at four fixed, widely spaced x positions — every row
+     *  shares the same line-start x (the "Name" column), so this exercises the table gap
+     *  heuristic without also tripping the column-clustering heuristic. */
+    async function buildTableHeavyPdf(): Promise<Buffer> {
+      return new Promise((resolve, reject) => {
+        const doc = new PDFDocument({ size: 'LETTER', autoFirstPage: false });
+        const chunks: Buffer[] = [];
+        doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+        doc.on('end', () => resolve(Buffer.concat(chunks)));
+        doc.on('error', reject);
+        doc.addPage();
+
+        const rows = [
+          ['Name', 'Q1', 'Q2', 'Q3'],
+          ['Northgate', '5.25%', '5.30%', '5.40%'],
+          ['Cedar Bluff', '4.90%', '4.95%', '5.00%'],
+          ['Sablewood', '6.05%', '6.10%', '6.15%'],
+        ];
+        let y = 100;
+        for (const row of rows) {
+          doc.fontSize(11).text(row[0], 72, y, { lineBreak: false });
+          doc.fontSize(11).text(row[1], 250, y, { lineBreak: false });
+          doc.fontSize(11).text(row[2], 350, y, { lineBreak: false });
+          doc.fontSize(11).text(row[3], 450, y, { lineBreak: false });
+          y += 20;
+        }
+        doc.end();
+      });
+    }
+
+    /** Three pages: text, no text (the scanned-page stand-in), text — the shape a scan mixed into
+     *  an otherwise text-native PDF produces. Unlike `buildPdfWithNoText`, not every page is
+     *  empty, so this must not hit `EmptyPdfTextLayerException`. */
+    async function buildMixedScannedTextPdf(): Promise<Buffer> {
+      return new Promise((resolve, reject) => {
+        const doc = new PDFDocument({ size: 'LETTER', autoFirstPage: false });
+        const chunks: Buffer[] = [];
+        doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+        doc.on('end', () => resolve(Buffer.concat(chunks)));
+        doc.on('error', reject);
+
+        doc.addPage();
+        doc
+          .fontSize(11)
+          .text('Page one has real extractable text describing the property.', 72, 100, {
+            width: 400,
+          });
+        doc.addPage();
+        doc.addPage();
+        doc
+          .fontSize(11)
+          .text('Page three also has real extractable text about market trends.', 72, 100, {
+            width: 400,
+          });
+        doc.end();
+      });
+    }
+
+    it('should flag a two-column page as reduced-fidelity, naming the multi-column reason', async () => {
+      const buffer = await buildTwoColumnPdf();
+
+      const parsed = await parser.parse(buffer);
+
+      expect(parsed.reducedFidelityReasons).toHaveLength(1);
+      expect(parsed.reducedFidelityReasons?.[0]).toMatch(/multi-column layout on 1 of 1 page/);
+    });
+
+    it('should flag a table-heavy page as reduced-fidelity, naming the table reason', async () => {
+      const buffer = await buildTableHeavyPdf();
+
+      const parsed = await parser.parse(buffer);
+
+      expect(parsed.reducedFidelityReasons).toHaveLength(1);
+      expect(parsed.reducedFidelityReasons?.[0]).toMatch(/table-like content on 1 of 1 page/);
+    });
+
+    it('should flag a document with some but not all pages empty, naming the empty-page count, without rejecting it', async () => {
+      const buffer = await buildMixedScannedTextPdf();
+
+      const parsed = await parser.parse(buffer);
+
+      expect(parsed.elements).toHaveLength(3);
+      expect(parsed.reducedFidelityReasons).toHaveLength(1);
+      expect(parsed.reducedFidelityReasons?.[0]).toMatch(
+        /1 of 3 page\(s\) have no extractable text/,
+      );
+    });
+
+    it('should not flag a clean single-column document — the false-positive guard', async () => {
+      for (const fileName of ['valuation-memo.pdf', 'market-overview.pdf'] as const) {
+        const buffer = await readFile(path.join(DATA_ROOM_DIR, fileName));
+
+        const parsed = await parser.parse(buffer);
+
+        expect(parsed.reducedFidelityReasons).toEqual([]);
+      }
+    });
+  });
 });

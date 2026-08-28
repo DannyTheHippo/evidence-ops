@@ -25,8 +25,10 @@ import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { canonicalEntitiesApiExamples } from './api-examples/canonical-entities.api-examples';
 import { CanonicalEntityService } from './canonical-entity.service';
 import { CreateCanonicalEntityRequestDto } from './dtos/request/create-canonical-entity.request.dto';
+import { RevokeHarvestedAliasRequestDto } from './dtos/request/revoke-harvested-alias.request.dto';
 import { UpdateCanonicalEntityRequestDto } from './dtos/request/update-canonical-entity.request.dto';
 import { CanonicalEntityResponseDto } from './dtos/response/canonical-entity.response.dto';
+import { ScanNearMatchesResponseDto } from './dtos/response/scan-near-matches.response.dto';
 
 @Controller('canonical-entities')
 @ApiTags('canonical-entities')
@@ -53,8 +55,28 @@ export class CanonicalEntitiesController {
     return { docs: docs.map((doc) => toResponseDto(CanonicalEntityResponseDto, doc)), count };
   }
 
+  // Admin-only: a proposal it records changes what a subsequent GET surfaces for review
+  // tenant-wide, the same authorship bar `create` sets for an authored row.
+  @Post('near-matches/scan')
+  @Version('1')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(RolesGuard)
+  @RequireRole(UserRole.Admin)
+  @ApiResponse(canonicalEntitiesApiExamples.nearMatchesScanned)
+  @ApiResponse(canonicalEntitiesApiExamples.forbidden)
+  async scanNearMatches(
+    @CurrentUser() user: AuthenticatedRequest['user'],
+  ): Promise<ScanNearMatchesResponseDto> {
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    const proposed = await this.canonicalEntityService.scanNearMatches(user.tenantId);
+    return toResponseDto(ScanNearMatchesResponseDto, { proposed });
+  }
+
   // Admin-only: an authored row changes how every conflict grouped under its name resolves
-  // tenant-wide, the same register as authoring a metric policy (`metric-policies.controller.ts`).
+  // tenant-wide.
   @Post()
   @Version('1')
   @HttpCode(HttpStatus.CREATED)
@@ -112,6 +134,71 @@ export class CanonicalEntitiesController {
           canonicalName: dto.canonicalName,
           aliases: dto.aliases,
         },
+        user.userId,
+      ),
+    );
+  }
+
+  // Admin-only, same reasoning as `create` — applying a proposed alias changes how every fact
+  // grouped under it resolves tenant-wide. The one-click confirmation for both a document-read
+  // and an inferred proposal: both land as `proposed` and this is the only path to `applied`.
+  @Post(':id/harvested-aliases/apply')
+  @Version('1')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(RolesGuard)
+  @RequireRole(UserRole.Admin)
+  @ApiResponse(canonicalEntitiesApiExamples.aliasApplied)
+  @ApiResponse(canonicalEntitiesApiExamples.notFound)
+  @ApiResponse(canonicalEntitiesApiExamples.aliasNotFound)
+  @ApiResponse(canonicalEntitiesApiExamples.aliasNotProposed)
+  @ApiResponse(canonicalEntitiesApiExamples.forbidden)
+  async applyHarvestedAlias(
+    @Param('id') id: string,
+    @Body() dto: RevokeHarvestedAliasRequestDto,
+    @CurrentUser() user: AuthenticatedRequest['user'],
+  ): Promise<CanonicalEntityResponseDto> {
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    return toResponseDto(
+      CanonicalEntityResponseDto,
+      await this.canonicalEntityService.applyHarvestedAlias(
+        id,
+        user.tenantId,
+        dto.alias,
+        user.userId,
+      ),
+    );
+  }
+
+  // Admin-only, same reasoning as `create` — revoking a harvested alias changes how every fact
+  // grouped under it resolves tenant-wide. A `POST` rather than a `DELETE`: the alias travels in
+  // the body, and the row it hangs off survives.
+  @Post(':id/harvested-aliases/revoke')
+  @Version('1')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(RolesGuard)
+  @RequireRole(UserRole.Admin)
+  @ApiResponse(canonicalEntitiesApiExamples.aliasRevoked)
+  @ApiResponse(canonicalEntitiesApiExamples.notFound)
+  @ApiResponse(canonicalEntitiesApiExamples.aliasNotFound)
+  @ApiResponse(canonicalEntitiesApiExamples.forbidden)
+  async revokeHarvestedAlias(
+    @Param('id') id: string,
+    @Body() dto: RevokeHarvestedAliasRequestDto,
+    @CurrentUser() user: AuthenticatedRequest['user'],
+  ): Promise<CanonicalEntityResponseDto> {
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    return toResponseDto(
+      CanonicalEntityResponseDto,
+      await this.canonicalEntityService.revokeHarvestedAlias(
+        id,
+        user.tenantId,
+        dto.alias,
         user.userId,
       ),
     );

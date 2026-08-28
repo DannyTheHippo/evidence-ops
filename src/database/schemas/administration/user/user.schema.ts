@@ -22,6 +22,15 @@ export class User extends AuditableDocument {
 
   @Prop({ type: String, required: true, enum: Object.values(UserRole), default: UserRole.Member })
   role: UserRole;
+
+  /**
+   * Session epoch. Minted into every JWT and compared against this row on each request
+   * (`JwtAuthGuard`), so raising it refuses every token issued before the raise. `required` with a
+   * `0` default: a row with no epoch would mint an `undefined` claim, and the guard refuses a
+   * non-numeric claim, so a missing value locks the account out rather than opening it.
+   */
+  @Prop({ type: Number, required: true, default: 0 })
+  tokenVersion: number;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

@@ -93,18 +93,18 @@ export class ConflictResponseDto {
   @ApiProperty({
     example: false,
     description:
-      "True when this conflict's factKey.metric was detected under a metric pack version that " +
-      "is no longer the tenant's active one — a pack activation (or a retraction rescan that " +
-      "hasn't reached this group yet) can leave a row's tolerance out of date with what the " +
-      'active pack would compute today. Always present, independent of unscorable — the two are ' +
-      'unrelated failure modes and a row can carry either, both, or neither. Never hidden: a stale ' +
-      'row stays in the list, shown and labelled, rather than silently dropped.',
+      "True when this conflict's packId/packVersion stamp does not match the deployed " +
+      'ACTIVE_PACK_ID/ACTIVE_PACK_VERSION — a row detected under a superseded ontology may no ' +
+      'longer match what the current ontology would compute today. Always present, independent ' +
+      'of unscorable — the two are unrelated failure modes and a row can carry either, both, or ' +
+      'neither. Never hidden: a stale row stays in the list, shown and labelled, rather than ' +
+      'silently dropped.',
   })
   stale: boolean;
 
   @Expose()
   @ApiProperty({
-    example: "Detected under pack 'cre' v1; the tenant's active pack is now 'acme-cre' v2.",
+    example: "Detected under pack 'cre' v1; the active pack is now 'cre' v2.",
     description:
       'Present only when stale is true — which pack detected this row versus which is active now.',
     required: false,

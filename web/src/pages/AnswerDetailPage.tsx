@@ -13,21 +13,32 @@ export default function AnswerDetailPage() {
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // `cancelled` (matching ConflictsPage.tsx's own document-index effect) stops a response for a
+  // stale `id` from landing after navigation moves to a different answer — without it, `/answers/A`
+  // → `/answers/B` can render A's claims under B's url if A's fetch resolves after B's.
   useEffect(() => {
     if (!id) return;
+    let cancelled = false;
+
     getAnswerById(id)
       .then((result) => {
+        if (cancelled) return;
         setAnswer(result);
         setNotFound(false);
         setError(null);
       })
       .catch((err: unknown) => {
+        if (cancelled) return;
         if (err instanceof ApiError && err.status === 404) {
           setNotFound(true);
           return;
         }
         setError(err instanceof Error ? err.message : 'Failed to load answer');
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
 
   const { documentIndex, conflictChunkIndex } = useAnswerEnrichment(answer);

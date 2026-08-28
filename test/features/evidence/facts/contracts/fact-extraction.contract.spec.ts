@@ -8,7 +8,7 @@ const factCandidateSchema = buildFactCandidateSchema(METRIC_IDS);
 const factExtractionResultSchema = buildFactExtractionResultSchema(METRIC_IDS);
 
 const validCandidate = {
-  entity: 'Northgate Business Park',
+  entityQuote: 'Northgate Business Park',
   metric: 'cap_rate',
   periodText: 'March 2025',
   observedAtText: '2025-03-14',
@@ -45,6 +45,30 @@ describe('factCandidateSchema', () => {
     expect(factCandidateSchema.safeParse({ ...validCandidate, quote: '' }).success).toBe(false);
   });
 
+  it('should reject an empty entityQuote', () => {
+    expect(factCandidateSchema.safeParse({ ...validCandidate, entityQuote: '' }).success).toBe(
+      false,
+    );
+  });
+
+  it('should reject an entityQuote longer than 200 characters', () => {
+    expect(
+      factCandidateSchema.safeParse({ ...validCandidate, entityQuote: 'x'.repeat(201) }).success,
+    ).toBe(false);
+  });
+
+  it('should accept an entityQuote at exactly the 200 character limit', () => {
+    expect(
+      factCandidateSchema.safeParse({ ...validCandidate, entityQuote: 'x'.repeat(200) }).success,
+    ).toBe(true);
+  });
+
+  it('should reject a candidate with no entityQuote at all', () => {
+    expect(
+      factCandidateSchema.safeParse({ ...validCandidate, entityQuote: undefined }).success,
+    ).toBe(false);
+  });
+
   it('should reject a confidence outside [0, 1]', () => {
     expect(factCandidateSchema.safeParse({ ...validCandidate, confidence: 1.5 }).success).toBe(
       false,
@@ -62,6 +86,19 @@ describe('factCandidateSchema', () => {
     expect(factCandidateSchema.safeParse({ ...validCandidate, observedAtText: '' }).success).toBe(
       true,
     );
+  });
+
+  // The prose path's own numeric grammar: `zod/v4`'s `z.number()` accepts only finite numbers, so a
+  // model cannot propose an amount that would make every tolerance comparison in
+  // `isConflictingPair` read as agreement. Pinned here because the deterministic spreadsheet path
+  // enforces the same property in its own code (`parseDecimalAmount`, xlsx-fact-extractor.ts) and
+  // the two must not drift apart.
+  it.each([
+    { label: 'Infinity', amount: Infinity },
+    { label: '-Infinity', amount: -Infinity },
+    { label: 'NaN', amount: NaN },
+  ])('should reject an amount of $label', ({ amount }) => {
+    expect(factCandidateSchema.safeParse({ ...validCandidate, amount }).success).toBe(false);
   });
 
   it('should reject a candidate missing observedAtText entirely', () => {

@@ -29,10 +29,22 @@ export class SpendGuardModelProvider implements ModelProvider {
     private readonly inner: ModelProvider,
     private readonly spendService: TenantSpendService,
     private readonly dailyLimitUsd: number,
+    // Sub-ceiling for `fact_extraction` calls only, reserved against the same ledger `reserve`
+    // already atomically checks — `undefined` (the default) reserves ingest against the full
+    // `dailyLimitUsd`, same as before this parameter existed. Every other task class always
+    // reserves against `dailyLimitUsd`, so a backfill's own ingest spend can never crowd out the
+    // headroom interactive calls (`qa_answer`, `claim_verification`) depend on.
+    private readonly ingestDailyLimitUsd?: number,
   ) {}
 
   get info(): ModelProviderInfo {
     return this.inner.info;
+  }
+
+  /** Forwards to the delegate — see `ModelProvider.resolveModel`'s own doc comment for why every
+   * decorator in the chain must do this rather than let it fall back silently. */
+  resolveModel(taskClass: ModelRequest['taskClass']): string {
+    return this.inner.resolveModel?.(taskClass) ?? this.inner.info.model;
   }
 
   async generate<TSchema extends z.ZodType | undefined = undefined>(
@@ -47,7 +59,8 @@ export class SpendGuardModelProvider implements ModelProvider {
     }
 
     const { tenantId, maxCostUsd } = request;
-    const windowStart = await this.spendService.reserve(tenantId, maxCostUsd, this.dailyLimitUsd);
+    const limitUsd = this.limitUsdFor(request.taskClass);
+    const windowStart = await this.spendService.reserve(tenantId, maxCostUsd, limitUsd);
 
     let result: ModelResult<TSchema>;
     try {
@@ -59,5 +72,14 @@ export class SpendGuardModelProvider implements ModelProvider {
 
     await this.spendService.settle(tenantId, windowStart, maxCostUsd, result.costUsd);
     return result;
+  }
+
+  /** `fact_extraction` is the only ingest task class; everything else is interactive and always
+   * reserves against the full `dailyLimitUsd`. */
+  private limitUsdFor(taskClass: ModelRequest['taskClass']): number {
+    if (taskClass === 'fact_extraction' && this.ingestDailyLimitUsd !== undefined) {
+      return this.ingestDailyLimitUsd;
+    }
+    return this.dailyLimitUsd;
   }
 }

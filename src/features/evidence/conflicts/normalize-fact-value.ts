@@ -1,8 +1,5 @@
 import type { FactValue } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
-// The pack schema's `MetricDefinition` (`id: string`) rather than `metric-ontology.ts`'s own
-// (`id: MetricId`) — neither function here reads `.id`, and the wider type lets a caller working
-// from a resolved `MetricPackData` pass its metrics straight through without narrowing.
-import type { MetricDefinition } from '../../../database/schemas/evidence/metric-pack/metric-pack.schema';
+import type { MetricDefinition } from '../facts/metric-ontology';
 
 /** `5.25%`, `0.0525`, and `5.25` (unit `percent`) are the same cap rate expressed three ways;
  * `$12.0M` and `12000000` are the same sale price. This is the one place that reconciles any of

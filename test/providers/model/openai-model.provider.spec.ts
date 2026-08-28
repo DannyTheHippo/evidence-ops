@@ -1,5 +1,6 @@
 import { z } from 'zod/v4';
 import { ModelBudgetExceededError } from '../../../src/providers/model/errors/model-budget-exceeded.error';
+import { ModelOutputTruncatedError } from '../../../src/providers/model/errors/model-output-truncated.error';
 import { ModelSchemaValidationError } from '../../../src/providers/model/errors/model-schema-validation.error';
 import { OpenAiInvalidResponseError } from '../../../src/providers/model/errors/openai-invalid-response.error';
 import { OpenAiRequestFailedError } from '../../../src/providers/model/errors/openai-request-failed.error';
@@ -37,7 +38,7 @@ interface OpenAiUsageOverrides {
 function buildResponse(
   content: string,
   usage: OpenAiUsageOverrides = {},
-  finishReason?: string,
+  finishReason?: string | null,
 ): Response {
   const body = {
     choices: [{ message: { content }, finish_reason: finishReason }],
@@ -269,13 +270,13 @@ describe('OpenAiModelProvider', () => {
     const schema = z.object({ answer: z.string() });
     const requestWithSchema: ModelRequest<typeof schema> = { ...baseRequest, outputSchema: schema };
 
-    it('should retry exactly once and succeed when the retry output validates', async () => {
+    it('should retry exactly once and succeed when the retry output validates, for a schema failure that is not a truncation', async () => {
       fetchMock
         .mockResolvedValueOnce(
-          buildResponse('not json', { prompt_tokens: 10, completion_tokens: 5 }),
+          buildResponse('not json', { prompt_tokens: 10, completion_tokens: 5 }, 'stop'),
         )
         .mockResolvedValueOnce(
-          buildResponse('{"answer":"Paris"}', { prompt_tokens: 20, completion_tokens: 8 }),
+          buildResponse('{"answer":"Paris"}', { prompt_tokens: 20, completion_tokens: 8 }, 'stop'),
         );
       const provider = buildProvider();
 
@@ -311,6 +312,114 @@ describe('OpenAiModelProvider', () => {
         ModelSchemaValidationError,
       );
       expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('output-cap truncation', () => {
+    const schema = z.object({ answer: z.string() });
+    const requestWithSchema: ModelRequest<typeof schema> = { ...baseRequest, outputSchema: schema };
+
+    it('should throw ModelOutputTruncatedError on a first response with finish_reason "length", without making a second (doomed) call', async () => {
+      fetchMock.mockResolvedValueOnce(
+        buildResponse('{"answ', { completion_tokens: 100 }, 'length'),
+      );
+      const provider = buildProvider();
+
+      const error = await provider.generate(requestWithSchema).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ModelOutputTruncatedError);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('should throw ModelOutputTruncatedError on a retry response that also carries finish_reason "length"', async () => {
+      fetchMock
+        .mockResolvedValueOnce(buildResponse('not json', { completion_tokens: 5 }, 'stop'))
+        .mockResolvedValueOnce(buildResponse('{"answ', { completion_tokens: 100 }, 'length'));
+      const provider = buildProvider();
+
+      const error = await provider.generate(requestWithSchema).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ModelOutputTruncatedError);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('should return a response that parses and validates even though it carries finish_reason "length" — a valid response is valid regardless of why generation stopped', async () => {
+      fetchMock.mockResolvedValueOnce(
+        buildResponse('{"answer":"Paris"}', { completion_tokens: 100 }, 'length'),
+      );
+      const provider = buildProvider();
+
+      const result = await provider.generate(requestWithSchema);
+
+      expect(result.output).toEqual({ answer: 'Paris' });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('should carry the stop reason, maxTokens cap, output token count and raw text as public fields, and state the cap, count and stop reason in the message without embedding the raw output', async () => {
+      fetchMock.mockResolvedValueOnce(buildResponse('{"answ', { completion_tokens: 77 }, 'length'));
+      const provider = buildProvider();
+
+      const error = (await provider
+        .generate({ ...requestWithSchema, maxTokens: 100 })
+        .catch((e: unknown) => e)) as ModelOutputTruncatedError;
+
+      expect(error.stopReason).toBe('length');
+      expect(error.maxTokens).toBe(100);
+      expect(error.outputTokens).toBe(77);
+      expect(error.raw).toBe('{"answ');
+      expect(error.message).toContain('100');
+      expect(error.message).toContain('77');
+      expect(error.message).toContain('length');
+      expect(error.message).not.toMatch(/JSON|schema/i);
+      expect(error.message).not.toContain('{"answ');
+    });
+
+    it("should not throw on a truncated response for the schema-less branch — a truncated free-text answer is the caller's business", async () => {
+      fetchMock.mockResolvedValueOnce(buildResponse('Par', {}, 'length'));
+      const provider = buildProvider();
+
+      const result = await provider.generate(baseRequest);
+
+      expect(result.output).toBe('Par');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not append an empty assistant turn on retry when the first attempt produced no text', async () => {
+      fetchMock
+        .mockResolvedValueOnce(buildResponse('', {}, 'stop'))
+        .mockResolvedValueOnce(buildResponse('{"answer":"Paris"}', {}, 'stop'));
+      const provider = buildProvider();
+
+      await provider.generate(requestWithSchema);
+
+      const retryBody = lastRequestBody();
+      expect(retryBody.messages.some((m) => m.role === 'assistant' && m.content === '')).toBe(
+        false,
+      );
+      expect(retryBody.messages.at(-1)?.role).toBe('user');
+    });
+
+    it('should not append a whitespace-only assistant turn on retry either — there is nothing to echo', async () => {
+      fetchMock
+        .mockResolvedValueOnce(buildResponse('   \n\t', {}, 'stop'))
+        .mockResolvedValueOnce(buildResponse('{"answer":"Paris"}', {}, 'stop'));
+      const provider = buildProvider();
+
+      await provider.generate(requestWithSchema);
+
+      const retryBody = lastRequestBody();
+      expect(retryBody.messages.some((m) => m.role === 'assistant')).toBe(false);
+      expect(retryBody.messages.at(-1)?.role).toBe('user');
+    });
+
+    it('should treat a null finish_reason the same as an absent one — no cap signal, so the schema-less branch returns normally', async () => {
+      fetchMock.mockResolvedValueOnce(buildResponse('Paris', {}, null));
+      const provider = buildProvider();
+
+      const result = await provider.generate(baseRequest);
+
+      expect(result.output).toBe('Paris');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
   });
 

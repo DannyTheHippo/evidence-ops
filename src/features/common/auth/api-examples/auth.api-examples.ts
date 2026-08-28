@@ -94,6 +94,21 @@ export const loginApiExamples: Record<string, ApiResponseOptions> = {
       },
     },
   },
+  tooManyRequests: {
+    status: HttpStatus.TOO_MANY_REQUESTS,
+    description:
+      'Too many credential attempts from this address, or against this email address, within the configured window. Carries no information about whether the account exists.',
+    examples: {
+      example: {
+        summary: 'Credential attempts exhausted',
+        value: {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          message: 'ThrottlerException: Too Many Requests',
+          error: 'Too Many Requests',
+        },
+      },
+    },
+  },
 };
 
 export const logoutApiExamples: Record<string, ApiResponseOptions> = {

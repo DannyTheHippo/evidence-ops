@@ -523,7 +523,11 @@ export class SourcesService {
         const absentSweeps = (entry.absentSweeps ?? 0) + 1;
         if (absentSweeps >= ABSENT_SWEEPS_BEFORE_WITHDRAWAL) {
           fileStates[index] = this.cloneFileState(entry, { absentSweeps, withdrawnAt: new Date() });
-          documentIdsToWithdraw.push(entry.documentId);
+          // A placeholder entry (no `documentId`) was never ingested, so there is no document
+          // version to withdraw — only stop tracking it as active, above.
+          if (entry.documentId !== undefined) {
+            documentIdsToWithdraw.push(entry.documentId);
+          }
         } else {
           fileStates[index] = this.cloneFileState(entry, { absentSweeps });
         }
@@ -587,13 +591,17 @@ export class SourcesService {
    * stale by the time `fetchFile` runs (the file can grow between list and fetch), so it is the
    * cheap guard, never a replacement for the authoritative check against the bytes actually read.
    *
-   * A brand-new file that fails has no prior `fileStates` entry to attach `lastError` to, and
-   * `SourceFileState.documentId` is required — there is nothing to persist a partial entry against,
-   * so that case is logged only, not recorded on the source. It is retried on every future sync
-   * (no entry means "new" again) until it succeeds or the underlying file is fixed. An existing
-   * entry that fails keeps its previous watermark (`sizeBytes`/`mtimeMs`/`sha256`/`documentId`)
-   * unchanged alongside the new `lastError` — advancing the watermark on a failed attempt would make
-   * the cheap watermark check above skip the file forever without it ever having synced.
+   * A brand-new file that fails gets a placeholder entry pushed onto `fileStates` —
+   * `{path, sizeBytes, mtimeMs, lastError}`, with no `documentId` and no `sha256`, since nothing
+   * was ever ingested and an unresolvable-kind or oversized rejection never reads bytes to hash —
+   * so the file is listed against its source instead of only logged. `documentId` presence is what
+   * distinguishes a placeholder from a synced entry everywhere below: the watermark early-return,
+   * the dedupe branch, and the create-vs-add-version choice all require it, so a placeholder is
+   * never mistaken for a synced file and is retried on every sweep until it succeeds or the
+   * underlying file is fixed. An existing (non-placeholder) entry that fails keeps its previous
+   * watermark (`sizeBytes`/`mtimeMs`/`sha256`/`documentId`) unchanged alongside the new
+   * `lastError` — advancing the watermark on a failed attempt would make the cheap watermark check
+   * above skip the file forever without it ever having synced.
    *
    * The cheap watermark early-return REQUIRES `!existing.withdrawnAt` — a withdrawn path that
    * reappears with byte-identical `sizeBytes`/`mtimeMs` (`cp -p`, `rsync -a`, and `git checkout`
@@ -615,6 +623,7 @@ export class SourcesService {
 
     if (
       existing &&
+      existing.documentId !== undefined &&
       existing.sizeBytes === file.sizeBytes &&
       existing.mtimeMs === file.mtimeMs &&
       !existing.withdrawnAt
@@ -650,7 +659,7 @@ export class SourcesService {
 
       const sha256 = createHash('sha256').update(content).digest('hex');
 
-      if (existing && existing.sha256 === sha256) {
+      if (existing && existing.documentId !== undefined && existing.sha256 === sha256) {
         fileStates[index] = this.cloneFileState(existing, {
           sizeBytes: file.sizeBytes,
           mtimeMs: file.mtimeMs,
@@ -672,18 +681,20 @@ export class SourcesService {
       };
 
       // `sourceClass`/`sourceId` only matter on the document-creation branch below — `addVersion`
-      // (existing branch) writes bytes onto a document that already has both, unrelated to this
-      // sync attempt's source.
-      const response = existing
-        ? await this.documentsService.upload(
-            uploadedFile,
-            { documentId: existing.documentId.toString() },
-            tenantId,
-          )
-        : await this.documentsService.upload(uploadedFile, { title: filename }, tenantId, {
-            sourceClass,
-            sourceId,
-          });
+      // (existing-document branch) writes bytes onto a document that already has both, unrelated
+      // to this sync attempt's source. A placeholder entry (no `documentId`) has no document to add
+      // a version to, so it takes the creation branch exactly like a brand-new path would.
+      const response =
+        existing && existing.documentId !== undefined
+          ? await this.documentsService.upload(
+              uploadedFile,
+              { documentId: existing.documentId.toString() },
+              tenantId,
+            )
+          : await this.documentsService.upload(uploadedFile, { title: filename }, tenantId, {
+              sourceClass,
+              sourceId,
+            });
 
       const newState: SourceFileState = {
         path: file.relativePath,
@@ -699,8 +710,10 @@ export class SourcesService {
       }
       // The genuinely-changed-bytes path above created a fresh version that is never itself
       // withdrawn, but an EARLIER version of the same document can still carry `withdrawnAt` from a
-      // prior sweep; this reconciles the whole document, not just this new version.
-      if (existing && existing.withdrawnAt !== undefined) {
+      // prior sweep; this reconciles the whole document, not just this new version. A placeholder
+      // never carries `withdrawnAt` (only a `documentId`-bearing entry is ever withdrawn — see
+      // `runSync`), so this is unreachable for one, but the guard is explicit rather than assumed.
+      if (existing && existing.documentId !== undefined && existing.withdrawnAt !== undefined) {
         await this.documentsService.reinstateVersions([existing.documentId], tenantId);
       }
     } catch (error) {
@@ -708,7 +721,12 @@ export class SourcesService {
       if (existing) {
         fileStates[index] = this.cloneFileState(existing, { lastError: message });
       } else {
-        this.logger.warn(`Sync error for new file '${file.relativePath}': ${message}`);
+        fileStates.push({
+          path: file.relativePath,
+          sizeBytes: file.sizeBytes,
+          mtimeMs: file.mtimeMs,
+          lastError: message,
+        });
       }
     }
   }

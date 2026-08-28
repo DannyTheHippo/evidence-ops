@@ -14,9 +14,6 @@ import ConflictsPage from './pages/ConflictsPage';
 import DataRoomPage from './pages/DataRoomPage';
 import HomePage from './pages/HomePage';
 import InvitationsPage from './pages/InvitationsPage';
-import MeasuresPage from './pages/MeasuresPage';
-import MetricPacksPage from './pages/MetricPacksPage';
-import ResolutionRulesPage from './pages/ResolutionRulesPage';
 import RunsPage from './pages/RunsPage';
 import SearchPage from './pages/SearchPage';
 import SourceDetailPage from './pages/SourceDetailPage';
@@ -75,14 +72,6 @@ export default function AuthenticatedRoutes() {
         element={
           <RequireAuth>
             <HomePage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/measures"
-        element={
-          <RequireAuth>
-            <MeasuresPage />
           </RequireAuth>
         }
       />
@@ -207,34 +196,10 @@ export default function AuthenticatedRoutes() {
         }
       />
       <Route
-        path="/resolution-rules"
-        element={
-          <RequireAdmin>
-            <ResolutionRulesPage />
-          </RequireAdmin>
-        }
-      />
-      <Route
         path="/canonical-entities"
         element={
           <RequireAdmin>
             <CanonicalEntitiesPage />
-          </RequireAdmin>
-        }
-      />
-      <Route
-        path="/metric-packs"
-        element={
-          <RequireAdmin>
-            <MetricPacksPage />
-          </RequireAdmin>
-        }
-      />
-      <Route
-        path="/metric-packs/:packId/:version"
-        element={
-          <RequireAdmin>
-            <MetricPacksPage />
           </RequireAdmin>
         }
       />

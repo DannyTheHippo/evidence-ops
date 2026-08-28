@@ -191,9 +191,7 @@
    needs no override here. */
 
 /* A list row naming one specific item, with room for trailing status or meta, that links to
-   where you act on it — or, in a reorder control (ResolutionRulesPage's RuleEditorDialog), that
-   IS the thing being acted on, with a rank numeral and a pair of move buttons standing in for the
-   link. .dashboard-answer is this same pattern applied to a recent-answers list. */
+   where you act on it. .dashboard-answer is this same pattern applied to a recent-answers list. */
 .actionable-row,
 .dashboard-answer {
   display: flex;
@@ -211,24 +209,6 @@
 .actionable-row-name,
 .dashboard-answer-question {
   overflow-wrap: anywhere;
-}
-
-/* ── Rank reorder rows ───────────────────────────────────────────────────── */
-
-/* The rendered rank numeral in a reorder row. Rendered rather than left to the <ol> marker
-   because the shared list reset (primitives.css) strips markers, and tabular numerals are needed
-   past position 9. */
-.rank-index {
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
-  min-width: 1.5em;
-}
-.rank-name {
-  flex: 1;
-}
-.rank-actions {
-  display: flex;
-  gap: var(--space-1);
 }
 
 /* ── Ask density ─────────────────────────────────────────────────────────── */

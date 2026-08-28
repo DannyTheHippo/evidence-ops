@@ -4,6 +4,7 @@ import { TypedConfigService } from '../../config/environment/typed-config.servic
 import { OpenAiInvalidResponseError } from './errors/openai-invalid-response.error';
 import { OpenAiRequestFailedError } from './errors/openai-request-failed.error';
 import { ModelBudgetExceededError } from './errors/model-budget-exceeded.error';
+import { ModelOutputTruncatedError } from './errors/model-output-truncated.error';
 import { ModelSchemaValidationError } from './errors/model-schema-validation.error';
 import { UnknownModelPricingError } from './errors/unknown-model-pricing.error';
 import type {
@@ -59,6 +60,11 @@ const openAiChatCompletionResponseSchema = z.object({
         message: z.object({
           content: z.string().nullable().optional(),
         }),
+        // Nullable and optional for the same self-hosted-server reason `content` above is: a
+        // vLLM/Ollama endpoint's exact null-vs-absent behaviour for this field is not pinned
+        // either. Both a `null` and an absent value mean there is no cap signal to check, so
+        // `extractFinishReason` treats them identically — the response is not length-truncated.
+        finish_reason: z.string().nullable().optional(),
       }),
     )
     .min(1),
@@ -96,6 +102,10 @@ function toOpenAiMessages(request: {
 
 function extractOutput(response: OpenAiChatCompletionResponse): string {
   return response.choices[0].message.content ?? '';
+}
+
+function extractFinishReason(response: OpenAiChatCompletionResponse): string | null | undefined {
+  return response.choices[0].finish_reason;
 }
 
 function toModelUsage(usage: OpenAiUsage): ModelUsage {
@@ -206,6 +216,9 @@ export class OpenAiModelProvider implements ModelProvider {
     const first = await this.callChatCompletions(baseMessages, request.maxTokens, responseFormat);
 
     if (!schema || !validationSchema) {
+      // A truncated free-text answer is the caller's business, not a hard failure here — with no
+      // outputSchema there is no downstream parse a truncation would break, so the text comes
+      // back as-is regardless of finish_reason.
       return {
         output: extractOutput(first) as ModelOutput<TSchema>,
         usage: toModelUsage(first.usage),
@@ -216,6 +229,8 @@ export class OpenAiModelProvider implements ModelProvider {
     const firstText = extractOutput(first);
     const firstParsed = safeParseModelJson(firstText, validationSchema);
     if (firstParsed.success) {
+      // A response is valid regardless of why generation stopped — a `finish_reason` that would
+      // otherwise mean truncation is moot once the emitted text has already parsed and validated.
       return {
         output: unwrapIfWrapped(
           firstParsed.data,
@@ -226,17 +241,33 @@ export class OpenAiModelProvider implements ModelProvider {
       };
     }
 
+    // Consulted only once the parse/validation above has already failed: the cap signal explains
+    // *why* an unparseable response is unparseable, it does not by itself mean the response is
+    // bad. A response cut off by the output cap is incomplete by construction, so entering the
+    // schema-validation retry below would resend the same (or a longer) prompt against the same
+    // cap and reproduce the same cutoff — that retry is a real billed request.
+    if (extractFinishReason(first) === 'length') {
+      throw new ModelOutputTruncatedError(
+        'length',
+        request.maxTokens,
+        first.usage.completion_tokens,
+        firstText,
+      );
+    }
+
     // Exactly one retry, feeding the validation errors back to the model — matches
     // `AnthropicModelProvider`'s retry count for the same failure class. Usage/cost from both
     // calls accumulate — the retry is a real billed request.
-    const retryMessages: OpenAiChatMessage[] = [
-      ...baseMessages,
-      { role: 'assistant', content: firstText },
-      {
-        role: 'user',
-        content: `Your previous response failed schema validation:\n${formatIssuesForRetry(firstParsed.issues)}\n\nReturn ONLY corrected JSON matching the schema.`,
-      },
-    ];
+    const correctionMessage: OpenAiChatMessage = {
+      role: 'user',
+      content: `Your previous response failed schema validation:\n${formatIssuesForRetry(firstParsed.issues)}\n\nReturn ONLY corrected JSON matching the schema.`,
+    };
+    // Some providers reject an empty assistant content turn outright, matching
+    // `AnthropicModelProvider`'s handling: when the model produced no visible (non-whitespace)
+    // text, there is nothing to echo back, so the correction turn is appended directly instead.
+    const retryMessages: OpenAiChatMessage[] = firstText.trim()
+      ? [...baseMessages, { role: 'assistant', content: firstText }, correctionMessage]
+      : [...baseMessages, correctionMessage];
 
     const retry = await this.callChatCompletions(retryMessages, request.maxTokens, responseFormat);
     const retryText = extractOutput(retry);
@@ -254,6 +285,15 @@ export class OpenAiModelProvider implements ModelProvider {
         usage,
         costUsd,
       };
+    }
+
+    if (extractFinishReason(retry) === 'length') {
+      throw new ModelOutputTruncatedError(
+        'length',
+        request.maxTokens,
+        retry.usage.completion_tokens,
+        retryText,
+      );
     }
 
     throw new ModelSchemaValidationError(retryParsed.issues, retryText);

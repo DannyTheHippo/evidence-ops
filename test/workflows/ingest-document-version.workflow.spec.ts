@@ -1,15 +1,26 @@
 import { ingestDocumentVersion } from '../../src/workflows/ingest-document-version.workflow';
+import {
+  EXTRACT_FACTS_NON_RETRYABLE_ERROR_TYPES,
+  INGEST_HEARTBEAT_TIMEOUT_MS,
+  INGEST_NON_RETRYABLE_ERROR_TYPES,
+  INGEST_SCHEDULE_TO_CLOSE_TIMEOUT_MS,
+  INGEST_START_TO_CLOSE_TIMEOUT_MS,
+} from '../../src/workflows/ingest-retry-policy';
 import type { IngestDocumentVersionInput } from '../../src/workflows/types';
 
 interface ActivityStubs {
   ingestDocumentVersion: jest.Mock;
   extractFacts: jest.Mock;
   scanForConflicts: jest.Mock;
+  recordFactExtractionFailure: jest.Mock;
   requestIngestApproval: jest.Mock;
   getApprovalDecision: jest.Mock;
 }
 
 interface ProxyActivitiesOptions {
+  readonly startToCloseTimeout?: number | string;
+  readonly scheduleToCloseTimeout?: number | string;
+  readonly heartbeatTimeout?: number | string;
   readonly retry?: { readonly nonRetryableErrorTypes?: readonly string[] };
 }
 
@@ -35,6 +46,7 @@ jest.mock('@temporalio/workflow', () => {
     ingestDocumentVersion: jest.fn(),
     extractFacts: jest.fn(),
     scanForConflicts: jest.fn(),
+    recordFactExtractionFailure: jest.fn(),
     requestIngestApproval: jest.fn(),
     getApprovalDecision: jest.fn(),
   };
@@ -57,7 +69,8 @@ const { activityStubs, setHandler, condition, workflowInfo } = temporalWorkflowM
 // (during the `ingestDocumentVersion` import above) and before any `afterEach(jest.resetAllMocks)`
 // wipes `proxyActivities.mock.calls` — a later `describe` block reading `.mock.calls` directly
 // would see an empty array once the first spec's cleanup has run. Order matches the source file's
-// declaration order: ingest, facts, conflicts, approval request, approval decision.
+// declaration order: ingest, facts, facts-failure recording, conflicts, approval request,
+// approval decision.
 const proxyActivitiesCalls = [...temporalWorkflowMock.proxyActivities.mock.calls];
 
 const ungatedInput: IngestDocumentVersionInput = {
@@ -117,6 +130,47 @@ describe('ingestDocumentVersion', () => {
     expect(setHandler).not.toHaveBeenCalled();
     expect(condition).not.toHaveBeenCalled();
     expect(result).toEqual({ chunksCreated: 4, alreadyIngested: false });
+  });
+
+  // An ingest that succeeded and a fact extraction that did not leaves the version `completed`
+  // and searchable with no facts in it. Recording that state is what makes the two tellable
+  // apart; the conflict scan is skipped because there are no new fact keys to scan.
+  it('should record the fact-extraction failure and rethrow it, without scanning for conflicts', async () => {
+    const extractionFailure = new Error('daily spend ceiling reached');
+    activityStubs.extractFacts.mockRejectedValue(extractionFailure);
+
+    await expect(ingestDocumentVersion(ungatedInput)).rejects.toBe(extractionFailure);
+
+    expect(activityStubs.recordFactExtractionFailure).toHaveBeenCalledWith(
+      'version-1',
+      'tenant-a',
+      'daily spend ceiling reached',
+    );
+    expect(activityStubs.scanForConflicts).not.toHaveBeenCalled();
+  });
+
+  it('should describe a non-Error extraction failure rather than dropping its detail', async () => {
+    activityStubs.extractFacts.mockRejectedValue('extraction rejected with a bare string');
+
+    await expect(ingestDocumentVersion(ungatedInput)).rejects.toBe(
+      'extraction rejected with a bare string',
+    );
+
+    expect(activityStubs.recordFactExtractionFailure).toHaveBeenCalledWith(
+      'version-1',
+      'tenant-a',
+      'extraction rejected with a bare string',
+    );
+  });
+
+  // The recording is bookkeeping around the real failure: its own failure must never become the
+  // one the workflow reports, or the cause is lost.
+  it('should still fail with the extraction error when recording the failure itself fails', async () => {
+    const extractionFailure = new Error('daily spend ceiling reached');
+    activityStubs.extractFacts.mockRejectedValue(extractionFailure);
+    activityStubs.recordFactExtractionFailure.mockRejectedValue(new Error('mongo unreachable'));
+
+    await expect(ingestDocumentVersion(ungatedInput)).rejects.toBe(extractionFailure);
   });
 
   it('should run the pipeline and record an approved gate outcome when a signal wakes it and the persisted decision is approved', async () => {
@@ -215,40 +269,50 @@ describe('proxyActivities retry configuration', () => {
   // Guards each group's `nonRetryableErrorTypes` against a silent rename of the error class it
   // names — Temporal matches these as plain strings (see the workflow file's own group comments),
   // so a rename that isn't mirrored here would disable the classification without failing tsc.
-  it("should mark a missing tenantId, Voyage's deterministic failures, and a scanned PDF's missing text layer non-retryable for ingestDocumentVersion", () => {
+  it('should apply the declared non-retryable classification to ingestDocumentVersion', () => {
     const [ingestOptions] = proxyActivitiesCalls[0];
     expect(ingestOptions.retry?.nonRetryableErrorTypes).toEqual([
-      'MissingTenantId',
-      'VoyageApiKeyMissingError',
-      'VoyageInvalidResponseError',
-      'EmptyPdfTextLayerException',
+      ...INGEST_NON_RETRYABLE_ERROR_TYPES,
     ]);
   });
 
-  it('should mark a missing tenantId, the budget, pricing, schema-validation, and spend-guard failures non-retryable for extractFacts', () => {
+  // A heartbeat with no timeout declared is inert — Temporal never fails a stalled attempt and
+  // never delivers cancellation back to it, so `IngestionService`'s catch never records the
+  // failure. The pairing is asserted here because nothing in the type system requires it.
+  it('should declare a heartbeat timeout for ingestDocumentVersion, under its startToCloseTimeout', () => {
+    const [ingestOptions] = proxyActivitiesCalls[0];
+    expect(ingestOptions.heartbeatTimeout).toBe(INGEST_HEARTBEAT_TIMEOUT_MS);
+    expect(ingestOptions.startToCloseTimeout).toBe(INGEST_START_TO_CLOSE_TIMEOUT_MS);
+    expect(ingestOptions.scheduleToCloseTimeout).toBe(INGEST_SCHEDULE_TO_CLOSE_TIMEOUT_MS);
+  });
+
+  it('should apply the declared non-retryable classification to extractFacts', () => {
     const [factsOptions] = proxyActivitiesCalls[1];
     expect(factsOptions.retry?.nonRetryableErrorTypes).toEqual([
+      ...EXTRACT_FACTS_NON_RETRYABLE_ERROR_TYPES,
+    ]);
+  });
+
+  it('should mark a missing tenantId and an unknown version non-retryable for recordFactExtractionFailure', () => {
+    const [factsFailureOptions] = proxyActivitiesCalls[2];
+    expect(factsFailureOptions.retry?.nonRetryableErrorTypes).toEqual([
       'MissingTenantId',
-      'ModelBudgetExceededError',
-      'UnknownModelPricingError',
-      'ModelSchemaValidationError',
-      'TenantSpendLimitExceededError',
-      'ModelRequestMissingTenantError',
+      'DocumentVersionNotFoundException',
     ]);
   });
 
   it('should mark a missing tenantId non-retryable for scanForConflicts', () => {
-    const [conflictsOptions] = proxyActivitiesCalls[2];
+    const [conflictsOptions] = proxyActivitiesCalls[3];
     expect(conflictsOptions.retry?.nonRetryableErrorTypes).toEqual(['MissingTenantId']);
   });
 
   it('should mark a missing tenantId non-retryable for requestIngestApproval', () => {
-    const [approvalRequestOptions] = proxyActivitiesCalls[3];
+    const [approvalRequestOptions] = proxyActivitiesCalls[4];
     expect(approvalRequestOptions.retry?.nonRetryableErrorTypes).toEqual(['MissingTenantId']);
   });
 
   it('should mark a missing tenantId non-retryable for getApprovalDecision', () => {
-    const [approvalDecisionOptions] = proxyActivitiesCalls[4];
+    const [approvalDecisionOptions] = proxyActivitiesCalls[5];
     expect(approvalDecisionOptions.retry?.nonRetryableErrorTypes).toEqual(['MissingTenantId']);
   });
 });

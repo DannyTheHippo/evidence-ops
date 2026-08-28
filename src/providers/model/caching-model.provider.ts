@@ -53,6 +53,12 @@ export class CachingModelProvider implements ModelProvider {
     return this.inner.info;
   }
 
+  /** Forwards to the delegate — see `ModelProvider.resolveModel`'s own doc comment for why every
+   * decorator in the chain must do this rather than let it fall back silently. */
+  resolveModel(taskClass: ModelRequest['taskClass']): string {
+    return this.inner.resolveModel?.(taskClass) ?? this.inner.info.model;
+  }
+
   async generate<TSchema extends z.ZodType | undefined = undefined>(
     request: ModelRequest<TSchema>,
   ): Promise<ModelResult<TSchema>> {
@@ -60,9 +66,13 @@ export class CachingModelProvider implements ModelProvider {
       return this.inner.generate(request);
     }
 
+    // Resolved per request, not `this.info.model` — a `taskClass` routed to a different model
+    // (`AnthropicModelProvider.resolveModel`) must key a different cache entry, or two models'
+    // responses to the identical prompt would collide on one entry.
+    const model = this.resolveModel(request.taskClass);
     const key = computeCacheKey({
       provider: this.info.provider,
-      model: this.info.model,
+      model,
       maxTokens: request.maxTokens,
       system: request.system,
       messages: request.messages,

@@ -167,12 +167,13 @@ describe('proxyActivities retry configuration', () => {
     ]);
   });
 
-  it('should mark the budget, pricing, schema-validation, and spend-guard failures non-retryable for synthesizeAnswer', () => {
+  it('should mark the budget, pricing, schema-validation, truncation, and spend-guard failures non-retryable for synthesizeAnswer', () => {
     const [synthesisOptions] = proxyActivitiesCalls[1];
     expect(synthesisOptions.retry?.nonRetryableErrorTypes).toEqual([
       'ModelBudgetExceededError',
       'UnknownModelPricingError',
       'ModelSchemaValidationError',
+      'ModelOutputTruncatedError',
       'TenantSpendLimitExceededError',
       'ModelRequestMissingTenantError',
     ]);

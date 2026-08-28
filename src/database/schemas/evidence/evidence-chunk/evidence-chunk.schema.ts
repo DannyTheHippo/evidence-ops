@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types, WithTimestamps } from 'mongoose';
+import type { ChunkElement } from '../../../../features/evidence/ingestion/chunk.type';
 import { AuditableDocument } from '../../../global/auditable-document/auditable-document.schema';
 import { EvidenceLocator } from './evidence-locator.type';
 
@@ -60,6 +61,18 @@ export class EvidenceChunk extends AuditableDocument<string> {
   // union at the application boundary.
   @Prop({ type: MongooseSchema.Types.Mixed, required: true })
   locator: EvidenceLocator;
+
+  // The constituent elements this chunk was built from, each with its own locator and text —
+  // `[]` for a spreadsheet preamble chunk, whose own `locator` is already an exact range; a
+  // spreadsheet row-window chunk carries a header element and a data element instead, each named
+  // more precisely than the chunk's own `locator`. What lets `resolveCitationLocator` (`chunker.ts`)
+  // resolve a citation's quote to the specific element it actually came from, rather than only
+  // `locator`'s anchor (the chunk's *first* spanned element). `default: []`, not `required`, mirrors
+  // `Answer.claims`'s pattern for the same reason: a Mongoose default never populates a `.lean()`
+  // read, so a row written before this field existed returns `undefined` here, not `[]` — every
+  // reader must tolerate that, not only an empty array.
+  @Prop({ type: [MongooseSchema.Types.Mixed], default: [] })
+  elements: ChunkElement[];
 
   @Prop({ type: String, required: true })
   tenantId: string;

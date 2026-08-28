@@ -3,6 +3,7 @@ import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { Types } from 'mongoose';
+import { TypedConfigService } from '../../../../src/config/environment/typed-config.service';
 import { User } from '../../../../src/database/schemas/administration/user/user.schema';
 import { Answer } from '../../../../src/database/schemas/evidence/answer/answer.schema';
 import { DocumentVersion } from '../../../../src/database/schemas/evidence/document-version/document-version.schema';
@@ -19,8 +20,10 @@ import {
 import { UserRole } from '../../../../src/shared/enums/user-role.enum';
 import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
+import { locateQuote } from '../../../../src/shared/utils/locate-quote.util';
 import { getMockLogger } from '../../../utils/get-mock-logger';
 import { getMockModel } from '../../../utils/get-mock-model';
+import { getMockTypedConfig } from '../../../utils/get-mock-typed-config';
 
 describe('QaService', () => {
   let service: QaService;
@@ -39,6 +42,7 @@ describe('QaService', () => {
         { provide: getModelToken(User.name), useValue: mockUserModel },
         { provide: getModelToken(DocumentVersion.name), useValue: mockDocumentVersionModel },
         { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
+        { provide: TypedConfigService, useValue: getMockTypedConfig() },
         { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: mockLogger },
       ],
@@ -174,6 +178,106 @@ describe('QaService', () => {
       // `citation.docVersionId` ('v1') is not a valid ObjectId — `resolveWithdrawnDocVersionIds`
       // filters it out and short-circuits before ever querying DocumentVersion.
       expect(mockDocumentVersionModel.find).not.toHaveBeenCalled();
+    });
+
+    // Pins the three-part property a spoofed quote must never break: the raw bidi-override and
+    // zero-width bytes still verify against the chunk they were cited from (verification runs on
+    // stored bytes), the stored document itself is never mutated by serving a response, and only
+    // the response the browser actually renders is neutralized — in both the flattened `citations`
+    // field and the nested `outcome.claims[].citations[].quote` this same citation also appears
+    // under.
+    it('should neutralize a bidi-override and zero-width character in a citation quote for display, while the raw bytes still verify and the stored document stays untouched', async () => {
+      const answerId = new Types.ObjectId();
+      const actorId = new Types.ObjectId().toString();
+      const rightToLeftOverride = String.fromCharCode(0x202e);
+      const zeroWidthSpace = String.fromCharCode(0x200b);
+      const rawQuote = `NOI $1,234,567${zeroWidthSpace} was reported${rightToLeftOverride}.`;
+      const neutralizedQuote = 'NOI $1,234,567 was reported.';
+      const chunkText = `The annual ${rawQuote} for the property.`;
+      const citation = {
+        docVersionId: 'v1',
+        sha256: 'a'.repeat(64),
+        chunkId: 'chunk-1',
+        locator: { kind: 'pdf-page' as const, page: 1, extractorVersion: 'v1' },
+        quote: rawQuote,
+      };
+      const outcome = {
+        kind: 'answered' as const,
+        claims: [{ statement: 's', citations: [citation] }],
+      };
+      const storedAnswer = {
+        _id: answerId,
+        questionText: 'What is the NOI?',
+        runStatus: 'completed',
+        outcome,
+        claimCoverage: 1,
+        verificationReport: { verifiedClaimCount: 1, totalClaimCount: 1, droppedClaims: [] },
+        claims: [{ statement: 's', citations: [citation] }],
+        conflictIds: [],
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        retrievedChunkIds: ['chunk-1'],
+      };
+      mockAnswerModel.findOne.mockResolvedValueOnce(storedAnswer);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      // Verification runs on the raw stored bytes, never the display form — the bidi override and
+      // zero-width space intact.
+      expect(locateQuote(rawQuote, chunkText)).toEqual({ kind: 'exact', similarity: 1 });
+
+      const result = await service.getAnswerById(answerId.toString(), actorId, 'tenant-a');
+
+      expect(result.citations).toEqual([{ ...citation, quote: neutralizedQuote }]);
+      expect(result.outcome).toEqual({
+        kind: 'answered',
+        claims: [{ statement: 's', citations: [{ ...citation, quote: neutralizedQuote }] }],
+      });
+      // Storage stays byte-faithful — the document the service read from still carries the raw
+      // bidi/zero-width bytes, unmutated by serving this response.
+      expect(storedAnswer.claims[0].citations[0].quote).toBe(rawQuote);
+      expect(storedAnswer.outcome.claims[0].citations[0].quote).toBe(rawQuote);
+    });
+
+    it('should leave a non-answered outcome untouched — insufficient_evidence carries no citations to neutralize', async () => {
+      const answerId = new Types.ObjectId();
+      const outcome = { kind: 'insufficient_evidence' as const, reason: 'No evidence found.' };
+      mockAnswerModel.findOne.mockResolvedValueOnce({
+        _id: answerId,
+        questionText: 'What is the cap rate?',
+        runStatus: 'completed',
+        outcome,
+        claimCoverage: 0,
+        verificationReport: { verifiedClaimCount: 0, totalClaimCount: 0, droppedClaims: [] },
+        claims: [],
+        conflictIds: [],
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        retrievedChunkIds: [],
+      });
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      const result = await service.getAnswerById(answerId.toString(), 'actor', 'tenant-a');
+
+      expect(result.outcome).toEqual(outcome);
+    });
+
+    it('should omit outcome when a completed answer carries no outcome at all', async () => {
+      const answerId = new Types.ObjectId();
+      mockAnswerModel.findOne.mockResolvedValueOnce({
+        _id: answerId,
+        questionText: 'What is the cap rate?',
+        runStatus: 'completed',
+        outcome: undefined,
+        claimCoverage: undefined,
+        verificationReport: undefined,
+        claims: [],
+        conflictIds: [],
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        retrievedChunkIds: [],
+      });
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      const result = await service.getAnswerById(answerId.toString(), 'actor', 'tenant-a');
+
+      expect(result.outcome).toBeUndefined();
     });
 
     it('should omit outcome and verificationReport for a non-completed answer even when both are present on the document', async () => {
@@ -396,12 +500,14 @@ describe('QaService', () => {
         claims: [
           {
             statement: 's1',
-            citations: [{ docVersionId: withdrawnVersionId.toString() }],
+            citations: [{ docVersionId: withdrawnVersionId.toString(), quote: 'q1' }],
           },
         ],
       });
       const answerTwo = buildAnswerDoc({
-        claims: [{ statement: 's2', citations: [{ docVersionId: liveVersionId.toString() }] }],
+        claims: [
+          { statement: 's2', citations: [{ docVersionId: liveVersionId.toString(), quote: 'q2' }] },
+        ],
       });
       mockAnswerModel.find.mockResolvedValueOnce([answerOne, answerTwo]);
       mockAnswerModel.countDocuments.mockResolvedValueOnce(2);
@@ -536,6 +642,27 @@ describe('QaService', () => {
       subscription.unsubscribe();
     });
 
+    it('should complete the stream once it has been open for the configured max lifetime, even with an answer that never reaches a terminal status', async () => {
+      const answer = buildAnswerDoc();
+      mockAnswerModel.findOne.mockResolvedValue(answer);
+      mockUserModel.findById.mockResolvedValue({ tenantId: 'tenant-a' });
+      mockAuditService.record.mockResolvedValue(undefined);
+      let completed = false;
+
+      service.streamAnswer(answer._id.toString(), 'actor-1', 'tenant-a').subscribe({
+        complete: () => {
+          completed = true;
+        },
+      });
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(completed).toBe(false);
+
+      await jest.advanceTimersByTimeAsync(getMockTypedConfig().sse.maxStreamLifetimeMs);
+
+      expect(completed).toBe(true);
+    });
+
     it('should emit the terminal answer event and then complete, without a later heartbeat', async () => {
       const answer = buildAnswerDoc();
       mockAnswerModel.findOne.mockResolvedValueOnce(answer); // opened$'s existence-gating peek
@@ -574,7 +701,9 @@ describe('QaService', () => {
       const completedAnswer = buildAnswerDoc({
         _id: answer._id,
         runStatus: 'completed',
-        claims: [{ statement: 's', citations: [{ docVersionId: versionId.toString() }] }],
+        claims: [
+          { statement: 's', citations: [{ docVersionId: versionId.toString(), quote: 'q' }] },
+        ],
       });
       mockAnswerModel.findOne.mockResolvedValueOnce(answer); // opened$'s existence-gating peek
       mockAnswerModel.findOne.mockResolvedValueOnce(answer); // first tick, still running, no citations

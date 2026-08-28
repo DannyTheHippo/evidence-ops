@@ -2,7 +2,6 @@ import { Injectable, type OnModuleDestroy } from '@nestjs/common';
 import { Client, Connection, type WorkflowExecutionStatusName } from '@temporalio/client';
 import { randomUUID } from 'node:crypto';
 import { TypedConfigService } from '../../config/environment/typed-config.service';
-import { createTemporalOtelPlugin } from '../telemetry/otel-temporal-plugin.factory';
 import type { WorkflowEngine, WorkflowHandle, WorkflowStatus } from './workflow-engine.interface';
 
 function toWorkflowStatus(name: WorkflowExecutionStatusName): WorkflowStatus {
@@ -71,9 +70,9 @@ export class TemporalWorkflowEngine implements WorkflowEngine, OnModuleDestroy {
   }
 
   /**
-   * Cached alongside the connection: a fresh `Client` per call would also mean a fresh
-   * `OpenTelemetryPlugin` (and its `BatchSpanProcessor`/`OTLPTraceExporter`) per call, none of
-   * them ever shut down — this method is on the `start`/`status` hot path.
+   * Cached alongside the connection: a fresh `Client`/`Connection` per call, with neither ever
+   * shut down, is what this caching exists to avoid — this method is on the `start`/`status` hot
+   * path.
    *
    * A rejected `connectionPromise` clears itself before rethrowing: the calling `start`/`status`/
    * `signal` invocation still fails, but the *next* call to `getClient` sees `connectionPromise`
@@ -93,9 +92,6 @@ export class TemporalWorkflowEngine implements WorkflowEngine, OnModuleDestroy {
       new Client({
         connection,
         namespace: this.config.temporal.namespace,
-        // 'evidence-ops-api' mirrors the OTEL_SERVICE_NAME this process's own `instrumentation.ts`
-        // resolves via the api start scripts — same reasoning as `worker/main.ts`'s plugin wiring.
-        plugins: [createTemporalOtelPlugin('evidence-ops-api', this.config.telemetry.otlpEndpoint)],
       }),
     );
     return this.clientPromise;

@@ -42,12 +42,13 @@ describe('SpendGuardEmbeddingProvider', () => {
     jest.resetAllMocks();
   });
 
-  const buildProvider = (dailyLimitUsd: number) =>
+  const buildProvider = (dailyLimitUsd: number, ingestDailyLimitUsd?: number) =>
     new SpendGuardEmbeddingProvider(
       inner,
       spendService as unknown as TenantSpendService,
       dailyLimitUsd,
       als as unknown as AsyncLocalStorage<AlsContext>,
+      ingestDailyLimitUsd,
     );
 
   it('should proxy info to the delegate', () => {
@@ -121,7 +122,7 @@ describe('SpendGuardEmbeddingProvider', () => {
   it('should never call the delegate or release when the reservation itself is refused by the ceiling', async () => {
     const provider = buildProvider(50);
     spendService.reserve.mockRejectedValueOnce(
-      new TenantSpendLimitExceededError('tenant-a', 1, 50),
+      new TenantSpendLimitExceededError('tenant-a', 1, 50, windowStart),
     );
 
     await expect(provider.embed(request)).rejects.toBeInstanceOf(TenantSpendLimitExceededError);
@@ -147,5 +148,31 @@ describe('SpendGuardEmbeddingProvider', () => {
 
     expect(spendService.reserve).toHaveBeenCalledWith('tenant-a', 0, 50);
     expect(spendService.settle).toHaveBeenCalledWith('tenant-a', windowStart, 0, 0);
+  });
+
+  it('should reserve a document embed against the ingest sub-ceiling when one is configured', async () => {
+    const provider = buildProvider(50, 40);
+    inner.embed.mockResolvedValue({ embeddings: [[0, 0]], usage: { totalTokens: 3 } });
+
+    await provider.embed({ inputs: ['hello world'], inputType: 'document' });
+
+    const estimatedCostUsd = computeVoyageCostUsd(
+      'voyage-4',
+      estimateEmbeddingTokens(['hello world']),
+    );
+    expect(spendService.reserve).toHaveBeenCalledWith('tenant-a', estimatedCostUsd, 40);
+  });
+
+  it('should reserve a query embed against the full ceiling even when an ingest sub-ceiling is configured', async () => {
+    const provider = buildProvider(50, 40);
+    inner.embed.mockResolvedValue({ embeddings: [[0, 0]], usage: { totalTokens: 3 } });
+
+    await provider.embed({ inputs: ['hello world'], inputType: 'query' });
+
+    const estimatedCostUsd = computeVoyageCostUsd(
+      'voyage-4',
+      estimateEmbeddingTokens(['hello world']),
+    );
+    expect(spendService.reserve).toHaveBeenCalledWith('tenant-a', estimatedCostUsd, 50);
   });
 });

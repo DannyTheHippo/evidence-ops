@@ -12,6 +12,7 @@ import { User, UserSchema } from '../../../database/schemas/administration/user/
 import { InvitationsModule } from '../invitations/invitations.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { CredentialThrottleGuard } from './guards/credential-throttle.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
 @Module({
@@ -39,6 +40,8 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
   providers: [
     AuthService,
     JwtAuthGuard,
+    // Route-scoped, not an APP_GUARD: `AuthController` applies it to login and registration only.
+    CredentialThrottleGuard,
     {
       provide: APP_GUARD,
       useExisting: JwtAuthGuard,

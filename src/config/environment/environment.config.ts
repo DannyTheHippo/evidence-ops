@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ANTHROPIC_PRICING } from '../../providers/model/anthropic-pricing.table';
 
 /** Coerce common truthy/falsey env strings to a boolean. */
 const zBool = (def: boolean) =>
@@ -43,10 +44,34 @@ const zOptionalString = () =>
     .optional()
     .transform((v) => (v?.trim() ? v.trim() : undefined));
 
+/** Same blank-vs-unset normalisation as `zOptionalString`, for a numeric var with no safe
+ * default of its own — "not configured" must stay distinguishable from any real value. */
+const zNumOptional = () =>
+  z
+    .string()
+    .optional()
+    .transform((v) => (v?.trim() ? Number(v.trim()) : undefined))
+    .pipe(z.number().finite().optional());
+
 // Exported so callers outside this module (the login cookie's `Secure`/`__Host-` decision) share
 // the one predicate that also gates the MONGO_DB_URI/JWT_SECRET requirement below — a fourth
 // prod-like environment added only here must not silently ship an insecure cookie elsewhere.
 export const isProdLike = (nodeEnv: string): boolean => ['production', 'staging'].includes(nodeEnv);
+
+// Mirrors `mongo-hybrid.store.ts`'s `PIPELINE_NAMES`/`PIPELINE_WEIGHTS`/`RRF_K`, copied rather
+// than imported because that module depends on `TypedConfigService`, which depends on this
+// module's own types — importing it here would be circular. `$rankFusion` scores a hit as
+// `sum(weight * (1 / (RRF_K + rank)))` across the `search` and `vector` input pipelines, each
+// weighted 1. The best any single hit can do is rank 1 in both pipelines at once, so the true
+// scale ceiling — not 1, despite the field reading like a 0-1 similarity score — is
+// `PIPELINE_COUNT * MAX_PIPELINE_WEIGHT / (RRF_K + 1)`. `test/config/environment.config.spec.ts`
+// pins these to the store's real values, so the two can't drift apart silently. Exported for that
+// test to import; not otherwise part of this module's public surface.
+export const RETRIEVAL_RRF_K = 60;
+export const RETRIEVAL_PIPELINE_COUNT = 2;
+export const RETRIEVAL_MAX_PIPELINE_WEIGHT = 1;
+const RETRIEVAL_SCORE_CEILING =
+  (RETRIEVAL_PIPELINE_COUNT * RETRIEVAL_MAX_PIPELINE_WEIGHT) / (RETRIEVAL_RRF_K + 1);
 
 /**
  * Raw-env schema. Validates `process.env` and projects it into namespaced,
@@ -80,16 +105,34 @@ export const environmentSchema = z
     JWT_SECRET: zOptionalString(),
     JWT_EXPIRES_IN: z.string().default('7d'),
 
+    // Bounds `POST /auth/login` and `POST /auth/register` (`CredentialThrottleGuard`), each of
+    // which runs a bcrypt at cost 12 on the main thread. Far tighter than THROTTLE_LIMIT below,
+    // and over a much longer window: the general limit is sized for a human clicking around a UI,
+    // whereas these two routes have no legitimate high-frequency use and are the only ones whose
+    // cost per unauthenticated request is measured in hundreds of milliseconds of CPU.
+    //
+    // AUTH_CREDENTIAL_EMAIL_LIMIT bounds a `(email, address)` pair, not an email: it caps how much
+    // of one address's allowance can go at a single account, so a source pool's reach against one
+    // account grows only with the pool. Bounding the email alone would let any caller spend an
+    // account's allowance and lock its owner out, since the bucket is spent before authentication.
+    AUTH_CREDENTIAL_WINDOW_MS: zNum(900_000),
+    AUTH_CREDENTIAL_IP_LIMIT: zNum(10),
+    AUTH_CREDENTIAL_EMAIL_LIMIT: zNum(5),
+
     THROTTLE_TTL_MS: zNum(60000),
     THROTTLE_LIMIT: zNum(100),
 
     // 'anthropic' | 'openai' selects which base ModelProvider providers.module.ts wires behind
-    // the standing Tracing(Caching(SpendGuard(base))) chain.
+    // the standing Caching(SpendGuard(base)) chain.
     MODEL_PROVIDER: z.enum(['anthropic', 'openai']).default('anthropic'),
 
     ANTHROPIC_API_KEY: zOptionalString(),
     ANTHROPIC_MODEL: z.string().default('claude-sonnet-5'),
     ANTHROPIC_TIMEOUT_MS: zNum(60_000),
+    // Per-taskClass routing override for `fact_extraction` only — `claim_verification` and
+    // `qa_answer` stay pinned to ANTHROPIC_MODEL. Unset (the default) routes every task class to
+    // ANTHROPIC_MODEL, same as before this variable existed.
+    ANTHROPIC_MODEL_FACT_EXTRACTION: zOptionalString(),
 
     // Deliberately optional, no default: self-hosted OpenAI-compatible endpoints (vLLM, Ollama)
     // accept no auth, so a missing key must not throw at construction.
@@ -107,6 +150,10 @@ export const environmentSchema = z
     // Free-tier default (3 RPM, 5 retries, 5min wait budget) — the account this ships against has
     // no payment method on file and is throttled to those limits; see voyage-embedding.provider.ts.
     VOYAGE_REQUESTS_PER_MINUTE: zNum(3),
+    // Paced independently of VOYAGE_REQUESTS_PER_MINUTE (ingest's `document` inputType) so a
+    // backfill's own pacer can never delay a `query` embed behind it — see
+    // `voyage-embedding.provider.ts`'s `pace`.
+    VOYAGE_QUERY_REQUESTS_PER_MINUTE: zNum(3),
     VOYAGE_MAX_RETRIES: zNum(5),
     VOYAGE_MAX_RETRY_WAIT_MS: zNum(300_000),
     VOYAGE_REQUEST_TIMEOUT_MS: zNum(30_000),
@@ -117,18 +164,42 @@ export const environmentSchema = z
 
     RETRIEVAL_FUSION: z.enum(['server', 'app']).default('server'),
     RETRIEVAL_LIMIT: zNum(12),
+    // Minimum fused RRF score a hit must clear to reach synthesis; `EvidenceRetrievalService`
+    // drops anything below it before a chunk is ever built. The fused score sits on the RRF
+    // scale bounded by `RETRIEVAL_SCORE_CEILING` above (~0.0328 today), not a 0-1 similarity
+    // scale — a value above that ceiling rejects every hit this store can ever return, so it is
+    // refused here rather than left to silently abstain on every question. Every hit a
+    // `RetrievalStore` returns carries a strictly positive fused score (an RRF contribution of
+    // `1 / (60 + rank)` from at least one pipeline), so the default of 0 clears every hit and
+    // changes nothing.
+    RETRIEVAL_SCORE_FLOOR: zNum(0).pipe(
+      z.number().max(RETRIEVAL_SCORE_CEILING, {
+        message:
+          `Must not exceed ${RETRIEVAL_SCORE_CEILING} — the maximum fused RRF score the ` +
+          `retrieval store's pipelines can produce (${RETRIEVAL_PIPELINE_COUNT} pipelines × ` +
+          `weight ${RETRIEVAL_MAX_PIPELINE_WEIGHT} / (RRF_K=${RETRIEVAL_RRF_K} + best rank 1)). ` +
+          'The fused score is not a 0-1 similarity; a higher value rejects every hit and ' +
+          'silently abstains on every question with no error at query time.',
+      }),
+    ),
 
     EXTRACTION_CHUNK_CONCURRENCY: zNum(2),
+    // Whether an alias read out of a document's own parenthetical definitions starts resolving as
+    // soon as it is harvested. Off by default: an applied alias changes which facts share a
+    // conflict group across every document already ingested, so the harvester records proposals
+    // with their citations and changes no resolution until an operator turns this on deliberately.
+    EXTRACTION_ALIAS_HARVEST_AUTO_APPLY: zBool(false),
 
     /** Per-tenant aggregate daily ceiling on model spend, in USD. A value `<= 0` disables the ceiling entirely. */
     MODEL_SPEND_DAILY_LIMIT_USD: zNum(50),
+    // Sub-ceiling reserved against the same aggregate ledger for ingest calls (`fact_extraction`,
+    // embedding `document` inputType) only — interactive calls (`qa_answer`,
+    // `claim_verification`, embedding `query` inputType) keep reserving against the full
+    // MODEL_SPEND_DAILY_LIMIT_USD, so a backfill can never exhaust the headroom Q&A depends on.
+    // Unset (the default) leaves ingest reserving against the full ceiling too, same as before
+    // this variable existed.
+    MODEL_SPEND_DAILY_LIMIT_INGEST_USD: zNumOptional(),
 
-    OTEL_EXPORTER_OTLP_ENDPOINT: z.string().default('http://localhost:4318'),
-    // Dev-only, OFF by default: attaches prompt/completion text as span *events* (never
-    // attributes — see `docs/global/threat-model.md` residual risks). Evidence text reaching a trace
-    // backend is document content leaving the trust boundary; only turn this on locally against
-    // a trace backend you control.
-    OTEL_CAPTURE_MODEL_CONTENT: zBool(false),
     // Set per-process by each start script ('evidence-ops-api' / 'evidence-ops-worker' /
     // 'evidence-ops-mcp'), never read directly from `process.env` outside this file — see
     // `instrumentation.ts`'s use of `telemetry.serviceName` to pick a process's metrics port.
@@ -142,9 +213,8 @@ export const environmentSchema = z
     SOURCE_SYNC_INTERVAL_MS: zNum(300_000),
 
     // 3002: distinct from the API's 3000 (host-mapped 3001, docker-compose.yml) and every other
-    // port already in use in this stack (mongo host-mapped 27018, jaeger/OTLP 4318, temporal UI
-    // 8233, web 8090, qdrant 6333) — the MCP process is a third HTTP-listening process alongside
-    // the API.
+    // port already in use in this stack (mongo host-mapped 27018, temporal UI 8233, web 8090) —
+    // the MCP process is a third HTTP-listening process alongside the API.
     MCP_PORT: zNum(3002),
     MCP_RATE_LIMIT_PER_MINUTE: zNum(60),
     // Applied in `src/mcp/main.ts` before `authenticate`, keyed on the caller's IP — distinct from
@@ -164,23 +234,50 @@ export const environmentSchema = z
     API_KEY_DEFAULT_TTL_DAYS: zNum(90),
   })
   .superRefine((e, ctx) => {
-    if (!isProdLike(e.NODE_ENV)) {
-      return;
+    if (isProdLike(e.NODE_ENV)) {
+      if (!e.MONGO_DB_URI) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['MONGO_DB_URI'],
+          message: 'Required when NODE_ENV is production or staging',
+        });
+      }
+
+      if (!e.JWT_SECRET) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['JWT_SECRET'],
+          message: 'Required when NODE_ENV is production or staging',
+        });
+      }
     }
 
-    if (!e.MONGO_DB_URI) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['MONGO_DB_URI'],
-        message: 'Required when NODE_ENV is production or staging',
-      });
+    if (e.MODEL_SPEND_DAILY_LIMIT_INGEST_USD !== undefined) {
+      if (e.MODEL_SPEND_DAILY_LIMIT_USD <= 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['MODEL_SPEND_DAILY_LIMIT_INGEST_USD'],
+          message:
+            'Must not be set while MODEL_SPEND_DAILY_LIMIT_USD disables the ceiling (<= 0) — ' +
+            'a sub-limit under a disabled ceiling would silently have no effect.',
+        });
+      } else if (e.MODEL_SPEND_DAILY_LIMIT_INGEST_USD > e.MODEL_SPEND_DAILY_LIMIT_USD) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['MODEL_SPEND_DAILY_LIMIT_INGEST_USD'],
+          message: `Must not exceed MODEL_SPEND_DAILY_LIMIT_USD (${e.MODEL_SPEND_DAILY_LIMIT_USD})`,
+        });
+      }
     }
 
-    if (!e.JWT_SECRET) {
+    if (
+      e.ANTHROPIC_MODEL_FACT_EXTRACTION !== undefined &&
+      !(e.ANTHROPIC_MODEL_FACT_EXTRACTION in ANTHROPIC_PRICING)
+    ) {
       ctx.addIssue({
         code: 'custom',
-        path: ['JWT_SECRET'],
-        message: 'Required when NODE_ENV is production or staging',
+        path: ['ANTHROPIC_MODEL_FACT_EXTRACTION'],
+        message: `Must be a model priced in anthropic-pricing.table.ts (one of: ${Object.keys(ANTHROPIC_PRICING).join(', ')})`,
       });
     }
   })
@@ -210,6 +307,9 @@ export const environmentSchema = z
       auth: {
         jwtSecret,
         jwtExpiresIn: e.JWT_EXPIRES_IN,
+        credentialWindowMs: e.AUTH_CREDENTIAL_WINDOW_MS,
+        credentialIpLimit: e.AUTH_CREDENTIAL_IP_LIMIT,
+        credentialEmailLimit: e.AUTH_CREDENTIAL_EMAIL_LIMIT,
       },
       throttle: {
         ttlMs: e.THROTTLE_TTL_MS,
@@ -222,6 +322,7 @@ export const environmentSchema = z
         apiKey: e.ANTHROPIC_API_KEY,
         model: e.ANTHROPIC_MODEL,
         timeoutMs: e.ANTHROPIC_TIMEOUT_MS,
+        factExtractionModel: e.ANTHROPIC_MODEL_FACT_EXTRACTION,
       },
       openai: {
         apiKey: e.OPENAI_API_KEY,
@@ -234,6 +335,7 @@ export const environmentSchema = z
         model: e.VOYAGE_MODEL,
         dimensions: e.VOYAGE_DIMENSIONS,
         requestsPerMinute: e.VOYAGE_REQUESTS_PER_MINUTE,
+        queryRequestsPerMinute: e.VOYAGE_QUERY_REQUESTS_PER_MINUTE,
         maxRetries: e.VOYAGE_MAX_RETRIES,
         maxRetryWaitMs: e.VOYAGE_MAX_RETRY_WAIT_MS,
         requestTimeoutMs: e.VOYAGE_REQUEST_TIMEOUT_MS,
@@ -246,10 +348,9 @@ export const environmentSchema = z
       retrieval: {
         fusion: e.RETRIEVAL_FUSION,
         limit: e.RETRIEVAL_LIMIT,
+        scoreFloor: e.RETRIEVAL_SCORE_FLOOR,
       },
       telemetry: {
-        otlpEndpoint: e.OTEL_EXPORTER_OTLP_ENDPOINT,
-        captureModelContent: e.OTEL_CAPTURE_MODEL_CONTENT,
         serviceName: e.OTEL_SERVICE_NAME,
         metricsPort: e.METRICS_PORT,
       },
@@ -259,9 +360,11 @@ export const environmentSchema = z
       },
       extraction: {
         chunkConcurrency: e.EXTRACTION_CHUNK_CONCURRENCY,
+        aliasHarvestAutoApply: e.EXTRACTION_ALIAS_HARVEST_AUTO_APPLY,
       },
       spend: {
         dailyLimitUsd: e.MODEL_SPEND_DAILY_LIMIT_USD,
+        ingestDailyLimitUsd: e.MODEL_SPEND_DAILY_LIMIT_INGEST_USD,
       },
       mcp: {
         port: e.MCP_PORT,

@@ -6,7 +6,7 @@ import {
   type DocumentVersionIngestionStatus,
   type EvidenceChunkView,
 } from '../../api/client';
-import Badge from '../../components/ui/Badge';
+import Badge, { type BadgeTone } from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Skeleton from '../../components/ui/Skeleton';
 import { TableCell } from '../../components/ui/Table';
@@ -14,16 +14,19 @@ import { IconDownload } from '../../components/icons';
 import { truncateSha256 } from '../../lib/identifiers';
 import { formatBytes } from './format-size';
 
-// 'needs-ocr' falls through to the same 'caution' tone as 'pending' — deliberately, not merely by
-// omission: a scanned PDF with no text layer is a gap in the corpus to flag for attention, not the
-// verification-grade failure 'rejected' signals elsewhere in this app.
-function ingestionTone(
-  status: DocumentVersionIngestionStatus,
-): 'verified' | 'caution' | 'rejected' {
-  if (status === 'completed') return 'verified';
-  if (status === 'failed') return 'rejected';
-  return 'caution';
-}
+// 'needs-ocr' and 'facts-failed' carry the same 'caution' tone as 'pending', each deliberately: a
+// scanned PDF with no text layer is a gap in the corpus to flag for attention, and a 'facts-failed'
+// version has real, citable chunks and only lacks extracted facts. Neither is the
+// verification-grade failure 'rejected' signals elsewhere in this app. A total map rather than a
+// fallthrough, so a status added to the API's union fails the type-check here instead of silently
+// inheriting a tone nobody chose for it.
+const INGESTION_TONE: Record<DocumentVersionIngestionStatus, BadgeTone> = {
+  pending: 'caution',
+  completed: 'verified',
+  'facts-failed': 'caution',
+  failed: 'rejected',
+  'needs-ocr': 'caution',
+};
 
 // `listVersionChunks` has no `skip`/`limit` and returns every chunk in one response — the drill-in
 // renders straight from that array, never a fetch page. At ~700 tokens of prose each, a card per
@@ -68,9 +71,25 @@ export default function VersionRow({ version }: { version: DocumentVersion }) {
           {formatBytes(version.sizeBytes)}
         </TableCell>
         <TableCell label="Ingestion">
-          <Badge tone={ingestionTone(version.ingestionStatus)}>{version.ingestionStatus}</Badge>
+          <Badge tone={INGESTION_TONE[version.ingestionStatus]}>{version.ingestionStatus}</Badge>
           {version.ingestionFailureReason && (
             <p className="cell-sub">{version.ingestionFailureReason}</p>
+          )}
+          {/* Silent on an empty array. A reader deciding whether to trust this version — or a
+              citation drawn from it — needs to know the text behind it is only part of what the
+              source said, and that qualification stands alongside a 'completed' status rather
+              than replacing it. */}
+          {version.reducedFidelityReasons.length > 0 && (
+            <>
+              <Badge tone="caution">reduced fidelity</Badge>
+              <ul className="fidelity-list">
+                {version.reducedFidelityReasons.map((reason) => (
+                  <li key={reason} className="cell-sub">
+                    {reason}
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
         </TableCell>
         {/* The full digest is the chain-of-custody value, but 64 hex characters crowd out the

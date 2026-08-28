@@ -1,4 +1,14 @@
-import { validateEnvironment } from '../../src/config/environment/environment.config';
+import {
+  RETRIEVAL_MAX_PIPELINE_WEIGHT,
+  RETRIEVAL_PIPELINE_COUNT,
+  RETRIEVAL_RRF_K,
+  validateEnvironment,
+} from '../../src/config/environment/environment.config';
+import {
+  PIPELINE_NAMES,
+  PIPELINE_WEIGHTS,
+  RRF_K,
+} from '../../src/providers/retrieval/mongo-hybrid.store';
 import { NodeEnv } from '../../src/shared/enums/global/node-env.enum';
 
 const validEnv: Record<string, unknown> = {
@@ -223,6 +233,10 @@ describe('validateEnvironment', () => {
       expect(result.temporal.taskQueue).toBe('evidence-ops');
       expect(result.retrieval.fusion).toBe('server');
       expect(result.retrieval.limit).toBe(12);
+      // Ships inert: the real value comes from a deferred corpus run. Asserted against the
+      // schema default itself (RETRIEVAL_SCORE_FLOOR is unset above), not a test fixture's own
+      // default, so this fails the moment that default changes.
+      expect(result.retrieval.scoreFloor).toBe(0);
       expect(result.extraction.chunkConcurrency).toBe(2);
       expect(result.spend.dailyLimitUsd).toBe(50);
     });
@@ -298,6 +312,41 @@ describe('validateEnvironment', () => {
       const result = validateEnvironment({ ...validEnv, RETRIEVAL_FUSION: 'app' });
 
       expect(result.retrieval.fusion).toBe('app');
+    });
+
+    describe('RETRIEVAL_SCORE_FLOOR', () => {
+      // Mirrors the ceiling `environment.config.ts` derives from the retrieval store's fusion
+      // formula: two equally weighted pipelines, RRF_K=60, best rank 1 each.
+      const RRF_SCORE_CEILING = 2 / 61;
+
+      it('accepts a value at the RRF score ceiling', () => {
+        const result = validateEnvironment({
+          ...validEnv,
+          RETRIEVAL_SCORE_FLOOR: String(RRF_SCORE_CEILING),
+        });
+
+        expect(result.retrieval.scoreFloor).toBeCloseTo(RRF_SCORE_CEILING);
+      });
+
+      it('refuses to boot with a RETRIEVAL_SCORE_FLOOR above the RRF score ceiling, naming the real scale', () => {
+        const env: Record<string, unknown> = { ...validEnv, RETRIEVAL_SCORE_FLOOR: '0.5' };
+
+        expect(() => validateEnvironment(env)).toThrow(/Invalid environment configuration/);
+        expect(() => validateEnvironment(env)).toThrow(/RETRIEVAL_SCORE_FLOOR/);
+        expect(() => validateEnvironment(env)).toThrow(/RRF_K=60/);
+      });
+    });
+
+    describe('retrieval score ceiling constants track the store', () => {
+      // `RETRIEVAL_SCORE_CEILING` is hand-derived from `mongo-hybrid.store.ts`'s fusion constants
+      // because importing that module here would be circular (see the comment at the constants'
+      // definition). This is the guard that comment promises: it fails the moment either side
+      // changes without the other.
+      it('mirrors PIPELINE_NAMES.length, the max of PIPELINE_WEIGHTS, and RRF_K', () => {
+        expect(RETRIEVAL_PIPELINE_COUNT).toBe(PIPELINE_NAMES.length);
+        expect(RETRIEVAL_MAX_PIPELINE_WEIGHT).toBe(Math.max(...Object.values(PIPELINE_WEIGHTS)));
+        expect(RETRIEVAL_RRF_K).toBe(RRF_K);
+      });
     });
 
     it('rejects an unknown MODEL_PROVIDER value', () => {

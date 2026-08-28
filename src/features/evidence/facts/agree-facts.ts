@@ -1,10 +1,7 @@
 import type { FactKey } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
-// The pack schema's `MetricDefinition` (`id: string`), matching `extractProseFacts`'s own
-// `ontology` param — a resolved `MetricPackData`'s metrics, not necessarily `METRIC_ONTOLOGY`.
-import type { MetricDefinition } from '../../../database/schemas/evidence/metric-pack/metric-pack.schema';
 import { groupKey } from '../conflicts/detect-conflicts';
 import { isConflictingPair, normalizeFactValue } from '../conflicts/normalize-fact-value';
-import { findMetricById } from './metric-ontology';
+import { findMetricById, type MetricDefinition } from './metric-ontology';
 import type { ExtractedFactInput } from './prose-fact-extractor';
 
 const MIN_AGREEING_PASSES = 2;
@@ -18,7 +15,9 @@ export interface DroppedFactGroup {
   readonly totalPasses: number;
 }
 
-/** A candidate whose unit `normalizeFactValue` could not convert. Should not happen — every
+/** A candidate whose unit `normalizeFactValue` could not convert, or whose canonical value
+ * cannot be safely compared — non-finite, or beyond `Number.MAX_SAFE_INTEGER` where a double's
+ * 53-bit mantissa can no longer distinguish it from its neighbors. Should not happen — every
  * candidate reaching this module already passed `prose-fact-extractor.ts`'s own metric/unit
  * check — but kept here rather than trusted blindly, per that function's fail-open direction:
  * a broken normalization drops the one candidate it cannot compare, never the whole scan, and
@@ -35,14 +34,14 @@ export interface AgreementReport {
   readonly unnormalizable: readonly UnnormalizableCandidate[];
 }
 
-export interface AgreeFactsResult {
-  readonly facts: ExtractedFactInput[];
+export interface AgreeFactsResult<T extends ExtractedFactInput> {
+  readonly facts: T[];
   readonly report: AgreementReport;
 }
 
-interface Vote {
+interface Vote<T extends ExtractedFactInput> {
   readonly passIndex: number;
-  readonly fact: ExtractedFactInput;
+  readonly fact: T;
   readonly canonical: number;
 }
 
@@ -52,11 +51,14 @@ interface Vote {
  * lets a 2-of-3 majority survive even when the third pass's value is far enough off that the
  * whole group's min/max spread alone would exceed tolerance. Ties resolve to whichever pivot
  * comes first in `votes`, keeping the result deterministic. */
-function largestAgreeingCluster(votes: readonly Vote[], metric: MetricDefinition): Vote[] {
-  let best: Vote[] = [];
+function largestAgreeingCluster<T extends ExtractedFactInput>(
+  votes: readonly Vote<T>[],
+  metric: MetricDefinition,
+): Vote<T>[] {
+  let best: Vote<T>[] = [];
   for (const pivot of votes) {
     const seenPasses = new Set<number>();
-    const cluster: Vote[] = [];
+    const cluster: Vote<T>[] = [];
     for (const vote of votes) {
       if (seenPasses.has(vote.passIndex)) {
         continue;
@@ -87,12 +89,17 @@ function largestAgreeingCluster(votes: readonly Vote[], metric: MetricDefinition
  * A surviving group keeps the earliest-indexed agreeing vote's quote, locator, and value —
  * "the majority" is treated as one representative report, not an average of N reports — except
  * confidence, which is the mean of every agreeing vote's confidence.
+ *
+ * Generic in the candidate type so a caller that has already attached its own per-candidate fields
+ * — `prose-fact-extractor.ts` attaches the registry resolution's `entityMatched` before agreement
+ * runs, since agreement groups on the resolved entity name — gets those fields back on the
+ * surviving representative instead of a widened `ExtractedFactInput`.
  */
-export function agreeFacts(
-  passResults: readonly (readonly ExtractedFactInput[])[],
+export function agreeFacts<T extends ExtractedFactInput>(
+  passResults: readonly (readonly T[])[],
   ontology: readonly MetricDefinition[],
-): AgreeFactsResult {
-  const groups = new Map<string, Vote[]>();
+): AgreeFactsResult<T> {
+  const groups = new Map<string, Vote<T>[]>();
   const unnormalizable: UnnormalizableCandidate[] = [];
 
   passResults.forEach((passFacts, passIndex) => {
@@ -117,6 +124,20 @@ export function agreeFacts(
         continue;
       }
 
+      // Fails toward unnormalizable, never toward agreement: `isConflictingPair`'s `>`
+      // comparisons are all `false` against a non-finite operand, and a value at or beyond
+      // `Number.MAX_SAFE_INTEGER` can collide with an unrelated value once both round to the
+      // same double — either way a poisoned candidate would look indistinguishable from every
+      // other vote in `largestAgreeingCluster`, survive `MIN_AGREEING_PASSES`, and — via the
+      // earliest-`passIndex` tiebreak below — become the persisted representative fact.
+      if (!Number.isFinite(canonical) || Math.abs(canonical) > Number.MAX_SAFE_INTEGER) {
+        unnormalizable.push({
+          fact,
+          reason: `value '${fact.value.amount} ${fact.value.unit}' does not convert to a safely comparable ${metric.canonicalUnit} value for metric '${metric.id}'`,
+        });
+        continue;
+      }
+
       const key = groupKey(fact.factKey);
       const votes = groups.get(key) ?? [];
       votes.push({ passIndex, fact, canonical });
@@ -124,7 +145,7 @@ export function agreeFacts(
     }
   });
 
-  const facts: ExtractedFactInput[] = [];
+  const facts: T[] = [];
   const droppedGroups: DroppedFactGroup[] = [];
 
   for (const votes of groups.values()) {

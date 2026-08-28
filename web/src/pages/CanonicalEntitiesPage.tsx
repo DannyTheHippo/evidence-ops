@@ -9,6 +9,7 @@ import Skeleton from '../components/ui/Skeleton';
 import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
 import { notify } from '../components/ui/toast';
 import EntityEditorDialog from './canonical-entities/EntityEditorDialog';
+import ProposalsQueue from './canonical-entities/ProposalsQueue';
 
 const PAGE_SIZE = 25;
 
@@ -121,6 +122,14 @@ export default function CanonicalEntitiesPage() {
     setCount((current) => Math.max(0, current - 1));
   }
 
+  // A confirm/reject decision returns the row it decided on — patched in place rather than
+  // re-fetching, the same shape `handleSaved` already uses for the authoring dialog.
+  function handleEntityChanged(updated: CanonicalEntity) {
+    setEntities(
+      (current) => current?.map((row) => (row.id === updated.id ? updated : row)) ?? current,
+    );
+  }
+
   return (
     <div className="view">
       <div className="page-head">
@@ -128,14 +137,11 @@ export default function CanonicalEntitiesPage() {
           <span className="eyebrow">Admin</span>
           <h1 className="page-title">Canonical Entities</h1>
           <p className="page-sub">
-            Register every spelling of a property under one canonical name — an unregistered
+            Confirm or reject proposed spellings below, or register one yourself — an unregistered
             property never has its conflicts surfaced, and renaming or deleting a row here does not
             retroactively regroup facts already extracted.
           </p>
         </div>
-        <Button variant="primary" onClick={() => setEditorTarget('new')}>
-          Add entity
-        </Button>
       </div>
 
       {error && (
@@ -146,39 +152,57 @@ export default function CanonicalEntitiesPage() {
 
       {!entities && !error && <Skeleton label="Loading canonical entities…" />}
 
-      {entities && entities.length === 0 && (
-        <EmptyState
-          icon={<IconTag size={24} />}
-          title="No canonical entities registered yet"
-          description="Add one above to start grouping alternate spellings of a property under a single canonical name."
+      {entities && (
+        <ProposalsQueue
+          entities={entities}
+          onEntityChanged={handleEntityChanged}
+          onScanned={load}
         />
       )}
 
-      {entities && entities.length > 0 && (
+      {entities && (
         <section className="panel">
-          <Table caption="Registered canonical entities and their aliases.">
-            <thead>
-              <tr>
-                <TableHeaderCell>Canonical name</TableHeaderCell>
-                <TableHeaderCell>Aliases</TableHeaderCell>
-                <TableHeaderCell>Actions</TableHeaderCell>
-              </tr>
-            </thead>
-            <tbody>
-              {entities.map((entity) => (
-                <EntityRow
-                  key={entity.id}
-                  entity={entity}
-                  onEdit={setEditorTarget}
-                  onDeleted={handleDeleted}
-                />
-              ))}
-            </tbody>
-          </Table>
+          <div className="card-head">
+            <h2 className="card-title">Registered entities</h2>
+            <Button variant="primary" onClick={() => setEditorTarget('new')}>
+              Add entity
+            </Button>
+          </div>
+
+          {entities.length === 0 && (
+            <EmptyState
+              className="empty-state--inline"
+              icon={<IconTag size={24} />}
+              title="No canonical entities registered yet"
+              description="Add one above to start grouping alternate spellings of a property under a single canonical name."
+            />
+          )}
+
+          {entities.length > 0 && (
+            <Table caption="Registered canonical entities and their aliases.">
+              <thead>
+                <tr>
+                  <TableHeaderCell>Canonical name</TableHeaderCell>
+                  <TableHeaderCell>Aliases</TableHeaderCell>
+                  <TableHeaderCell>Actions</TableHeaderCell>
+                </tr>
+              </thead>
+              <tbody>
+                {entities.map((entity) => (
+                  <EntityRow
+                    key={entity.id}
+                    entity={entity}
+                    onEdit={setEditorTarget}
+                    onDeleted={handleDeleted}
+                  />
+                ))}
+              </tbody>
+            </Table>
+          )}
+
+          <Pager count={count} skip={skip} pageSize={PAGE_SIZE} onSkipChange={setSkip} />
         </section>
       )}
-
-      {entities && <Pager count={count} skip={skip} pageSize={PAGE_SIZE} onSkipChange={setSkip} />}
 
       {editorTarget && (
         <EntityEditorDialog

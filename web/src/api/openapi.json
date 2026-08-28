@@ -1,0 +1,4048 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/auth/register": {
+      "post": {
+        "operationId": "AuthController_register",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Account created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Newly registered account",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "email": "user@example.com",
+                      "createdAt": "2026-07-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The invitation's email already has an account. The existing account is untouched.\n\nThe invitation token is unknown, expired, or already used.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Invalid invitation",
+                    "value": {
+                      "statusCode": 400,
+                      "message": "Invitation is invalid, expired, or already used",
+                      "error": "Bad Request"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Email is already registered.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Duplicate email",
+                    "value": {
+                      "statusCode": 409,
+                      "message": "Email 'user@example.com' is already registered",
+                      "error": "Conflict"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "operationId": "AuthController_login",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authenticated successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthTokenResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Authenticated, session cookie set",
+                    "value": {
+                      "user": {
+                        "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                        "email": "user@example.com",
+                        "createdAt": "2026-07-01T00:00:00.000Z"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid email or password.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Invalid credentials",
+                    "value": {
+                      "statusCode": 401,
+                      "message": "Invalid email or password",
+                      "error": "Unauthorized"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "AuthController_logout",
+        "parameters": [],
+        "responses": {
+          "204": {
+            "description": "Session cookie cleared. The underlying JWT is not revoked and stays valid until it expires."
+          },
+          "401": {
+            "description": "No or invalid token provided.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Missing or invalid token",
+                    "value": {
+                      "statusCode": 401,
+                      "message": "Invalid or expired token",
+                      "error": "Unauthorized"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "operationId": "AuthController_me",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Current authenticated account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Current account",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "email": "user@example.com",
+                      "createdAt": "2026-07-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No or invalid token provided.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Missing or invalid token",
+                    "value": {
+                      "statusCode": 401,
+                      "message": "Invalid or expired token",
+                      "error": "Unauthorized"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/invitations": {
+      "post": {
+        "operationId": "InvitationsController_mint",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInvitationRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The newly minted invitation, including its plaintext token — shown exactly once.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Minted invitation",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "email": "colleague@example.com",
+                      "role": "member",
+                      "token": "eo_inv_9f8c12ab34cd56ef",
+                      "expiresAt": "2026-07-08T00:00:00.000Z",
+                      "createdAt": "2026-07-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Only an admin may mint or list invitations.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The invited email already has an account.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Email already registered",
+                    "value": {
+                      "statusCode": 409,
+                      "message": "Email 'colleague@example.com' already has an account",
+                      "error": "Conflict"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "invitations"
+        ]
+      },
+      "get": {
+        "operationId": "InvitationsController_list",
+        "parameters": [
+          {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's invitations.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "One invitation",
+                    "value": {
+                      "docs": [
+                        {
+                          "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "email": "colleague@example.com",
+                          "role": "member",
+                          "expiresAt": "2026-07-08T00:00:00.000Z",
+                          "createdAt": "2026-07-01T00:00:00.000Z"
+                        }
+                      ],
+                      "count": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Only an admin may mint or list invitations.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "invitations"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "HealthController_getHealth",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Health check status returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Health check status",
+                    "value": {
+                      "status": "ok",
+                      "mongo": "up"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Health"
+        ]
+      }
+    },
+    "/info": {
+      "get": {
+        "operationId": "InfoController_getVersion",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "App version returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InfoResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "App version",
+                    "value": {
+                      "version": "1.0.0"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Info"
+        ]
+      }
+    },
+    "/documents": {
+      "post": {
+        "operationId": "DocumentsController_upload",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  },
+                  "documentId": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "requireApproval": {
+                    "type": "boolean"
+                  },
+                  "sourceClass": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Document uploaded. Unchanged bytes for an existing document return the existing version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Uploaded document with its current version",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "title": "Q3 Rent Roll",
+                      "sourceKind": "xlsx",
+                      "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                      "sourceClass": "unclassified",
+                      "currentVersion": {
+                        "id": "65f1c2e4a1b2c3d4e5f6a7b9",
+                        "versionNumber": 1,
+                        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85",
+                        "sizeBytes": 245760,
+                        "createdAt": "2026-07-01T00:00:00.000Z"
+                      },
+                      "createdAt": "2026-07-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document does not exist.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown document",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Document '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Content type is not one of pdf, docx, xlsx.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Disallowed content type",
+                    "value": {
+                      "statusCode": 415,
+                      "message": "Unsupported content type 'text/csv'; expected one of pdf, docx, xlsx",
+                      "error": "Unsupported Media Type"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "documents"
+        ]
+      },
+      "get": {
+        "operationId": "DocumentsController_list",
+        "parameters": [
+          {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "ingestionStatus",
+            "required": false,
+            "in": "query",
+            "description": "Filter to documents whose CURRENT version has this ingestionStatus — 'failed' and 'needs-ocr' are the corpus-health use cases. An older failed version superseded by a newer completed one does not match, the same semantics `HomePage.tsx`'s client-side filter already uses. Omit to list every document regardless of ingestion outcome.",
+            "schema": {
+              "example": "failed",
+              "type": "string",
+              "enum": [
+                "pending",
+                "completed",
+                "facts-failed",
+                "failed",
+                "needs-ocr"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of documents with their current version.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "One document",
+                    "value": {
+                      "docs": [
+                        {
+                          "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "title": "Q3 Rent Roll",
+                          "sourceKind": "xlsx",
+                          "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                          "sourceClass": "unclassified",
+                          "currentVersion": {
+                            "id": "65f1c2e4a1b2c3d4e5f6a7b9",
+                            "versionNumber": 1,
+                            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85",
+                            "sizeBytes": 245760,
+                            "createdAt": "2026-07-01T00:00:00.000Z"
+                          },
+                          "createdAt": "2026-07-01T00:00:00.000Z"
+                        }
+                      ],
+                      "count": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/documents/events": {
+      "get": {
+        "operationId": "DocumentsController_streamEvents",
+        "parameters": [
+          {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/event-stream. Polls every 3s. `documents` events carry the exact shape GET /documents returns; a `heartbeat` event fires every 15s; a terminal `error` event means the client should fall back to polling GET /documents. Re-checks the connecting session every 30s and closes if it is gone or moved tenants, and closes unconditionally once the connection has been open for the configured max stream lifetime — this stream's own list has no terminal state of its own, unlike the answer/run streams."
+          },
+          "429": {
+            "description": "The caller's tenant or user is already at its open-SSE-stream cap.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Open-stream cap reached",
+                    "value": {
+                      "statusCode": 429,
+                      "message": "User 'user-1' is at its open-stream limit (10)",
+                      "error": "Too Many Requests"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/documents/{id}": {
+      "get": {
+        "operationId": "DocumentsController_getById",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Document with its full version history.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentWithVersionsResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Document with one version",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "title": "Q3 Rent Roll",
+                      "sourceKind": "xlsx",
+                      "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                      "sourceClass": "unclassified",
+                      "currentVersion": {
+                        "id": "65f1c2e4a1b2c3d4e5f6a7b9",
+                        "versionNumber": 1,
+                        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85",
+                        "sizeBytes": 245760,
+                        "createdAt": "2026-07-01T00:00:00.000Z"
+                      },
+                      "createdAt": "2026-07-01T00:00:00.000Z",
+                      "versions": [
+                        {
+                          "id": "65f1c2e4a1b2c3d4e5f6a7b9",
+                          "versionNumber": 1,
+                          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85",
+                          "sizeBytes": 245760,
+                          "createdAt": "2026-07-01T00:00:00.000Z"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document does not exist.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown document",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Document '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "documents"
+        ]
+      },
+      "delete": {
+        "operationId": "DocumentsController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Document deleted along with its versions, stored bytes, evidence chunks, and extracted facts. Conflicts referencing a deleted fact are resolved as superseded, not deleted."
+          },
+          "403": {
+            "description": "Caller does not hold the admin role required to delete a document.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document does not exist.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown document",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Document '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/documents/versions/{versionId}/content": {
+      "get": {
+        "operationId": "DocumentsController_getVersionContent",
+        "parameters": [
+          {
+            "name": "versionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw bytes of the stored document version, served as a file download with a sanitized filename."
+          },
+          "404": {
+            "description": "Document version does not exist, belongs to another tenant, or its stored bytes carry a different tenant stamp — all three are indistinguishable from each other.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown or cross-tenant version",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Document version '65f1c2e4a1b2c3d4e5f6a7b9' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/documents/versions/{versionId}/chunks": {
+      "get": {
+        "operationId": "DocumentsController_listVersionChunks",
+        "parameters": [
+          {
+            "name": "versionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The version's evidence chunks, in locator order. Not a re-parse of the source document — chunk granularity may span pages, ~12% overlap means adjacent chunks repeat some text, and elements quarantined at ingestion are absent entirely.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceChunkResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Two chunks of one version",
+                    "value": {
+                      "docs": [
+                        {
+                          "id": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+                          "text": "The cap rate for Northgate Business Park is approximately 6.10%.",
+                          "tokenCount": 128,
+                          "locator": {
+                            "kind": "pdf-page",
+                            "extractorVersion": "v1",
+                            "page": 3
+                          }
+                        }
+                      ],
+                      "count": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Document version does not exist or belongs to another tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown or cross-tenant version",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Document version '65f1c2e4a1b2c3d4e5f6a7b9' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/canonical-entities": {
+      "get": {
+        "operationId": "CanonicalEntitiesController_list",
+        "parameters": [
+          {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's registered canonical entities.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "One registered entity",
+                    "value": {
+                      "docs": [
+                        {
+                          "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "canonicalName": "Northgate Business Park",
+                          "aliases": [
+                            "Northgate Bus. Park"
+                          ],
+                          "createdAt": "2026-07-01T00:00:00.000Z"
+                        }
+                      ],
+                      "count": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "canonical-entities"
+        ]
+      },
+      "post": {
+        "operationId": "CanonicalEntitiesController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCanonicalEntityRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The canonical entity row that was created.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Created entity",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "canonicalName": "Northgate Business Park",
+                      "aliases": [
+                        "Northgate Bus. Park"
+                      ],
+                      "createdAt": "2026-07-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not hold the admin role required to author this registry.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A canonical entity with this name already exists for this tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Duplicate canonical name",
+                    "value": {
+                      "statusCode": 409,
+                      "message": "A canonical entity named 'Northgate Business Park' already exists for this tenant",
+                      "error": "Conflict"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "canonical-entities"
+        ]
+      }
+    },
+    "/canonical-entities/{id}": {
+      "patch": {
+        "operationId": "CanonicalEntitiesController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCanonicalEntityRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The canonical entity row after this update.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Updated entity",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "canonicalName": "Northgate Business Park",
+                      "aliases": [
+                        "Northgate Bus. Park"
+                      ],
+                      "createdAt": "2026-07-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not hold the admin role required to author this registry.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No canonical entity with this id exists for the caller's tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown id",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Canonical entity '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A canonical entity with this name already exists for this tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Duplicate canonical name",
+                    "value": {
+                      "statusCode": 409,
+                      "message": "A canonical entity named 'Northgate Business Park' already exists for this tenant",
+                      "error": "Conflict"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "canonical-entities"
+        ]
+      },
+      "delete": {
+        "operationId": "CanonicalEntitiesController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The canonical entity row was deleted."
+          },
+          "403": {
+            "description": "Caller does not hold the admin role required to author this registry.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No canonical entity with this id exists for the caller's tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown id",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Canonical entity '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "canonical-entities"
+        ]
+      }
+    },
+    "/conflicts": {
+      "get": {
+        "operationId": "ConflictsController_list",
+        "parameters": [
+          {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "Exact conflict status to filter by.",
+            "schema": {
+              "example": "open",
+              "type": "string",
+              "enum": [
+                "open",
+                "resolved",
+                "dismissed"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of detected conflicts.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "One open conflict",
+                    "value": {
+                      "docs": [
+                        {
+                          "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "factKey": {
+                            "entity": "Northgate Business Park",
+                            "metric": "cap_rate",
+                            "period": "2025-03"
+                          },
+                          "factIds": [
+                            "65f1c2e4a1b2c3d4e5f6a7b9",
+                            "65f1c2e4a1b2c3d4e5f6a7ba"
+                          ],
+                          "values": [
+                            {
+                              "factId": "65f1c2e4a1b2c3d4e5f6a7b9",
+                              "value": 5.25,
+                              "unit": "percent",
+                              "sourceChunkId": "chunk-xlsx",
+                              "documentVersionId": "65f1c2e4a1b2c3d4e5f6a7c0",
+                              "locator": {
+                                "kind": "xlsx-cell",
+                                "extractorVersion": "v1",
+                                "sheetName": "Comps",
+                                "cell": "F2"
+                              }
+                            },
+                            {
+                              "factId": "65f1c2e4a1b2c3d4e5f6a7ba",
+                              "value": 6.1,
+                              "unit": "percent",
+                              "sourceChunkId": "chunk-prose",
+                              "documentVersionId": "65f1c2e4a1b2c3d4e5f6a7c1",
+                              "locator": {
+                                "kind": "pdf-page",
+                                "extractorVersion": "v1",
+                                "page": 2
+                              }
+                            }
+                          ],
+                          "magnitude": 0.0085,
+                          "status": "open",
+                          "createdAt": "2026-07-01T00:00:00.000Z",
+                          "ruleFired": "none",
+                          "explanation": "No authorityOrder is configured for this metric."
+                        }
+                      ],
+                      "count": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "conflicts"
+        ]
+      }
+    },
+    "/conflicts/{id}/resolution-requests": {
+      "post": {
+        "operationId": "ConflictsController_requestResolution",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestConflictResolutionRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "A resolveConflict workflow was started to gate the proposed winner behind a human.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Resolution requested",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7bb",
+                      "workflowId": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
+                      "status": "running",
+                      "createdAt": "2026-07-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Conflict does not exist.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown conflict",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Conflict '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict is not open, or winningFactId is not one of its own facts.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Not open",
+                    "value": {
+                      "statusCode": 409,
+                      "message": "Conflict '65f1c2e4a1b2c3d4e5f6a7b8' is 'resolved', not 'open' — it cannot be resolved again",
+                      "error": "Conflict"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "conflicts"
+        ]
+      }
+    },
+    "/workflow-runs": {
+      "get": {
+        "operationId": "WorkflowRunsController_list",
+        "parameters": [
+          {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "workflowId",
+            "required": false,
+            "in": "query",
+            "description": "Underlying Temporal workflow id to filter by. Omit it to list every run for the caller's tenant, most recent first.",
+            "schema": {
+              "example": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Runs for the caller's tenant, most recent first. Filters to a single workflow when workflowId is given; omitting it lists every run.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "One running run",
+                    "value": {
+                      "docs": [
+                        {
+                          "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "workflowId": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
+                          "workflowType": "resolve-conflict",
+                          "status": "running",
+                          "createdAt": "2026-07-01T00:00:00.000Z"
+                        }
+                      ],
+                      "count": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "workflow-runs"
+        ]
+      }
+    },
+    "/workflow-runs/{id}/events": {
+      "get": {
+        "operationId": "WorkflowRunsController_streamRun",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/event-stream. Polls every 1.5s until status reaches a terminal state, emitting the final state before closing. `run` events carry the exact shape GET /workflow-runs/:id returns; `approvals` events carry the exact shape GET /approvals returns (the tenant's whole pending inbox, not just this run's); a `heartbeat` event fires every 15s; a terminal `error` event means the client should fall back to polling both endpoints. Re-checks the connecting session every 30s and closes if it is gone or moved tenants."
+          },
+          "429": {
+            "description": "The caller's tenant or user is already at its open-SSE-stream cap.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Open-stream cap reached",
+                    "value": {
+                      "statusCode": 429,
+                      "message": "User 'user-1' is at its open-stream limit (10)",
+                      "error": "Too Many Requests"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "workflow-runs"
+        ]
+      }
+    },
+    "/workflow-runs/{id}": {
+      "get": {
+        "operationId": "WorkflowRunsController_getById",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run's current status, best-effort refreshed from the live workflow engine.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Running resolveConflict run",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "workflowId": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
+                      "workflowType": "resolve-conflict",
+                      "status": "running",
+                      "createdAt": "2026-07-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "WorkflowRun does not exist.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown workflow run",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "WorkflowRun '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "workflow-runs"
+        ]
+      }
+    },
+    "/approvals": {
+      "get": {
+        "operationId": "ApprovalsController_list",
+        "parameters": [
+          {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "state",
+            "required": false,
+            "in": "query",
+            "description": "Approval state to filter by. Defaults to `pending` — this endpoint is the pending inbox.",
+            "schema": {
+              "example": "pending",
+              "type": "string",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "timed_out"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated pending-approval inbox.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "One pending approval",
+                    "value": {
+                      "docs": [
+                        {
+                          "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "subject": {
+                            "entityType": "Conflict",
+                            "entityId": "65f1c2e4a1b2c3d4e5f6a7b9"
+                          },
+                          "action": "resolve_conflict",
+                          "summary": "Resolve Northgate Business Park cap_rate (2025-03) in favor of 5.25% over 6.10%.",
+                          "requestedBy": "analyst@example.com",
+                          "workflowId": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
+                          "state": "pending",
+                          "createdAt": "2026-07-01T00:00:00.000Z"
+                        }
+                      ],
+                      "count": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "approvals"
+        ]
+      }
+    },
+    "/approvals/{id}/decision": {
+      "post": {
+        "operationId": "ApprovalsController_decide",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecideApprovalRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The approval after recording the decision.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Approved",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "subject": {
+                        "entityType": "Conflict",
+                        "entityId": "65f1c2e4a1b2c3d4e5f6a7b9"
+                      },
+                      "action": "resolve_conflict",
+                      "summary": "Resolve Northgate Business Park cap_rate (2025-03) in favor of 5.25% over 6.10%.",
+                      "requestedBy": "analyst@example.com",
+                      "workflowId": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
+                      "state": "approved",
+                      "createdAt": "2026-07-01T00:00:00.000Z",
+                      "decidedBy": "reviewer@example.com",
+                      "decidedAt": "2026-07-02T00:00:00.000Z",
+                      "decisionReason": "Evidence checks out."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not hold the admin role required to decide an approval.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Approval does not exist for this tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown approval",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Approval '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Approval was already decided.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Already approved",
+                    "value": {
+                      "statusCode": 409,
+                      "message": "Approval '65f1c2e4a1b2c3d4e5f6a7b8' is already 'approved' — a decision cannot be re-applied",
+                      "error": "Conflict"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "approvals"
+        ]
+      }
+    },
+    "/questions": {
+      "post": {
+        "operationId": "QaController_startQuestion",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartQuestionRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Question accepted; a workflow was started to produce the answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartQuestionResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Queued answer",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "runStatus": "queued"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "questionText is missing, empty, or not a string.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Empty questionText",
+                    "value": {
+                      "statusCode": 400,
+                      "message": [
+                        "questionText should not be empty"
+                      ],
+                      "error": "Bad Request"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "qa"
+        ]
+      }
+    },
+    "/answers/{id}/events": {
+      "get": {
+        "operationId": "QaController_streamAnswer",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/event-stream. Polls every 1.5s until runStatus reaches a terminal state, emitting the final state before closing. `answer` events carry the exact shape GET /answers/:id returns; a `heartbeat` event fires every 15s; a terminal `error` event means the client should fall back to polling GET /answers/:id. Re-checks the connecting session every 30s and closes if it is gone or moved tenants."
+          },
+          "429": {
+            "description": "The caller's tenant or user is already at its open-SSE-stream cap.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Open-stream cap reached",
+                    "value": {
+                      "statusCode": 429,
+                      "message": "User 'user-1' is at its open-stream limit (10)",
+                      "error": "Too Many Requests"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "qa"
+        ]
+      }
+    },
+    "/answers": {
+      "get": {
+        "operationId": "QaController_listAnswers",
+        "parameters": [
+          {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "runStatus",
+            "required": false,
+            "in": "query",
+            "description": "Exact workflow run status to filter by.",
+            "schema": {
+              "example": "completed",
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "completed",
+                "failed"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated answer history for the caller's tenant, most recent first, optionally filtered by runStatus.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "One completed answer",
+                    "value": {
+                      "docs": [
+                        {
+                          "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "questionText": "What is the cap rate for Northgate Business Park in Q1 2025?",
+                          "runStatus": "completed",
+                          "outcome": {
+                            "kind": "answered",
+                            "claims": [
+                              {
+                                "statement": "The cap rate is approximately 6.10%.",
+                                "citations": []
+                              }
+                            ]
+                          },
+                          "claimCoverage": 1,
+                          "retrievedChunkCount": 8,
+                          "verificationReport": {
+                            "verifiedClaimCount": 1,
+                            "totalClaimCount": 1,
+                            "droppedClaims": []
+                          },
+                          "citations": [],
+                          "conflictIds": [],
+                          "createdAt": "2026-07-01T00:00:00.000Z",
+                          "usage": {
+                            "promptTokens": 1240,
+                            "completionTokens": 180,
+                            "costUsd": 0.0042
+                          }
+                        }
+                      ],
+                      "count": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "qa"
+        ]
+      }
+    },
+    "/answers/{id}": {
+      "get": {
+        "operationId": "QaController_getAnswerById",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-computed answer envelope. `outcome` is present only once runStatus is completed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnswerResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Completed answer",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "questionText": "What is the cap rate for Northgate Business Park in Q1 2025?",
+                      "runStatus": "completed",
+                      "outcome": {
+                        "kind": "answered",
+                        "claims": [
+                          {
+                            "statement": "The cap rate is approximately 6.10%.",
+                            "citations": []
+                          }
+                        ]
+                      },
+                      "claimCoverage": 1,
+                      "retrievedChunkCount": 8,
+                      "verificationReport": {
+                        "verifiedClaimCount": 1,
+                        "totalClaimCount": 1,
+                        "droppedClaims": []
+                      },
+                      "citations": [],
+                      "conflictIds": [],
+                      "createdAt": "2026-07-01T00:00:00.000Z",
+                      "usage": {
+                        "promptTokens": 1240,
+                        "completionTokens": 180,
+                        "costUsd": 0.0042
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Answer does not exist.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown answer",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Answer '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "qa"
+        ]
+      }
+    },
+    "/retrieval/search": {
+      "get": {
+        "operationId": "RetrievalController_search",
+        "parameters": [
+          {
+            "name": "query",
+            "required": true,
+            "in": "query",
+            "description": "Search text run against the hybrid retrieval index.",
+            "schema": {
+              "example": "What is the cap rate for Northgate Business Park?",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Hybrid retrieval hits for the query, ranked as the store returns them.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "One matching chunk",
+                    "value": {
+                      "docs": [
+                        {
+                          "chunkId": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+                          "docVersionId": "65f1c2e4a1b2c3d4e5f6a7b9",
+                          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85",
+                          "text": "The cap rate for Northgate Business Park is approximately 6.10%.",
+                          "locator": {
+                            "kind": "pdf-page",
+                            "extractorVersion": "v1",
+                            "page": 3
+                          }
+                        }
+                      ],
+                      "count": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "retrieval"
+        ]
+      }
+    },
+    "/sources": {
+      "post": {
+        "operationId": "SourcesController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSourceRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The newly created source.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Created source",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "name": "Deal Room Inbox",
+                      "kind": "local-folder",
+                      "path": "deal-room",
+                      "enabled": true,
+                      "intervalMs": 60000,
+                      "lastSyncAt": "2026-07-01T00:00:00.000Z",
+                      "lastSyncStatus": "ok",
+                      "fileCount": 42,
+                      "connectivity": "connector",
+                      "reachability": "live",
+                      "owner": "Jane Doe, IT",
+                      "tracked": true,
+                      "sourceClass": "unclassified",
+                      "createdAt": "2026-07-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not hold the admin role required to create or reconfigure a source.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A source with this name already exists for this tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Duplicate name",
+                    "value": {
+                      "statusCode": 409,
+                      "message": "A source named 'Deal Room Inbox' already exists for this tenant",
+                      "error": "Conflict"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "sources"
+        ]
+      },
+      "get": {
+        "operationId": "SourcesController_list",
+        "parameters": [
+          {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "lastSyncStatus",
+            "required": false,
+            "in": "query",
+            "description": "Exact lastSyncStatus to filter by — currently only 'failed' is meaningful. Omit to list every source regardless of sync outcome.",
+            "schema": {
+              "example": "failed",
+              "type": "string"
+            }
+          },
+          {
+            "name": "tracked",
+            "required": false,
+            "in": "query",
+            "description": "Filter to sources with this exact tracked value. R4 renders synced ('tracked: true') and inventory-only ('tracked: false') sources as two separately-paged lists, so this cannot be done by partitioning one fetched page client-side.",
+            "schema": {
+              "example": false,
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated sources for the tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "One source",
+                    "value": {
+                      "docs": [
+                        {
+                          "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "name": "Deal Room Inbox",
+                          "kind": "local-folder",
+                          "path": "deal-room",
+                          "enabled": true,
+                          "intervalMs": 60000,
+                          "lastSyncAt": "2026-07-01T00:00:00.000Z",
+                          "lastSyncStatus": "ok",
+                          "fileCount": 42,
+                          "connectivity": "connector",
+                          "reachability": "live",
+                          "owner": "Jane Doe, IT",
+                          "tracked": true,
+                          "sourceClass": "unclassified",
+                          "createdAt": "2026-07-01T00:00:00.000Z"
+                        }
+                      ],
+                      "count": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "sources"
+        ]
+      }
+    },
+    "/sources/{id}": {
+      "get": {
+        "operationId": "SourcesController_getById",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The requested source, with per-file sync state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceWithFileStatesResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Source with one failed file",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "name": "Deal Room Inbox",
+                      "kind": "local-folder",
+                      "path": "deal-room",
+                      "enabled": true,
+                      "intervalMs": 60000,
+                      "lastSyncAt": "2026-07-01T00:00:00.000Z",
+                      "lastSyncStatus": "ok",
+                      "fileCount": 42,
+                      "connectivity": "connector",
+                      "reachability": "live",
+                      "owner": "Jane Doe, IT",
+                      "tracked": true,
+                      "sourceClass": "unclassified",
+                      "createdAt": "2026-07-01T00:00:00.000Z",
+                      "fileStates": [
+                        {
+                          "path": "contracts/lease-agreement.pdf",
+                          "status": "failed",
+                          "lastError": "Could not resolve a document type for 'contracts/lease-agreement.pdf'",
+                          "mtimeMs": 1753920000000
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Source does not exist for this tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown source",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Source '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "sources"
+        ]
+      },
+      "patch": {
+        "operationId": "SourcesController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSourceRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The requested source.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Existing source",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "name": "Deal Room Inbox",
+                      "kind": "local-folder",
+                      "path": "deal-room",
+                      "enabled": true,
+                      "intervalMs": 60000,
+                      "lastSyncAt": "2026-07-01T00:00:00.000Z",
+                      "lastSyncStatus": "ok",
+                      "fileCount": 42,
+                      "connectivity": "connector",
+                      "reachability": "live",
+                      "owner": "Jane Doe, IT",
+                      "tracked": true,
+                      "sourceClass": "unclassified",
+                      "createdAt": "2026-07-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not hold the admin role required to create or reconfigure a source.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Source does not exist for this tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown source",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Source '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "sources"
+        ]
+      }
+    },
+    "/sources/{id}/sync": {
+      "post": {
+        "operationId": "SourcesController_requestSync",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The sync workflow run for this source — newly started, or the already-running one this request deduplicated against.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Sync accepted",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7c9",
+                      "workflowId": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
+                      "status": "running",
+                      "createdAt": "2026-07-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Source does not exist for this tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown source",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Source '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "sources"
+        ]
+      }
+    },
+    "/sources/{id}/class-drift": {
+      "get": {
+        "operationId": "SourcesController_getClassDrift",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How many documents from this source still carry a superseded sourceClass.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "drifted": {
+                    "summary": "Documents still carry the previous class",
+                    "value": {
+                      "previousClass": "memo",
+                      "count": 12
+                    }
+                  },
+                  "none": {
+                    "summary": "sourceClass has never changed for this source",
+                    "value": {
+                      "count": 0
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Source does not exist for this tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown source",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Source '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "sources"
+        ]
+      }
+    },
+    "/sources/{id}/class-drift/apply": {
+      "post": {
+        "operationId": "SourcesController_applyClassDrift",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The result of applying this source's current sourceClass to every document that still carried the previous one.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Applied to 12 documents",
+                    "value": {
+                      "modifiedCount": 12,
+                      "previousClass": "memo",
+                      "sourceClass": "crm-export"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not hold the admin role required to create or reconfigure a source.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Source does not exist for this tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown source",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Source '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "sources"
+        ]
+      }
+    },
+    "/audit-events": {
+      "get": {
+        "operationId": "AuditEventsController_list",
+        "parameters": [
+          {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "action",
+            "required": false,
+            "in": "query",
+            "description": "Exact audit action to filter by.",
+            "schema": {
+              "example": "approvals.decided",
+              "type": "string"
+            }
+          },
+          {
+            "name": "entityType",
+            "required": false,
+            "in": "query",
+            "description": "Exact subject entity type to filter by.",
+            "schema": {
+              "example": "Approval",
+              "type": "string"
+            }
+          },
+          {
+            "name": "entityId",
+            "required": false,
+            "in": "query",
+            "description": "Exact subject entity id to filter by.",
+            "schema": {
+              "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+              "type": "string"
+            }
+          },
+          {
+            "name": "origin",
+            "required": false,
+            "in": "query",
+            "description": "Exact origin to filter by: 'mcp' for an AI client holding a PAT, 'api' otherwise.",
+            "schema": {
+              "example": "mcp",
+              "type": "string",
+              "enum": [
+                "api",
+                "mcp"
+              ]
+            }
+          },
+          {
+            "name": "refusalReason",
+            "required": false,
+            "in": "query",
+            "description": "Exact refusal reason to filter by, matching mcp.tool_call.refused rows.",
+            "schema": {
+              "example": "authz-denied",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated audit log, most recent first, optionally filtered.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "One API-origin row, one MCP-origin refusal",
+                    "value": {
+                      "docs": [
+                        {
+                          "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "actor": "65f1c2e4a1b2c3d4e5f6a7c0",
+                          "action": "approvals.decided",
+                          "subject": {
+                            "entityType": "Approval",
+                            "entityId": "65f1c2e4a1b2c3d4e5f6a7b9"
+                          },
+                          "timestamp": "2026-07-02T00:00:00.000Z",
+                          "correlationId": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
+                          "createdAt": "2026-07-02T00:00:00.000Z",
+                          "origin": "api"
+                        },
+                        {
+                          "id": "65f1c2e4a1b2c3d4e5f6a7bb",
+                          "actor": "65f1c2e4a1b2c3d4e5f6a7c1",
+                          "action": "mcp.tool_call.refused",
+                          "subject": {
+                            "entityType": "Answer",
+                            "entityId": "65f1c2e4a1b2c3d4e5f6a7bc"
+                          },
+                          "timestamp": "2026-07-02T00:05:00.000Z",
+                          "correlationId": "b4a2c3d5-6789-4e0f-9abc-2234567890ac",
+                          "createdAt": "2026-07-02T00:05:00.000Z",
+                          "origin": "mcp",
+                          "toolName": "get_answer",
+                          "refusalReason": "authz-denied"
+                        }
+                      ],
+                      "count": 2
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not hold the admin role required to read the audit log.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "audit-events"
+        ]
+      }
+    },
+    "/api-keys": {
+      "post": {
+        "operationId": "ApiKeysController_mint",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApiKeyRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The newly minted key, including its plaintext token — shown exactly once.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Minted API key",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "name": "CI integration",
+                      "token": "eo_pat_9f8c12ab34cd56ef",
+                      "tokenPrefix": "eo_pat_9f8c12",
+                      "expiresAt": "2026-12-31T00:00:00.000Z",
+                      "createdAt": "2026-07-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The caller already has the maximum number of active API keys.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Active key cap reached",
+                    "value": {
+                      "statusCode": 409,
+                      "message": "User '65f1c2e4a1b2c3d4e5f6a7b8' already has 10 active API keys, the maximum allowed",
+                      "error": "Conflict"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "api-keys"
+        ]
+      },
+      "get": {
+        "operationId": "ApiKeysController_list",
+        "parameters": [
+          {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The caller's own API keys.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "One key",
+                    "value": {
+                      "docs": [
+                        {
+                          "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "name": "CI integration",
+                          "tokenPrefix": "eo_pat_9f8c12",
+                          "expiresAt": "2026-12-31T00:00:00.000Z",
+                          "lastUsedAt": "2026-08-01T00:00:00.000Z",
+                          "createdAt": "2026-07-01T00:00:00.000Z"
+                        }
+                      ],
+                      "count": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "api-keys"
+        ]
+      }
+    },
+    "/api-keys/{id}": {
+      "delete": {
+        "operationId": "ApiKeysController_revoke",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The key was revoked."
+          },
+          "404": {
+            "description": "API key does not exist for this user.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown key",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "API key '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "api-keys"
+        ]
+      }
+    }
+  },
+  "info": {
+    "title": "Evidence Ops API",
+    "description": "Evidence Ops API specification",
+    "version": "0.1.0",
+    "contact": {}
+  },
+  "tags": [],
+  "servers": [],
+  "components": {
+    "schemas": {
+      "RegisterRequestDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "example": "user@example.com",
+            "description": "Account email address. Required unless invitationToken is present — a token carries its own email, so this field is ignored when one is supplied."
+          },
+          "password": {
+            "type": "string",
+            "example": "correct-horse-battery-staple",
+            "description": "Account password (8-72 characters)."
+          },
+          "invitationToken": {
+            "type": "string",
+            "example": "eo_inv_9f8c12ab34cd56ef",
+            "description": "Single-use invitation token. When present, the invitation determines the tenant, role and email the account joins with."
+          }
+        },
+        "required": [
+          "password"
+        ]
+      },
+      "MeResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Account identifier."
+          },
+          "email": {
+            "type": "string",
+            "example": "user@example.com",
+            "description": "Account email address."
+          },
+          "role": {
+            "type": "string",
+            "example": "member",
+            "enum": [
+              "admin",
+              "member"
+            ],
+            "description": "Account role."
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "Account creation timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "role",
+          "createdAt"
+        ]
+      },
+      "LoginRequestDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "example": "user@example.com",
+            "description": "Account email address."
+          },
+          "password": {
+            "type": "string",
+            "example": "correct-horse-battery-staple",
+            "description": "Account password (8-72 characters)."
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ]
+      },
+      "AuthTokenResponseDto": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/MeResponseDto"
+          }
+        },
+        "required": [
+          "user"
+        ]
+      },
+      "CreateInvitationRequestDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "example": "colleague@example.com",
+            "description": "Email address to invite."
+          },
+          "role": {
+            "type": "string",
+            "example": "member",
+            "enum": [
+              "admin",
+              "member"
+            ],
+            "description": "Role the invitee joins the tenant with."
+          }
+        },
+        "required": [
+          "email",
+          "role"
+        ]
+      },
+      "HealthResponseDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "ok",
+            "description": "Overall health status.",
+            "enum": [
+              "ok",
+              "degraded"
+            ]
+          },
+          "mongo": {
+            "type": "string",
+            "example": "up",
+            "description": "Mongo connectivity, checked via an admin ping (~2s timeout).",
+            "enum": [
+              "up",
+              "down"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "mongo"
+        ]
+      },
+      "InfoResponseDto": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string",
+            "example": "1.0.0",
+            "description": "Application package version."
+          }
+        },
+        "required": [
+          "version"
+        ]
+      },
+      "DocumentVersionResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b9",
+            "description": "Version identifier."
+          },
+          "versionNumber": {
+            "type": "number",
+            "example": 1,
+            "description": "Sequential version number, starting at 1."
+          },
+          "sha256": {
+            "type": "string",
+            "example": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85",
+            "description": "sha256 of the version bytes — what a citation pins."
+          },
+          "sizeBytes": {
+            "type": "number",
+            "example": 245760,
+            "description": "Size of the version bytes, in bytes."
+          },
+          "ingestionStatus": {
+            "type": "string",
+            "example": "pending",
+            "enum": [
+              "pending",
+              "completed",
+              "facts-failed",
+              "failed",
+              "needs-ocr"
+            ],
+            "description": "Progress marker for the ingestion workflow started on upload."
+          },
+          "ingestionFailureReason": {
+            "type": "string",
+            "example": "Document has 3 page(s) but no extractable text on any of them (likely a scanned image with no embedded text layer); OCR is out of scope for this parser",
+            "description": "Present when ingestionStatus is \"failed\" or \"needs-ocr\" — the parser exception message from the attempt that set that status."
+          },
+          "reducedFidelityReasons": {
+            "example": [
+              "Document has 3 page(s) but no extractable text on any of them; falling back to OCR-only extraction for those pages"
+            ],
+            "description": "Non-empty when this version was ingested with known fidelity loss; each entry states one reason. Empty for a version with no fidelity loss.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "Version creation timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "versionNumber",
+          "sha256",
+          "sizeBytes",
+          "ingestionStatus",
+          "reducedFidelityReasons",
+          "createdAt"
+        ]
+      },
+      "DocumentResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Document identifier."
+          },
+          "title": {
+            "type": "string",
+            "example": "Q3 Rent Roll",
+            "description": "Document title."
+          },
+          "sourceKind": {
+            "type": "string",
+            "example": "xlsx",
+            "enum": [
+              "pdf",
+              "docx",
+              "xlsx",
+              "pptx",
+              "csv",
+              "tsv",
+              "txt",
+              "md"
+            ],
+            "description": "Extractor pipeline kind."
+          },
+          "mimeType": {
+            "type": "string",
+            "example": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "description": "Raw content type as uploaded."
+          },
+          "sourceClass": {
+            "type": "string",
+            "example": "unclassified",
+            "enum": [
+              "crm-export",
+              "pm-export",
+              "spreadsheet",
+              "memo",
+              "report",
+              "unclassified"
+            ],
+            "description": "Authority classification for this document. 'unclassified' means nobody has declared one — the survivorship policy treats that as no authority information, not the lowest rank."
+          },
+          "currentVersion": {
+            "$ref": "#/components/schemas/DocumentVersionResponseDto"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "Document creation timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "sourceKind",
+          "mimeType",
+          "sourceClass",
+          "currentVersion",
+          "createdAt"
+        ]
+      },
+      "DocumentWithVersionsResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Document identifier."
+          },
+          "title": {
+            "type": "string",
+            "example": "Q3 Rent Roll",
+            "description": "Document title."
+          },
+          "sourceKind": {
+            "type": "string",
+            "example": "xlsx",
+            "enum": [
+              "pdf",
+              "docx",
+              "xlsx",
+              "pptx",
+              "csv",
+              "tsv",
+              "txt",
+              "md"
+            ],
+            "description": "Extractor pipeline kind."
+          },
+          "mimeType": {
+            "type": "string",
+            "example": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "description": "Raw content type as uploaded."
+          },
+          "sourceClass": {
+            "type": "string",
+            "example": "unclassified",
+            "enum": [
+              "crm-export",
+              "pm-export",
+              "spreadsheet",
+              "memo",
+              "report",
+              "unclassified"
+            ],
+            "description": "Authority classification for this document. 'unclassified' means nobody has declared one — the survivorship policy treats that as no authority information, not the lowest rank."
+          },
+          "currentVersion": {
+            "$ref": "#/components/schemas/DocumentVersionResponseDto"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "Document creation timestamp."
+          },
+          "versions": {
+            "description": "Full version history, oldest first.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DocumentVersionResponseDto"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "sourceKind",
+          "mimeType",
+          "sourceClass",
+          "currentVersion",
+          "createdAt",
+          "versions"
+        ]
+      },
+      "EvidenceChunkResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+            "description": "Content-addressed chunk identifier."
+          },
+          "text": {
+            "type": "string",
+            "example": "The cap rate for Northgate Business Park is approximately 6.10%.",
+            "description": "Chunk text, exactly as stored at ingestion."
+          },
+          "tokenCount": {
+            "type": "number",
+            "example": 128,
+            "description": "Token count of this chunk, as measured at ingestion."
+          },
+          "locator": {
+            "type": "object",
+            "example": {
+              "kind": "pdf-page",
+              "extractorVersion": "v1",
+              "page": 3
+            },
+            "description": "Where this chunk's text came from in the source document."
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "tokenCount",
+          "locator"
+        ]
+      },
+      "CreateCanonicalEntityRequestDto": {
+        "type": "object",
+        "properties": {
+          "canonicalName": {
+            "type": "string",
+            "example": "Northgate Business Park",
+            "description": "Canonical display name this row registers alternate spellings against."
+          },
+          "aliases": {
+            "example": [
+              "Northgate Bus. Park"
+            ],
+            "description": "Alternate spellings that should resolve to canonicalName.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "canonicalName"
+        ]
+      },
+      "UpdateCanonicalEntityRequestDto": {
+        "type": "object",
+        "properties": {
+          "canonicalName": {
+            "type": "string",
+            "example": "Northgate Business Park",
+            "description": "New canonical display name for this row."
+          },
+          "aliases": {
+            "example": [
+              "Northgate Bus. Park"
+            ],
+            "description": "Replaces the full alias list. Omit to leave the current aliases untouched.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "RequestConflictResolutionRequestDto": {
+        "type": "object",
+        "properties": {
+          "winningFactId": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b9",
+            "description": "ExtractedFact id proposed as this conflict's correct value — the workflow gates this proposal behind a human, it does not choose it."
+          }
+        },
+        "required": [
+          "winningFactId"
+        ]
+      },
+      "DecideApprovalRequestDto": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "string",
+            "example": "approved",
+            "enum": [
+              "approved",
+              "rejected"
+            ],
+            "description": "Human decision on the pending approval request."
+          },
+          "reason": {
+            "type": "string",
+            "example": "Evidence checks out; the spreadsheet figure is the current underwriting value.",
+            "description": "Optional rationale for the decision."
+          }
+        },
+        "required": [
+          "decision"
+        ]
+      },
+      "StartQuestionRequestDto": {
+        "type": "object",
+        "properties": {
+          "questionText": {
+            "type": "string",
+            "example": "What is the cap rate for Northgate Business Park in Q1 2025?",
+            "description": "Natural-language question to answer from the evidence corpus."
+          }
+        },
+        "required": [
+          "questionText"
+        ]
+      },
+      "StartQuestionResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Answer identifier. Poll GET /answers/{id} for the run's status and outcome."
+          },
+          "runStatus": {
+            "type": "string",
+            "example": "queued",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed"
+            ],
+            "description": "Initial workflow run status — always queued at creation."
+          }
+        },
+        "required": [
+          "id",
+          "runStatus"
+        ]
+      },
+      "DroppedClaimResponseDto": {
+        "type": "object",
+        "properties": {
+          "statement": {
+            "type": "string",
+            "example": "The cap rate is approximately 6.10%.",
+            "description": "The model-authored claim statement that was dropped during verification."
+          },
+          "reason": {
+            "type": "string",
+            "example": "quote did not match the source chunk",
+            "description": "Why the claim was dropped."
+          }
+        },
+        "required": [
+          "statement",
+          "reason"
+        ]
+      },
+      "VerificationReportResponseDto": {
+        "type": "object",
+        "properties": {
+          "verifiedClaimCount": {
+            "type": "number",
+            "example": 3,
+            "description": "Number of model-authored claims that survived server-side citation verification."
+          },
+          "totalClaimCount": {
+            "type": "number",
+            "example": 4,
+            "description": "Total number of model-authored claims before verification."
+          },
+          "droppedClaims": {
+            "description": "Claims dropped during verification, with the reason each was dropped.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DroppedClaimResponseDto"
+            }
+          }
+        },
+        "required": [
+          "verifiedClaimCount",
+          "totalClaimCount",
+          "droppedClaims"
+        ]
+      },
+      "AnswerUsageResponseDto": {
+        "type": "object",
+        "properties": {
+          "promptTokens": {
+            "type": "number",
+            "example": 1240,
+            "description": "Prompt tokens for the synthesis call."
+          },
+          "completionTokens": {
+            "type": "number",
+            "example": 180,
+            "description": "Completion tokens for the synthesis call."
+          },
+          "costUsd": {
+            "type": "number",
+            "example": 0.0042,
+            "description": "Synthesis call cost in USD."
+          }
+        },
+        "required": [
+          "promptTokens",
+          "completionTokens",
+          "costUsd"
+        ]
+      },
+      "AnswerResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Answer identifier."
+          },
+          "questionText": {
+            "type": "string",
+            "example": "What is the cap rate for Northgate Business Park in Q1 2025?",
+            "description": "The question this answer was requested for."
+          },
+          "runStatus": {
+            "type": "string",
+            "example": "completed",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed"
+            ],
+            "description": "Workflow lifecycle status — separate from the answer outcome below."
+          },
+          "outcome": {
+            "type": "object",
+            "description": "The gate-verified outcome, present only once runStatus is 'completed'. For kind: 'answered', claims are the survivors of server-side grounding verification, never the model's raw, unverified claim set. One of kind: 'answered' | 'insufficient_evidence' | 'conflicting_evidence'.",
+            "example": {
+              "kind": "answered",
+              "claims": [
+                {
+                  "statement": "The cap rate is approximately 6.10%.",
+                  "citations": []
+                }
+              ]
+            }
+          },
+          "claimCoverage": {
+            "type": "number",
+            "example": 0.75,
+            "description": "Fraction of the model-authored claims that survived server-side verification."
+          },
+          "retrievedChunkCount": {
+            "type": "number",
+            "example": 12,
+            "description": "Number of evidence chunks retrieved for this run, present only once runStatus is 'completed'."
+          },
+          "verificationReport": {
+            "description": "Server-computed claim verification summary, present only once runStatus is 'completed'.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/VerificationReportResponseDto"
+              }
+            ]
+          },
+          "citations": {
+            "description": "Citations backing the server-verified claims, flattened across all claims.",
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "conflictIds": {
+            "description": "Conflict identifiers relevant to this answer, if any were detected.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "Answer creation timestamp."
+          },
+          "withdrawnCitedDocVersionIds": {
+            "description": "Cited document versions that currently carry withdrawnAt, resolved fresh on every read — never persisted alongside citations, so this can change between two reads of the same answer without the answer itself changing.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "usage": {
+            "description": "Token and cost accounting for the QA synthesis call, present only once runStatus is 'completed'.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AnswerUsageResponseDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "questionText",
+          "runStatus",
+          "citations",
+          "conflictIds",
+          "createdAt",
+          "withdrawnCitedDocVersionIds"
+        ]
+      },
+      "CreateSourceRequestDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Deal Room Inbox",
+            "description": "Human-readable name for this source."
+          },
+          "kind": {
+            "type": "string",
+            "example": "local-folder",
+            "enum": [
+              "local-folder"
+            ],
+            "description": "Which connector syncs this source."
+          },
+          "path": {
+            "type": "string",
+            "example": "deal-room",
+            "description": "The connector's location for this source — a folder path for 'local-folder'."
+          },
+          "intervalMs": {
+            "type": "number",
+            "example": 60000,
+            "description": "Per-source override of the global sync interval, in milliseconds. Omit to use the configured default."
+          },
+          "enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "Whether the sync loop is allowed to run for this source. Defaults to true.",
+            "default": true
+          },
+          "connectivity": {
+            "type": "string",
+            "example": "connector",
+            "enum": [
+              "connector",
+              "export-only",
+              "manual"
+            ],
+            "description": "How this source's bytes get into the corpus. Defaults to 'connector'.",
+            "default": "connector"
+          },
+          "reachability": {
+            "type": "string",
+            "example": "live",
+            "enum": [
+              "live",
+              "possible",
+              "prohibited"
+            ],
+            "description": "Whether the estate's own access posture lets this system reach this source at all. Defaults to 'live'.",
+            "default": "live"
+          },
+          "owner": {
+            "type": "string",
+            "example": "Jane Doe, IT",
+            "description": "Person or team accountable for this source. Required — its absence is the gap an estate's inventory pass exists to surface, so it is never inferred or defaulted."
+          },
+          "tracked": {
+            "type": "boolean",
+            "example": true,
+            "description": "Whether the sync loop may ever run for this source. 'false' marks an inventory-only row catalogued for the estate map but never synced. Defaults to true.",
+            "default": true
+          },
+          "sourceClass": {
+            "type": "string",
+            "example": "unclassified",
+            "enum": [
+              "crm-export",
+              "pm-export",
+              "spreadsheet",
+              "memo",
+              "report",
+              "unclassified"
+            ],
+            "description": "Default document classification a document created from this source's sync pass inherits. Defaults to 'unclassified'.",
+            "default": "unclassified"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "path",
+          "owner"
+        ]
+      },
+      "SourceFileStateResponseDto": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "example": "contracts/lease-agreement.pdf",
+            "description": "The file's path relative to the source's root."
+          },
+          "status": {
+            "type": "string",
+            "example": "failed",
+            "enum": [
+              "ok",
+              "failed"
+            ],
+            "description": "'failed' when the most recent sync attempt for this file recorded an error."
+          },
+          "lastError": {
+            "type": "string",
+            "example": "Could not resolve a document type for 'contracts/lease-agreement.pdf'",
+            "description": "Error detail from the most recent failed sync attempt for this file."
+          },
+          "mtimeMs": {
+            "type": "number",
+            "example": 1753920000000,
+            "description": "The file's on-disk modification time, epoch milliseconds."
+          }
+        },
+        "required": [
+          "path",
+          "status",
+          "mtimeMs"
+        ]
+      },
+      "SourceWithFileStatesResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Source identifier."
+          },
+          "name": {
+            "type": "string",
+            "example": "Deal Room Inbox",
+            "description": "Human-readable name for this source."
+          },
+          "kind": {
+            "type": "string",
+            "example": "local-folder",
+            "enum": [
+              "local-folder"
+            ],
+            "description": "Which connector syncs this source."
+          },
+          "path": {
+            "type": "string",
+            "example": "deal-room",
+            "description": "The connector's location for this source — a folder path for 'local-folder'."
+          },
+          "enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "Whether the sync loop is allowed to run for this source."
+          },
+          "intervalMs": {
+            "type": "number",
+            "example": 60000,
+            "description": "Per-source override of the global sync interval, in milliseconds. Absent means the configured default applies."
+          },
+          "lastSyncAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "When the most recent sync attempt finished."
+          },
+          "lastSyncStatus": {
+            "type": "string",
+            "example": "ok",
+            "description": "Outcome of the most recent sync attempt — 'ok' or 'failed'."
+          },
+          "lastSyncError": {
+            "type": "string",
+            "example": "ENOENT: no such file or directory",
+            "description": "Error detail, present only when lastSyncStatus is failed."
+          },
+          "fileCount": {
+            "type": "number",
+            "example": 42,
+            "description": "Number of files this source has synced state for."
+          },
+          "connectivity": {
+            "type": "string",
+            "example": "connector",
+            "enum": [
+              "connector",
+              "export-only",
+              "manual"
+            ],
+            "description": "How this source's bytes get into the corpus."
+          },
+          "reachability": {
+            "type": "string",
+            "example": "live",
+            "enum": [
+              "live",
+              "possible",
+              "prohibited"
+            ],
+            "description": "Whether the estate's own access posture lets this system reach this source at all."
+          },
+          "owner": {
+            "type": "string",
+            "example": "Jane Doe, IT",
+            "description": "Person or team accountable for this source. Absent means nobody has said yet."
+          },
+          "tracked": {
+            "type": "boolean",
+            "example": true,
+            "description": "Whether the sync loop may ever run for this source. 'false' marks an inventory-only row."
+          },
+          "sourceClass": {
+            "type": "string",
+            "example": "unclassified",
+            "enum": [
+              "crm-export",
+              "pm-export",
+              "spreadsheet",
+              "memo",
+              "report",
+              "unclassified"
+            ],
+            "description": "Default document classification a document created from this source's sync pass inherits."
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "Source creation timestamp."
+          },
+          "fileStates": {
+            "description": "Per-file sync state, one entry per file this source has ever seen.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceFileStateResponseDto"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "path",
+          "enabled",
+          "fileCount",
+          "connectivity",
+          "reachability",
+          "tracked",
+          "sourceClass",
+          "createdAt",
+          "fileStates"
+        ]
+      },
+      "UpdateSourceRequestDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "example": false,
+            "description": "Whether the sync loop is allowed to run for this source."
+          },
+          "connectivity": {
+            "type": "string",
+            "example": "export-only",
+            "enum": [
+              "connector",
+              "export-only",
+              "manual"
+            ],
+            "description": "How this source's bytes get into the corpus."
+          },
+          "reachability": {
+            "type": "string",
+            "example": "possible",
+            "enum": [
+              "live",
+              "possible",
+              "prohibited"
+            ],
+            "description": "Whether the estate's own access posture lets this system reach this source at all."
+          },
+          "owner": {
+            "type": "string",
+            "example": "Jane Doe, IT",
+            "description": "Person or team accountable for this source."
+          },
+          "tracked": {
+            "type": "boolean",
+            "example": false,
+            "description": "Whether the sync loop may ever run for this source. 'false' marks an inventory-only row catalogued for the estate map but never synced."
+          },
+          "sourceClass": {
+            "type": "string",
+            "example": "crm-export",
+            "enum": [
+              "crm-export",
+              "pm-export",
+              "spreadsheet",
+              "memo",
+              "report",
+              "unclassified"
+            ],
+            "description": "Default document classification a document created from this source's sync pass inherits. Correcting this does not rewrite documents already ingested under the old class."
+          }
+        }
+      },
+      "CreateApiKeyRequestDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "CI integration",
+            "description": "Human-readable name for this key."
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-12-31T00:00:00.000Z",
+            "description": "When this key stops working, at most one year out. Omit to use the default TTL (`apiKeys.defaultTtlDays` from config)."
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    }
+  }
+}

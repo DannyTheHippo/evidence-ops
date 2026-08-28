@@ -24,8 +24,9 @@ const UNRESOLVED_IP_TRACKER = 'unresolved';
 /**
  * The `POST /mcp` handler, kept in its own module — importing `McpServerService` only for its
  * type — so that `test/mcp/main.spec.ts` can exercise it without dragging in `./mcp.module`'s
- * `ConfigModule.forRoot()`, which reads `.env` the moment that module is imported. `src/mcp/main.ts`
- * wires the returned function onto the route; nothing here depends on `NestFactory` having run.
+ * `ConfigModule.forRoot()`, which reads `.env` the moment that module is imported.
+ * `createMcpHttpApp` (`./mcp-http-app.ts`) wires the returned function onto the route; nothing here
+ * depends on `NestFactory` having run.
  *
  * Every request is gated, in order, before any MCP protocol work starts: `checkPreAuthIpRateLimit`
  * (fails CLOSED — a hit against `config.mcp.preAuthIpRateLimitMaxRequests`, keyed on `req.ip`,

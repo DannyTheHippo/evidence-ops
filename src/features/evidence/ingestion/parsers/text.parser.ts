@@ -1,5 +1,6 @@
 import type { TextBlockLocator } from '../../../../database/schemas/evidence/evidence-chunk/evidence-locator.type';
 import type { DocumentParser, ParsedDocument, ParsedElement } from './parsed-element.type';
+import { decodeTextBuffer, encodingFidelityReasons } from '../decode-text-buffer';
 import { sanitizeEvidenceText } from '../sanitize-evidence-text';
 
 // Mirrors the 'txt'/'md' entries of SOURCE_KIND_TO_MIME_TYPE (documents.constant.ts). Not imported
@@ -10,8 +11,9 @@ const TEXT_MIME_TYPE = 'text/plain';
 const MARKDOWN_MIME_TYPE = 'text/markdown';
 
 // Bump whenever a change here could shift `blockIndex`/`headingPath` coordinates a stored
-// citation already points at.
-const EXTRACTOR_VERSION = 'text-block-1';
+// citation already points at — including a change to `decodeTextBuffer`'s encoding detection,
+// since a different decode of the same bytes can shift the blank-line/heading boundaries below.
+const EXTRACTOR_VERSION = 'text-block-3';
 
 // A block is a heading only when it is exactly one line matching this pattern — `#{1,6}` followed
 // by a required space, per ATX heading syntax. `#hashtag` (no space) never matches and falls
@@ -31,8 +33,11 @@ export class TextParser implements DocumentParser {
   // eslint-disable-next-line @typescript-eslint/require-await -- matches the async `DocumentParser.parse` contract other parsers use for I/O; this one has none but keeps the same call shape.
   async parse(content: Buffer): Promise<ParsedDocument> {
     // Normalize CRLF to LF up front so blank-line and heading detection never depend on the
-    // source file's line-ending style.
-    const text = content.toString('utf-8').replace(/\r\n/g, '\n');
+    // source file's line-ending style. `decodeTextBuffer` resolves the source encoding first — a
+    // bare `content.toString('utf-8')` here would turn a Windows-1252 or UTF-16 upload into
+    // replacement characters or NUL-interleaved text before this parser ever sees it.
+    const { text: decoded, encoding } = decodeTextBuffer(content);
+    const text = decoded.replace(/\r\n/g, '\n');
     const lines = text.split('\n');
 
     const blocks: string[][] = [];
@@ -87,6 +92,10 @@ export class TextParser implements DocumentParser {
       elements.push({ text: blockText, locator, headingPath });
     });
 
-    return { elements, extractorVersion: EXTRACTOR_VERSION };
+    return {
+      elements,
+      extractorVersion: EXTRACTOR_VERSION,
+      reducedFidelityReasons: encodingFidelityReasons(encoding),
+    };
   }
 }

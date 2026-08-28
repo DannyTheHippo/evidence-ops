@@ -2,10 +2,12 @@ import type { ExecutionContext } from '@nestjs/common';
 import { UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
+import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { TypedConfigService } from '../../../../../src/config/environment/typed-config.service';
+import { User } from '../../../../../src/database/schemas/administration/user/user.schema';
 import { JwtAuthGuard } from '../../../../../src/features/common/auth/guards/jwt-auth.guard';
 import { JwtPayload } from '../../../../../src/features/common/auth/types/jwt-payload.type';
 import { NodeEnv } from '../../../../../src/shared/enums/global/node-env.enum';
@@ -25,6 +27,32 @@ describe('JwtAuthGuard', () => {
   // passing it to `expect()` reads as an unbound method reference and trips
   // `@typescript-eslint/unbound-method`. Same reasoning as `documents.service.spec.ts:33-36`.
   const mockJwtService = { verifyAsync: jest.fn() };
+  const mockUserModel = { findById: jest.fn() };
+
+  /**
+   * Queues a verified token together with the `User` row it was minted from — identical by
+   * construction, so every acceptance below proves the guard's row comparison passes on agreement
+   * rather than proving it was skipped. A refusal case queues a diverging row explicitly.
+   */
+  const issueToken = (payload: JwtPayload, rowOverrides: Partial<JwtPayload> = {}): void => {
+    const row = { ...payload, ...rowOverrides };
+    mockJwtService.verifyAsync.mockResolvedValueOnce(payload);
+    mockUserModel.findById.mockResolvedValueOnce({
+      email: row.email,
+      tenantId: row.tenantId,
+      role: row.role,
+      tokenVersion: row.tokenVersion,
+    });
+  };
+
+  const buildPayload = (overrides: Partial<JwtPayload> = {}): JwtPayload => ({
+    sub: 'user-id',
+    email: 'user@example.com',
+    tenantId: 'default',
+    role: UserRole.Admin,
+    tokenVersion: 0,
+    ...overrides,
+  });
 
   const buildContext = (
     headers: Record<string, string> = {},
@@ -54,6 +82,7 @@ describe('JwtAuthGuard', () => {
         { provide: JwtService, useValue: mockJwtService },
         { provide: Reflector, useValue: { getAllAndOverride: jest.fn().mockReturnValue(false) } },
         { provide: TypedConfigService, useValue: config },
+        { provide: getModelToken(User.name), useValue: mockUserModel },
         { provide: AsyncLocalStorage, useValue: mockAls },
       ],
     }).compile();
@@ -112,14 +141,79 @@ describe('JwtAuthGuard', () => {
     await expect(guard.canActivate(context)).rejects.toThrow(UnauthorizedException);
   });
 
+  /**
+   * Unit half of the mutation-class sweep in `auth.e2e-spec.ts`: every claim the guard compares
+   * against the `User` row, diverged one at a time. The e2e drives the class through the real
+   * request path; these pin each comparison term individually, so dropping one is attributable to
+   * the term rather than to the whole guard.
+   */
+  describe('row comparison', () => {
+    const divergences: Array<[string, Partial<JwtPayload>]> = [
+      ['email', { email: 'renamed@example.com' }],
+      ['tenantId', { tenantId: 'tenant-b' }],
+      ['role', { role: UserRole.Member }],
+      ['tokenVersion', { tokenVersion: 1 }],
+    ];
+
+    it.each(divergences)(
+      'should refuse a token whose %s no longer matches the row',
+      async (_claim, rowOverrides) => {
+        issueToken(buildPayload(), rowOverrides);
+        const { context } = buildContext({ cookie: 'eo_session=stale-token' });
+
+        await expect(guard.canActivate(context)).rejects.toThrow(
+          new UnauthorizedException('Invalid or expired token'),
+        );
+      },
+    );
+
+    it('should refuse a token whose user row no longer exists', async () => {
+      mockJwtService.verifyAsync.mockResolvedValueOnce(buildPayload());
+      mockUserModel.findById.mockResolvedValueOnce(null);
+      const { context } = buildContext({ cookie: 'eo_session=orphan-token' });
+
+      await expect(guard.canActivate(context)).rejects.toThrow(UnauthorizedException);
+    });
+
+    // Every account starts at epoch 0 and stays there until a revocation raises it, so a
+    // truthiness check on the claim would refuse the entire user base.
+    it('should accept an epoch of 0 carried by both the token and the row', async () => {
+      issueToken(buildPayload({ tokenVersion: 0 }));
+      const { context } = buildContext({ cookie: 'eo_session=epoch-zero-token' });
+
+      await expect(guard.canActivate(context)).resolves.toBe(true);
+    });
+
+    it('should refuse a token minted before the epoch claim existed', async () => {
+      const preEpochPayload = {
+        sub: 'user-id',
+        email: 'user@example.com',
+        tenantId: 'default',
+        role: UserRole.Admin,
+      };
+      mockJwtService.verifyAsync.mockResolvedValueOnce(preEpochPayload);
+      mockUserModel.findById.mockResolvedValueOnce({ ...preEpochPayload, tokenVersion: 0 });
+      const { context } = buildContext({ cookie: 'eo_session=pre-epoch-token' });
+
+      await expect(guard.canActivate(context)).rejects.toThrow(UnauthorizedException);
+    });
+
+    // Fails CLOSED on the lookup itself: an unreachable database refuses rather than admitting a
+    // token it could not check.
+    it('should refuse when the row lookup fails', async () => {
+      mockJwtService.verifyAsync.mockResolvedValueOnce(buildPayload());
+      mockUserModel.findById.mockRejectedValueOnce(new Error('mongo unreachable'));
+      const { context } = buildContext({ cookie: 'eo_session=valid-token' });
+
+      await expect(guard.canActivate(context)).rejects.toThrow(
+        new UnauthorizedException('Invalid or expired token'),
+      );
+    });
+  });
+
   it('should set request.user with all four fields and write both ALS keys on a valid payload', async () => {
-    const payload: JwtPayload = {
-      sub: 'user-id',
-      email: 'user@example.com',
-      tenantId: 'default',
-      role: UserRole.Admin,
-    };
-    mockJwtService.verifyAsync.mockResolvedValueOnce(payload);
+    const payload = buildPayload();
+    issueToken(payload);
     const { context, request } = buildContext({ cookie: 'eo_session=valid-token' });
 
     await expect(guard.canActivate(context)).resolves.toBe(true);
@@ -135,13 +229,7 @@ describe('JwtAuthGuard', () => {
   });
 
   it('should accept a token carried by the eo_session cookie in a non-prod-like environment', async () => {
-    const payload: JwtPayload = {
-      sub: 'user-id',
-      email: 'user@example.com',
-      tenantId: 'default',
-      role: UserRole.Admin,
-    };
-    mockJwtService.verifyAsync.mockResolvedValueOnce(payload);
+    issueToken(buildPayload());
     const { context } = buildContext({ cookie: 'eo_session=cookie-token' });
 
     await expect(guard.canActivate(context)).resolves.toBe(true);
@@ -159,19 +247,14 @@ describe('JwtAuthGuard', () => {
     it('should reject the plain eo_session cookie and accept __Host-eo_session in a prod-like environment', async () => {
       // Non-default tenant: production also rejects the default tenant (see "default tenant
       // rejection" below), and this test is about cookie-name resolution, not that check.
-      const payload: JwtPayload = {
-        sub: 'user-id',
-        email: 'user@example.com',
-        tenantId: 'tenant-b',
-        role: UserRole.Admin,
-      };
+      const payload = buildPayload({ tenantId: 'tenant-b' });
       const { guard: prodGuard } = await buildGuard(NodeEnv.PRODUCTION);
 
       const { context: plainContext } = buildContext({ cookie: 'eo_session=cookie-token' });
       await expect(prodGuard.canActivate(plainContext)).rejects.toThrow(UnauthorizedException);
       expect(mockJwtService.verifyAsync).not.toHaveBeenCalled();
 
-      mockJwtService.verifyAsync.mockResolvedValueOnce(payload);
+      issueToken(payload);
       const { context: secureContext } = buildContext({
         cookie: '__Host-eo_session=secure-cookie-token',
       });
@@ -180,12 +263,6 @@ describe('JwtAuthGuard', () => {
     });
 
     it('should reject the __Host-eo_session cookie and accept the plain eo_session in a dev environment', async () => {
-      const payload: JwtPayload = {
-        sub: 'user-id',
-        email: 'user@example.com',
-        tenantId: 'default',
-        role: UserRole.Admin,
-      };
       const { guard: devGuard } = await buildGuard(NodeEnv.DEVELOPMENT);
 
       const { context: secureContext } = buildContext({
@@ -194,7 +271,7 @@ describe('JwtAuthGuard', () => {
       await expect(devGuard.canActivate(secureContext)).rejects.toThrow(UnauthorizedException);
       expect(mockJwtService.verifyAsync).not.toHaveBeenCalled();
 
-      mockJwtService.verifyAsync.mockResolvedValueOnce(payload);
+      issueToken(buildPayload());
       const { context: plainContext } = buildContext({ cookie: 'eo_session=cookie-token' });
       await expect(devGuard.canActivate(plainContext)).resolves.toBe(true);
       expect(mockJwtService.verifyAsync).toHaveBeenCalledWith('cookie-token');
@@ -205,15 +282,10 @@ describe('JwtAuthGuard', () => {
   // carrying it in a prod-like environment — stale JWT, seeded dev account, hand-crafted — must
   // not authenticate, and the rejection must be indistinguishable from any other bad token.
   describe('default tenant rejection', () => {
-    const defaultTenantPayload: JwtPayload = {
-      sub: 'user-id',
-      email: 'user@example.com',
-      tenantId: 'default',
-      role: UserRole.Admin,
-    };
+    const defaultTenantPayload = buildPayload();
 
     it('should throw UnauthorizedException for the default tenant under production', async () => {
-      mockJwtService.verifyAsync.mockResolvedValueOnce(defaultTenantPayload);
+      issueToken(defaultTenantPayload);
       const { guard: prodGuard } = await buildGuard(NodeEnv.PRODUCTION);
       const { context } = buildContext({ cookie: '__Host-eo_session=default-tenant-token' });
 
@@ -223,7 +295,7 @@ describe('JwtAuthGuard', () => {
     });
 
     it('should throw UnauthorizedException for the default tenant under staging', async () => {
-      mockJwtService.verifyAsync.mockResolvedValueOnce(defaultTenantPayload);
+      issueToken(defaultTenantPayload);
       const { guard: stagingGuard } = await buildGuard(NodeEnv.STAGING);
       const { context } = buildContext({ cookie: '__Host-eo_session=default-tenant-token' });
 
@@ -233,28 +305,23 @@ describe('JwtAuthGuard', () => {
     });
 
     it('should accept the default tenant under a non-prod-like environment', async () => {
-      mockJwtService.verifyAsync.mockResolvedValueOnce(defaultTenantPayload);
+      issueToken(defaultTenantPayload);
       const { context } = buildContext({ cookie: 'eo_session=default-tenant-token' });
 
       await expect(guard.canActivate(context)).resolves.toBe(true);
     });
 
     it('should accept a non-default tenant under production and staging', async () => {
-      const nonDefaultPayload: JwtPayload = {
-        sub: 'user-id',
-        email: 'user@example.com',
-        tenantId: 'tenant-b',
-        role: UserRole.Admin,
-      };
+      const nonDefaultPayload = buildPayload({ tenantId: 'tenant-b' });
       const { guard: prodGuard } = await buildGuard(NodeEnv.PRODUCTION);
-      mockJwtService.verifyAsync.mockResolvedValueOnce(nonDefaultPayload);
+      issueToken(nonDefaultPayload);
       const { context: prodContext } = buildContext({
         cookie: '__Host-eo_session=non-default-token',
       });
       await expect(prodGuard.canActivate(prodContext)).resolves.toBe(true);
 
       const { guard: stagingGuard } = await buildGuard(NodeEnv.STAGING);
-      mockJwtService.verifyAsync.mockResolvedValueOnce(nonDefaultPayload);
+      issueToken(nonDefaultPayload);
       const { context: stagingContext } = buildContext({
         cookie: '__Host-eo_session=non-default-token',
       });
@@ -267,13 +334,7 @@ describe('JwtAuthGuard', () => {
   // this proves an Authorization header present alongside a valid cookie is ignored entirely, not
   // merely deprioritized.
   it('should ignore an Authorization header and authenticate from the cookie alone', async () => {
-    const payload: JwtPayload = {
-      sub: 'user-id',
-      email: 'user@example.com',
-      tenantId: 'default',
-      role: UserRole.Admin,
-    };
-    mockJwtService.verifyAsync.mockResolvedValueOnce(payload);
+    issueToken(buildPayload());
     const { context } = buildContext({
       authorization: 'Bearer header-token',
       cookie: 'eo_session=cookie-token',

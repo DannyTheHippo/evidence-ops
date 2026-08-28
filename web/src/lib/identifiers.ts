@@ -10,13 +10,14 @@ import type { WorkflowRunType } from '../api/client';
 const WORKFLOW_TYPE_LABELS: Record<WorkflowRunType, string> = {
   'resolve-conflict': 'Conflict resolution',
   'sync-source': 'Source sync',
+  'rescan-conflicts': 'Conflict rescan',
 };
 
 /** The name a run is listed under. `WorkflowRun.workflowId` is a bare `randomUUID()`, so the type
  * is the only field that says what a run actually is. Falls back for rows the API wrote before it
- * recorded a type. */
+ * recorded a type, and for any future type this SPA build does not yet know how to label. */
 export function workflowTypeLabel(workflowType?: WorkflowRunType): string {
-  return workflowType ? WORKFLOW_TYPE_LABELS[workflowType] : 'Workflow run';
+  return (workflowType && WORKFLOW_TYPE_LABELS[workflowType]) || 'Workflow run';
 }
 
 /** Head and tail of a content digest, e.g. `3f9a1c04…7b2e`. A value no longer than the 13

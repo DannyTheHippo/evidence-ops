@@ -94,6 +94,17 @@ describe('TenantSpendService', () => {
         "Reserving $5.0000 for tenant 'tenant-a' would exceed the $10.0000 daily spend ceiling",
       );
     });
+
+    it('should carry the window it was refused against as resetAt, one UTC day later', async () => {
+      mockModelSpendWindowModel.updateOne.mockResolvedValueOnce({ acknowledged: true });
+      mockModelSpendWindowModel.findOneAndUpdate.mockResolvedValueOnce(null);
+
+      const error: unknown = await service.reserve('tenant-a', 5, 10).catch((e: unknown) => e);
+
+      expect((error as TenantSpendLimitExceededError).resetAt).toEqual(
+        new Date('2026-08-18T00:00:00.000Z'),
+      );
+    });
   });
 
   describe('settle', () => {
@@ -105,6 +116,25 @@ describe('TenantSpendService', () => {
       expect(mockModelSpendWindowModel.updateOne).toHaveBeenCalledWith(
         { tenantId: 'tenant-a', windowStart },
         { $inc: { reservedUsd: -0.5, spentUsd: 0.42 } },
+      );
+    });
+
+    it('should log rather than throw when the write fails, so a successful delegate call never surfaces as an error', async () => {
+      mockModelSpendWindowModel.updateOne.mockRejectedValueOnce(new Error('mongo unavailable'));
+
+      await expect(service.settle('tenant-a', windowStart, 0.5, 0.42)).resolves.toBeUndefined();
+
+      expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('settle failed'));
+    });
+
+    it('should stringify a non-Error rejection rather than reading a `.message` that does not exist', async () => {
+      // covers the `String(error)` branch of `error instanceof Error ? error.message : String(error)`.
+      mockModelSpendWindowModel.updateOne.mockRejectedValueOnce('a plain string rejection');
+
+      await expect(service.settle('tenant-a', windowStart, 0.5, 0.42)).resolves.toBeUndefined();
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.stringContaining('a plain string rejection'),
       );
     });
 
@@ -138,6 +168,63 @@ describe('TenantSpendService', () => {
       expect(mockModelSpendWindowModel.updateOne).toHaveBeenCalledWith(
         { tenantId: 'tenant-a', windowStart },
         { $inc: { reservedUsd: -0.5 } },
+      );
+    });
+
+    it('should log rather than throw when the write fails, so the delegate error the caller already threw stays visible', async () => {
+      mockModelSpendWindowModel.updateOne.mockRejectedValueOnce(new Error('mongo unavailable'));
+
+      await expect(service.release('tenant-a', windowStart, 0.5)).resolves.toBeUndefined();
+
+      expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('release failed'));
+    });
+
+    it('should stringify a non-Error rejection rather than reading a `.message` that does not exist', async () => {
+      mockModelSpendWindowModel.updateOne.mockRejectedValueOnce('a plain string rejection');
+
+      await expect(service.release('tenant-a', windowStart, 0.5)).resolves.toBeUndefined();
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.stringContaining('a plain string rejection'),
+      );
+    });
+  });
+
+  describe('sweepStaleReservations', () => {
+    it('should zero out reservedUsd only for windows untouched since before the staleness threshold', async () => {
+      mockModelSpendWindowModel.updateMany.mockResolvedValueOnce({ modifiedCount: 2 });
+
+      const swept = await service.sweepStaleReservations(5 * 60 * 1000);
+
+      expect(swept).toBe(2);
+      expect(mockModelSpendWindowModel.updateMany).toHaveBeenCalledWith(
+        {
+          reservedUsd: { $gt: 0 },
+          updatedAt: { $lt: new Date('2026-08-17T15:25:00.000Z') },
+        },
+        { $set: { reservedUsd: 0 } },
+      );
+    });
+
+    it('should report zero swept windows and log rather than throw when the write fails', async () => {
+      mockModelSpendWindowModel.updateMany.mockRejectedValueOnce(new Error('mongo unavailable'));
+
+      const swept = await service.sweepStaleReservations(5 * 60 * 1000);
+
+      expect(swept).toBe(0);
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.stringContaining('sweepStaleReservations failed'),
+      );
+    });
+
+    it('should stringify a non-Error rejection rather than reading a `.message` that does not exist', async () => {
+      mockModelSpendWindowModel.updateMany.mockRejectedValueOnce('a plain string rejection');
+
+      const swept = await service.sweepStaleReservations(5 * 60 * 1000);
+
+      expect(swept).toBe(0);
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.stringContaining('a plain string rejection'),
       );
     });
   });

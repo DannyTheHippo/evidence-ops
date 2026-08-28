@@ -3,11 +3,15 @@ import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { Types } from 'mongoose';
+import { TypedConfigService } from '../../../../src/config/environment/typed-config.service';
 import { User } from '../../../../src/database/schemas/administration/user/user.schema';
 import { WorkflowRun } from '../../../../src/database/schemas/workflow/workflow-run/workflow-run.schema';
 import { ApprovalsService } from '../../../../src/features/evidence/approvals/approvals.service';
 import { WorkflowRunNotFoundException } from '../../../../src/features/evidence/workflow-runs/exceptions/workflow-runs.exception';
-import { WORKFLOW_RUN_STREAM_INTERVAL_MS } from '../../../../src/features/evidence/workflow-runs/workflow-runs.constant';
+import {
+  WORKFLOW_RUN_ENGINE_STATUS_CACHE_MS,
+  WORKFLOW_RUN_STREAM_INTERVAL_MS,
+} from '../../../../src/features/evidence/workflow-runs/workflow-runs.constant';
 import { WorkflowRunsService } from '../../../../src/features/evidence/workflow-runs/workflow-runs.service';
 import { WORKFLOW_ENGINE } from '../../../../src/providers/workflow-engine/workflow-engine.interface';
 import {
@@ -20,6 +24,7 @@ import { AuditService } from '../../../../src/shared/services/audit/audit.servic
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../../../utils/get-mock-logger';
 import { getMockModel } from '../../../utils/get-mock-model';
+import { getMockTypedConfig } from '../../../utils/get-mock-typed-config';
 
 describe('WorkflowRunsService', () => {
   let service: WorkflowRunsService;
@@ -39,6 +44,7 @@ describe('WorkflowRunsService', () => {
         { provide: getModelToken(User.name), useValue: mockUserModel },
         { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
         { provide: ApprovalsService, useValue: mockApprovalsService },
+        { provide: TypedConfigService, useValue: getMockTypedConfig() },
         { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: mockLogger },
       ],
@@ -324,6 +330,105 @@ describe('WorkflowRunsService', () => {
       expect(result.status).toBe('completed');
       expect(mockAuditService.record).not.toHaveBeenCalled();
     });
+
+    it('should coalesce a second peekRun call for the same workflowId onto the cached engine result', async () => {
+      const run = {
+        _id: new Types.ObjectId(),
+        workflowId: 'wf-1',
+        status: 'running',
+        errorMessage: undefined,
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      };
+      mockWorkflowRunModel.findOne.mockResolvedValue(run);
+      mockWorkflowEngine.status.mockResolvedValueOnce({ id: 'wf-1', status: 'completed' });
+
+      const first = await service.peekRun(run._id.toString(), 'tenant-a');
+      const second = await service.peekRun(run._id.toString(), 'tenant-a');
+
+      expect(mockWorkflowEngine.status).toHaveBeenCalledTimes(1);
+      expect(first.status).toBe('completed');
+      expect(second.status).toBe('completed');
+    });
+
+    it('should call the engine again once the cache window for that workflowId elapses', async () => {
+      jest.useFakeTimers();
+      const run = {
+        _id: new Types.ObjectId(),
+        workflowId: 'wf-1',
+        status: 'running',
+        errorMessage: undefined,
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      };
+      mockWorkflowRunModel.findOne.mockResolvedValue(run);
+      mockWorkflowEngine.status
+        .mockResolvedValueOnce({ id: 'wf-1', status: 'completed' })
+        .mockResolvedValueOnce({ id: 'wf-1', status: 'failed' });
+
+      const first = await service.peekRun(run._id.toString(), 'tenant-a');
+      jest.advanceTimersByTime(WORKFLOW_RUN_ENGINE_STATUS_CACHE_MS);
+      const second = await service.peekRun(run._id.toString(), 'tenant-a');
+
+      expect(mockWorkflowEngine.status).toHaveBeenCalledTimes(2);
+      expect(first.status).toBe('completed');
+      expect(second.status).toBe('failed');
+      jest.useRealTimers();
+    });
+
+    it('should cache a failed engine call too, so a repeated poll within the window warns only once', async () => {
+      const run = {
+        _id: new Types.ObjectId(),
+        workflowId: 'wf-1',
+        status: 'running',
+        errorMessage: undefined,
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      };
+      mockWorkflowRunModel.findOne.mockResolvedValue(run);
+      mockWorkflowEngine.status.mockRejectedValueOnce(new Error('temporal unreachable'));
+
+      const first = await service.peekRun(run._id.toString(), 'tenant-a');
+      const second = await service.peekRun(run._id.toString(), 'tenant-a');
+
+      expect(mockWorkflowEngine.status).toHaveBeenCalledTimes(1);
+      expect(first.status).toBe('running');
+      expect(second.status).toBe('running');
+      expect(mockLogger.warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('should evict expired entries for other workflowIds rather than retaining one per run ever polled', async () => {
+      jest.useFakeTimers();
+      const buildRun = (workflowId: string) => ({
+        _id: new Types.ObjectId(),
+        workflowId,
+        status: 'running',
+        errorMessage: undefined,
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      });
+      mockWorkflowEngine.status.mockResolvedValue({ id: 'wf', status: 'completed' });
+
+      const staleWorkflowIds = ['wf-a', 'wf-b', 'wf-c'];
+      for (const workflowId of staleWorkflowIds) {
+        const run = buildRun(workflowId);
+        mockWorkflowRunModel.findOne.mockResolvedValueOnce(run);
+        await service.peekRun(run._id.toString(), 'tenant-a');
+      }
+
+      jest.advanceTimersByTime(WORKFLOW_RUN_ENGINE_STATUS_CACHE_MS);
+
+      const freshRun = buildRun('wf-d');
+      mockWorkflowRunModel.findOne.mockResolvedValueOnce(freshRun);
+      await service.peekRun(freshRun._id.toString(), 'tenant-a');
+
+      const liveStatusCache = (service as unknown as { liveStatusCache: Map<string, unknown> })
+        .liveStatusCache;
+
+      expect(liveStatusCache.size).toBe(1);
+      expect(liveStatusCache.has('wf-d')).toBe(true);
+      for (const workflowId of staleWorkflowIds) {
+        expect(liveStatusCache.has(workflowId)).toBe(false);
+      }
+
+      jest.useRealTimers();
+    });
   });
 
   describe('streamRun', () => {
@@ -526,6 +631,29 @@ describe('WorkflowRunsService', () => {
 
       expect(events.some((event) => event.type === 'heartbeat')).toBe(true);
       subscription.unsubscribe();
+    });
+
+    it('should complete the stream once it has been open for the configured max lifetime, even with a run that never reaches a terminal status', async () => {
+      const run = buildRun();
+      mockWorkflowRunModel.findOne.mockResolvedValue(run);
+      mockWorkflowEngine.status.mockRejectedValue(new Error('no live handle'));
+      mockApprovalsService.peekPending.mockResolvedValue(emptyApprovalsPage);
+      mockUserModel.findById.mockResolvedValue({ tenantId: 'tenant-a' });
+      mockAuditService.record.mockResolvedValue(undefined);
+      let completed = false;
+
+      service.streamRun(run._id.toString(), 'actor-1', 'tenant-a').subscribe({
+        complete: () => {
+          completed = true;
+        },
+      });
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(completed).toBe(false);
+
+      await jest.advanceTimersByTimeAsync(getMockTypedConfig().sse.maxStreamLifetimeMs);
+
+      expect(completed).toBe(true);
     });
 
     it('should emit the terminal run event and then complete, tearing down the approvals and heartbeat timers', async () => {

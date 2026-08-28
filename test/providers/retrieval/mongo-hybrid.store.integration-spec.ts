@@ -2,11 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { Db, MongoClient, ObjectId } from 'mongodb';
 import type { Connection } from 'mongoose';
 import {
-  COLLECTION,
+  EVIDENCE_CHUNKS_COLLECTION as COLLECTION,
   SEARCH_INDEX,
   VECTOR_INDEX,
   resolveVectorDimensions,
-} from '../../../migrations/0003-search-indexes';
+} from '../../../migrations/0001-baseline';
 import { waitForSearchIndexReady } from '../../../src/features/evidence/retrieval/search-index-readiness.util';
 import type { EvidenceLocator } from '../../../src/database/schemas/evidence/evidence-chunk/evidence-locator.type';
 import { FakeEmbeddingProvider } from '../../../src/providers/embedding/fake-embedding.provider';
@@ -153,7 +153,7 @@ describe('MongoHybridRetrievalStore (integration)', () => {
     new MongoHybridRetrievalStore(
       connection,
       new FakeEmbeddingProvider(),
-      getMockTypedConfig({ retrieval: { fusion, limit: 12 } }),
+      getMockTypedConfig({ retrieval: { fusion, limit: 12, scoreFloor: 0 } }),
     );
 
   // The query already carries `vector: seedEmbedding` (the exact vector the seeded chunk was

@@ -46,6 +46,18 @@ export class DocumentVersionResponseDto {
   ingestionFailureReason?: string;
 
   @Expose()
+  @ApiProperty({
+    example: [
+      'Document has 3 page(s) but no extractable text on any of them; falling back to OCR-only extraction for those pages',
+    ],
+    description:
+      'Non-empty when this version was ingested with known fidelity loss; each entry states one ' +
+      'reason. Empty for a version with no fidelity loss.',
+    type: [String],
+  })
+  reducedFidelityReasons: string[];
+
+  @Expose()
   @ApiProperty({ example: '2026-07-01T00:00:00.000Z', description: 'Version creation timestamp.' })
   createdAt: Date;
 }

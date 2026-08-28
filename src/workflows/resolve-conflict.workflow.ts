@@ -63,6 +63,16 @@ const resolutionActivities = proxyActivities<Pick<Activities, 'recordConflictRes
   retry: { maximumAttempts: 2 },
 });
 
+// `expireApproval` (`ApprovalsService.expire`) is a `state: 'pending'`-guarded update against the
+// single `approval.id` row, not an insert — retrying it after a crash re-applies the same
+// terminal state to the same row, the same idempotency `resolutionActivities` above relies on for
+// its own low `maximumAttempts`.
+const approvalExpiryActivities = proxyActivities<Pick<Activities, 'expireApproval'>>({
+  startToCloseTimeout: '10 seconds',
+  scheduleToCloseTimeout: '30 seconds',
+  retry: { maximumAttempts: 2 },
+});
+
 // ADR-0003's own description of this milestone's approval gate: "await condition(pred, '24
 // hours')". A day is long enough for a human reviewer to see and act on the request across a
 // normal working cycle without leaving the workflow (and the `Approval` row it created) waiting
@@ -143,7 +153,13 @@ export async function resolveConflict(
   if (!woke) {
     // A timeout is not an approval and never becomes one by falling through to
     // `getApprovalDecision` — fails closed by recording `timed_out` directly, with no further
-    // read.
+    // read. `expireApproval` moves the `Approval` row itself to `timed_out` first, so the row
+    // leaves the pending inbox and can never be decided afterwards — without this, a human could
+    // still click Approve on a row this workflow has already given up waiting on, writing a
+    // decision (and an audit row) for an execution that no longer exists to signal. Run before
+    // `recordConflictResolution` so the row a still-open HTTP request might read next is never
+    // caught mid-transition.
+    await approvalExpiryActivities.expireApproval(approval.id, input.tenantId);
     await resolutionActivities.recordConflictResolution({
       conflictId: input.conflictId,
       outcome: 'timed_out',

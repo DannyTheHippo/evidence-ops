@@ -16,10 +16,15 @@ import { FakeWorkflowEngine } from '../src/providers/workflow-engine/fake-workfl
 import { WORKFLOW_ENGINE } from '../src/providers/workflow-engine/workflow-engine.interface';
 import { CachingEmbeddingProvider } from './providers/caching-embedding.provider';
 
-export type EvalCacheMode = 'record' | 'replay';
+export type EvalCacheMode = 'off' | 'record' | 'replay';
 
 export interface BootstrapEvalAppOptions {
   readonly cacheMode: EvalCacheMode;
+  /** Defaults to `cacheMode`. Split so the variance lane can hold the model live (`off`) while
+   * still serving query embeddings from the recorded cache: embedding-API float noise is a
+   * confound that lane isolates out, and the `$search`/`$vectorSearch` drift it does measure
+   * happens in Mongo on every pass regardless of this setting. */
+  readonly embeddingCacheMode?: EvalCacheMode;
   readonly modelCacheDir: string;
   readonly embeddingCacheDir: string;
 }
@@ -57,7 +62,7 @@ export async function bootstrapEvalApp(
       inject: [TypedConfigService],
       factory: (config: TypedConfigService): EmbeddingProvider =>
         new CachingEmbeddingProvider(new VoyageEmbeddingProvider(config), {
-          mode: options.cacheMode,
+          mode: options.embeddingCacheMode ?? options.cacheMode,
           cacheDir: options.embeddingCacheDir,
         }),
     })

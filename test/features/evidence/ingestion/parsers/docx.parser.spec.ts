@@ -136,17 +136,33 @@ describe('DocxParser', () => {
   });
 
   describe('parse — hostile archives (fails closed)', () => {
-    it('should reject an archive whose entry compression ratio indicates a zip bomb', async () => {
+    /**
+     * A high compression ratio is a property of repetitive text, not of an attack: a document of
+     * repeated boilerplate genuinely deflates several hundred to one. The parse must turn on the
+     * bytes the entry really inflates to, which this one keeps well inside the budget.
+     */
+    it('should parse a document whose repetitive text compresses far past a hundred to one', async () => {
+      const paragraphs = '<w:p><w:r><w:t>Base Rent</w:t></w:r></w:p>'.repeat(20_000);
       const zip = new JSZip();
-      // A 5MB run of a single repeated byte deflates to a few KB (~1000:1) — a cheap, realistic
-      // stand-in for a zip-bomb entry, well past the parser's compression-ratio cap.
-      zip.file('word/document.xml', 'A'.repeat(5_000_000), {
-        compression: 'DEFLATE',
-        compressionOptions: { level: 9 },
-      });
+      zip.file(
+        'word/document.xml',
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+          `<w:body>${paragraphs}</w:body></w:document>`,
+        { compression: 'DEFLATE', compressionOptions: { level: 9 } },
+      );
       const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+      const reloaded = await JSZip.loadAsync(buffer);
+      const sizes = (
+        reloaded.files['word/document.xml'] as unknown as {
+          _data: { compressedSize: number; uncompressedSize: number };
+        }
+      )._data;
 
-      await expect(parser.parse(buffer)).rejects.toBeInstanceOf(HostileArchiveException);
+      const result = await parser.parse(buffer);
+
+      expect(sizes.uncompressedSize / sizes.compressedSize).toBeGreaterThan(100);
+      expect(result.elements).toHaveLength(20_000);
+      expect(result.elements[0].text).toBe('Base Rent');
     });
 
     it('should reject an archive entry using a path-traversal name', async () => {

@@ -22,6 +22,7 @@ import {
   InvalidInvitationException,
   InvitationEmailConflictException,
 } from './exceptions/auth.exception';
+import { JwtPayload } from './types/jwt-payload.type';
 import { LoginResult } from './types/login-result.type';
 
 const PASSWORD_HASH_COST = 12;
@@ -151,22 +152,27 @@ export class AuthService {
     const email = dto.email.toLowerCase();
 
     const user = await this.userModel.findOne({ email });
-    if (!user) {
-      await bcrypt.compare(dto.password, DUMMY_PASSWORD_HASH);
+
+    // An unknown email compares against a fixed hash of the same cost, so both outcomes spend one
+    // bcrypt and neither answers faster. Both also refuse from this single site: the exception's
+    // stack is part of the response body below prod-like environments (`GlobalExceptionFilter`),
+    // and two throw sites put the branch that was taken into it.
+    const matches = await bcrypt.compare(dto.password, user?.password ?? DUMMY_PASSWORD_HASH);
+    if (!user || !matches) {
       throw new InvalidCredentialsException(INVALID_CREDENTIALS_MESSAGE);
     }
 
-    const matches = await bcrypt.compare(dto.password, user.password);
-    if (!matches) {
-      throw new InvalidCredentialsException(INVALID_CREDENTIALS_MESSAGE);
-    }
-
-    const accessToken = await this.jwtService.signAsync({
+    // Every claim here is re-read from the `User` row and re-compared on each request
+    // (`JwtAuthGuard`) — adding one makes it an identity attribute the guard must revalidate, so
+    // the guard's comparison set and this object move together.
+    const payload: JwtPayload = {
       sub: user._id.toString(),
       email: user.email,
       tenantId: user.tenantId,
       role: user.role,
-    });
+      tokenVersion: user.tokenVersion,
+    };
+    const accessToken = await this.jwtService.signAsync(payload);
 
     this.logger.debug(`User logged in with the _id '${user._id.toString()}'`);
 

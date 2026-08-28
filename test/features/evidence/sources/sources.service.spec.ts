@@ -10,6 +10,7 @@ import {
   Source,
   type SourceFileState,
 } from '../../../../src/database/schemas/evidence/source/source.schema';
+import { MAX_FILE_SIZE_BYTES } from '../../../../src/features/evidence/documents/documents.constant';
 import { DocumentsService } from '../../../../src/features/evidence/documents/documents.service';
 import {
   SourceNameConflictException,
@@ -930,8 +931,8 @@ describe('SourcesService', () => {
      * `flaky.pdf` is an existing file whose fetch fails this pass, so its `lastError` is recorded
      * against its OLD, unadvanced watermark; `new.pdf` uploads clean as a brand-new document;
      * `huge.pdf` and `mystery.exe` are brand-new files that fail (oversized, unresolvable kind
-     * respectively) and so get no `fileStates` entry at all — see `syncOneFile`'s own doc comment
-     * for why a new-file failure cannot be persisted.
+     * respectively) and so get a placeholder `fileStates` entry — no `documentId`, no `sha256` —
+     * see `syncOneFile`'s own doc comment for what distinguishes a placeholder from a synced entry.
      */
     it('should sync every discovered file and persist the resulting fileStates in one pass', async () => {
       const sameBytesAsBefore = Buffer.from('same-bytes-as-before');
@@ -1040,8 +1041,51 @@ describe('SourcesService', () => {
         lastError: 'disk read error',
       });
       expect(byPath.get('new.pdf')).toMatchObject({ documentId: newDocumentId });
-      expect(byPath.get('huge.pdf')).toBeUndefined();
-      expect(byPath.get('mystery.exe')).toBeUndefined();
+      expect(byPath.get('huge.pdf')).toEqual({
+        path: 'huge.pdf',
+        sizeBytes: 60 * 1024 * 1024,
+        mtimeMs: 3000,
+        lastError: `'huge.pdf' is ${60 * 1024 * 1024} bytes, over the ${MAX_FILE_SIZE_BYTES}-byte sync limit`,
+      });
+      expect(byPath.get('mystery.exe')).toEqual({
+        path: 'mystery.exe',
+        sizeBytes: 10,
+        mtimeMs: 3000,
+        lastError: "Could not resolve a document type for 'mystery.exe'",
+      });
+    });
+
+    it('should retry a placeholder entry on every sweep, even when its watermark matches, since it was never synced', async () => {
+      const placeholderState = {
+        path: 'mystery.exe',
+        sizeBytes: 10,
+        mtimeMs: 3000,
+        lastError: "Could not resolve a document type for 'mystery.exe'",
+      };
+
+      const source = buildMockSource({ fileStates: [placeholderState] });
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(source).mockResolvedValueOnce(source);
+      mockSourceConnector.listFiles.mockResolvedValueOnce([
+        { relativePath: 'mystery.exe', sizeBytes: 10, mtimeMs: 3000 },
+      ]);
+      mockSourceConnector.fetchFile.mockResolvedValueOnce(Buffer.from('binary'));
+
+      await service.runSync(sourceId.toString(), leaseToken);
+
+      // A synced entry with an identical watermark is skipped by the cheap check and never
+      // refetched (asserted above, `unchanged.pdf`); a placeholder has no `documentId` and must
+      // never take that shortcut, or an unresolvable-kind file would stop being retried the moment
+      // its size and mtime happened to match its own failed attempt.
+      expect(mockSourceConnector.fetchFile).toHaveBeenCalledWith('mystery.exe');
+      const persisted = getFinalizeUpdate(1).$set.fileStates.find(
+        (state) => state.path === 'mystery.exe',
+      );
+      expect(persisted).toEqual({
+        path: 'mystery.exe',
+        sizeBytes: 10,
+        mtimeMs: 3000,
+        lastError: "Could not resolve a document type for 'mystery.exe'",
+      });
     });
 
     it('should not withdraw a document version on the first absent sweep, only on the second consecutive one', async () => {
@@ -1117,6 +1161,54 @@ describe('SourcesService', () => {
         absentSweeps: 2,
       });
       expect(sweep2Gone?.withdrawnAt).toBeInstanceOf(Date);
+    });
+
+    it('should mark a placeholder entry withdrawn on the second absent sweep without calling withdrawVersions', async () => {
+      const staysDocumentId = new Types.ObjectId();
+      const staysState = {
+        path: 'stays.pdf',
+        sha256: 'a'.repeat(64),
+        sizeBytes: 100,
+        mtimeMs: 1000,
+        documentId: staysDocumentId,
+      };
+      const placeholderState = asSubdocumentLikeFileState({
+        path: 'mystery.exe',
+        sizeBytes: 10,
+        mtimeMs: 3000,
+        lastError: "Could not resolve a document type for 'mystery.exe'",
+      });
+
+      let source = buildMockSource({ fileStates: [staysState, placeholderState] });
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(source).mockResolvedValueOnce(source);
+      mockSourceConnector.listFiles.mockResolvedValueOnce([
+        { relativePath: 'stays.pdf', sizeBytes: 100, mtimeMs: 1000 },
+      ]);
+
+      await service.runSync(sourceId.toString(), leaseToken);
+
+      const sweep1FileStates = getFinalizeUpdate(1).$set.fileStates;
+      source = buildMockSource({ fileStates: sweep1FileStates });
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(source).mockResolvedValueOnce(source);
+      mockSourceConnector.listFiles.mockResolvedValueOnce([
+        { relativePath: 'stays.pdf', sizeBytes: 100, mtimeMs: 1000 },
+      ]);
+
+      await service.runSync(sourceId.toString(), leaseToken);
+
+      // A placeholder was never ingested, so there is no document version to withdraw — only
+      // `stays.pdf`'s real entry could ever appear here, and it never goes absent in this test.
+      expect(mockDocumentsService.withdrawVersions).not.toHaveBeenCalled();
+      const sweep2FileStates = getFinalizeUpdate(3).$set.fileStates;
+      const sweep2Placeholder = sweep2FileStates.find((state) => state.path === 'mystery.exe');
+      expect(sweep2Placeholder).toMatchObject({
+        path: 'mystery.exe',
+        sizeBytes: 10,
+        mtimeMs: 3000,
+        absentSweeps: 2,
+      });
+      expect(sweep2Placeholder?.documentId).toBeUndefined();
+      expect(sweep2Placeholder?.withdrawnAt).toBeInstanceOf(Date);
     });
 
     it('should reset absentSweeps when a path reappears via the cheap watermark match, so a later unrelated absence restarts the two-strike count', async () => {

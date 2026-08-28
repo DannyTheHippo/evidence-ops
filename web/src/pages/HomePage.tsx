@@ -12,7 +12,7 @@ import {
   type EvidenceDocument,
   type Source,
 } from '../api/client';
-import Badge from '../components/ui/Badge';
+import Badge, { type BadgeTone } from '../components/ui/Badge';
 import EmptyState from '../components/ui/EmptyState';
 import Skeleton from '../components/ui/Skeleton';
 import { answerBadge } from '../lib/answer-status';
@@ -109,28 +109,39 @@ interface CorpusHealthItem {
   to: string;
   typeLabel: string;
   detail: string;
+  tone: BadgeTone;
 }
 
-/** Failed ingestions and failed syncs as one queue, the same "specific item, not a count" shape as
- * the work queue above. An ingestion failure has no other alert anywhere in the app today — Data
- * Room shows `ingestionStatus` per row, but only to someone already browsing it — and
- * `lastSyncError` is otherwise visible only on the Sources pages. Reads the server's own
- * failed-only filters rather than scanning a fixed-size page client-side, so a failure older than
- * any window is still visible here.
+/** Failed ingestions, documents with no extracted facts, and failed syncs as one queue, the same
+ * "specific item, not a count" shape as the work queue above. An ingestion failure has no other
+ * alert anywhere in the app today — Data Room shows `ingestionStatus` per row, but only to someone
+ * already browsing it — and `lastSyncError` is otherwise visible only on the Sources pages. Reads
+ * the server's own status-filtered queries rather than scanning a fixed-size page client-side, so a
+ * failure older than any window is still visible here.
+ *
+ * Tone separates the two kinds of item the queue lists. An ingestion or sync failure is `rejected`:
+ * the evidence never landed. A `facts-failed` document is `caution`: its chunks are committed and
+ * searchable, and answers citing them are honest — it carries no extracted facts, so it feeds
+ * neither the fact store nor conflict detection. A shared `rejected` tone would read as "unusable",
+ * which it is not.
  *
  * `needsOcrDocuments` surfaces as a count only, in the card head, not as itemized rows in the
  * queue below — a scanned PDF is a gap in the corpus to flag for attention, not the kind of
  * broken-ingest item the queue otherwise lists, and a tenant with a hundred scans should not push
- * every one of them into this list one row at a time. The full, browsable set is the Data Room's
- * own `ingestionStatus` filter (`DocumentList.tsx`). */
+ * every one of them into this list one row at a time. A `facts-failed` document is itemized instead
+ * of counted: it carries the extractor's own reason, and re-running extraction is a per-document
+ * action. The full, browsable set of either is the Data Room's own `ingestionStatus` filter
+ * (`DocumentList.tsx`). */
 function CorpusHealthSection({
   failedDocuments,
   failedSources,
   needsOcrDocuments,
+  factsFailedDocuments,
 }: {
   failedDocuments: FetchState<EvidenceDocument>;
   failedSources: FetchState<Source>;
   needsOcrDocuments: FetchState<EvidenceDocument>;
+  factsFailedDocuments: FetchState<EvidenceDocument>;
 }) {
   const items: CorpusHealthItem[] = [
     ...(failedDocuments.docs ?? []).map((doc) => ({
@@ -139,6 +150,15 @@ function CorpusHealthSection({
       to: `/documents/${doc.id}`,
       typeLabel: 'Ingestion failed',
       detail: doc.currentVersion.ingestionFailureReason ?? 'No reason recorded.',
+      tone: 'rejected' as const,
+    })),
+    ...(factsFailedDocuments.docs ?? []).map((doc) => ({
+      key: `facts-failed-${doc.id}`,
+      name: doc.title,
+      to: `/documents/${doc.id}`,
+      typeLabel: 'No facts extracted',
+      detail: doc.currentVersion.ingestionFailureReason ?? 'No reason recorded.',
+      tone: 'caution' as const,
     })),
     ...(failedSources.docs ?? []).map((source) => ({
       key: `source-${source.id}`,
@@ -146,24 +166,34 @@ function CorpusHealthSection({
       to: `/sources/${source.id}`,
       typeLabel: 'Sync failed',
       detail: source.lastSyncError ?? 'No reason recorded.',
+      tone: 'rejected' as const,
     })),
   ];
 
-  const loading = !failedDocuments.docs && !failedSources.docs && !needsOcrDocuments.docs;
+  const loading =
+    !failedDocuments.docs &&
+    !failedSources.docs &&
+    !needsOcrDocuments.docs &&
+    !factsFailedDocuments.docs;
+  const anyError =
+    failedDocuments.error !== null ||
+    failedSources.error !== null ||
+    needsOcrDocuments.error !== null ||
+    factsFailedDocuments.error !== null;
 
   return (
     <section className="card">
       <div className="card-head">
         <h2 className="card-title">Corpus health</h2>
-        {!failedDocuments.error &&
-          !failedSources.error &&
-          !needsOcrDocuments.error &&
+        {!anyError &&
           (failedDocuments.count !== null ||
             failedSources.count !== null ||
-            needsOcrDocuments.count !== null) && (
+            needsOcrDocuments.count !== null ||
+            factsFailedDocuments.count !== null) && (
             <span className="card-meta card-meta--end">
               {failedDocuments.count ?? 0} ingestion failures · {failedSources.count ?? 0} sync
-              failures · {needsOcrDocuments.count ?? 0} need OCR
+              failures · {needsOcrDocuments.count ?? 0} need OCR · {factsFailedDocuments.count ?? 0}{' '}
+              without extracted facts
             </span>
           )}
       </div>
@@ -182,11 +212,17 @@ function CorpusHealthSection({
           {needsOcrDocuments.error}
         </p>
       )}
-      {loading && !failedDocuments.error && !failedSources.error && !needsOcrDocuments.error && (
-        <Skeleton label="Loading corpus health…" />
+      {factsFailedDocuments.error && (
+        <p className="error" role="alert">
+          {factsFailedDocuments.error}
+        </p>
       )}
+      {loading && !anyError && <Skeleton label="Loading corpus health…" />}
       {!loading && items.length === 0 && (
-        <EmptyState className="empty-state--inline" title="No failed ingestions or syncs" />
+        <EmptyState
+          className="empty-state--inline"
+          title="No ingestion, extraction or sync failures"
+        />
       )}
       {items.length > 0 && (
         <ul className="actionable-list">
@@ -198,7 +234,7 @@ function CorpusHealthSection({
                 </Link>
                 <span className="card-meta"> — {item.detail}</span>
               </span>
-              <Badge tone="rejected">{item.typeLabel}</Badge>
+              <Badge tone={item.tone}>{item.typeLabel}</Badge>
             </li>
           ))}
         </ul>
@@ -312,6 +348,11 @@ export default function HomePage() {
     count: null,
     error: null,
   });
+  const [factsFailedDocuments, setFactsFailedDocuments] = useState<FetchState<EvidenceDocument>>({
+    docs: null,
+    count: null,
+    error: null,
+  });
   const [answers, setAnswers] = useState<FetchState<Answer>>({
     docs: null,
     count: null,
@@ -411,6 +452,21 @@ export default function HomePage() {
       });
   }, []);
 
+  // A 'facts-failed' version is searchable and answerable while carrying no extracted facts, so
+  // nothing else on this page would report it — it is not a 'failed' ingestion and its document
+  // reads as healthy everywhere the status is not shown.
+  useEffect(() => {
+    listDocuments({ ingestionStatus: 'facts-failed', limit: 100 })
+      .then(({ docs, count }) => setFactsFailedDocuments({ docs, count, error: null }))
+      .catch((err: unknown) => {
+        setFactsFailedDocuments({
+          docs: null,
+          count: null,
+          error: err instanceof Error ? err.message : 'Failed to load documents',
+        });
+      });
+  }, []);
+
   useEffect(() => {
     listAnswers({ limit: 5 })
       .then(({ docs, count }) => setAnswers({ docs, count, error: null }))
@@ -479,6 +535,7 @@ export default function HomePage() {
             failedDocuments={failedDocuments}
             failedSources={failedSources}
             needsOcrDocuments={needsOcrDocuments}
+            factsFailedDocuments={factsFailedDocuments}
           />
           <RecentAnswersSection answers={answers} />
           {funnelLoaded && !funnelComplete && <FirstRunChecklist steps={steps} />}

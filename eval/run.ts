@@ -1,5 +1,4 @@
 import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
-import { QdrantClient } from '@qdrant/js-client-rest';
 import { execSync } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -18,73 +17,130 @@ import {
 import { classifyCanaryLeak } from './metrics/classify-canary-leak';
 import { computeMetrics, type CaseOutcomeKind, type CaseResult } from './metrics/compute-metrics';
 import { conflictValuesOverlapExpectedLocators } from './metrics/conflict-scope-check';
-import { chunkOverlapsAnyLocator, type OverlapCandidateChunk } from './metrics/locator-overlap';
-import { populateQdrantCollection, searchQdrantVector } from './qdrant/qdrant-benchmark-store';
-import { makeQdrantAwareSearch, type QdrantSearch } from './qdrant/qdrant-aware-search';
-import type { RawEvidenceChunkRow } from './qdrant/chunk-to-point.util';
 import {
-  EMBEDDING_PROVIDER,
-  type EmbeddingProvider,
-} from '../src/providers/embedding/embedding-provider.interface';
+  chunkOverlapsAnyLocator,
+  classifyOverlapScoringMethod,
+  type OverlapCandidateChunk,
+} from './metrics/locator-overlap';
+import { outcomeMatchesExpectation } from './metrics/outcome-match-check';
 import { assertAtlasSearchSupported } from '../src/providers/retrieval/atlas-search-capability.util';
 import { assertRequiredSearchIndexesExist } from '../src/providers/retrieval/required-search-indexes.util';
 import {
   ANSWER_CONTENT_ACCURACY_FLOOR,
+  RECALL_AT_5_FLOOR,
   buildMarkdownReport,
   failingCases,
   hasConflictScopeGap,
+  hasMixedScoringMethods,
   hasOwnVoiceLeak,
   isBelowAnswerContentFloor,
+  isBelowRecallAt5Floor,
   type EvalRunResult,
   type PerCaseReport,
-  type RetrievalModeSummary,
+  type ScoringMethodSplit,
 } from './report';
-import { runRetrievalComparison, type SearchByMode } from './retrieval/retrieval-comparison';
-import { QDRANT_MODES, RETRIEVAL_MODES, searchByMode } from './retrieval/retrieval-modes';
+import { aggregateVariance } from './variance/aggregate-variance';
+import {
+  buildVarianceMarkdownReport,
+  type VarianceCaseRun,
+  type VarianceRunResult,
+} from './variance/variance-report';
 import manifest from '../fixtures/data-room/manifest.json';
 import {
   EvidenceChunk,
   EvidenceChunkDocument,
 } from '../src/database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
 import { ConflictsService } from '../src/features/evidence/conflicts/conflicts.service';
-import { createActivities } from '../src/worker/activities';
-
-const EVAL_TENANT_ID = 'eval';
-const CACHE_DIR = path.join(__dirname, 'cache');
-const MODEL_CACHE_DIR = path.join(CACHE_DIR, 'model');
-const EMBEDDING_CACHE_DIR = path.join(CACHE_DIR, 'embedding');
-const RESULTS_DIR = path.join(__dirname, 'results');
-const DEFAULT_QDRANT_URL = 'http://localhost:6333';
-
-// Duplicated from `retrieval-modes.ts`'s own (unexported) `COLLECTION` constant, not imported —
-// same convention that file's header comment already establishes for the `src`/`eval` boundary,
-// applied here one file further out: the collection name is copied, not shared, across the two
-// eval modules that read it.
-const MONGO_EVIDENCE_CHUNKS_COLLECTION = 'evidence_chunks';
+import { createActivities, type Activities } from '../src/worker/activities';
 
 const CANARY_TOKENS: readonly string[] = manifest.canaries.map((canary) => canary.token);
 
+/**
+ * The synthetic lane is the committed, zero-cost replay lane CI runs on every change: its cache and
+ * results live under `eval/cache`/`eval/results` and stay tracked in git. The benchmark lane is a
+ * separate lane over a corpus outside the synthetic fixtures, re-recorded deliberately rather than
+ * replayed by default — its cache and results live under `eval/benchmark/`, which `.gitignore`
+ * excludes wholesale so a cache entry that embeds a client document's content can never enter git
+ * history. Each lane uses its own tenant so a benchmark run's ingested evidence never mixes with the
+ * synthetic corpus already ingested under the synthetic lane's tenant.
+ */
+type EvalLane = 'synthetic' | 'benchmark';
+
+const EVAL_LANES: readonly EvalLane[] = ['synthetic', 'benchmark'];
+
+interface LaneConfig {
+  readonly tenantId: string;
+  readonly cacheDir: string;
+  readonly modelCacheDir: string;
+  readonly embeddingCacheDir: string;
+  readonly resultsDir: string;
+}
+
+function laneConfig(lane: EvalLane): LaneConfig {
+  const laneRoot = lane === 'synthetic' ? __dirname : path.join(__dirname, 'benchmark');
+  const cacheDir = path.join(laneRoot, 'cache');
+  return {
+    tenantId: lane === 'synthetic' ? 'eval' : 'eval-benchmark',
+    cacheDir,
+    modelCacheDir: path.join(cacheDir, 'model'),
+    embeddingCacheDir: path.join(cacheDir, 'embedding'),
+    resultsDir: path.join(laneRoot, 'results'),
+  };
+}
+
+const DEFAULT_VARIANCE_RUNS = 5;
+
 interface CliOptions {
   readonly cacheMode: EvalCacheMode;
+  /** The variance lane holds the model live on every pass (`cacheMode: 'off'`) but keeps serving
+   * query embeddings from the recorded cache — see `BootstrapEvalAppOptions.embeddingCacheMode`. */
+  readonly embeddingCacheMode: EvalCacheMode;
   readonly ingest: boolean;
-  readonly qdrant: boolean;
-  readonly qdrantUrl: string;
+  readonly lane: EvalLane;
+  /** `undefined` outside the variance lane; a pass count of at least 1 inside it. */
+  readonly varianceRuns: number | undefined;
 }
 
-function readFlagValue(argv: readonly string[], flag: string, fallback: string): string {
-  const index = argv.indexOf(flag);
-  if (index === -1) {
-    return fallback;
-  }
-  return argv[index + 1] ?? fallback;
-}
-
+/**
+ * Refuses at parse time, before a single model call, for the two combinations that would silently
+ * measure something other than variance: `--ingest` changes the corpus between what a variance pass
+ * measures and what the recorded embedding cache was keyed against, and `--record` would serve pass
+ * 2 onward from pass 1's fixture, reporting perfect stability that was never measured.
+ */
 function parseCliOptions(argv: readonly string[]): CliOptions {
+  const laneFlagIndex = argv.indexOf('--lane');
+  const laneArg = laneFlagIndex === -1 ? undefined : argv[laneFlagIndex + 1];
+  if (laneArg !== undefined && !EVAL_LANES.includes(laneArg as EvalLane)) {
+    throw new Error(`eval: unknown lane '${laneArg}' — expected one of ${EVAL_LANES.join(', ')}`);
+  }
+
+  const variance = argv.includes('--variance');
+  if (variance && argv.includes('--ingest')) {
+    throw new Error(
+      'eval: --variance cannot be combined with --ingest — the corpus must stay fixed across ' +
+        'passes, or the spread measures re-ingestion rather than run-to-run variance.',
+    );
+  }
+  if (variance && argv.includes('--record')) {
+    throw new Error(
+      'eval: --variance cannot be combined with --record — a recorded model response would be ' +
+        'replayed from pass 2 onward, reporting a stability that was never measured.',
+    );
+  }
+
+  const runsFlagIndex = argv.indexOf('--runs');
+  const runsArg = runsFlagIndex === -1 ? undefined : argv[runsFlagIndex + 1];
+  const varianceRuns = runsArg === undefined ? DEFAULT_VARIANCE_RUNS : Number(runsArg);
+  if (variance && (!Number.isInteger(varianceRuns) || varianceRuns < 1)) {
+    throw new Error(`eval: --runs must be a positive integer, got '${runsArg}'`);
+  }
+
   return {
-    cacheMode: argv.includes('--record') ? 'record' : 'replay',
+    cacheMode: variance ? 'off' : argv.includes('--record') ? 'record' : 'replay',
+    embeddingCacheMode: variance ? 'replay' : argv.includes('--record') ? 'record' : 'replay',
     ingest: argv.includes('--ingest'),
-    qdrant: argv.includes('--qdrant'),
-    qdrantUrl: readFlagValue(argv, '--qdrant-url', DEFAULT_QDRANT_URL),
+    lane: (laneArg as EvalLane | undefined) ?? 'synthetic',
+    varianceRuns: variance ? varianceRuns : undefined,
   };
 }
 
@@ -115,35 +171,137 @@ function gitSha(): string {
   }
 }
 
-function outcomeMatchesExpectation(
-  category: EvalCase['category'],
-  expectedOutcome: EvalCase['expectedOutcome'],
-  actualOutcomeKind: CaseOutcomeKind,
-): boolean {
-  // Adversarial cases have no `AnswerContract` analog of `refuse_injection` (see
-  // `compute-metrics.ts`'s `CaseOutcomeKind` doc comment) — passing is about *not leaking the
-  // canary*, checked separately, not about which outcome kind the model produced.
-  if (category === 'adversarial') {
-    return true;
+interface VarianceLaneOptions {
+  readonly activities: Pick<Activities, 'retrieveEvidence' | 'synthesizeAnswer' | 'groundingCheck'>;
+  readonly cases: readonly EvalCase[];
+  readonly tenantId: string;
+  readonly resultsDir: string;
+  readonly gitSha: string;
+  readonly corpusFingerprint: string;
+  readonly requestedRunCount: number;
+  readonly modelCacheMode: EvalCacheMode;
+  readonly embeddingCacheMode: EvalCacheMode;
+}
+
+/**
+ * Runs the fixed question set `requestedRunCount` times over one already-ingested corpus, with the
+ * model live on every pass, and reports the spread (`eval/variance/aggregate-variance.ts`).
+ *
+ * Reports, never gates: a missed bar leaves the exit code at 0. This lane measures the system's own
+ * nondeterminism rather than asserting a threshold on it, and a measurement that fails the build is
+ * a measurement that stops being taken.
+ *
+ * The report is rewritten after every completed pass, over the passes completed so far. Each pass
+ * spends real money, so a lane stopped part-way — by the daily spend ceiling, or by anything
+ * else — must leave a complete, readable report of the passes that did finish rather than losing
+ * them with the process.
+ */
+async function runVarianceLane(options: VarianceLaneOptions): Promise<void> {
+  const observations: VarianceCaseRun[] = [];
+
+  for (let runIndex = 1; runIndex <= options.requestedRunCount; runIndex += 1) {
+    console.log(`eval: variance pass ${runIndex}/${options.requestedRunCount}`);
+
+    for (const evalCase of options.cases) {
+      const retrievedChunks = await options.activities.retrieveEvidence({
+        questionText: evalCase.question,
+        tenantId: options.tenantId,
+      });
+      const { contract: rawOutcome } = await options.activities.synthesizeAnswer({
+        questionText: evalCase.question,
+        chunks: retrievedChunks,
+        tenantId: options.tenantId,
+      });
+      // `questionText` is load-bearing, exactly as in the scoring lane's identical call above: without
+      // it `groundingCheck` names no question entity and every conflict-attachment fork fails closed
+      // to abstention, which would shift this lane's whole outcome distribution.
+      const groundingResult = await options.activities.groundingCheck({
+        outcome: rawOutcome,
+        retrievedChunks,
+        tenantId: options.tenantId,
+        questionText: evalCase.question,
+      });
+
+      const citations =
+        groundingResult.outcome.kind === 'answered'
+          ? groundingResult.claims.flatMap((claim) => claim.citations)
+          : [];
+
+      observations.push({
+        runIndex,
+        caseId: evalCase.id,
+        question: evalCase.question,
+        outcomeKind: groundingResult.outcome.kind,
+        citedChunkIds: citations.map((citation) => citation.chunkId),
+        claimCount: groundingResult.outcome.kind === 'answered' ? groundingResult.claims.length : 0,
+        retrievedChunkIds: retrievedChunks.map((chunk) => chunk.chunkId),
+        citations: citations.map((citation) => ({
+          chunkId: citation.chunkId,
+          quote: citation.quote,
+        })),
+      });
+
+      console.log(
+        `eval: variance ${runIndex}/${options.requestedRunCount} ${evalCase.id} -> ` +
+          `${groundingResult.outcome.kind}`,
+      );
+    }
+
+    const result: VarianceRunResult = {
+      gitSha: options.gitSha,
+      generatedAt: new Date().toISOString(),
+      runCount: runIndex,
+      requestedRunCount: options.requestedRunCount,
+      corpusFingerprint: options.corpusFingerprint,
+      modelCacheMode: options.modelCacheMode,
+      embeddingCacheMode: options.embeddingCacheMode,
+      observations,
+      aggregate: aggregateVariance(observations, runIndex),
+    };
+
+    await mkdir(options.resultsDir, { recursive: true });
+    await writeFile(
+      path.join(options.resultsDir, `variance-${options.gitSha}.json`),
+      JSON.stringify(result, null, 2),
+      'utf-8',
+    );
+    await writeFile(
+      path.join(options.resultsDir, `variance-${options.gitSha}.md`),
+      buildVarianceMarkdownReport(result),
+      'utf-8',
+    );
+
+    const { summary } = result.aggregate;
+    console.log(
+      `eval: wrote variance-${options.gitSha}.json/.md — after ${runIndex} pass(es): ` +
+        `flips=${summary.flippedCaseIds.length} ` +
+        `citationStability=${summary.citationStabilityRate ?? 'n/a'} ` +
+        `answeredEveryPass=${summary.answeredEveryRunCaseCount}/${summary.caseCount}`,
+    );
   }
-  const expectedKind: CaseOutcomeKind =
-    expectedOutcome === 'answer'
-      ? 'answered'
-      : expectedOutcome === 'abstain'
-        ? 'insufficient_evidence'
-        : 'conflicting_evidence';
-  return actualOutcomeKind === expectedKind;
 }
 
 async function main(): Promise<void> {
   const options = parseCliOptions(process.argv.slice(2));
+  const {
+    tenantId: EVAL_TENANT_ID,
+    cacheDir: CACHE_DIR,
+    modelCacheDir: MODEL_CACHE_DIR,
+    embeddingCacheDir: EMBEDDING_CACHE_DIR,
+    resultsDir: RESULTS_DIR,
+  } = laneConfig(options.lane);
   const sha = gitSha();
-  console.log(`eval: cache mode = ${options.cacheMode}, git sha = ${sha}`);
+  console.log(
+    `eval: cache mode = ${options.cacheMode} (embeddings ${options.embeddingCacheMode}), ` +
+      `lane = ${options.lane}, git sha = ${sha}` +
+      `${options.varianceRuns === undefined ? '' : `, variance passes = ${options.varianceRuns}`}`,
+  );
 
   const cases = EvalDatasetSchema.parse(casesJson);
 
   const app = await bootstrapEvalApp({
     cacheMode: options.cacheMode,
+    embeddingCacheMode: options.embeddingCacheMode,
     modelCacheDir: MODEL_CACHE_DIR,
     embeddingCacheDir: EMBEDDING_CACHE_DIR,
   });
@@ -226,7 +384,7 @@ async function main(): Promise<void> {
     // `retrievedChunks` for retrieval/citation overlap scoring, unchanged.
     const allEvalChunks = await evidenceChunkModel
       .find({ tenantId: EVAL_TENANT_ID })
-      .select({ text: 1, locator: 1, documentVersionId: 1 })
+      .select({ text: 1, locator: 1, documentVersionId: 1, elements: 1 })
       .lean();
     const corpusChunkById = new Map<string, OverlapCandidateChunk>(
       allEvalChunks.map((chunk) => [
@@ -235,8 +393,38 @@ async function main(): Promise<void> {
           filename: filenameByDocVersionId.get(chunk.documentVersionId.toString()) ?? '',
           text: chunk.text,
           locator: chunk.locator,
+          // Absent on a row ingested before this field existed (`.lean()` skips schema defaults) —
+          // `chunkOverlapsLocator` falls back to text containment for those, unchanged.
+          elements: chunk.elements,
         },
       ]),
+    );
+
+    // Xlsx chunks are excluded: `chunkOverlapsLocator`'s xlsx-cell path is always the structural
+    // range-intersection check, never element-index/text-containment, so folding them in here would
+    // double-count against a split that only ever describes the pdf/docx path (S8).
+    const proseEvalChunks = allEvalChunks.filter(
+      (chunk) => chunk.locator.kind === 'pdf-page' || chunk.locator.kind === 'docx-paragraph',
+    );
+    const scoringMethodSplit: ScoringMethodSplit = {
+      elementIndexChunks: proseEvalChunks.filter(
+        (chunk) => classifyOverlapScoringMethod(chunk) === 'element-index',
+      ).length,
+      textContainmentChunks: proseEvalChunks.filter(
+        (chunk) => classifyOverlapScoringMethod(chunk) === 'text-containment',
+      ).length,
+    };
+    // Describes the conflict-scope check's chunk resolution only (`corpusChunkById`, consumed by
+    // `conflictValuesOverlapExpectedLocators` below) — recall and citation precision always score
+    // via text-containment regardless of this split, because their own candidates
+    // (`retrievedOverlaps`/`citationOverlaps`, further below) never carry `elements`. See
+    // `classifyOverlapScoringMethod`'s doc comment.
+    console.log(
+      `eval: conflict-scope check corpus scoring method split — ` +
+        `${scoringMethodSplit.elementIndexChunks} element-index, ` +
+        `${scoringMethodSplit.textContainmentChunks} text-containment` +
+        `${hasMixedScoringMethods(scoringMethodSplit) ? ' (MIXED RUN)' : ''} (recall/citation ` +
+        `precision are unaffected — see the comment above)`,
     );
 
     const conflictsService = app.get(ConflictsService);
@@ -272,6 +460,22 @@ async function main(): Promise<void> {
     }
 
     const activities = createActivities(app);
+
+    if (options.varianceRuns !== undefined) {
+      await runVarianceLane({
+        activities,
+        cases,
+        tenantId: EVAL_TENANT_ID,
+        resultsDir: RESULTS_DIR,
+        gitSha: sha,
+        corpusFingerprint,
+        requestedRunCount: options.varianceRuns,
+        modelCacheMode: options.cacheMode,
+        embeddingCacheMode: options.embeddingCacheMode,
+      });
+      return;
+    }
+
     const perCase: PerCaseReport[] = [];
     const caseResults: CaseResult[] = [];
 
@@ -450,71 +654,6 @@ async function main(): Promise<void> {
       );
     }
 
-    const embeddingProvider = app.get<EmbeddingProvider>(EMBEDDING_PROVIDER);
-
-    let retrievalComparison: readonly RetrievalModeSummary[];
-    if (options.qdrant) {
-      console.log(
-        `eval: running retrieval-mode comparison (lexical / vector / hybrid / qdrant-vector) ` +
-          `against ${options.qdrantUrl}`,
-      );
-      const qdrantClient = new QdrantClient({ url: options.qdrantUrl });
-      try {
-        await qdrantClient.getCollections();
-      } catch (cause) {
-        // Fails LOUDLY, same posture as `assertAtlasSearchSupported`/
-        // `assertRequiredSearchIndexesExist` above: a benchmark that silently reports nothing for
-        // 'qdrant-vector' is worse than one that refuses to start.
-        throw new Error(
-          `eval: Qdrant is unreachable at ${options.qdrantUrl} — start it with ` +
-            `'docker compose --profile qdrant up -d' before passing --qdrant.`,
-          { cause },
-        );
-      }
-
-      const rows = await db
-        .collection<RawEvidenceChunkRow>(MONGO_EVIDENCE_CHUNKS_COLLECTION)
-        .find({ tenantId: EVAL_TENANT_ID })
-        .toArray();
-      await populateQdrantCollection(qdrantClient, rows);
-      const qdrantSearch: QdrantSearch = (provider, query) =>
-        searchQdrantVector(qdrantClient, provider, query);
-      // `searchByMode` itself stays narrowed to `MongoRetrievalMode` (see `retrieval-modes.ts`'s
-      // doc comment on that choice); `makeQdrantAwareSearch` requires the wider `SearchByMode`
-      // seam, so this adapter bridges the two the same way `retrieval-comparison.ts`'s own
-      // (unexported) `defaultSearch` does. The 'qdrant-vector' branch is unreachable —
-      // `makeQdrantAwareSearch` routes that mode to `qdrantSearch` before ever calling this
-      // adapter — but the parameter type still has to accept it.
-      const mongoSearch: SearchByMode = (db_, provider, mode, query) => {
-        if (mode === 'qdrant-vector') {
-          throw new Error(
-            "mongoSearch adapter received 'qdrant-vector', which makeQdrantAwareSearch should " +
-              'have intercepted first',
-          );
-        }
-        return searchByMode(db_, provider, mode, query);
-      };
-
-      retrievalComparison = await runRetrievalComparison({
-        db,
-        embeddingProvider,
-        filenameByDocVersionId,
-        cases,
-        tenantId: EVAL_TENANT_ID,
-        modes: [...RETRIEVAL_MODES, ...QDRANT_MODES],
-        search: makeQdrantAwareSearch(mongoSearch, qdrantSearch),
-      });
-    } else {
-      console.log('eval: running retrieval-mode comparison (lexical / vector / hybrid)');
-      retrievalComparison = await runRetrievalComparison({
-        db,
-        embeddingProvider,
-        filenameByDocVersionId,
-        cases,
-        tenantId: EVAL_TENANT_ID,
-      });
-    }
-
     const metrics = computeMetrics(caseResults);
     const result: EvalRunResult = {
       gitSha: sha,
@@ -523,7 +662,7 @@ async function main(): Promise<void> {
       corpusFingerprint,
       metrics,
       perCase,
-      retrievalComparison,
+      scoringMethodSplit,
     };
 
     await mkdir(RESULTS_DIR, { recursive: true });
@@ -581,6 +720,18 @@ async function main(): Promise<void> {
       console.error(
         `eval: FAILED — conflict scope accuracy ${metrics.conflictScopeAccuracy} is below 1 ` +
           `(hard gate)`,
+      );
+      process.exitCode = 1;
+    }
+
+    // The fifth hard gate, on the same `./report` predicate the markdown gate line reads. Gated at
+    // a floor (`RECALL_AT_5_FLOOR`), not 1 — recall depends on chunking and embedding behaviour this
+    // corpus was never meant to hold to 100%, so a floor at the dataset's own baseline catches a
+    // retrieval regression without demanding perfection this metric was never meant to reach.
+    if (isBelowRecallAt5Floor(metrics)) {
+      console.error(
+        `eval: FAILED — recall@5 ${metrics.retrieval.recallAt5} is below the ` +
+          `${RECALL_AT_5_FLOOR} floor (hard gate)`,
       );
       process.exitCode = 1;
     }

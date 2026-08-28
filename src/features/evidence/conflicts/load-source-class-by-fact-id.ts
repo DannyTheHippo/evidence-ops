@@ -32,9 +32,8 @@ export interface FactSourceEnrichment {
  * that cannot be found gives no evidence of withdrawal either.
  *
  * `loadSourceClassByFactId` below is a thin sourceClass-only projection of this function, kept for
- * `ResolutionBacktestService.run` and `ConflictsService.computeProposalForConflict` — neither of
- * which needs withdrawal state — so their existing `Map<string, DocumentSourceClass>` shape never
- * has to change.
+ * `ConflictsService.computeProposalForConflict`, which needs no withdrawal state — so its existing
+ * `Map<string, DocumentSourceClass>` shape never has to change.
  */
 export async function loadFactSourceEnrichment(
   documentVersionModel: Model<DocumentVersionDocument>,
@@ -85,11 +84,11 @@ export async function loadFactSourceEnrichment(
 }
 
 /**
- * Shared by `ConflictsService.computeProposalForConflict` and `ResolutionBacktestService.run`,
- * both of which need only `sourceClass` to feed `resolveConflictPolicy`. Calls
- * `loadFactSourceEnrichment` once and re-maps its result in memory — no second query — so this
- * keeps its original `Map<string, DocumentSourceClass>` shape for callers that predate, and never
- * need, the withdrawal signal `loadFactSourceEnrichment` also carries.
+ * Used by `ConflictsService.computeProposalForConflict`, which needs only `sourceClass` to feed
+ * `resolveConflictPolicy`. Calls `loadFactSourceEnrichment` once and re-maps its result in memory
+ * — no second query — so this keeps its original `Map<string, DocumentSourceClass>` shape for a
+ * caller that predates, and never needs, the withdrawal signal `loadFactSourceEnrichment` also
+ * carries.
  */
 export async function loadSourceClassByFactId(
   documentVersionModel: Model<DocumentVersionDocument>,

@@ -7,10 +7,6 @@ import { Conflict } from '../../../../src/database/schemas/evidence/conflict/con
 import { DocumentVersion } from '../../../../src/database/schemas/evidence/document-version/document-version.schema';
 import { Document } from '../../../../src/database/schemas/evidence/document/document.schema';
 import { ExtractedFact } from '../../../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
-import type {
-  MetricDefinition,
-  MetricPackData,
-} from '../../../../src/database/schemas/evidence/metric-pack/metric-pack.schema';
 import { Approval } from '../../../../src/database/schemas/workflow/approval/approval.schema';
 import { ConflictsService } from '../../../../src/features/evidence/conflicts/conflicts.service';
 import {
@@ -19,10 +15,10 @@ import {
   InvalidConflictResolutionException,
 } from '../../../../src/features/evidence/conflicts/exceptions/conflicts.exception';
 import * as resolveConflictPolicyModule from '../../../../src/features/evidence/conflicts/resolve-conflict-policy';
-import { METRIC_ONTOLOGY } from '../../../../src/features/evidence/facts/metric-ontology';
-import { MetricPacksService } from '../../../../src/features/evidence/facts/metric-packs.service';
-import { MetricPoliciesService } from '../../../../src/features/evidence/facts/metric-policies.service';
-import { CRE_PACK_V1 } from '../../../../src/features/evidence/facts/packs/cre.pack';
+import {
+  ACTIVE_PACK_ID,
+  ACTIVE_PACK_VERSION,
+} from '../../../../src/features/evidence/facts/metric-ontology';
 import { WorkflowRunsService } from '../../../../src/features/evidence/workflow-runs/workflow-runs.service';
 import { approvalTimeoutCounter } from '../../../../src/providers/telemetry/domain-metrics';
 import { WORKFLOW_ENGINE } from '../../../../src/providers/workflow-engine/workflow-engine.interface';
@@ -41,26 +37,8 @@ describe('ConflictsService', () => {
   const mockApprovalModel = getMockModel();
   const mockWorkflowEngine = { start: jest.fn(), status: jest.fn(), signal: jest.fn() };
   const mockWorkflowRunsService = { create: jest.fn(), findById: jest.fn() };
-  const mockMetricPoliciesService = { resolveForTenant: jest.fn() };
-  const mockMetricPacksService = {
-    resolveActive: jest.fn(),
-    findVersion: jest.fn(),
-  } satisfies Record<keyof Pick<MetricPacksService, 'resolveActive' | 'findVersion'>, jest.Mock>;
   const mockAuditService = { record: jest.fn() };
   const mockLogger = getMockLogger();
-
-  // The byte-identical-to-today policy every existing test below assumes: no tenant has authored
-  // an override, so this is exactly the fold `MetricPoliciesService.resolveForTenant` produces
-  // over `METRIC_ONTOLOGY` alone.
-  const defaultPolicies = new Map(
-    METRIC_ONTOLOGY.map((metric) => [
-      metric.id,
-      {
-        authorityOrder: metric.authorityOrder,
-        stalenessWindowMs: metric.stalenessWindowMs ?? Number.POSITIVE_INFINITY,
-      },
-    ]),
-  );
 
   const buildFact = (
     factKey: { entity: string; metric: string; period: string },
@@ -69,6 +47,12 @@ describe('ConflictsService', () => {
     _id: new Types.ObjectId(),
     factKey,
     value,
+    // Every scan query now projects `documentVersionId` too (`excludeSupersededFacts`), so a fact
+    // fixture omitting it would no longer match what a real Mongo projection returns. Left
+    // unresolvable by default (`mockDocumentVersionModel.find` resolves `[]` unless a test
+    // overrides it), which `excludeSupersededFacts` keeps rather than drops — see that method's own
+    // doc comment.
+    documentVersionId: new Types.ObjectId(),
   });
 
   /** `ConflictsService.scanForConflicts`'s full-scan path reads via a Mongoose `.cursor()`, not a
@@ -94,20 +78,24 @@ describe('ConflictsService', () => {
         { provide: getModelToken(Approval.name), useValue: mockApprovalModel },
         { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
         { provide: WorkflowRunsService, useValue: mockWorkflowRunsService },
-        { provide: MetricPoliciesService, useValue: mockMetricPoliciesService },
-        { provide: MetricPacksService, useValue: mockMetricPacksService },
         { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: mockLogger },
       ],
     }).compile();
 
     service = module.get<ConflictsService>(ConflictsService);
-    // Re-set every `beforeEach`, not once at module scope — `afterEach`'s `resetAllMocks()` wipes
-    // implementations, not just call history.
-    mockMetricPoliciesService.resolveForTenant.mockResolvedValue(defaultPolicies);
-    // The byte-identical-to-today pack every existing test below assumes: no tenant has authored
-    // or activated a pack of its own, so every scan/list resolves to exactly the code default.
-    mockMetricPacksService.resolveActive.mockResolvedValue(CRE_PACK_V1);
+
+    // Default for `excludeSupersededFacts`'s two lookups: no version/document resolves, so every
+    // scan test that isn't specifically exercising supersession keeps every fact unchanged — see
+    // that method's own "unresolvable is kept" doc comment. `mockResolvedValueOnce` in an
+    // individual test still takes priority over this base implementation.
+    mockDocumentVersionModel.find.mockResolvedValue([]);
+    mockDocumentModel.find.mockResolvedValue([]);
+    // Default for `detectAndPersist`'s existing-conflicts lookup (retraction and idempotency): no
+    // open conflict to retract or grow, so every scan test that isn't specifically exercising
+    // either keeps this a no-op. `mockResolvedValueOnce` in an individual test still takes
+    // priority.
+    mockConflictModel.find.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -121,13 +109,13 @@ describe('ConflictsService', () => {
 
     expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
       { tenantId: 'acme-corp' },
-      { factKey: 1, value: 1 },
+      { factKey: 1, value: 1, documentVersionId: 1 },
     );
     expect(mockConflictModel.find).not.toHaveBeenCalled();
     expect(result).toEqual({ conflictsCreated: 0, skippedFactCount: 0 });
   });
 
-  it('should return conflictsCreated 0 without querying existing conflicts when normalized values agree within tolerance', async () => {
+  it('should return conflictsCreated 0, still checking for a retractable open conflict, when normalized values agree within tolerance', async () => {
     const tenantId = 'acme-corp';
     const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
     // 5.25% vs 5.30% is a 5bp spread — well inside cap_rate's 25bp absolute tolerance.
@@ -141,9 +129,12 @@ describe('ConflictsService', () => {
 
     expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
       { tenantId },
-      { factKey: 1, value: 1 },
+      { factKey: 1, value: 1, documentVersionId: 1 },
     );
-    expect(mockConflictModel.find).not.toHaveBeenCalled();
+    // No candidate this scan (values agree), so `findRetractableConflicts` still needs the
+    // tenant's existing conflicts to know whether one needs closing — the default empty result
+    // (`beforeEach`) means there is nothing to retract here.
+    expect(mockConflictModel.find).toHaveBeenCalledWith({ tenantId });
     expect(mockConflictModel.insertMany).not.toHaveBeenCalled();
     expect(result).toEqual({ conflictsCreated: 0, skippedFactCount: 0 });
   });
@@ -192,8 +183,8 @@ describe('ConflictsService', () => {
     // cap_rate is a ratio metric — see the paired currency-metric assertion below, which is what
     // catches a magnitudeUnit backfill that blanket-assigns one unit to every conflict.
     expect(insertedConflicts[0].magnitudeUnit).toBe('ratio');
-    expect(insertedConflicts[0].packId).toBe(CRE_PACK_V1.packId);
-    expect(insertedConflicts[0].packVersion).toBe(CRE_PACK_V1.version);
+    expect(insertedConflicts[0].packId).toBe(ACTIVE_PACK_ID);
+    expect(insertedConflicts[0].packVersion).toBe(ACTIVE_PACK_VERSION);
     expect(insertedConflicts[0].status).toBe('open');
     expect(insertedConflicts[0].tenantId).toBe(tenantId);
     expect(result).toEqual({ conflictsCreated: 1, skippedFactCount: 0 });
@@ -220,17 +211,52 @@ describe('ConflictsService', () => {
     expect(insertedConflicts[0].magnitudeUnit).toBe('usd');
   });
 
-  it('should skip a candidate whose group already has an open Conflict record', async () => {
+  it('should leave an open Conflict record untouched when the candidate factIds are unchanged', async () => {
     const tenantId = 'acme-corp';
     const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
     const factLow = buildFact(factKey, { amount: 5.25, unit: 'percent' });
     const factHigh = buildFact(factKey, { amount: 6.1, unit: 'percent' });
     mockExtractedFactModel.find.mockReturnValueOnce(asCursor([factLow, factHigh]));
-    mockConflictModel.find.mockResolvedValueOnce([{ factKey, status: 'open' }]);
+    const mockSave = jest.fn();
+    mockConflictModel.find.mockResolvedValueOnce([
+      { factKey, status: 'open', factIds: [factLow._id, factHigh._id], save: mockSave },
+    ]);
 
     const result = await service.scanForConflicts(tenantId);
 
     expect(mockConflictModel.insertMany).not.toHaveBeenCalled();
+    expect(mockSave).not.toHaveBeenCalled();
+    expect(result).toEqual({ conflictsCreated: 0, skippedFactCount: 0 });
+  });
+
+  it('should grow an open Conflict record in place, never insert a duplicate, when a third fact joins the same disagreement', async () => {
+    const tenantId = 'acme-corp';
+    const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+    const factLow = buildFact(factKey, { amount: 5.25, unit: 'percent' });
+    const factHigh = buildFact(factKey, { amount: 6.1, unit: 'percent' });
+    const factNew = buildFact(factKey, { amount: 6.5, unit: 'percent' });
+    mockExtractedFactModel.find.mockReturnValueOnce(asCursor([factLow, factHigh, factNew]));
+    const mockSave = jest.fn().mockResolvedValueOnce(undefined);
+    const openConflict = {
+      _id: new Types.ObjectId(),
+      factKey,
+      status: 'open',
+      factIds: [factLow._id, factHigh._id],
+      magnitude: 0.0085,
+      magnitudeUnit: 'ratio',
+      save: mockSave,
+    };
+    mockConflictModel.find.mockResolvedValueOnce([openConflict]);
+
+    const result = await service.scanForConflicts(tenantId);
+
+    expect(mockConflictModel.insertMany).not.toHaveBeenCalled();
+    expect(mockSave).toHaveBeenCalledTimes(1);
+    expect(openConflict.factIds.map((id) => id.toString())).toEqual(
+      [factLow._id, factHigh._id, factNew._id].map((id) => id.toString()),
+    );
+    expect(openConflict.magnitude).toBeCloseTo(0.0125, 4);
+    expect(openConflict.magnitudeUnit).toBe('ratio');
     expect(result).toEqual({ conflictsCreated: 0, skippedFactCount: 0 });
   });
 
@@ -259,6 +285,253 @@ describe('ConflictsService', () => {
     expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining("unit 'usd'"));
   });
 
+  describe('supersession (a corrected re-upload must not conflict with the version it corrected)', () => {
+    const tenantId = 'acme-corp';
+    const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+    const documentId = new Types.ObjectId();
+    const priorVersionId = new Types.ObjectId();
+    const currentVersionId = new Types.ObjectId();
+
+    it('should exclude a superseded version’s fact and detect no conflict against the current version’s own value', async () => {
+      const priorFact = {
+        ...buildFact(factKey, { amount: 5.25, unit: 'percent' }),
+        documentVersionId: priorVersionId,
+      };
+      const currentFact = {
+        ...buildFact(factKey, { amount: 5.3, unit: 'percent' }),
+        documentVersionId: currentVersionId,
+      };
+      mockExtractedFactModel.find.mockReturnValueOnce(asCursor([priorFact, currentFact]));
+      mockDocumentVersionModel.find.mockResolvedValueOnce([
+        { _id: priorVersionId, documentId },
+        { _id: currentVersionId, documentId },
+      ]);
+      mockDocumentModel.find.mockResolvedValueOnce([{ _id: documentId, currentVersionId }]);
+
+      const result = await service.scanForConflicts(tenantId);
+
+      expect(mockDocumentVersionModel.find).toHaveBeenCalledWith(
+        { _id: { $in: [priorVersionId, currentVersionId] }, tenantId },
+        { documentId: 1 },
+      );
+      expect(mockDocumentModel.find).toHaveBeenCalledWith(
+        { _id: { $in: [documentId] }, tenantId },
+        { currentVersionId: 1 },
+      );
+      // A single normalizable fact is left (the prior version's excluded) — nothing left to
+      // disagree with, so no new conflict is created. `conflictModel.find` still runs
+      // (`findRetractableConflicts` needs the group's existing conflicts, if any, to know whether
+      // one needs closing) — the default empty result (`beforeEach`) means there is none here.
+      expect(mockConflictModel.find).toHaveBeenCalledWith({ tenantId });
+      expect(result).toEqual({ conflictsCreated: 0, skippedFactCount: 0 });
+    });
+
+    it('should still detect a genuine conflict between two facts that both belong to the current version', async () => {
+      const factLow = {
+        ...buildFact(factKey, { amount: 5.25, unit: 'percent' }),
+        documentVersionId: currentVersionId,
+      };
+      const factHigh = {
+        ...buildFact(factKey, { amount: 6.1, unit: 'percent' }),
+        documentVersionId: currentVersionId,
+      };
+      mockExtractedFactModel.find.mockReturnValueOnce(asCursor([factLow, factHigh]));
+      mockDocumentVersionModel.find.mockResolvedValueOnce([{ _id: currentVersionId, documentId }]);
+      mockDocumentModel.find.mockResolvedValueOnce([{ _id: documentId, currentVersionId }]);
+      mockConflictModel.find.mockResolvedValueOnce([]);
+      mockConflictModel.insertMany.mockResolvedValueOnce([]);
+
+      const result = await service.scanForConflicts(tenantId);
+
+      expect(result).toEqual({ conflictsCreated: 1, skippedFactCount: 0 });
+    });
+
+    it('should keep a fact whose document has no currentVersionId set yet, rather than drop it', async () => {
+      const factLow = {
+        ...buildFact(factKey, { amount: 5.25, unit: 'percent' }),
+        documentVersionId: currentVersionId,
+      };
+      const factHigh = {
+        ...buildFact(factKey, { amount: 6.1, unit: 'percent' }),
+        documentVersionId: currentVersionId,
+      };
+      mockExtractedFactModel.find.mockReturnValueOnce(asCursor([factLow, factHigh]));
+      mockDocumentVersionModel.find.mockResolvedValueOnce([{ _id: currentVersionId, documentId }]);
+      // The document row resolves, but carries no `currentVersionId` yet.
+      mockDocumentModel.find.mockResolvedValueOnce([{ _id: documentId }]);
+      mockConflictModel.find.mockResolvedValueOnce([]);
+      mockConflictModel.insertMany.mockResolvedValueOnce([]);
+
+      const result = await service.scanForConflicts(tenantId);
+
+      expect(result).toEqual({ conflictsCreated: 1, skippedFactCount: 0 });
+    });
+
+    it('should keep a fact whose document version no longer resolves, rather than drop it', async () => {
+      const factLow = {
+        ...buildFact(factKey, { amount: 5.25, unit: 'percent' }),
+        documentVersionId: currentVersionId,
+      };
+      const factHigh = {
+        ...buildFact(factKey, { amount: 6.1, unit: 'percent' }),
+        documentVersionId: currentVersionId,
+      };
+      mockExtractedFactModel.find.mockReturnValueOnce(asCursor([factLow, factHigh]));
+      // Neither fact's `documentVersionId` resolves to a `DocumentVersion` row.
+      mockDocumentVersionModel.find.mockResolvedValueOnce([]);
+      mockConflictModel.find.mockResolvedValueOnce([]);
+      mockConflictModel.insertMany.mockResolvedValueOnce([]);
+
+      const result = await service.scanForConflicts(tenantId);
+
+      expect(mockDocumentModel.find).not.toHaveBeenCalled();
+      expect(result).toEqual({ conflictsCreated: 1, skippedFactCount: 0 });
+    });
+  });
+
+  describe('retraction (an open conflict whose group stops disagreeing must not force conflicting_evidence forever)', () => {
+    // Locally typed (mirrors `recordResolution`'s own `MockConflictDoc`) so the mutations
+    // `detectAndPersist` makes in place — `status`, `resolution` — type-check without widening
+    // `openConflict` to `any`.
+    interface MockRetractableConflictDoc {
+      _id: Types.ObjectId;
+      factKey: { entity: string; metric: string; period: string };
+      status: string;
+      factIds: Types.ObjectId[];
+      resolution?: {
+        outcome: string;
+        resolvedAt: Date;
+        packId: string;
+        packVersion: number;
+      };
+      save: jest.Mock;
+    }
+
+    const tenantId = 'acme-corp';
+    const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+    const documentAId = new Types.ObjectId();
+    const documentBId = new Types.ObjectId();
+    const documentAVersion1Id = new Types.ObjectId();
+    const documentAVersion2Id = new Types.ObjectId();
+    const documentBVersionId = new Types.ObjectId();
+
+    it('should retract the open conflict once a corrected re-upload stops disagreeing with the other document', async () => {
+      // Step 1 — the original ingest: Document A v1 states 5.25%, Document B states 6.10%, an
+      // 85bp spread past cap_rate's 25bp tolerance, so the scan opens a conflict.
+      const factA1 = {
+        ...buildFact(factKey, { amount: 5.25, unit: 'percent' }),
+        documentVersionId: documentAVersion1Id,
+      };
+      const factB1 = {
+        ...buildFact(factKey, { amount: 6.1, unit: 'percent' }),
+        documentVersionId: documentBVersionId,
+      };
+      mockExtractedFactModel.find.mockReturnValueOnce(asCursor([factA1, factB1]));
+      mockDocumentVersionModel.find.mockResolvedValueOnce([
+        { _id: documentAVersion1Id, documentId: documentAId },
+        { _id: documentBVersionId, documentId: documentBId },
+      ]);
+      mockDocumentModel.find.mockResolvedValueOnce([
+        { _id: documentAId, currentVersionId: documentAVersion1Id },
+        { _id: documentBId, currentVersionId: documentBVersionId },
+      ]);
+      mockConflictModel.find.mockResolvedValueOnce([]);
+      mockConflictModel.insertMany.mockResolvedValueOnce([]);
+
+      const firstScan = await service.scanForConflicts(tenantId);
+
+      expect(firstScan).toEqual({ conflictsCreated: 1, skippedFactCount: 0 });
+
+      // Step 2 — Document A is re-uploaded as v2, correcting its value to 6.10%: agrees with
+      // Document B, so this rescan finds no candidate for the group. `resetAllMocks` also wipes
+      // the `beforeEach` defaults — restore them, same pattern the incremental-scan parity test
+      // above uses.
+      jest.resetAllMocks();
+      mockDocumentVersionModel.find.mockResolvedValue([]);
+      mockDocumentModel.find.mockResolvedValue([]);
+      mockConflictModel.find.mockResolvedValue([]);
+
+      const factA1StillStored = {
+        ...buildFact(factKey, { amount: 5.25, unit: 'percent' }),
+        _id: factA1._id,
+        documentVersionId: documentAVersion1Id,
+      };
+      const factA2 = {
+        ...buildFact(factKey, { amount: 6.1, unit: 'percent' }),
+        documentVersionId: documentAVersion2Id,
+      };
+      const factB1StillStored = {
+        ...buildFact(factKey, { amount: 6.1, unit: 'percent' }),
+        _id: factB1._id,
+        documentVersionId: documentBVersionId,
+      };
+      mockExtractedFactModel.find.mockReturnValueOnce(
+        asCursor([factA1StillStored, factA2, factB1StillStored]),
+      );
+      mockDocumentVersionModel.find.mockResolvedValueOnce([
+        { _id: documentAVersion1Id, documentId: documentAId },
+        { _id: documentAVersion2Id, documentId: documentAId },
+        { _id: documentBVersionId, documentId: documentBId },
+      ]);
+      mockDocumentModel.find.mockResolvedValueOnce([
+        // Document A now points at v2 — v1's fact is superseded and excluded.
+        { _id: documentAId, currentVersionId: documentAVersion2Id },
+        { _id: documentBId, currentVersionId: documentBVersionId },
+      ]);
+      const mockSave = jest.fn().mockResolvedValueOnce(undefined);
+      const openConflict: MockRetractableConflictDoc = {
+        _id: new Types.ObjectId(),
+        factKey,
+        status: 'open',
+        factIds: [factA1._id, factB1._id],
+        save: mockSave,
+      };
+      mockConflictModel.find.mockResolvedValueOnce([openConflict]);
+
+      const secondScan = await service.scanForConflicts(tenantId);
+
+      expect(secondScan).toEqual({ conflictsCreated: 0, skippedFactCount: 0 });
+      expect(mockConflictModel.insertMany).not.toHaveBeenCalled();
+      expect(mockSave).toHaveBeenCalledTimes(1);
+      expect(openConflict.status).toBe('dismissed');
+      // `resolvedAt` asserted separately, not via `expect.any(Date)` inside the object literal —
+      // see `recordResolution`'s own spec for why (`no-unsafe-assignment` on `expect.any`'s
+      // `any`-typed return).
+      expect(openConflict.resolution?.resolvedAt).toBeInstanceOf(Date);
+      expect(openConflict.resolution).toMatchObject({
+        outcome: 'retracted',
+        packId: ACTIVE_PACK_ID,
+        packVersion: ACTIVE_PACK_VERSION,
+      });
+    });
+
+    it('should NOT retract an open conflict whose group had a fact skipped this scan for an unrecognized unit', async () => {
+      // The group's only current facts this scan are un-normalizable, so `detectConflicts`
+      // neither confirms nor refutes the disagreement — retracting here would silently close a
+      // conflict that may still be live.
+      const factA = {
+        ...buildFact(factKey, { amount: 250, unit: 'usd' }),
+        documentVersionId: documentAVersion1Id,
+      };
+      mockExtractedFactModel.find.mockReturnValueOnce(asCursor([factA]));
+      const mockSave = jest.fn();
+      const openConflict = {
+        _id: new Types.ObjectId(),
+        factKey,
+        status: 'open',
+        factIds: [factA._id, new Types.ObjectId()],
+        save: mockSave,
+      };
+      mockConflictModel.find.mockResolvedValueOnce([openConflict]);
+
+      const result = await service.scanForConflicts(tenantId);
+
+      expect(mockSave).not.toHaveBeenCalled();
+      expect(openConflict.status).toBe('open');
+      expect(result).toEqual({ conflictsCreated: 0, skippedFactCount: 1 });
+    });
+  });
+
   describe('incremental scan (factKeys given)', () => {
     const tenantId = 'acme-corp';
     const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
@@ -275,7 +548,7 @@ describe('ConflictsService', () => {
 
       expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
         { tenantId, groupKeyNormalized: { $in: [groupKeyNormalized] } },
-        { factKey: 1, value: 1 },
+        { factKey: 1, value: 1, documentVersionId: 1 },
       );
       expect(mockConflictModel.find).toHaveBeenCalledWith({
         tenantId,
@@ -291,7 +564,7 @@ describe('ConflictsService', () => {
 
       expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
         { tenantId, groupKeyNormalized: { $in: [groupKeyNormalized] } },
-        { factKey: 1, value: 1 },
+        { factKey: 1, value: 1, documentVersionId: 1 },
       );
     });
 
@@ -305,7 +578,7 @@ describe('ConflictsService', () => {
       // never the cursor-based full-scan path a `factKeys === undefined` check would fall back to.
       expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
         { tenantId, groupKeyNormalized: { $in: [] } },
-        { factKey: 1, value: 1 },
+        { factKey: 1, value: 1, documentVersionId: 1 },
       );
       expect(result).toEqual({ conflictsCreated: 0, skippedFactCount: 0 });
     });
@@ -323,9 +596,10 @@ describe('ConflictsService', () => {
       ).mock.calls[0][0];
 
       jest.resetAllMocks();
-      // `resetAllMocks()` wipes implementations, not just call history — re-arm the default pack
-      // resolution the same way `beforeEach` does.
-      mockMetricPacksService.resolveActive.mockResolvedValue(CRE_PACK_V1);
+      // `resetAllMocks` also wipes the `beforeEach` defaults for `excludeSupersededFacts`'s two
+      // lookups — restore them so this mid-test reset behaves like every other scan.
+      mockDocumentVersionModel.find.mockResolvedValue([]);
+      mockDocumentModel.find.mockResolvedValue([]);
       mockExtractedFactModel.find.mockResolvedValueOnce([factLow, factHigh]);
       mockConflictModel.find.mockResolvedValueOnce([]);
       mockConflictModel.insertMany.mockResolvedValueOnce([]);
@@ -382,320 +656,6 @@ describe('ConflictsService', () => {
         [factLow._id, factHigh._id, factNew._id].map((id) => id.toString()),
       );
       expect(result).toEqual({ conflictsCreated: 1, skippedFactCount: 0 });
-    });
-  });
-
-  describe('scanForConflictsByMetrics', () => {
-    const tenantId = 'acme-corp';
-    const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
-    const groupKeyNormalized = 'northgate business park::cap_rate::2025-03';
-
-    it('should resolve metricIds to their groupKeyNormalized values via distinct, then scan only those groups', async () => {
-      const factLow = buildFact(factKey, { amount: 5.25, unit: 'percent' });
-      const factHigh = buildFact(factKey, { amount: 6.1, unit: 'percent' });
-      mockExtractedFactModel.distinct.mockResolvedValueOnce([groupKeyNormalized]);
-      mockExtractedFactModel.find.mockResolvedValueOnce([factLow, factHigh]);
-      mockConflictModel.find.mockResolvedValueOnce([]);
-      mockConflictModel.insertMany.mockResolvedValueOnce([]);
-
-      const result = await service.scanForConflictsByMetrics(tenantId, ['cap_rate']);
-
-      expect(mockExtractedFactModel.distinct).toHaveBeenCalledWith('groupKeyNormalized', {
-        tenantId,
-        'factKey.metric': { $in: ['cap_rate'] },
-      });
-      expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
-        { tenantId, groupKeyNormalized: { $in: [groupKeyNormalized] } },
-        { factKey: 1, value: 1 },
-      );
-      expect(mockConflictModel.find).toHaveBeenCalledWith({
-        tenantId,
-        groupKeyNormalized: { $in: [groupKeyNormalized] },
-      });
-      expect(result).toEqual({ conflictsCreated: 1, skippedFactCount: 0 });
-    });
-
-    it('should rescan nothing when metricIds is empty — a pack version that only renamed labels or added aliases', async () => {
-      mockExtractedFactModel.distinct.mockResolvedValueOnce([]);
-      mockExtractedFactModel.find.mockResolvedValueOnce([]);
-
-      const result = await service.scanForConflictsByMetrics(tenantId, []);
-
-      expect(mockExtractedFactModel.distinct).toHaveBeenCalledWith('groupKeyNormalized', {
-        tenantId,
-        'factKey.metric': { $in: [] },
-      });
-      expect(mockConflictModel.find).not.toHaveBeenCalled();
-      expect(result).toEqual({ conflictsCreated: 0, skippedFactCount: 0 });
-    });
-  });
-
-  describe('retractConflicts', () => {
-    const tenantId = 'acme-corp';
-    const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
-    const groupKeyNormalized = 'northgate business park::cap_rate::2025-03';
-
-    it('should return conflictsRetracted 0 without querying when metricIds is empty', async () => {
-      const result = await service.retractConflicts(tenantId, []);
-
-      expect(mockConflictModel.find).not.toHaveBeenCalled();
-      expect(result).toEqual({ conflictsRetracted: 0 });
-    });
-
-    it('should return conflictsRetracted 0 without further queries when no open conflict matches the given metrics', async () => {
-      mockConflictModel.find.mockResolvedValueOnce([]);
-
-      const result = await service.retractConflicts(tenantId, ['cap_rate']);
-
-      expect(mockConflictModel.find).toHaveBeenCalledWith({
-        tenantId,
-        status: 'open',
-        'factKey.metric': { $in: ['cap_rate'] },
-      });
-      expect(mockApprovalModel.find).not.toHaveBeenCalled();
-      expect(result).toEqual({ conflictsRetracted: 0 });
-    });
-
-    it('should dismiss an open conflict as retracted, stamped with the active pack, when its current group no longer conflicts', async () => {
-      const conflictId = new Types.ObjectId();
-      const openConflict = { _id: conflictId, factKey, groupKeyNormalized, status: 'open' };
-      // 5.25% vs 5.30% is a 5bp spread — well inside cap_rate's 25bp absolute tolerance, so the
-      // group the conflict once disagreed over no longer does.
-      const factLow = buildFact(factKey, { amount: 5.25, unit: 'percent' });
-      const factHigh = buildFact(factKey, { amount: 5.3, unit: 'percent' });
-      mockConflictModel.find.mockResolvedValueOnce([openConflict]);
-      mockApprovalModel.find.mockResolvedValueOnce([]);
-      mockExtractedFactModel.find.mockResolvedValueOnce([factLow, factHigh]);
-      mockConflictModel.updateMany.mockResolvedValueOnce({});
-
-      const result = await service.retractConflicts(tenantId, ['cap_rate']);
-
-      expect(mockApprovalModel.find).toHaveBeenCalledWith(
-        {
-          tenantId,
-          state: 'pending',
-          'subject.entityType': 'Conflict',
-          'subject.entityId': { $in: [conflictId] },
-        },
-        { 'subject.entityId': 1 },
-      );
-      expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
-        { tenantId, groupKeyNormalized: { $in: [groupKeyNormalized] } },
-        { factKey: 1, value: 1 },
-      );
-      expect(mockConflictModel.updateMany).toHaveBeenCalledWith(
-        { _id: { $in: [conflictId] } },
-        {
-          status: 'dismissed',
-          resolution: {
-            outcome: 'retracted',
-            resolvedAt: expect.any(Date) as Date,
-            packId: CRE_PACK_V1.packId,
-            packVersion: CRE_PACK_V1.version,
-          },
-        },
-      );
-      expect(result).toEqual({ conflictsRetracted: 1 });
-    });
-
-    it('should not retract an open conflict whose current group still conflicts under the active pack', async () => {
-      const conflictId = new Types.ObjectId();
-      const openConflict = { _id: conflictId, factKey, groupKeyNormalized, status: 'open' };
-      const factLow = buildFact(factKey, { amount: 5.25, unit: 'percent' });
-      const factHigh = buildFact(factKey, { amount: 6.1, unit: 'percent' });
-      mockConflictModel.find.mockResolvedValueOnce([openConflict]);
-      mockApprovalModel.find.mockResolvedValueOnce([]);
-      mockExtractedFactModel.find.mockResolvedValueOnce([factLow, factHigh]);
-
-      const result = await service.retractConflicts(tenantId, ['cap_rate']);
-
-      expect(mockConflictModel.updateMany).not.toHaveBeenCalled();
-      expect(result).toEqual({ conflictsRetracted: 0 });
-    });
-
-    it('should skip retracting a conflict that carries a pending resolution approval', async () => {
-      const conflictId = new Types.ObjectId();
-      const openConflict = { _id: conflictId, factKey, groupKeyNormalized, status: 'open' };
-      const factLow = buildFact(factKey, { amount: 5.25, unit: 'percent' });
-      const factHigh = buildFact(factKey, { amount: 5.3, unit: 'percent' });
-      mockConflictModel.find.mockResolvedValueOnce([openConflict]);
-      mockApprovalModel.find.mockResolvedValueOnce([
-        { subject: { entityId: conflictId, entityType: 'Conflict' } },
-      ]);
-      mockExtractedFactModel.find.mockResolvedValueOnce([factLow, factHigh]);
-
-      const result = await service.retractConflicts(tenantId, ['cap_rate']);
-
-      expect(mockConflictModel.updateMany).not.toHaveBeenCalled();
-      expect(result).toEqual({ conflictsRetracted: 0 });
-    });
-  });
-
-  describe('previewPackActivation', () => {
-    const tenantId = 'acme-corp';
-
-    const capRateMetric: MetricDefinition = {
-      id: 'cap_rate',
-      label: 'Cap Rate',
-      aliases: ['Cap Rate'],
-      valueType: 'percentage',
-      canonicalUnit: 'ratio',
-      units: [
-        { id: 'ratio', toCanonicalFactor: 1 },
-        { id: 'percent', toCanonicalFactor: 0.01 },
-      ],
-      toleranceKind: 'absolute',
-      tolerance: 0.0025,
-    };
-    const salePriceMetric: MetricDefinition = {
-      id: 'sale_price',
-      label: 'Sale Price',
-      aliases: ['Sale Price'],
-      valueType: 'currency',
-      canonicalUnit: 'usd',
-      units: [
-        { id: 'usd', toCanonicalFactor: 1 },
-        { id: 'usd_thousands', toCanonicalFactor: 1_000 },
-      ],
-      toleranceKind: 'relative',
-      tolerance: 0.01,
-    };
-    const activePack: MetricPackData = {
-      packId: 'cre',
-      version: 1,
-      label: 'CRE Default',
-      metrics: [capRateMetric, salePriceMetric],
-    };
-
-    it('should preview an empty metric set, querying nothing further, when the draft only relabels a metric', async () => {
-      const draftPack: MetricPackData = {
-        packId: 'cre-fork',
-        version: 2,
-        label: 'CRE Fork',
-        metrics: [{ ...capRateMetric, label: 'Capitalization Rate' }, salePriceMetric],
-      };
-      mockMetricPacksService.findVersion.mockResolvedValueOnce(draftPack);
-      mockMetricPacksService.resolveActive.mockResolvedValueOnce(activePack);
-
-      const result = await service.previewPackActivation(tenantId, 'cre-fork', 2);
-
-      expect(result).toEqual({ metrics: [] });
-      expect(mockExtractedFactModel.distinct).not.toHaveBeenCalled();
-      expect(mockConflictModel.find).not.toHaveBeenCalled();
-    });
-
-    it('should skip the existing-conflicts query when no candidate conflicts under the draft pack at all', async () => {
-      const draftPack: MetricPackData = {
-        packId: 'cre-fork',
-        version: 2,
-        label: 'CRE Fork',
-        metrics: [{ ...capRateMetric, tolerance: 0.5 }, salePriceMetric],
-      };
-      mockMetricPacksService.findVersion.mockResolvedValueOnce(draftPack);
-      mockMetricPacksService.resolveActive.mockResolvedValueOnce(activePack);
-      mockExtractedFactModel.distinct.mockResolvedValueOnce([]);
-      mockExtractedFactModel.find.mockResolvedValueOnce([]);
-      mockConflictModel.find.mockResolvedValueOnce([]); // would-retract's own openConflicts query
-
-      const result = await service.previewPackActivation(tenantId, 'cre-fork', 2);
-
-      expect(result).toEqual({ metrics: [] });
-      // The would-create half bails out before ever reading existing conflicts — the only
-      // `conflictModel.find` call below is would-retract's `openConflicts` query.
-      expect(mockConflictModel.find).toHaveBeenCalledTimes(1);
-      expect(mockConflictModel.find).toHaveBeenCalledWith({
-        tenantId,
-        status: 'open',
-        'factKey.metric': { $in: ['cap_rate'] },
-      });
-    });
-
-    it('should report per-metric would-create/would-retract counts without writing anything to Mongo', async () => {
-      const capRateFactKey = {
-        entity: 'Northgate Business Park',
-        metric: 'cap_rate',
-        period: '2025-03',
-      };
-      const capRateGroupKeyNormalized = 'northgate business park::cap_rate::2025-03';
-      const salePriceFactKey = {
-        entity: 'Fenwick Logistics Center',
-        metric: 'sale_price',
-        period: '2025-02',
-      };
-      const salePriceGroupKeyNormalized = 'fenwick logistics center::sale_price::2025-02';
-
-      const draftPack: MetricPackData = {
-        packId: 'cre-fork',
-        version: 2,
-        label: 'CRE Fork',
-        metrics: [
-          // Loosened: the tenant's existing open cap_rate conflict would no longer disagree.
-          { ...capRateMetric, tolerance: 0.5 },
-          // Tightened: facts that agree under the active pack's 1% relative tolerance would newly
-          // disagree under the draft's 0.1%.
-          { ...salePriceMetric, tolerance: 0.001 },
-        ],
-      };
-      mockMetricPacksService.findVersion.mockResolvedValueOnce(draftPack);
-      mockMetricPacksService.resolveActive.mockResolvedValueOnce(activePack);
-
-      const capRateFactLow = buildFact(capRateFactKey, { amount: 5.25, unit: 'percent' });
-      const capRateFactHigh = buildFact(capRateFactKey, { amount: 6.1, unit: 'percent' });
-      const salePriceFactA = buildFact(salePriceFactKey, { amount: 1_000_000, unit: 'usd' });
-      const salePriceFactB = buildFact(salePriceFactKey, { amount: 1_005_000, unit: 'usd' });
-
-      // would-create half: `previewWouldCreate`'s own query shape.
-      mockExtractedFactModel.distinct.mockResolvedValueOnce([
-        capRateGroupKeyNormalized,
-        salePriceGroupKeyNormalized,
-      ]);
-      mockExtractedFactModel.find.mockResolvedValueOnce([
-        capRateFactLow,
-        capRateFactHigh,
-        salePriceFactA,
-        salePriceFactB,
-      ]);
-      mockConflictModel.find.mockResolvedValueOnce([]); // no existing conflict for either group
-
-      // would-retract half: `findRetractableConflicts`'s own query shape.
-      const openCapRateConflictId = new Types.ObjectId();
-      mockConflictModel.find.mockResolvedValueOnce([
-        {
-          _id: openCapRateConflictId,
-          factKey: capRateFactKey,
-          groupKeyNormalized: capRateGroupKeyNormalized,
-          status: 'open',
-        },
-      ]);
-      mockApprovalModel.find.mockResolvedValueOnce([]);
-      mockExtractedFactModel.find.mockResolvedValueOnce([capRateFactLow, capRateFactHigh]);
-
-      const result = await service.previewPackActivation(tenantId, 'cre-fork', 2);
-
-      expect(mockExtractedFactModel.distinct).toHaveBeenCalledWith('groupKeyNormalized', {
-        tenantId,
-        'factKey.metric': { $in: ['cap_rate', 'sale_price'] },
-      });
-      expect(mockConflictModel.find).toHaveBeenNthCalledWith(1, {
-        tenantId,
-        groupKeyNormalized: { $in: [capRateGroupKeyNormalized, salePriceGroupKeyNormalized] },
-      });
-      expect(mockConflictModel.find).toHaveBeenNthCalledWith(2, {
-        tenantId,
-        status: 'open',
-        'factKey.metric': { $in: ['cap_rate', 'sale_price'] },
-      });
-      expect(result).toEqual({
-        metrics: [
-          { metricId: 'cap_rate', wouldCreate: 0, wouldRetract: 1 },
-          { metricId: 'sale_price', wouldCreate: 1, wouldRetract: 0 },
-        ],
-      });
-      // The whole point of a preview: it computes the same thing an activation's rescan would, but
-      // commits none of it.
-      expect(mockConflictModel.insertMany).not.toHaveBeenCalled();
-      expect(mockConflictModel.updateMany).not.toHaveBeenCalled();
-      expect(mockExtractedFactModel.updateMany).not.toHaveBeenCalled();
     });
   });
 
@@ -810,6 +770,107 @@ describe('ConflictsService', () => {
     });
   });
 
+  describe('findConflictedFactGroupsForTenant', () => {
+    it('should return an empty array without querying facts when the tenant has no open conflicts', async () => {
+      mockConflictModel.find.mockResolvedValueOnce([]);
+
+      const result = await service.findConflictedFactGroupsForTenant('acme-corp');
+
+      expect(mockConflictModel.find).toHaveBeenCalledWith({
+        tenantId: 'acme-corp',
+        status: 'open',
+      });
+      expect(mockExtractedFactModel.find).not.toHaveBeenCalled();
+      expect(result).toEqual([]);
+    });
+
+    it('should project every open conflict for the tenant, never scoped by chunkIds', async () => {
+      const factIdXlsx = new Types.ObjectId();
+      const factIdProse = new Types.ObjectId();
+      const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+      const conflict = {
+        _id: new Types.ObjectId(),
+        factKey,
+        factIds: [factIdXlsx, factIdProse],
+      };
+      mockConflictModel.find.mockResolvedValueOnce([conflict]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([
+        { _id: factIdXlsx, value: { amount: 5.25, unit: 'percent' }, chunkId: 'chunk-xlsx' },
+        { _id: factIdProse, value: { amount: 6.1, unit: 'percent' }, chunkId: 'chunk-prose' },
+      ]);
+
+      const result = await service.findConflictedFactGroupsForTenant('acme-corp');
+
+      expect(mockExtractedFactModel.find).toHaveBeenCalledWith({
+        _id: { $in: [factIdXlsx, factIdProse] },
+        tenantId: 'acme-corp',
+      });
+      expect(result).toEqual([
+        {
+          conflictId: conflict._id.toString(),
+          factKey,
+          values: [
+            { value: 5.25, unit: 'percent', sourceChunkId: 'chunk-xlsx' },
+            { value: 6.1, unit: 'percent', sourceChunkId: 'chunk-prose' },
+          ],
+        },
+      ]);
+    });
+
+    it('should skip and log a conflict with a dangling factId rather than throw, so one bad row does not break unrelated questions', async () => {
+      const goodFactKey = {
+        entity: 'Northgate Business Park',
+        metric: 'cap_rate',
+        period: '2025-03',
+      };
+      const goodFactId = new Types.ObjectId();
+      const otherGoodFactId = new Types.ObjectId();
+      const goodConflict = {
+        _id: new Types.ObjectId(),
+        factKey: goodFactKey,
+        factIds: [goodFactId, otherGoodFactId],
+      };
+      const brokenFactKey = {
+        entity: 'Sablewood Retail Court',
+        metric: 'cap_rate',
+        period: '2025-04',
+      };
+      const survivingFactId = new Types.ObjectId();
+      const missingFactId = new Types.ObjectId();
+      const brokenConflict = {
+        _id: new Types.ObjectId(),
+        factKey: brokenFactKey,
+        factIds: [survivingFactId, missingFactId],
+      };
+      mockConflictModel.find.mockResolvedValueOnce([brokenConflict, goodConflict]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([
+        { _id: goodFactId, value: { amount: 5.25, unit: 'percent' }, chunkId: 'chunk-xlsx' },
+        { _id: otherGoodFactId, value: { amount: 6.1, unit: 'percent' }, chunkId: 'chunk-prose' },
+        { _id: survivingFactId, value: { amount: 5.0, unit: 'percent' }, chunkId: 'chunk-sable' },
+        // `missingFactId` never resolves — the dangling reference.
+      ]);
+
+      const result = await service.findConflictedFactGroupsForTenant('acme-corp');
+
+      expect(result).toEqual([
+        {
+          conflictId: goodConflict._id.toString(),
+          factKey: goodFactKey,
+          values: [
+            { value: 5.25, unit: 'percent', sourceChunkId: 'chunk-xlsx' },
+            { value: 6.1, unit: 'percent', sourceChunkId: 'chunk-prose' },
+          ],
+        },
+      ]);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining(`Conflict '${brokenConflict._id.toString()}'`),
+      );
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('references 2 fact(s), but only 1'),
+      );
+    });
+  });
+
   describe('list', () => {
     it('should page conflicts for a tenant, batch-load their facts in one $in query, and record an audit event scoped to the actor', async () => {
       const actorId = new Types.ObjectId().toString();
@@ -822,8 +883,8 @@ describe('ConflictsService', () => {
         magnitude: 0.0085,
         status: 'open',
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
-        packId: CRE_PACK_V1.packId,
-        packVersion: CRE_PACK_V1.version,
+        packId: ACTIVE_PACK_ID,
+        packVersion: ACTIVE_PACK_VERSION,
       };
       const documentVersionIdA = new Types.ObjectId();
       const documentVersionIdB = new Types.ObjectId();
@@ -871,8 +932,6 @@ describe('ConflictsService', () => {
         { documentId: 1, withdrawnAt: 1 },
       );
       expect(mockDocumentModel.find).not.toHaveBeenCalled();
-      expect(mockMetricPoliciesService.resolveForTenant).toHaveBeenCalledTimes(1);
-      expect(mockMetricPoliciesService.resolveForTenant).toHaveBeenCalledWith('tenant-a');
       expect(mockAuditService.record).toHaveBeenCalledWith({
         action: 'conflicts.listed',
         actorId,
@@ -930,8 +989,8 @@ describe('ConflictsService', () => {
         status: 'open',
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
         // Detected under an earlier pack version than the tenant's current active one.
-        packId: CRE_PACK_V1.packId,
-        packVersion: CRE_PACK_V1.version + 1,
+        packId: ACTIVE_PACK_ID,
+        packVersion: ACTIVE_PACK_VERSION + 1,
       };
       const factA = {
         _id: factIdA,
@@ -957,56 +1016,11 @@ describe('ConflictsService', () => {
 
       expect(result.docs[0].stale).toBe(true);
       expect(result.docs[0].staleReason).toContain(
-        `${CRE_PACK_V1.packId}' v${CRE_PACK_V1.version + 1}`,
+        `${ACTIVE_PACK_ID}' v${ACTIVE_PACK_VERSION + 1}`,
       );
-      expect(result.docs[0].staleReason).toContain(
-        `${CRE_PACK_V1.packId}' v${CRE_PACK_V1.version}`,
-      );
+      expect(result.docs[0].staleReason).toContain(`${ACTIVE_PACK_ID}' v${ACTIVE_PACK_VERSION}`);
       // Staleness is independent of unscorability — this row's evidence is fully intact.
       expect(result.docs[0].unscorable).toBe(false);
-    });
-
-    it('should resolve the tenant survivorship-policy map once for a page of multiple conflicts, not once per conflict', async () => {
-      const actorId = new Types.ObjectId().toString();
-      const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
-      const conflictOne = {
-        _id: new Types.ObjectId(),
-        factKey,
-        factIds: [new Types.ObjectId(), new Types.ObjectId()],
-        magnitude: 0.0085,
-        status: 'open',
-        createdAt: new Date('2026-07-01T00:00:00.000Z'),
-      };
-      const conflictTwo = {
-        _id: new Types.ObjectId(),
-        factKey,
-        factIds: [new Types.ObjectId(), new Types.ObjectId()],
-        magnitude: 0.009,
-        status: 'open',
-        createdAt: new Date('2026-07-01T00:00:00.000Z'),
-      };
-      const buildResolvedFact = (id: Types.ObjectId, amount: number) => ({
-        _id: id,
-        value: { amount, unit: 'percent' },
-        chunkId: `chunk-${id.toString()}`,
-        documentVersionId: new Types.ObjectId(),
-        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'A1' },
-      });
-      const facts = [
-        ...conflictOne.factIds.map((id, index) => buildResolvedFact(id, 5.25 + index)),
-        ...conflictTwo.factIds.map((id, index) => buildResolvedFact(id, 6.1 + index)),
-      ];
-      mockConflictModel.find.mockResolvedValueOnce([conflictOne, conflictTwo]);
-      mockConflictModel.countDocuments.mockResolvedValueOnce(2);
-      mockExtractedFactModel.find.mockResolvedValueOnce(facts);
-      mockDocumentVersionModel.find.mockResolvedValueOnce([]);
-      mockAuditService.record.mockResolvedValueOnce(undefined);
-
-      const result = await service.list({ skip: 0, limit: 20 }, actorId, 'tenant-a');
-
-      expect(mockMetricPoliciesService.resolveForTenant).toHaveBeenCalledTimes(1);
-      expect(mockMetricPoliciesService.resolveForTenant).toHaveBeenCalledWith('tenant-a');
-      expect(result.docs).toHaveLength(2);
     });
 
     it("should propose the higher-authority fact, keyed by each document version's sourceClass, for a metric with an authorityOrder", async () => {
@@ -1228,7 +1242,7 @@ describe('ConflictsService', () => {
       expect(result.docs[0].explanation).toContain('No authorityOrder');
     });
 
-    it('should scope the query to an explicit tenantId and skip the fact, document, and policy queries entirely for an empty page', async () => {
+    it('should scope the query to an explicit tenantId and skip the fact and document queries entirely for an empty page', async () => {
       const actorId = new Types.ObjectId().toString();
       mockConflictModel.find.mockResolvedValueOnce([]);
       mockConflictModel.countDocuments.mockResolvedValueOnce(0);
@@ -1244,7 +1258,6 @@ describe('ConflictsService', () => {
       expect(mockExtractedFactModel.find).not.toHaveBeenCalled();
       expect(mockDocumentVersionModel.find).not.toHaveBeenCalled();
       expect(mockDocumentModel.find).not.toHaveBeenCalled();
-      expect(mockMetricPoliciesService.resolveForTenant).not.toHaveBeenCalled();
       expect(result).toEqual({ docs: [], count: 0 });
     });
 
@@ -1283,8 +1296,8 @@ describe('ConflictsService', () => {
         magnitude: 0.0085,
         status: 'resolved',
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
-        packId: CRE_PACK_V1.packId,
-        packVersion: CRE_PACK_V1.version,
+        packId: ACTIVE_PACK_ID,
+        packVersion: ACTIVE_PACK_VERSION,
       };
       const factA = {
         _id: factIdA,
@@ -1540,8 +1553,6 @@ describe('ConflictsService', () => {
         'subject.entityType': 'Conflict',
         'subject.entityId': new Types.ObjectId(conflictId),
       });
-      expect(mockMetricPoliciesService.resolveForTenant).toHaveBeenCalledTimes(1);
-      expect(mockMetricPoliciesService.resolveForTenant).toHaveBeenCalledWith('tenant-a');
       expect(mockWorkflowEngine.start).toHaveBeenCalledWith('resolveConflict', {
         conflictId,
         winningFactId,
@@ -1602,9 +1613,8 @@ describe('ConflictsService', () => {
       expect(mockWorkflowEngine.start).not.toHaveBeenCalled();
       expect(mockWorkflowRunsService.create).not.toHaveBeenCalled();
       // The guard trips before the proposal is computed — no second `ExtractedFact.find` call
-      // beyond `loadConflictForResolution`'s own, and no policy read paid for either.
+      // beyond `loadConflictForResolution`'s own.
       expect(mockExtractedFactModel.find).toHaveBeenCalledTimes(1);
-      expect(mockMetricPoliciesService.resolveForTenant).not.toHaveBeenCalled();
     });
 
     it('should scope the workflow start and the run to an explicit tenantId when provided', async () => {
@@ -1770,7 +1780,7 @@ describe('ConflictsService', () => {
       });
     });
 
-    it('should refuse to record any outcome for a conflict a metric-pack rescan already retracted', async () => {
+    it('should refuse to record any outcome for a previously-retracted conflict', async () => {
       const conflict: MockConflictDoc = {
         status: 'dismissed',
         factKey,

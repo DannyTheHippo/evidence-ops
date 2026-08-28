@@ -213,6 +213,38 @@ describe('verifyClaim', () => {
     expect(result.kind).toBe('survived');
   });
 
+  it.each([NaN, Infinity, -Infinity])(
+    'should drop a claim whose only overlap with its quote is a shared number when the corroborating cell fact carries a non-finite amount (%s)',
+    (nonFiniteAmount) => {
+      // Same shape as the cell-fact-corroborated case above, but the stored fact's amount is
+      // non-finite — an upstream extraction defect, not something this module can assume never
+      // happens. The corroboration must not fire: the claim falls back to the same
+      // "uncorroborated shared number" outcome it would get with no cell fact at all.
+      const cellFact: GroundingCellFact = {
+        chunkId: XLSX_CHUNK.chunkId,
+        factKey: { entity: 'Northgate Business Park', metric: 'sale_price', period: '2025-03' },
+        value: { amount: nonFiniteAmount, unit: 'usd' },
+        locator: XLSX_CELL_LOCATOR,
+      };
+      const claim = buildClaim({
+        statement: 'Northgate Business Park sold for $41,000,000.',
+        citations: [
+          buildCitation({
+            chunkId: XLSX_CHUNK.chunkId,
+            quote: 'Sale Price (USD): 41000000',
+            locator: XLSX_REGION_LOCATOR,
+          }),
+        ],
+      });
+
+      const result = verifyClaim({ claim, retrievedChunks: [XLSX_CHUNK], cellFacts: [cellFact] });
+
+      expect(result.kind).toBe('dropped');
+      if (result.kind !== 'dropped') throw new Error('unreachable');
+      expect(result.violations[0].kind).toBe('quote-unrelated-to-statement');
+    },
+  );
+
   it('should survive a claim whose quote is a legitimate heavy paraphrase of its statement', () => {
     // Guards against the alignment floors being too aggressive: this statement and quote share
     // almost no surface tokens despite the quote clearly supporting the statement.
@@ -253,6 +285,114 @@ describe('verifyClaim', () => {
     if (result.kind !== 'dropped') throw new Error('unreachable');
     expect(result.violations[0].kind).toBe('numeric-claim-unsupported');
     expect(result.dropped.reason).toContain('45');
+  });
+
+  it('should drop a claim containing a full-width-digit number unsupported by any cited chunk or fact', () => {
+    // A compatibility digit form ("１２２００") NFKC-folds to plain ASCII inside
+    // `extractNumericTokens`, so it is checked — and rejected — exactly like its ASCII form.
+    const claim = buildClaim({
+      statement:
+        'Northgate Business Park traded at a cap rate of approximately 6.10%, building area １２２００ SF.',
+    });
+
+    const result = verifyClaim({ claim, retrievedChunks: [PROSE_CHUNK], cellFacts: [] });
+
+    expect(result.kind).toBe('dropped');
+    if (result.kind !== 'dropped') throw new Error('unreachable');
+    expect(result.violations[0].kind).toBe('numeric-claim-unsupported');
+    expect(result.dropped.reason).toContain('12200');
+  });
+
+  it('should drop a claim stating a number in a digit script NFKC cannot fold to ASCII (Arabic-Indic)', () => {
+    // Regression for the non-ASCII-digit bypass: an Arabic-Indic digit run ("١٢٢٠٠") is legible to a
+    // reader but this module has no value to parse it into — it must not extract as "no number
+    // stated" and pass check 4 with nothing verified.
+    const claim = buildClaim({
+      statement:
+        'Northgate Business Park traded at a cap rate of approximately 6.10%, building area ١٢٢٠٠ SF.',
+    });
+
+    const result = verifyClaim({ claim, retrievedChunks: [PROSE_CHUNK], cellFacts: [] });
+
+    expect(result.kind).toBe('dropped');
+    if (result.kind !== 'dropped') throw new Error('unreachable');
+    expect(result.violations[0].kind).toBe('numeric-claim-unsupported');
+    expect(result.dropped.reason).toContain('cannot represent as a verifiable value');
+  });
+
+  it('should drop a claim stating a number past Number.MAX_SAFE_INTEGER, a magnitude this system cannot verify', () => {
+    // The magnitude counterpart of the script case above: an 18-digit account number is legible to a
+    // reader but `isRepresentableToken` rejects it, so `extractNumericTokens` omits it — it must not
+    // extract as "no number stated" and pass check 4 with nothing verified.
+    const claim = buildClaim({
+      statement:
+        'Northgate Business Park traded at a cap rate of approximately 6.10%, account 123456789012345678 was credited.',
+    });
+
+    const result = verifyClaim({ claim, retrievedChunks: [PROSE_CHUNK], cellFacts: [] });
+
+    expect(result.kind).toBe('dropped');
+    if (result.kind !== 'dropped') throw new Error('unreachable');
+    expect(result.violations[0].kind).toBe('numeric-claim-unsupported');
+    expect(result.dropped.reason).toContain('cannot represent as a verifiable value');
+  });
+
+  it('should survive a claim whose supported number is verified even though its cited chunk also carries an over-magnitude digit run', () => {
+    // Asymmetry pinned for the magnitude case: an unrepresentable numeral appearing only in the
+    // *chunk* text must not cost the claim a violation — it contributes no support (same as today) but
+    // is not itself grounds to drop an otherwise fully-supported claim.
+    const chunkWithOverMagnitudeDigits: RetrievedChunk = {
+      chunkId: 'chunk-over-magnitude',
+      docVersionId: 'doc-v1',
+      sha256: SHA256_A,
+      text: 'Northgate Business Park traded at a cap rate of approximately 6.10%. Account 123456789012345678 was credited.',
+      locator: PDF_LOCATOR,
+    };
+    const claim = buildClaim({
+      citations: [
+        buildCitation({
+          chunkId: chunkWithOverMagnitudeDigits.chunkId,
+          quote: 'at a cap rate of approximately 6.10%',
+        }),
+      ],
+    });
+
+    const result = verifyClaim({
+      claim,
+      retrievedChunks: [chunkWithOverMagnitudeDigits],
+      cellFacts: [],
+    });
+
+    expect(result.kind).toBe('survived');
+  });
+
+  it('should survive a claim whose supported number is verified even though its cited chunk also carries an unparseable digit run', () => {
+    // Asymmetry pinned: an unparseable numeral appearing only in the *chunk* text must not cost the
+    // claim a violation — it contributes no support (same as today) but is not itself grounds to drop
+    // an otherwise fully-supported claim.
+    const chunkWithForeignDigits: RetrievedChunk = {
+      chunkId: 'chunk-arabic-digits',
+      docVersionId: 'doc-v1',
+      sha256: SHA256_A,
+      text: 'Northgate Business Park traded at a cap rate of approximately 6.10%. المساحة ١٢٢٠٠ قدم مربع.',
+      locator: PDF_LOCATOR,
+    };
+    const claim = buildClaim({
+      citations: [
+        buildCitation({
+          chunkId: chunkWithForeignDigits.chunkId,
+          quote: 'at a cap rate of approximately 6.10%',
+        }),
+      ],
+    });
+
+    const result = verifyClaim({
+      claim,
+      retrievedChunks: [chunkWithForeignDigits],
+      cellFacts: [],
+    });
+
+    expect(result.kind).toBe('survived');
   });
 
   it('should survive a numeric claim supported by the cited chunk text with no fact involved', () => {
@@ -307,6 +447,97 @@ describe('verifyClaim', () => {
     expect(result.claim.citations[0].locator).not.toEqual(XLSX_REGION_LOCATOR);
   });
 
+  it("should verify a claim stating a parenthesized negative number against a fact of the same negative amount, and upgrade its citation's locator", () => {
+    const chunk: RetrievedChunk = {
+      chunkId: 'chunk-noi',
+      docVersionId: 'doc-v1',
+      sha256: SHA256_A,
+      text: 'Northgate Business Park recorded NOI (USD) of ($41,000) for the period.',
+      locator: XLSX_REGION_LOCATOR,
+    };
+    const cellFact: GroundingCellFact = {
+      chunkId: chunk.chunkId,
+      factKey: { entity: 'Northgate Business Park', metric: 'noi', period: '2025-03' },
+      value: { amount: -41_000, unit: 'usd' },
+      locator: XLSX_CELL_LOCATOR,
+    };
+    const claim = buildClaim({
+      statement: 'Northgate Business Park reported NOI of $(41,000) for the period.',
+      citations: [
+        buildCitation({ chunkId: chunk.chunkId, quote: chunk.text, locator: XLSX_REGION_LOCATOR }),
+      ],
+    });
+
+    const result = verifyClaim({ claim, retrievedChunks: [chunk], cellFacts: [cellFact] });
+
+    expect(result.kind).toBe('survived');
+    if (result.kind !== 'survived') throw new Error('unreachable');
+    expect(result.claim.citations[0].locator).toEqual(XLSX_CELL_LOCATOR);
+    expect(result.touchedFactKeys).toEqual([cellFact.factKey]);
+  });
+
+  it("should verify a claim citing a terse cell quote that is only a corroborated negative value, via checkQuoteAlignment's numeric-only alignment path", () => {
+    // Same "terse cell quote" scenario `check-quote-alignment.ts`'s own doc comment describes for a
+    // positive amount ("Sale Price (USD): 41000000"), exercised here with a negative one: the quote
+    // shares almost no words with the statement, so alignment can only pass through the corroborated
+    // numeric token `#-41000` — pinning that a negative value tags and compares the same way a
+    // positive one does in that path, not just in `verifyClaim`'s own check 4.
+    const chunk: RetrievedChunk = {
+      chunkId: 'chunk-noi-cell',
+      docVersionId: 'doc-v1',
+      sha256: SHA256_A,
+      text: '($41,000)',
+      locator: XLSX_CELL_LOCATOR,
+    };
+    const cellFact: GroundingCellFact = {
+      chunkId: chunk.chunkId,
+      factKey: { entity: 'Northgate Business Park', metric: 'noi', period: '2025-03' },
+      value: { amount: -41_000, unit: 'usd' },
+      locator: XLSX_CELL_LOCATOR,
+    };
+    const claim = buildClaim({
+      statement: 'NOI was $(41,000) for the property this period.',
+      citations: [
+        buildCitation({ chunkId: chunk.chunkId, quote: chunk.text, locator: XLSX_CELL_LOCATOR }),
+      ],
+    });
+
+    const result = verifyClaim({ claim, retrievedChunks: [chunk], cellFacts: [cellFact] });
+
+    expect(result.kind).toBe('survived');
+    if (result.kind !== 'survived') throw new Error('unreachable');
+    expect(result.touchedFactKeys).toEqual([cellFact.factKey]);
+  });
+
+  it('should drop a claim stating a negative number that contradicts a positive cell fact on the same cited chunk', () => {
+    const chunk: RetrievedChunk = {
+      chunkId: 'chunk-noi-mismatch',
+      docVersionId: 'doc-v1',
+      sha256: SHA256_A,
+      text: 'Northgate Business Park recorded NOI (USD) of ($41,000) for the period.',
+      locator: XLSX_REGION_LOCATOR,
+    };
+    const cellFact: GroundingCellFact = {
+      chunkId: chunk.chunkId,
+      factKey: { entity: 'Northgate Business Park', metric: 'noi', period: '2025-03' },
+      value: { amount: 41_000, unit: 'usd' }, // positive — does not match the claim's negative figure
+      locator: XLSX_CELL_LOCATOR,
+    };
+    const claim = buildClaim({
+      statement: 'Northgate Business Park reported NOI of $(41,000) for the period.',
+      citations: [
+        buildCitation({ chunkId: chunk.chunkId, quote: chunk.text, locator: XLSX_REGION_LOCATOR }),
+      ],
+    });
+
+    const result = verifyClaim({ claim, retrievedChunks: [chunk], cellFacts: [cellFact] });
+
+    expect(result.kind).toBe('dropped');
+    if (result.kind !== 'dropped') throw new Error('unreachable');
+    expect(result.violations[0].kind).toBe('numeric-claim-unsupported');
+    expect(result.dropped.reason).toContain('-41000');
+  });
+
   it('should reject a claim whose number appears in the chunk text but is not backed by any cell fact on a chunk that has cell facts', () => {
     // Regression for the grounding-gate wiring defect: a cited chunk that carries *any* cell-level
     // fact is authoritative for numbers, so an unmatched value is rejected rather than accepted on
@@ -340,6 +571,35 @@ describe('verifyClaim', () => {
     if (result.kind !== 'dropped') throw new Error('unreachable');
     expect(result.violations[0].kind).toBe('numeric-claim-unsupported');
     expect(result.dropped.reason).toContain('41000000');
+  });
+
+  it('should drop a claim whose number genuinely differs from the cited chunk, even when both texts share the prototype-key word "constructor"', () => {
+    // Regression for the `extract-numeric-tokens.ts` prototype-pollution defect: pre-fix, both
+    // "five constructor bids" and "two constructor bids" extracted as `[NaN]` (`SCALES.constructor`
+    // resolves through `Object.prototype` to the `Object` function, and arithmetic on it is `NaN`),
+    // and `[NaN].includes(NaN)` is `true` under SameValueZero — so a claim stating a *different*
+    // number than its cited chunk was laundered through as numerically supported. Post-fix both
+    // sides extract their real, distinct values (5 and 2) and the mismatch is caught.
+    const chunk: RetrievedChunk = {
+      chunkId: 'chunk-constructor',
+      docVersionId: 'doc-v1',
+      sha256: SHA256_A,
+      text: 'The site had two constructor bids submitted for the Northgate renovation.',
+      locator: PDF_LOCATOR,
+    };
+    const claim = buildClaim({
+      statement: 'The site had five constructor bids submitted for the Northgate renovation.',
+      citations: [
+        buildCitation({ chunkId: chunk.chunkId, quote: chunk.text, locator: PDF_LOCATOR }),
+      ],
+    });
+
+    const result = verifyClaim({ claim, retrievedChunks: [chunk], cellFacts: [] });
+
+    expect(result.kind).toBe('dropped');
+    if (result.kind !== 'dropped') throw new Error('unreachable');
+    expect(result.violations[0].kind).toBe('numeric-claim-unsupported');
+    expect(result.dropped.reason).toContain('5');
   });
 
   it('should return the fact key of a cellFact whose value matches a number the claim states', () => {
@@ -428,5 +688,190 @@ describe('verifyClaim', () => {
     });
 
     expect(result.touchedFactKeys).toEqual([]);
+  });
+});
+
+describe('verifyClaim with subjectBinding', () => {
+  const MERIDIAN_CELL_LOCATOR: EvidenceLocator = {
+    kind: 'xlsx-cell',
+    extractorVersion: 'v1',
+    sheetName: 'Summary',
+    cell: 'D9',
+  };
+
+  const SALE_PRICE_CHUNK: RetrievedChunk = {
+    chunkId: 'chunk-sale-price',
+    docVersionId: 'doc-v1',
+    sha256: SHA256_A,
+    text: 'Cedar Bluff Logistics Center reported a sale price of $41,000,000. Meridian Tower reported net operating income of $41,000,000.',
+    locator: XLSX_REGION_LOCATOR,
+  };
+
+  const CEDAR_BLUFF_SALE_PRICE_FACT: GroundingCellFact = {
+    chunkId: SALE_PRICE_CHUNK.chunkId,
+    factKey: { entity: 'Cedar Bluff Logistics Center', metric: 'sale_price', period: '2025-03' },
+    value: { amount: 41_000_000, unit: 'usd' },
+    locator: XLSX_CELL_LOCATOR,
+  };
+
+  // A decoy fact for a different entity that happens to carry the exact same amount on the same
+  // cited chunk — the ADR-0004 bound 3 residual gap this task closes.
+  const MERIDIAN_NOI_FACT: GroundingCellFact = {
+    chunkId: SALE_PRICE_CHUNK.chunkId,
+    factKey: { entity: 'Meridian Tower', metric: 'net_operating_income', period: '2025-03' },
+    value: { amount: 41_000_000, unit: 'usd' },
+    locator: MERIDIAN_CELL_LOCATOR,
+  };
+
+  function buildCedarBluffClaim(): Claim {
+    return buildClaim({
+      statement: 'Cedar Bluff Logistics Center reported a sale price of $41,000,000.',
+      citations: [
+        buildCitation({
+          chunkId: SALE_PRICE_CHUNK.chunkId,
+          quote: 'Cedar Bluff Logistics Center reported a sale price of $41,000,000.',
+          locator: XLSX_REGION_LOCATOR,
+        }),
+      ],
+    });
+  }
+
+  it("should upgrade to the wrong entity's locator on a shared-value decoy fact when subjectBinding is off", () => {
+    // Pins today's known gap (ADR-0004 bound 3) byte-identical: every existing caller omits
+    // `subjectBinding`, so this must keep passing exactly as written.
+    const result = verifyClaim({
+      claim: buildCedarBluffClaim(),
+      retrievedChunks: [SALE_PRICE_CHUNK],
+      cellFacts: [MERIDIAN_NOI_FACT, CEDAR_BLUFF_SALE_PRICE_FACT],
+    });
+
+    expect(result.kind).toBe('survived');
+    if (result.kind !== 'survived') throw new Error('unreachable');
+    expect(result.claim.citations[0].locator).toEqual(MERIDIAN_CELL_LOCATOR);
+  });
+
+  it('should pick the entity-bound fact over a shared-value decoy when subjectBinding is on', () => {
+    const result = verifyClaim({
+      claim: buildCedarBluffClaim(),
+      retrievedChunks: [SALE_PRICE_CHUNK],
+      cellFacts: [MERIDIAN_NOI_FACT, CEDAR_BLUFF_SALE_PRICE_FACT],
+      subjectBinding: true,
+    });
+
+    expect(result.kind).toBe('survived');
+    if (result.kind !== 'survived') throw new Error('unreachable');
+    expect(result.claim.citations[0].locator).toEqual(XLSX_CELL_LOCATOR);
+    expect(result.touchedFactKeys).toEqual([CEDAR_BLUFF_SALE_PRICE_FACT.factKey]);
+  });
+
+  it("should drop a claim about one entity when the cited chunk only carries another entity's identically-valued fact, with subjectBinding on", () => {
+    const result = verifyClaim({
+      claim: buildCedarBluffClaim(),
+      retrievedChunks: [SALE_PRICE_CHUNK],
+      cellFacts: [MERIDIAN_NOI_FACT], // no fact for Cedar Bluff at all
+      subjectBinding: true,
+    });
+
+    expect(result.kind).toBe('dropped');
+    if (result.kind !== 'dropped') throw new Error('unreachable');
+    expect(result.violations[0].kind).toBe('numeric-claim-unsupported');
+  });
+
+  it("should reject a citation whose chunk never names the claim's subject entity, with subjectBinding on", () => {
+    const unrelatedChunk: RetrievedChunk = {
+      chunkId: 'chunk-unrelated',
+      docVersionId: 'doc-v1',
+      sha256: SHA256_A,
+      text: 'Quarterly market report: overall vacancy trends improved region-wide.',
+      locator: PDF_LOCATOR,
+    };
+    const cedarBluffAreaFact: GroundingCellFact = {
+      chunkId: 'chunk-cedar-source',
+      factKey: {
+        entity: 'Cedar Bluff Logistics Center',
+        metric: 'building_area_sf',
+        period: '2025-03',
+      },
+      value: { amount: 412_000, unit: 'sf' },
+      locator: XLSX_CELL_LOCATOR,
+    };
+    const claim = buildClaim({
+      statement: 'Cedar Bluff Logistics Center has a building area of 412,000 SF.',
+      citations: [
+        buildCitation({
+          chunkId: unrelatedChunk.chunkId,
+          quote: 'overall vacancy trends improved region-wide',
+          locator: PDF_LOCATOR,
+        }),
+      ],
+    });
+
+    const result = verifyClaim({
+      claim,
+      retrievedChunks: [unrelatedChunk],
+      cellFacts: [cedarBluffAreaFact],
+      subjectBinding: true,
+    });
+
+    expect(result.kind).toBe('dropped');
+    if (result.kind !== 'dropped') throw new Error('unreachable');
+    expect(result.violations[0].kind).toBe('quote-unrelated-to-statement');
+    expect(result.dropped.reason).toContain(unrelatedChunk.chunkId);
+    expect(result.dropped.reason).not.toContain('Cedar Bluff');
+  });
+
+  it('should stay inert with subjectBinding on when no cell fact names an entity the statement mentions', () => {
+    const result = verifyClaim({
+      claim: buildClaim(),
+      retrievedChunks: [PROSE_CHUNK],
+      cellFacts: [],
+      subjectBinding: true,
+    });
+
+    expect(result.kind).toBe('survived');
+  });
+
+  it('should reject an entity-bound fact whose metric does not relate to the claim, with subjectBinding on', () => {
+    const wrongMetricFact: GroundingCellFact = {
+      chunkId: SALE_PRICE_CHUNK.chunkId,
+      factKey: {
+        entity: 'Cedar Bluff Logistics Center',
+        metric: 'net_operating_income',
+        period: '2025-03',
+      },
+      value: { amount: 41_000_000, unit: 'usd' },
+      locator: XLSX_CELL_LOCATOR,
+    };
+
+    const result = verifyClaim({
+      claim: buildCedarBluffClaim(),
+      retrievedChunks: [SALE_PRICE_CHUNK],
+      cellFacts: [wrongMetricFact],
+      subjectBinding: true,
+    });
+
+    expect(result.kind).toBe('dropped');
+    if (result.kind !== 'dropped') throw new Error('unreachable');
+    expect(result.violations[0].kind).toBe('numeric-claim-unsupported');
+  });
+
+  it('should reject an entity- and metric-bound fact whose unit does not belong to that metric, with subjectBinding on', () => {
+    const wrongUnitFact: GroundingCellFact = {
+      chunkId: SALE_PRICE_CHUNK.chunkId,
+      factKey: { entity: 'Cedar Bluff Logistics Center', metric: 'sale_price', period: '2025-03' },
+      value: { amount: 41_000_000, unit: 'sf' },
+      locator: XLSX_CELL_LOCATOR,
+    };
+
+    const result = verifyClaim({
+      claim: buildCedarBluffClaim(),
+      retrievedChunks: [SALE_PRICE_CHUNK],
+      cellFacts: [wrongUnitFact],
+      subjectBinding: true,
+    });
+
+    expect(result.kind).toBe('dropped');
+    if (result.kind !== 'dropped') throw new Error('unreachable');
+    expect(result.violations[0].kind).toBe('numeric-claim-unsupported');
   });
 });

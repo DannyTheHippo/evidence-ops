@@ -1,4 +1,4 @@
-// Duplicated from `migrations/0003-search-indexes.ts` rather than imported: `tsconfig.build.json`
+// Duplicated from `migrations/0001-baseline.ts` rather than imported: `tsconfig.build.json`
 // scopes `rootDir` to `src`, so `src` importing from `migrations/` would break `nest build`.
 // `search-indexes.integration-spec.ts` is what keeps these two definitions honest against a live
 // server — see that file rather than an import for the cross-check.

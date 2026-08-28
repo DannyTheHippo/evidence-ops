@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { normalizeEntityName } from '../../../database/schemas/evidence/canonical-entity/canonical-entity.schema';
 import type { FactKey } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import { groundingClaimsDroppedCounter } from '../../../providers/telemetry/domain-metrics';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
@@ -14,16 +15,24 @@ export interface VerifyGroundingInput {
   readonly conflictedFactKeys?: readonly FactKey[];
 }
 
-/** Same grouping semantics as `groupKey` in `../conflicts/detect-conflicts.ts` (entity trimmed and
- * lowercased — free text an extractor read off a document; metric and period compared exactly —
- * already canonical). Reimplemented locally rather than imported: `src/features/evidence/conflicts/**`
- * is owned by another agent for this change, and this gate only needs key equality, not the rest of
- * that module's conflict-detection behavior. Exported so `activities.ts` can look up which
- * `ConflictedFactGroup` produced `GroundingReport.conflictingFactKey` without a third
- * reimplementation. */
+/** Structural equality for `FactKey`. `entity` is free text an extractor read off a document, so it
+ * is compared through `normalizeEntityName` — the same function `groupKey`
+ * (`../conflicts/detect-conflicts.ts`) keys conflict grouping with, so a fact key this gate sees and
+ * a fact key that grouping already grouped together compare equal here too. `metric` and `period`
+ * are both already canonical (a metric id from the ontology, a period key from `parsePeriod`) and
+ * compared exactly.
+ *
+ * Exact match only, never fuzzy: a name that does not fold to an identical normalized form does not
+ * match, however similar it looks, because a fuzzy match here would fabricate a conflict between two
+ * properties that were never the same — the same discipline `CanonicalEntity` enforces on its own
+ * alias matching. A refused match is the permissive outcome at this function's only call site
+ * (`verify`, below): it withholds the `conflicting_evidence` override, not a claim, so this
+ * comparison's safety is identity with `groupKey`'s fold rather than a bias toward refusing.
+ * Exported so `activities.ts` can look up which `ConflictedFactGroup` produced
+ * `GroundingReport.conflictingFactKey` without reimplementing this comparison. */
 export function factKeysMatch(a: FactKey, b: FactKey): boolean {
   return (
-    a.entity.trim().toLowerCase() === b.entity.trim().toLowerCase() &&
+    normalizeEntityName(a.entity) === normalizeEntityName(b.entity) &&
     a.metric === b.metric &&
     a.period === b.period
   );

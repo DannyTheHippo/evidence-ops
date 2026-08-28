@@ -9,18 +9,25 @@ import { z } from 'zod/v4';
 /**
  * One fact the model proposes from a chunk of document text. Everything here is untrusted until
  * the application verifies it: `metric` is the only field zod itself constrains to the allowlist
- * `metricIds` passes in — `unit` and `quote` are verified against the resolved pack and the source
- * chunk respectively by `prose-fact-extractor.ts` after the call returns — a schema can shape the
+ * `metricIds` passes in — `unit`, `quote` and `entityQuote` are verified against the ontology and
+ * the source chunk by `prose-fact-extractor.ts` after the call returns — a schema can shape the
  * JSON, but only application code can check a quote is real.
  *
- * Built from `metricIds` rather than a module-level constant because the allowlist is per-tenant
- * pack data (`MetricPacksService.resolveActive`), not a fixed ontology — `prose-fact-extractor.ts`
- * calls this once per extraction with the resolved pack's metric ids, in the pack's own order, so
- * two tenants resolving to the same pack get byte-identical schemas.
+ * Built from `metricIds` rather than hardcoding `METRIC_IDS` directly so `prose-fact-extractor.ts`
+ * can call this once per extraction with `METRIC_ONTOLOGY`'s metric ids, in the ontology's own
+ * order, without this file importing `metric-ontology.ts` itself.
  */
 export function buildFactCandidateSchema(metricIds: readonly string[]) {
   return z.object({
-    entity: z.string().min(1),
+    /** The span of the chunk that names the entity this fact is about, copied verbatim — an
+     * extractive field, not free text: two passes over one sentence that both copy from the source
+     * return the same characters, where two passes each writing the entity's name in their own
+     * words do not, and a difference there splits one entity into two `(entity, metric, period)`
+     * groups that then never agree. Verified as a real span of the chunk by
+     * `prose-fact-extractor.ts`, on the same `locateQuote` containment `quote` is verified with, and
+     * resolved against the tenant's `CanonicalEntity` registry before agreement runs. Capped at 200
+     * characters — an entity name is a phrase, not the sentence `quote` carries. */
+    entityQuote: z.string().min(1).max(200),
     metric: z.enum(metricIds),
     /** The literal date/time phrase the source states for this fact (e.g. "March 2025",
      * "2025-03-14"), or an empty string when the source states no period at all. Left as raw text,

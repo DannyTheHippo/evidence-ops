@@ -133,25 +133,39 @@ export class ApprovalsService {
       throw new ApprovalNotFoundException(`Approval '${id}' not found`);
     }
 
+    // Atomic read-and-write, not `findOne` then `.save()`: the prior read-then-write let two
+    // concurrent decisions both read `pending` and both write, producing two audit rows and
+    // signalling the workflow twice for a permission boundary that must only ever fire once. The
+    // `state: 'pending'` filter makes this the single write that can win — a second concurrent
+    // call's `findOneAndUpdate` matches nothing and comes back `null`. FAILS CLOSED: `null` is
+    // never treated as success.
+    //
     // Tenant-scoped: D1 left `getDecision` unscoped because its only caller (workflow code) held
     // an id it had just minted — that trust does not extend here, where the id comes from an
     // external HTTP caller who could otherwise guess another tenant's approval id.
-    const approval = await this.approvalModel.findOne({ _id: id, tenantId });
-    if (!approval) {
-      throw new ApprovalNotFoundException(`Approval '${id}' not found`);
-    }
+    const approval = await this.approvalModel.findOneAndUpdate(
+      { _id: id, tenantId, state: 'pending' },
+      {
+        state: input.decision,
+        decidedBy: input.decidedBy,
+        decidedAt: new Date(),
+        decisionReason: input.reason,
+      },
+      { returnDocument: 'after' },
+    );
 
-    if (approval.state !== 'pending') {
+    if (!approval) {
+      // `null` means either no such approval exists under this tenant, or one does but already
+      // left `pending` (the race this method now closes) — distinguished by a second, cheap read
+      // so the two keep their existing, distinct HTTP statuses rather than collapsing into one.
+      const exists = await this.approvalModel.exists({ _id: id, tenantId });
+      if (!exists) {
+        throw new ApprovalNotFoundException(`Approval '${id}' not found`);
+      }
       throw new ApprovalAlreadyDecidedException(
-        `Approval '${id}' is already '${approval.state}' — a decision cannot be re-applied`,
+        `Approval '${id}' is already decided — a decision cannot be re-applied`,
       );
     }
-
-    approval.state = input.decision;
-    approval.decidedBy = input.decidedBy;
-    approval.decidedAt = new Date();
-    approval.decisionReason = input.reason;
-    await approval.save();
 
     await this.auditService.record({
       action: 'approvals.decided',
@@ -189,6 +203,31 @@ export class ApprovalsService {
     }
 
     return this.toApprovalDto(approval);
+  }
+
+  /**
+   * Called from the `expireApproval` activity (`src/worker/activities.ts`), itself called from
+   * `resolveConflict`'s timeout branch (`resolve-conflict.workflow.ts`) once its 24-hour
+   * `condition()` wait elapses with no signal. Moves a still-`pending` row to `timed_out` so it
+   * leaves the pending inbox and can never be decided afterwards — restoring the property that the
+   * durable row and the workflow that owned it can never disagree about whether a human authorised
+   * something.
+   *
+   * Same atomic, `state: 'pending'`-guarded write `decide()` uses, and FAILS CLOSED the same way:
+   * if a human decision already landed and moved the row off `pending` before this runs, the
+   * filter matches nothing and this is a no-op — a real decision that beat the timeout to the row
+   * always wins, and a late timeout must never overwrite it. No exception on a no-op: an activity
+   * retry after a crash between "update succeeded" and "activity reported complete" would
+   * otherwise fail a call that already did its job.
+   */
+  async expire(id: string, tenantId: string): Promise<void> {
+    if (!Types.ObjectId.isValid(id)) {
+      return;
+    }
+    await this.approvalModel.findOneAndUpdate(
+      { _id: id, tenantId, state: 'pending' },
+      { state: 'timed_out' },
+    );
   }
 
   private toApprovalDto(approval: ApprovalDocument): ApprovalResponseDto {

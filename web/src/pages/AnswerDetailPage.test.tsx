@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import AnswerDetailPage from './AnswerDetailPage';
 
@@ -8,6 +8,14 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 const completedAnswer = {
@@ -108,5 +116,50 @@ describe('AnswerDetailPage', () => {
     renderAt('answer-1');
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Answer unavailable');
+  });
+
+  it('does not render a stale answer that resolves after navigating to a different answer', async () => {
+    const first = deferred<Response>();
+    const answerOne = { ...completedAnswer, id: 'answer-1', questionText: 'First question' };
+    const answerTwo = {
+      ...completedAnswer,
+      id: 'answer-2',
+      questionText: 'Second question',
+      outcome: { kind: 'insufficient_evidence', reason: 'No document mentions the vacancy rate.' },
+    };
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const isFirst = typeof input === 'string' && input.includes('/answers/answer-1');
+        return isFirst ? first.promise : Promise.resolve(jsonResponse(answerTwo));
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/answers/answer-1']}>
+        <Link to="/answers/answer-2">Go to second answer</Link>
+        <Routes>
+          <Route path="/answers/:id" element={<AnswerDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Loading answer…');
+
+    fireEvent.click(screen.getByText('Go to second answer'));
+
+    expect(await screen.findByText('No document mentions the vacancy rate.')).toBeInTheDocument();
+
+    // The first answer's request finally settles after navigation moved to the second answer —
+    // its `id`-keyed effect was already cleaned up, so this must not overwrite what's rendered.
+    first.resolve(jsonResponse(answerOne));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByRole('heading', { name: 'First question' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Second question' })).toBeInTheDocument();
   });
 });

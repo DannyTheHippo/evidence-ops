@@ -6,7 +6,12 @@ import { Types } from 'mongoose';
 import { DocumentVersion } from '../../../../src/database/schemas/evidence/document-version/document-version.schema';
 import { EvidenceChunk } from '../../../../src/database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
 import { computeChunkId } from '../../../../src/features/evidence/ingestion/compute-chunk-id';
-import { DocumentVersionNotFoundException } from '../../../../src/features/evidence/ingestion/exceptions/ingestion.exception';
+import { EmailAttachmentService } from '../../../../src/features/evidence/ingestion/email-attachment.service';
+import {
+  DocumentVersionNotFoundException,
+  HostileEmailException,
+  IngestionAbandonedException,
+} from '../../../../src/features/evidence/ingestion/exceptions/ingestion.exception';
 import { ParserRegistry } from '../../../../src/features/evidence/ingestion/parser.registry';
 import type {
   DocumentParser,
@@ -59,6 +64,10 @@ describe('IngestionService', () => {
     keyof Pick<ParserRegistry, 'resolve'>,
     jest.Mock
   >;
+  const mockEmailAttachmentService = { unwrapAttachments: jest.fn() } satisfies Record<
+    keyof Pick<EmailAttachmentService, 'unwrapAttachments'>,
+    jest.Mock
+  >;
 
   const versionId = new Types.ObjectId();
   const documentId = new Types.ObjectId();
@@ -78,9 +87,16 @@ describe('IngestionService', () => {
     ...overrides,
   });
 
-  const buildStubParser = (elements: ParsedDocument['elements']): DocumentParser => ({
+  const buildStubParser = (
+    elements: ParsedDocument['elements'],
+    reducedFidelityReasons?: readonly string[],
+  ): DocumentParser => ({
     supports: [PDF_MIME],
-    parse: jest.fn().mockResolvedValue({ elements, extractorVersion: 'pdf-pdfjs-1' }),
+    parse: jest.fn().mockResolvedValue({
+      elements,
+      extractorVersion: 'pdf-pdfjs-1',
+      ...(reducedFidelityReasons ? { reducedFidelityReasons } : {}),
+    }),
   });
 
   // `getMockModel`'s `findOneAndUpdate` is typed only on its return value, so `.mock.calls`
@@ -117,6 +133,7 @@ describe('IngestionService', () => {
         { provide: DOCUMENT_STORE, useValue: fakeDocumentStore },
         { provide: EMBEDDING_PROVIDER, useValue: fakeEmbeddingProvider },
         { provide: ParserRegistry, useValue: mockParserRegistry },
+        { provide: EmailAttachmentService, useValue: mockEmailAttachmentService },
         // `IngestionService`'s constructor only ever reads `connection.db` (same invariant as
         // `MongoHybridRetrievalStore`'s) to hand to the (mocked) convergence probes above — a
         // placeholder object satisfies the constructor's "has a db handle" guard without needing a
@@ -145,6 +162,7 @@ describe('IngestionService', () => {
         { provide: DOCUMENT_STORE, useValue: fakeDocumentStore },
         { provide: EMBEDDING_PROVIDER, useValue: fakeEmbeddingProvider },
         { provide: ParserRegistry, useValue: mockParserRegistry },
+        { provide: EmailAttachmentService, useValue: mockEmailAttachmentService },
         { provide: getConnectionToken(), useValue: { db: undefined } },
         { provide: AppLogger, useValue: mockLogger },
       ],
@@ -224,8 +242,113 @@ describe('IngestionService', () => {
     expect(finalizeFilter._id).toBe(versionId);
     expect(finalizeFilter.ingestionLeaseToken).toBeInstanceOf(Types.ObjectId);
     expect(finalizeUpdate).toEqual({
-      $set: { ingestionStatus: 'completed' },
+      $set: { ingestionStatus: 'completed', reducedFidelityReasons: [] },
       $unset: { ingestionLeaseToken: '' },
+    });
+  });
+
+  it('should stamp reducedFidelityReasons from the parser even when parsing yields no chunks', async () => {
+    const stored = await fakeDocumentStore.put({
+      content: Buffer.from('%PDF-empty'),
+      contentType: PDF_MIME,
+      metadata: {},
+    });
+    const version = buildVersion({ storageKey: stored.id });
+    mockDocumentVersionModel.findOne.mockResolvedValueOnce(version);
+    mockParserRegistry.resolve.mockReturnValueOnce(
+      buildStubParser([], ['3 of 3 page(s) have no extractable text']),
+    );
+
+    await service.ingestVersion(versionId.toString(), 'tenant-a');
+
+    const [, finalizeUpdate] = getFindOneAndUpdateCall(2);
+    expect(finalizeUpdate).toEqual({
+      $set: {
+        ingestionStatus: 'completed',
+        reducedFidelityReasons: ['3 of 3 page(s) have no extractable text'],
+      },
+      $unset: { ingestionLeaseToken: '' },
+    });
+  });
+
+  describe('email containers', () => {
+    const EMAIL_MIME = 'message/rfc822';
+
+    const ingestEmail = async (): Promise<void> => {
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('From: a@b.example\r\n\r\nbody'),
+        contentType: EMAIL_MIME,
+        metadata: {},
+      });
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
+        buildVersion({ storageKey: stored.id }),
+      );
+      mockParserRegistry.resolve.mockReturnValueOnce(
+        buildStubParser([
+          {
+            text: 'From: a@b.example',
+            locator: {
+              kind: 'text-block',
+              blockIndex: 0,
+              headingPath: [],
+              extractorVersion: 'email-block-1',
+            },
+            headingPath: [],
+          },
+        ]),
+      );
+      await service.ingestVersion(versionId.toString(), 'tenant-a');
+    };
+
+    it('should unwrap attachments for a version stored as an email, passing the version and its bytes', async () => {
+      mockEmailAttachmentService.unwrapAttachments.mockResolvedValueOnce({
+        created: 1,
+        skippedReasons: [],
+      });
+
+      await ingestEmail();
+
+      expect(mockEmailAttachmentService.unwrapAttachments).toHaveBeenCalledTimes(1);
+      const [passedVersion, passedContent] = mockEmailAttachmentService.unwrapAttachments.mock
+        .calls[0] as [{ _id: Types.ObjectId }, Buffer];
+      expect(passedVersion._id).toBe(versionId);
+      expect(passedContent.toString('utf8')).toContain('From: a@b.example');
+    });
+
+    it('should fail the version and record the reason when unwrapping refuses the container', async () => {
+      // The refusal has to reach the same visible terminal state every other container failure
+      // reaches, rather than leaving a completed email whose attachments never arrived.
+      mockEmailAttachmentService.unwrapAttachments.mockRejectedValueOnce(
+        new HostileEmailException('Attachment declares a spreadsheet and carries PDF bytes'),
+      );
+
+      await expect(ingestEmail()).rejects.toBeInstanceOf(HostileEmailException);
+
+      expect(mockEvidenceChunkModel.insertMany).not.toHaveBeenCalled();
+      const [, update] = getFindOneAndUpdateCall(2);
+      expect(update).toEqual({
+        $set: {
+          ingestionStatus: 'failed',
+          ingestionFailureReason: 'Attachment declares a spreadsheet and carries PDF bytes',
+        },
+        $unset: { ingestionLeaseToken: '' },
+      });
+    });
+
+    it('should not reach the unwrapper for a version of any other content type', async () => {
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('%PDF-1.4 fixture bytes'),
+        contentType: PDF_MIME,
+        metadata: {},
+      });
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
+        buildVersion({ storageKey: stored.id }),
+      );
+      mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser([]));
+
+      await service.ingestVersion(versionId.toString(), 'tenant-a');
+
+      expect(mockEmailAttachmentService.unwrapAttachments).not.toHaveBeenCalled();
     });
   });
 
@@ -312,7 +435,40 @@ describe('IngestionService', () => {
     expect(finalizeFilter._id).toBe(versionId);
     expect(finalizeFilter.ingestionLeaseToken).toBeInstanceOf(Types.ObjectId);
     expect(finalizeUpdate).toEqual({
-      $set: { ingestionStatus: 'completed' },
+      $set: { ingestionStatus: 'completed', reducedFidelityReasons: [] },
+      $unset: { ingestionLeaseToken: '' },
+    });
+  });
+
+  it('should stamp reducedFidelityReasons from the parser onto the completed version', async () => {
+    const stored = await fakeDocumentStore.put({
+      content: Buffer.from('%PDF-1.4 fixture bytes'),
+      contentType: PDF_MIME,
+      metadata: {},
+    });
+    const version = buildVersion({ storageKey: stored.id });
+    mockDocumentVersionModel.findOne.mockResolvedValueOnce(version);
+    mockParserRegistry.resolve.mockReturnValueOnce(
+      buildStubParser(
+        [
+          {
+            text: 'Some extracted page text.',
+            locator: { kind: 'pdf-page', page: 1, extractorVersion: 'pdf-pdfjs-1' },
+            headingPath: [],
+          },
+        ],
+        ['Detected a likely multi-column layout on 1 of 1 page(s)'],
+      ),
+    );
+
+    await service.ingestVersion(versionId.toString(), 'tenant-a');
+
+    const [, finalizeUpdate] = getFindOneAndUpdateCall(2);
+    expect(finalizeUpdate).toEqual({
+      $set: {
+        ingestionStatus: 'completed',
+        reducedFidelityReasons: ['Detected a likely multi-column layout on 1 of 1 page(s)'],
+      },
       $unset: { ingestionLeaseToken: '' },
     });
   });
@@ -741,6 +897,138 @@ describe('IngestionService', () => {
     });
   });
 
+  /**
+   * The abandoned-attempt path: a Temporal activity that is cancelled — after its heartbeat
+   * timeout elapses, or when the workflow cancels it — aborts the signal it passed in
+   * (`src/worker/activities.ts`). Without that signal the attempt keeps running and the version
+   * stays `pending` with a live lease, which is what the last test in this block pins.
+   */
+  describe('abandoned attempt', () => {
+    const buildHangingParser = (): DocumentParser => ({
+      supports: [PDF_MIME],
+      parse: jest.fn(() => new Promise<ParsedDocument>(() => undefined)),
+    });
+
+    const storeHangingVersion = async (): Promise<void> => {
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('%PDF-slow'),
+        contentType: PDF_MIME,
+        metadata: {},
+      });
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
+        buildVersion({ storageKey: stored.id }),
+      );
+      mockParserRegistry.resolve.mockReturnValueOnce(buildHangingParser());
+    };
+
+    it('should record a failed status naming the abort reason when the signal fires mid-parse', async () => {
+      await storeHangingVersion();
+      const controller = new AbortController();
+
+      const pending = service.ingestVersion(versionId.toString(), 'tenant-a', controller.signal);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      controller.abort(new Error('activity cancelled'));
+
+      await expect(pending).rejects.toBeInstanceOf(IngestionAbandonedException);
+      // Recorded under the same lease-gated CAS every other terminal state uses, so a superseded
+      // attempt still cannot stamp a version a newer attempt owns.
+      const [failureFilter, failureUpdate] = getFindOneAndUpdateCall(2);
+      expect(failureFilter._id).toBe(versionId);
+      expect(failureFilter.ingestionLeaseToken).toBeInstanceOf(Types.ObjectId);
+      expect(failureUpdate).toEqual({
+        $set: {
+          ingestionStatus: 'failed',
+          ingestionFailureReason:
+            'Ingestion attempt was abandoned before it finished: activity cancelled',
+        },
+        $unset: { ingestionLeaseToken: '' },
+      });
+    });
+
+    // The abandoned work is not stopped, only let go of — so it settles later, with nothing left
+    // waiting on it. Its rejection must be swallowed rather than escaping as an unhandled
+    // rejection, and it must not overwrite the reason already recorded.
+    it('should swallow the abandoned work’s own later failure, leaving the abort reason recorded', async () => {
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('%PDF-slow'),
+        contentType: PDF_MIME,
+        metadata: {},
+      });
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
+        buildVersion({ storageKey: stored.id }),
+      );
+      mockParserRegistry.resolve.mockReturnValueOnce({
+        supports: [PDF_MIME],
+        parse: jest.fn(
+          () =>
+            new Promise<ParsedDocument>((_resolve, reject) => {
+              setTimeout(() => {
+                reject(new Error('parser failed after the attempt was abandoned'));
+              }, 5);
+            }),
+        ),
+      });
+      const controller = new AbortController();
+      const unhandled = jest.fn();
+      process.once('unhandledRejection', unhandled);
+
+      const pending = service.ingestVersion(versionId.toString(), 'tenant-a', controller.signal);
+      controller.abort(new Error('activity cancelled'));
+
+      await expect(pending).rejects.toBeInstanceOf(IngestionAbandonedException);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      process.off('unhandledRejection', unhandled);
+      expect(unhandled).not.toHaveBeenCalled();
+      const [, failureUpdate] = getFindOneAndUpdateCall(2);
+      expect(failureUpdate).toEqual({
+        $set: {
+          ingestionStatus: 'failed',
+          ingestionFailureReason:
+            'Ingestion attempt was abandoned before it finished: activity cancelled',
+        },
+        $unset: { ingestionLeaseToken: '' },
+      });
+      // Only the claim and the abort's own failure write — the late rejection recorded nothing.
+      expect(mockDocumentVersionModel.findOneAndUpdate).toHaveBeenCalledTimes(2);
+    });
+
+    it('should record a failed status when the signal is already aborted as the attempt starts', async () => {
+      await storeHangingVersion();
+      const controller = new AbortController();
+      controller.abort(new Error('activity cancelled before it began'));
+
+      await expect(
+        service.ingestVersion(versionId.toString(), 'tenant-a', controller.signal),
+      ).rejects.toBeInstanceOf(IngestionAbandonedException);
+
+      const [, failureUpdate] = getFindOneAndUpdateCall(2);
+      expect(failureUpdate).toEqual({
+        $set: {
+          ingestionStatus: 'failed',
+          ingestionFailureReason:
+            'Ingestion attempt was abandoned before it finished: activity cancelled before it began',
+        },
+        $unset: { ingestionLeaseToken: '' },
+      });
+    });
+
+    // The behaviour a caller gets with no signal, and the reason the activity now passes one: an
+    // attempt abandoned by its runtime never settles here, so nothing records a failure and the
+    // version keeps its `pending` status and its live lease — visible only to the reconciler.
+    it('should neither settle nor record anything when no signal is given and the attempt never finishes', async () => {
+      await storeHangingVersion();
+      const settled = jest.fn();
+
+      void service.ingestVersion(versionId.toString(), 'tenant-a').then(settled, settled);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(settled).not.toHaveBeenCalled();
+      // Exactly one write: `claimAttempt`. No terminal state was recorded.
+      expect(mockDocumentVersionModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('ingestion failure recording', () => {
     const buildFailingParser = (error: unknown): DocumentParser => ({
       supports: [PDF_MIME],
@@ -884,6 +1172,123 @@ describe('IngestionService', () => {
 
       expect(mockLogger.debug).toHaveBeenCalledWith(
         expect.stringContaining('failure recording superseded by a newer attempt'),
+      );
+    });
+  });
+
+  describe('recordFactExtractionFailure', () => {
+    it('should move a completed version to facts-failed, scoped to its tenant, and report the transition', async () => {
+      mockDocumentVersionModel.findOneAndUpdate.mockResolvedValueOnce(buildVersion());
+
+      const recorded = await service.recordFactExtractionFailure(
+        versionId.toString(),
+        'tenant-a',
+        'daily spend ceiling reached',
+      );
+
+      expect(recorded).toBe(true);
+      const [filter, update] = getFindOneAndUpdateCall(1);
+      // The `completed` predicate is the guard: a version already `failed`, `needs-ocr`, or
+      // re-claimed as `pending` by a newer attempt is left exactly as it is.
+      expect(filter).toEqual({
+        _id: versionId.toString(),
+        tenantId: 'tenant-a',
+        ingestionStatus: 'completed',
+      });
+      expect(update).toEqual({
+        $set: {
+          ingestionStatus: 'facts-failed',
+          ingestionFailureReason: 'daily spend ceiling reached',
+        },
+      });
+    });
+
+    it('should report no transition, and log it, when the version is not completed', async () => {
+      mockDocumentVersionModel.findOneAndUpdate.mockResolvedValueOnce(null);
+
+      const recorded = await service.recordFactExtractionFailure(
+        versionId.toString(),
+        'tenant-a',
+        'daily spend ceiling reached',
+      );
+
+      expect(recorded).toBe(false);
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        expect.stringContaining("was not 'completed' when its fact extraction failed"),
+      );
+    });
+
+    it('should throw DocumentVersionNotFoundException for a malformed id, without querying the model', async () => {
+      await expect(
+        service.recordFactExtractionFailure('not-an-object-id', 'tenant-a', 'reason'),
+      ).rejects.toBeInstanceOf(DocumentVersionNotFoundException);
+      expect(mockDocumentVersionModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('reconcileStaleAttempts', () => {
+    const now = new Date('2026-08-27T12:00:00.000Z');
+    const staleAfterMs = 10 * 60 * 1000;
+
+    it('should sweep only claimed, still-pending versions older than the threshold, across every tenant', async () => {
+      mockDocumentVersionModel.updateMany.mockResolvedValueOnce({ modifiedCount: 3 });
+
+      const swept = await service.reconcileStaleAttempts(staleAfterMs, now);
+
+      expect(swept).toBe(3);
+      const [filter, update] = (
+        mockDocumentVersionModel.updateMany as jest.Mock<
+          Promise<unknown>,
+          [Record<string, unknown>, Record<string, unknown>]
+        >
+      ).mock.calls[0];
+      // `ingestionLeaseToken` is what separates an abandoned attempt from a version legitimately
+      // waiting on a human approval: the gated version is `pending` with no token, because its
+      // ingest activity never ran, and must not be swept.
+      expect(filter).toEqual({
+        ingestionStatus: 'pending',
+        ingestionLeaseToken: { $exists: true },
+        updatedAt: { $lt: new Date('2026-08-27T11:50:00.000Z') },
+      });
+      // No `tenantId` predicate, deliberately: worker maintenance has no request to inherit a
+      // tenant from, and a version stuck in one tenant is invisible to every other.
+      expect(filter.tenantId).toBeUndefined();
+      expect(update).toEqual({
+        $set: {
+          ingestionStatus: 'failed',
+          ingestionFailureReason:
+            'No ingestion attempt reported progress within 600000ms of claiming this version; the attempt is presumed lost',
+        },
+        $unset: { ingestionLeaseToken: '' },
+      });
+    });
+
+    it('should default the reference time to now', async () => {
+      mockDocumentVersionModel.updateMany.mockResolvedValueOnce({ modifiedCount: 0 });
+      const before = Date.now();
+
+      await service.reconcileStaleAttempts(staleAfterMs);
+
+      const [filter] = (
+        mockDocumentVersionModel.updateMany as jest.Mock<
+          Promise<unknown>,
+          [{ updatedAt: { $lt: Date } }]
+        >
+      ).mock.calls[0];
+      expect(filter.updatedAt.$lt.getTime()).toBeGreaterThanOrEqual(before - staleAfterMs);
+      expect(filter.updatedAt.$lt.getTime()).toBeLessThanOrEqual(Date.now() - staleAfterMs);
+    });
+
+    // FAILS OPEN: a self-healing sweep must never throw out of the maintenance task that calls it
+    // — a failed pass costs the next interval, nothing more.
+    it('should swallow and log a write failure, reporting nothing swept', async () => {
+      mockDocumentVersionModel.updateMany.mockRejectedValueOnce(new Error('mongo unreachable'));
+
+      const swept = await service.reconcileStaleAttempts(staleAfterMs, now);
+
+      expect(swept).toBe(0);
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        'reconcileStaleAttempts failed: mongo unreachable',
       );
     });
   });

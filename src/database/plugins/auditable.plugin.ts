@@ -29,14 +29,46 @@ export const auditablePlugin =
       }
     });
 
-    schema.pre('findOneAndUpdate', function (this: Query<unknown, unknown>): void {
-      const userId = als.getStore()?.user;
-      if (userId) {
+    schema.pre(
+      ['findOneAndUpdate', 'updateOne', 'updateMany'],
+      function (this: Query<unknown, unknown>): void {
+        const userId = als.getStore()?.user;
+        if (!userId) {
+          return;
+        }
+
         this.set('updatedBy', userId);
+
+        // `$setOnInsert` only ever takes effect on the insert an upsert produces — injecting it
+        // on a call that cannot upsert would leave dead weight on every plain update this schema
+        // issues for no observable effect.
+        if (this.getOptions().upsert !== true) {
+          return;
+        }
 
         const update = this.getUpdate();
         if (update && !Array.isArray(update)) {
           update.$setOnInsert = { ...update.$setOnInsert, createdBy: userId };
+        }
+      },
+    );
+
+    schema.pre('insertMany', function (docs: unknown): void {
+      const userId = als.getStore()?.user;
+      if (!userId) {
+        return;
+      }
+
+      // `insertMany` hands the pre-hook the raw docs (never a `Document[]` yet), as a single
+      // object or an array depending on how the caller invoked it — every one of them is a new
+      // record by definition, so both fields are stamped the same way `save` stamps a new
+      // document, with no `isNew` branch to check.
+      const documents = Array.isArray(docs) ? docs : [docs];
+      for (const doc of documents) {
+        if (doc && typeof doc === 'object') {
+          const record = doc as Record<string, unknown>;
+          record.createdBy = userId;
+          record.updatedBy = userId;
         }
       }
     });

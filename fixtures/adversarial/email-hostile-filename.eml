@@ -1,0 +1,32 @@
+Return-Path: <dana.okonkwo@meridian-facilities.example>
+From: Dana Okonkwo <dana.okonkwo@meridian-facilities.example>
+To: Analytics Intake <intake@evidence-ops.example>
+Subject: Suite export
+Date: Tue, 04 Aug 2026 09:14:00 +0000
+Message-ID: <kestrel-point-q3-2026@meridian-facilities.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="evidence-ops-boundary-01"
+
+This is a multi-part message in MIME format.
+--evidence-ops-boundary-01
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Hi team,
+
+# Kestrel Point Q3
+
+The comps extract for Kestrel Point is attached. Occupancy held at the level we
+discussed and the suite detail is unchanged from the June pass.
+
+Dana
+
+--evidence-ops-boundary-01
+Content-Type: text/csv; name="../../../etc/passwd.csv"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="../../../etc/passwd.csv"
+
+U3VpdGU7TW9udGhseSBSZW50IChVU0QpO0xlYXNlIEV4cGlyeQoxMDE7NDIwMDsyMDI3LTAzLTMx
+CjEwMjszMTAwOzIwMjYtMTEtMzAKMTAzOzU2MDA7MjAyOC0wNi0zMAo=
+
+--evidence-ops-boundary-01--

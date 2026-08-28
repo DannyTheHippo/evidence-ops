@@ -3,6 +3,7 @@ import { getModelToken } from '@nestjs/mongoose';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { Types } from 'mongoose';
+import { environmentSchema } from '../../../../src/config/environment/environment.config';
 import { TypedConfigService } from '../../../../src/config/environment/typed-config.service';
 import { DocumentVersion } from '../../../../src/database/schemas/evidence/document-version/document-version.schema';
 import { EvidenceChunk } from '../../../../src/database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
@@ -11,12 +12,11 @@ import type { CanonicalEntityResolution } from '../../../../src/features/evidenc
 import { CanonicalEntityService } from '../../../../src/features/evidence/facts/canonical-entity.service';
 import { DocumentVersionNotFoundException } from '../../../../src/features/evidence/facts/exceptions/facts.exception';
 import { FactsService } from '../../../../src/features/evidence/facts/facts.service';
+import type { HarvestedAliasSubject } from '../../../../src/features/evidence/facts/harvest-parenthetical-aliases';
 import {
   ACTIVE_PACK_ID,
   ACTIVE_PACK_VERSION,
 } from '../../../../src/features/evidence/facts/metric-ontology';
-import { MetricPacksService } from '../../../../src/features/evidence/facts/metric-packs.service';
-import { CRE_PACK_V1 } from '../../../../src/features/evidence/facts/packs/cre.pack';
 import { PASS_COUNT } from '../../../../src/features/evidence/facts/prose-fact-extractor';
 import { ParserRegistry } from '../../../../src/features/evidence/ingestion/parser.registry';
 import type {
@@ -45,6 +45,14 @@ import { getMockTypedConfig } from '../../../utils/get-mock-typed-config';
  * observes the extraction pool at rest rather than mid-flush.
  */
 const flushMicrotasks = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+/**
+ * Extraction config exactly as a deployment that sets none of these variables gets it — parsed out
+ * of the real schema rather than restated as a literal, so a test asserting the shipped default
+ * asserts what ships. A hand-written `false` here would pin nothing: the test would supply the
+ * value it then checked.
+ */
+const SHIPPED_EXTRACTION_CONFIG = environmentSchema.parse({ NODE_ENV: 'test' }).extraction;
 
 /**
  * `ModelProvider` whose calls stay pending until `releaseAll()`, so a test can observe exactly
@@ -106,14 +114,11 @@ describe('FactsService', () => {
   // registry itself. Tests that care about canonicalization override the implementation per-call.
   const mockCanonicalEntityService = {
     resolveMany: jest.fn(),
-  } satisfies Record<keyof Pick<CanonicalEntityService, 'resolveMany'>, jest.Mock>;
-  // Every test in this suite runs a tenant with no authored `MetricPack` row, so extraction always
-  // resolves to the code default — `beforeEach` re-arms this to `CRE_PACK_V1` after each
-  // `resetAllMocks`, matching `MetricPacksService.resolveActive`'s own fallback.
-  const mockMetricPacksService = {
-    resolveActive: jest.fn(),
-  } satisfies Record<keyof Pick<MetricPacksService, 'resolveActive'>, jest.Mock>;
-
+    recordHarvestedAliases: jest.fn(),
+  } satisfies Record<
+    keyof Pick<CanonicalEntityService, 'resolveMany' | 'recordHarvestedAliases'>,
+    jest.Mock
+  >;
   const versionId = new Types.ObjectId();
   const documentId = new Types.ObjectId();
   const PDF_MIME = 'application/pdf';
@@ -149,7 +154,11 @@ describe('FactsService', () => {
   ];
 
   const buildService = async (
-    options: { chunkConcurrency?: number; modelProvider?: ModelProvider } = {},
+    options: {
+      chunkConcurrency?: number;
+      aliasHarvestAutoApply?: boolean;
+      modelProvider?: ModelProvider;
+    } = {},
   ): Promise<FactsService> => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -161,11 +170,16 @@ describe('FactsService', () => {
         { provide: MODEL_PROVIDER, useValue: options.modelProvider ?? fakeModelProvider },
         { provide: ParserRegistry, useValue: mockParserRegistry },
         { provide: CanonicalEntityService, useValue: mockCanonicalEntityService },
-        { provide: MetricPacksService, useValue: mockMetricPacksService },
         {
           provide: TypedConfigService,
           useValue: getMockTypedConfig({
-            extraction: { chunkConcurrency: options.chunkConcurrency ?? 2 },
+            extraction: {
+              ...SHIPPED_EXTRACTION_CONFIG,
+              chunkConcurrency:
+                options.chunkConcurrency ?? SHIPPED_EXTRACTION_CONFIG.chunkConcurrency,
+              aliasHarvestAutoApply:
+                options.aliasHarvestAutoApply ?? SHIPPED_EXTRACTION_CONFIG.aliasHarvestAutoApply,
+            },
           }),
         },
         { provide: AppLogger, useValue: mockLogger },
@@ -181,12 +195,12 @@ describe('FactsService', () => {
     mockLogger = getMockLogger();
     // `resetAllMocks` (afterEach, below) wipes this implementation along with every other mock's,
     // so it is re-armed here rather than only at declaration.
+    mockCanonicalEntityService.recordHarvestedAliases.mockResolvedValue(0);
     mockCanonicalEntityService.resolveMany.mockImplementation((rawNames: readonly string[]) =>
       Promise.resolve(
         rawNames.map((name): CanonicalEntityResolution => ({ name, matched: false })),
       ),
     );
-    mockMetricPacksService.resolveActive.mockResolvedValue(CRE_PACK_V1);
 
     service = await buildService();
   });
@@ -406,6 +420,67 @@ describe('FactsService', () => {
       });
       expect(mockExtractedFactModel.insertMany).not.toHaveBeenCalled();
     });
+
+    it('should append the ambiguous-header fidelity reason onto the version, even when the ambiguity leaves no facts to extract', async () => {
+      // Row 1 qualifies as a header (>= 2 non-empty cells, >= 2 distinct values, an occupied row
+      // after it) but repeats each value across two columns — the two-row-header shape
+      // `resolveHeaderRow` (sheet-header.ts) can only flag, not resolve on its own. Row 2 (the
+      // real column labels) is then read as data, so this sheet also produces zero facts — proving
+      // the reason reaches the version even on the empty-candidates branch.
+      const twoRowHeaderElements: ParsedElement[] = [
+        buildXlsxElement('A1', 'Sale'),
+        buildXlsxElement('B1', 'Sale'),
+        buildXlsxElement('C1', 'Metrics'),
+        buildXlsxElement('D1', 'Metrics'),
+        buildXlsxElement('A2', 'Property Name'),
+        buildXlsxElement('B2', 'Sale Date'),
+        buildXlsxElement('C2', 'Cap Rate'),
+        buildXlsxElement('D2', 'Occupancy'),
+        buildXlsxElement('A3', 'Northgate Business Park'),
+        buildXlsxElement('B3', '2025-01-01'),
+        buildXlsxElement('C3', '5.25%'),
+        buildXlsxElement('D3', '92%'),
+      ];
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('workbook-bytes'),
+        contentType: XLSX_MIME,
+        metadata: {},
+      });
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
+        buildVersion({ storageKey: stored.id }),
+      );
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+      mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser(twoRowHeaderElements));
+      mockEvidenceChunkModel.find.mockResolvedValueOnce([
+        {
+          _id: 'chunk-two-row-header',
+          locator: { kind: 'xlsx-region', sheetName: SHEET_NAME, range: 'A1:D10' },
+        },
+      ]);
+
+      const result = await service.extractFacts(versionId.toString(), 'default');
+
+      expect(result).toEqual({
+        factsCreated: 0,
+        alreadyExtracted: false,
+        skippedChunkCount: 0,
+        factKeys: [],
+      });
+      expect(mockDocumentVersionModel.updateOne).toHaveBeenCalledWith(
+        { _id: versionId, tenantId: 'default' },
+        {
+          $addToSet: {
+            reducedFidelityReasons: {
+              $each: [
+                expect.stringContaining(
+                  `Sheet '${SHEET_NAME}': row 1 qualifies as the header but repeats a value`,
+                ),
+              ],
+            },
+          },
+        },
+      );
+    });
   });
 
   describe('prose path', () => {
@@ -448,7 +523,9 @@ describe('FactsService', () => {
       mockExtractedFactModel.find.mockResolvedValueOnce([]);
       mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser([buildProseElement()]));
       const chunkId = 'chunk-prose-1';
-      const chunkText = 'The cap rate is 5.25% per the offering memo.';
+      // Names the entity as well as the value: the extractor takes `factKey.entity` from a span of
+      // this text, so a chunk that never names the property produces no facts at all.
+      const chunkText = 'For Northgate Business Park the cap rate is 5.25% per the offering memo.';
       mockEvidenceChunkModel.find.mockResolvedValueOnce([
         { _id: chunkId, text: chunkText, locator: { kind: 'pdf-page', page: 1 } },
       ]);
@@ -456,7 +533,7 @@ describe('FactsService', () => {
         output: {
           facts: [
             {
-              entity: 'Northgate Business Park',
+              entityQuote: 'Northgate Business Park',
               metric: 'cap_rate',
               periodText: '',
               observedAtText: '',
@@ -466,7 +543,7 @@ describe('FactsService', () => {
               confidence: 0.9,
             },
             {
-              entity: 'Northgate Business Park',
+              entityQuote: 'Northgate Business Park',
               metric: 'cap_rate',
               periodText: '',
               observedAtText: '',
@@ -577,7 +654,9 @@ describe('FactsService', () => {
       mockExtractedFactModel.find.mockResolvedValueOnce([]);
       mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser([buildProseElement()]));
       const chunkId = 'chunk-prose-flaky';
-      const chunkText = 'The cap rate is 5.25% per the offering memo.';
+      // Names the entity as well as the value: the extractor takes `factKey.entity` from a span of
+      // this text, so a chunk that never names the property produces no facts at all.
+      const chunkText = 'For Northgate Business Park the cap rate is 5.25% per the offering memo.';
       mockEvidenceChunkModel.find.mockResolvedValueOnce([
         { _id: chunkId, text: chunkText, locator: { kind: 'pdf-page', page: 1 } },
       ]);
@@ -588,7 +667,7 @@ describe('FactsService', () => {
         output: {
           facts: [
             {
-              entity: 'Northgate Business Park',
+              entityQuote: 'Northgate Business Park',
               metric: 'cap_rate',
               periodText: '',
               observedAtText: '',
@@ -614,17 +693,77 @@ describe('FactsService', () => {
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.stringContaining(`Chunk '${chunkId}' had only 1 of 3 successful extraction passes`),
       );
+      // The chunk-level skip already says every group is gone; repeating each of them as a
+      // dropped group would add noise, not information.
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining('dropped fact group'),
+      );
+    });
+
+    it('should report a group no two passes agreed on, rather than losing it silently', async () => {
+      // The dominant prose loss path made visible: three passes propose the same
+      // `(entity, metric, period)` with values further apart than the metric's tolerance, so no
+      // two of them cluster, the group drops, and the only trace it ever existed is this warn.
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('%PDF-1.4 fixture bytes'),
+        contentType: PDF_MIME,
+        metadata: {},
+      });
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
+        buildVersion({ storageKey: stored.id }),
+      );
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+      mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser([buildProseElement()]));
+      const chunkId = 'chunk-prose-disagreement';
+      const chunkText = 'For Northgate Business Park the cap rate is 5.25% per the offering memo.';
+      mockEvidenceChunkModel.find.mockResolvedValueOnce([
+        { _id: chunkId, text: chunkText, locator: { kind: 'pdf-page', page: 1 } },
+      ]);
+      // 25bp tolerance on cap_rate: 5.25 / 7.4 / 9.9 percent are pairwise far outside it.
+      for (const amount of [5.25, 7.4, 9.9]) {
+        fakeModelProvider.enqueueResult({
+          output: {
+            facts: [
+              {
+                entityQuote: 'Northgate Business Park',
+                metric: 'cap_rate',
+                periodText: '',
+                observedAtText: '',
+                amount,
+                unit: 'percent',
+                quote: 'cap rate is 5.25%',
+                confidence: 0.9,
+              },
+            ],
+          },
+        });
+      }
+
+      const result = await service.extractFacts(versionId.toString(), 'default');
+
+      expect(result).toEqual({
+        factsCreated: 0,
+        alreadyExtracted: false,
+        // Not a skipped chunk: all 3 passes succeeded, they simply did not agree.
+        skippedChunkCount: 0,
+        factKeys: [],
+      });
+      expect(mockExtractedFactModel.insertMany).not.toHaveBeenCalled();
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        `Chunk '${chunkId}' dropped fact group 'northgate business park::cap_rate::undated': 1 of 3 passes agreed`,
+      );
     });
 
     /**
      * Chunk texts and the unanimous 3-pass model output for each, for the two multi-chunk tests
      * below. Both chunks carry the same metric and differ by entity so neither can be mistaken
-     * for the other's candidate, and each quote is an exact substring of its own chunk's text —
-     * the grounding check is what decides whether a candidate survives.
+     * for the other's candidate, and each chunk states both its own quote and its own entity
+     * verbatim — grounding is what decides whether a candidate survives, and it covers the entity
+     * span as well as the value's quote.
      */
     const CHUNK_A = {
       id: 'chunk-prose-a',
-      text: 'The cap rate is 5.25% per the offering memo.',
+      text: 'For Northgate Business Park the cap rate is 5.25% per the offering memo.',
       quote: 'cap rate is 5.25%',
       entity: 'Northgate Business Park',
       amount: 5.25,
@@ -641,7 +780,7 @@ describe('FactsService', () => {
       output: {
         facts: [
           {
-            entity: chunk.entity,
+            entityQuote: chunk.entity,
             metric: 'cap_rate',
             periodText: '',
             observedAtText: '',
@@ -695,10 +834,6 @@ describe('FactsService', () => {
       expect(byChunkId.get(CHUNK_B.id)?.rawText).toBe(CHUNK_B.quote);
       expect(byChunkId.get(CHUNK_B.id)?.factKey.entity).toBe(CHUNK_B.entity);
       expect(result.factsCreated).toBe(2);
-      // Resolved once per extraction, not once per chunk — two chunks' worth of passes must not
-      // have queried the tenant's active pack twice.
-      expect(mockMetricPacksService.resolveActive).toHaveBeenCalledTimes(1);
-      expect(mockMetricPacksService.resolveActive).toHaveBeenCalledWith('default');
     });
 
     it('should start no more chunks at once than config.extraction.chunkConcurrency allows', async () => {
@@ -757,7 +892,7 @@ describe('FactsService', () => {
       output: {
         facts: [
           {
-            entity,
+            entityQuote: entity,
             metric: 'cap_rate',
             periodText: '',
             observedAtText: '',
@@ -818,17 +953,23 @@ describe('FactsService', () => {
         );
       }
       const canonicalName = 'Kestrel Point Logistics Center';
-      mockCanonicalEntityService.resolveMany.mockImplementationOnce((rawNames: readonly string[]) =>
+      mockCanonicalEntityService.resolveMany.mockImplementation((rawNames: readonly string[]) =>
         Promise.resolve(rawNames.map(() => ({ name: canonicalName, matched: true }))),
       );
       mockExtractedFactModel.insertMany.mockResolvedValueOnce([]);
 
       await service.extractFacts(versionId.toString(), 'default');
 
-      // One batched call for both candidates, not one lookup per fact.
-      expect(mockCanonicalEntityService.resolveMany).toHaveBeenCalledTimes(1);
+      // One batched call per chunk — resolution runs inside the chunk's extraction, ahead of the
+      // agreement between its passes, so it cannot be deferred to a single end-of-document lookup.
+      // Each call carries every pass's candidate at once, not one lookup per pass.
+      expect(mockCanonicalEntityService.resolveMany).toHaveBeenCalledTimes(2);
       expect(mockCanonicalEntityService.resolveMany).toHaveBeenCalledWith(
-        [aliasChunk.rawEntity, canonicalChunk.rawEntity],
+        Array.from({ length: PASS_COUNT }, () => aliasChunk.rawEntity),
+        'default',
+      );
+      expect(mockCanonicalEntityService.resolveMany).toHaveBeenCalledWith(
+        Array.from({ length: PASS_COUNT }, () => canonicalChunk.rawEntity),
         'default',
       );
       const insertManyMock = mockExtractedFactModel.insertMany as jest.Mock<
@@ -996,6 +1137,119 @@ describe('FactsService', () => {
     expect(mockExtractedFactModel.deleteMany).toHaveBeenCalledWith({
       documentVersionId: versionId,
       tenantId: 'default',
+    });
+  });
+
+  describe('harvesting in-document alias definitions', () => {
+    // A cell whose text states a parenthetical definition. Sits below the fixture's data row, so
+    // it adds a definition to harvest without adding a fact to extract.
+    const definitionElements: ParsedElement[] = [
+      ...xlsxElements,
+      buildXlsxElement('A4', 'The asset is Northgate Business Park (the "Property").'),
+    ];
+
+    const arrangeXlsxVersion = async (elements: ParsedElement[] = definitionElements) => {
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('workbook-bytes'),
+        contentType: XLSX_MIME,
+        metadata: {},
+      });
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
+        buildVersion({ storageKey: stored.id }),
+      );
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+      mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser(elements));
+      mockEvidenceChunkModel.find.mockResolvedValueOnce([
+        {
+          _id: 'chunk-xlsx-region-1',
+          locator: { kind: 'xlsx-region', sheetName: SHEET_NAME, range: 'A1:C10' },
+        },
+      ]);
+      mockExtractedFactModel.insertMany.mockResolvedValueOnce([]);
+    };
+
+    /**
+     * The two-step enable, pinned. `SHIPPED_EXTRACTION_CONFIG` is parsed from the real environment
+     * schema, so this asserts the default a deployment actually gets rather than a value the test
+     * supplies: flipping `EXTRACTION_ALIAS_HARVEST_AUTO_APPLY`'s default turns it red. What it
+     * pins is inertness — with the flag off, an alias is recorded as a proposal, and
+     * `CanonicalEntity`'s pre-validate hook folds only `applied` entries into `aliasesNormalized`,
+     * so nothing this call writes changes what resolves.
+     */
+    it('should record a document-stated alias as a proposal under the shipped configuration', async () => {
+      await arrangeXlsxVersion();
+
+      await service.extractFacts(versionId.toString(), 'default');
+
+      expect(mockCanonicalEntityService.recordHarvestedAliases).toHaveBeenCalledWith(
+        [
+          {
+            // Recast rather than bare `expect.arrayContaining(...)` inside the object literal —
+            // its `any`-typed return trips `no-unsafe-assignment` wherever it lands in one.
+            subjectCandidates: expect.arrayContaining([
+              {
+                name: 'Northgate Business Park',
+                quote: 'Northgate Business Park (the "Property")',
+              },
+            ]) as HarvestedAliasSubject[],
+            aliases: ['Property', 'the Property'],
+            locator: definitionElements[4].locator,
+          },
+        ],
+        'default',
+        versionId,
+        false,
+      );
+    });
+
+    it('should harvest without a model call', async () => {
+      await arrangeXlsxVersion();
+
+      await service.extractFacts(versionId.toString(), 'default');
+
+      expect(mockCanonicalEntityService.recordHarvestedAliases).toHaveBeenCalledTimes(1);
+      expect(fakeModelProvider.calls).toEqual([]);
+    });
+
+    it('should apply harvested aliases once an operator enables auto-application', async () => {
+      service = await buildService({ aliasHarvestAutoApply: true });
+      await arrangeXlsxVersion();
+
+      await service.extractFacts(versionId.toString(), 'default');
+
+      expect(mockCanonicalEntityService.recordHarvestedAliases).toHaveBeenCalledWith(
+        expect.anything(),
+        'default',
+        versionId,
+        true,
+      );
+    });
+
+    // Fails OPEN: harvesting enriches the registry, extraction is the work it runs inside.
+    it('should extract facts anyway when the registry write fails', async () => {
+      mockCanonicalEntityService.recordHarvestedAliases.mockRejectedValueOnce(
+        new Error('write concern failed'),
+      );
+      await arrangeXlsxVersion();
+
+      const result = await service.extractFacts(versionId.toString(), 'default');
+
+      expect(result.factsCreated).toBe(1);
+      expect(mockExtractedFactModel.insertMany).toHaveBeenCalledTimes(1);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('Alias harvesting failed'),
+      );
+    });
+
+    it('should not harvest again for a version that was already extracted', async () => {
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(buildVersion());
+      mockExtractedFactModel.find.mockResolvedValueOnce([
+        { factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: 'undated' } },
+      ]);
+
+      await service.extractFacts(versionId.toString(), 'default');
+
+      expect(mockCanonicalEntityService.recordHarvestedAliases).not.toHaveBeenCalled();
     });
   });
 });

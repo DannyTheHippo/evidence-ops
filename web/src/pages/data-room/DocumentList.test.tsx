@@ -503,6 +503,53 @@ describe('DocumentList', () => {
       ).toBe(true);
     });
 
+    it('offers facts-failed as its own filter and badges it as a caution, not a rejection', async () => {
+      const factsFailedDoc = {
+        id: 'doc-3',
+        title: 'Northgate Rent Roll',
+        sourceKind: 'xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        currentVersion: {
+          id: 'v-3',
+          versionNumber: 1,
+          sha256: 'd'.repeat(64),
+          sizeBytes: 300,
+          ingestionStatus: 'facts-failed',
+          ingestionFailureReason: 'Fact extraction failed: model returned no parseable output',
+          reducedFidelityReasons: [],
+          createdAt: new Date().toISOString(),
+        },
+        createdAt: new Date().toISOString(),
+      };
+
+      const fetchMock = vi.fn((url: string) => {
+        if (url === '/api/v1/documents?skip=0&limit=20') {
+          return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+        }
+        if (url === '/api/v1/documents?skip=0&limit=20&ingestionStatus=facts-failed') {
+          return Promise.resolve(jsonResponse({ docs: [factsFailedDoc], count: 1 }));
+        }
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      renderList();
+      await screen.findByText('No documents yet');
+
+      fireEvent.change(screen.getByLabelText('Ingestion status'), {
+        target: { value: 'facts-failed' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+
+      expect(await screen.findByText('Northgate Rent Roll')).toBeInTheDocument();
+      // Its chunks are committed and citable — a caution, not the rejection tone a failed
+      // ingestion carries.
+      expect(screen.getByText('facts-failed').className).toContain('badge--possible');
+      expect(
+        screen.getByText('Fact extraction failed: model returned no parseable output'),
+      ).toBeInTheDocument();
+    });
+
     it('keeps polling while any version is pending, and stops once none is', async () => {
       vi.useFakeTimers();
       const pendingDoc = {

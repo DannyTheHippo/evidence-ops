@@ -55,6 +55,7 @@ interface DocumentVersionBody {
   sha256: string;
   sizeBytes: number;
   ingestionStatus: string;
+  reducedFidelityReasons: string[];
   createdAt: string;
 }
 
@@ -230,7 +231,15 @@ describe('Documents (e2e)', () => {
     // own default, not omitted from the payload.
     expect(body.sourceClass).toBe('unclassified');
     expect(Object.keys(body.currentVersion).sort()).toEqual(
-      ['id', 'versionNumber', 'sha256', 'sizeBytes', 'ingestionStatus', 'createdAt'].sort(),
+      [
+        'id',
+        'versionNumber',
+        'sha256',
+        'sizeBytes',
+        'ingestionStatus',
+        'reducedFidelityReasons',
+        'createdAt',
+      ].sort(),
     );
     expect(JSON.stringify(body)).not.toMatch(/storageKey/i);
 
@@ -260,7 +269,15 @@ describe('Documents (e2e)', () => {
      * level.
      */
     expect(Object.keys((uploaded.body as DocumentBody).currentVersion).sort()).toEqual(
-      ['id', 'versionNumber', 'sha256', 'sizeBytes', 'ingestionStatus', 'createdAt'].sort(),
+      [
+        'id',
+        'versionNumber',
+        'sha256',
+        'sizeBytes',
+        'ingestionStatus',
+        'reducedFidelityReasons',
+        'createdAt',
+      ].sort(),
     );
 
     /**
@@ -303,9 +320,64 @@ describe('Documents (e2e)', () => {
         'sizeBytes',
         'ingestionStatus',
         'ingestionFailureReason',
+        'reducedFidelityReasons',
         'createdAt',
       ].sort(),
     );
+
+    // `facts-failed` is the partial-success state: chunks committed and searchable, facts never
+    // extracted (`IngestionService.recordFactExtractionFailure`). It reaches the API through the
+    // same exposed field, so it is asserted through the same route rather than trusted to the
+    // union type, which no runtime gate checks.
+    await documentVersionModel.updateOne(
+      { _id: versionId },
+      {
+        ingestionStatus: 'facts-failed',
+        ingestionFailureReason: 'daily spend ceiling reached',
+      },
+    );
+
+    const factsFailed = await request(getTestServer(app))
+      .get(`/api/v1/documents/${documentId}`)
+      .set('Cookie', cookie);
+    const factsFailedVersion = (factsFailed.body as DocumentBody).currentVersion;
+
+    expect(factsFailedVersion.ingestionStatus).toBe('facts-failed');
+    expect(
+      (factsFailedVersion as DocumentVersionBody & { ingestionFailureReason?: string })
+        .ingestionFailureReason,
+    ).toBe('daily spend ceiling reached');
+  });
+
+  it('exposes reducedFidelityReasons — empty by default, populated once ingestion records a fidelity loss', async () => {
+    const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, {
+      title: 'Reduced Fidelity Reasons',
+    });
+    const documentId = (uploaded.body as DocumentBody).id;
+    const versionId = (uploaded.body as DocumentBody).currentVersion.id;
+
+    // Unlike `ingestionFailureReason`, this field always carries a key (an empty array, not an
+    // omitted one) — `@Expose()` only drops a field whose value is `undefined`, and the schema
+    // default is `[]`, never `undefined`.
+    expect((uploaded.body as DocumentBody).currentVersion.reducedFidelityReasons).toEqual([]);
+
+    await documentVersionModel.updateOne(
+      { _id: versionId },
+      {
+        reducedFidelityReasons: [
+          'Document has 3 page(s) but no extractable text on any of them; falling back to OCR-only extraction for those pages',
+        ],
+      },
+    );
+
+    const detail = await request(getTestServer(app))
+      .get(`/api/v1/documents/${documentId}`)
+      .set('Cookie', cookie);
+    const version = (detail.body as DocumentBody).currentVersion;
+
+    expect(version.reducedFidelityReasons).toEqual([
+      'Document has 3 page(s) but no extractable text on any of them; falling back to OCR-only extraction for those pages',
+    ]);
   });
 
   it('does not create a second version when the same bytes are re-uploaded', async () => {
@@ -619,6 +691,30 @@ describe('Documents (e2e)', () => {
       expect(response.status).toBe(200);
       const ids = body.docs.map((doc) => doc.id);
       expect(ids).toContain(needsOcrDoc._id.toString());
+      expect(ids).not.toContain(completedDoc._id.toString());
+    });
+
+    // The corpus-health case the new state exists for: chunks searchable, no facts extracted. A
+    // status the filter's `@IsIn` gate did not accept would 400 here rather than list anything.
+    it('returns a facts-failed current version and excludes a completed document', async () => {
+      const factsFailedDoc = await seedDocumentWithVersion(
+        `Facts Failed Fixture ${new Types.ObjectId().toString()}`,
+        { ingestionStatus: 'facts-failed' },
+      );
+      const completedDoc = await seedDocumentWithVersion(
+        `Completed Beside Facts Failed ${new Types.ObjectId().toString()}`,
+        { ingestionStatus: 'completed' },
+      );
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/documents')
+        .query({ ingestionStatus: 'facts-failed' })
+        .set('Cookie', cookie);
+      const body = response.body as { docs: DocumentBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      const ids = body.docs.map((doc) => doc.id);
+      expect(ids).toContain(factsFailedDoc._id.toString());
       expect(ids).not.toContain(completedDoc._id.toString());
     });
 

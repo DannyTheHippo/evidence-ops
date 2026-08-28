@@ -9,8 +9,16 @@ export const MCP_SERVER_INFO = { name: `${packageJSON.name}-mcp`, version: packa
  *  `POST`/`GET`/`DELETE`. */
 export const MCP_ROUTE_PATH = '/mcp';
 
-/** Fixed-window width for `McpServerService.checkRateLimit`. */
+/** Width of the interval `McpServerService.checkRateLimit` bounds: its budget applies to every
+ *  interval this wide, not only to consecutive ones. */
 export const MCP_RATE_LIMIT_WINDOW_MS = 60_000;
+
+/** Upper bound on how many keys `McpServerService`'s rolling-window sweep visits per call — see
+ *  that method's own doc comment for why a persistent cursor bounds this instead of a whole-map
+ *  walk. Comfortably above the key count either limiter's own tests exercise, so a small map is
+ *  still fully swept in one call; comfortably below any key count a flood could reach, so a large
+ *  map never turns one call's bookkeeping into the thing the limiter exists to bound. */
+export const MCP_RATE_LIMIT_SWEEP_BATCH_SIZE = 64;
 
 /**
  * `express.json()` body-size ceiling for `MCP_ROUTE_PATH`, set explicitly rather than left to

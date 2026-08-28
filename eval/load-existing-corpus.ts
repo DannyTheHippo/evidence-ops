@@ -21,8 +21,8 @@ import type { IngestedFixture, IngestFixturesResult } from './ingest-fixtures';
 
 /**
  * Reuse-path counterpart to `ingestFixtures`: rebuilds the same `IngestFixturesResult` shape from
- * rows already in Mongo instead of re-ingesting, so `run.ts`'s downstream locator-overlap and
- * retrieval-comparison code stays untouched by which path produced it.
+ * rows already in Mongo instead of re-ingesting, so `run.ts`'s downstream locator-overlap code
+ * stays untouched by which path produced it.
  *
  * Joins `document_versions` to `documents` by `documentId` rather than reading
  * `Document.currentVersionId` — a chunk can reference *any* version a document has ever had (the

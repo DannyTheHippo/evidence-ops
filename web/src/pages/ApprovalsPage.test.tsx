@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clearSession } from '../lib/auth';
@@ -9,6 +9,16 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+// A fetch response the test releases by hand, so a response can be made to land after a later
+// one already replaced it — the ordering a wall-clock delay can only approximate.
+function deferredResponse(body: unknown): { response: Promise<Response>; release: () => void } {
+  let release!: () => void;
+  const response = new Promise<Response>((resolve) => {
+    release = () => resolve(jsonResponse(body));
+  });
+  return { response, release };
 }
 
 const admin = {
@@ -559,5 +569,85 @@ describe('ApprovalsPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'View run' }));
 
     expect(await screen.findByText('No run found for this workflow.')).toBeInTheDocument();
+  });
+
+  it('guards against a double submit between the click inside the dialog and the button becoming disabled', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      const routes: Record<string, () => Response> = {
+        '/api/v1/auth/me': () => jsonResponse(admin),
+        '/api/v1/approvals?skip=0&limit=20&state=pending': () =>
+          jsonResponse({ docs: [pendingApproval], count: 1 }),
+        '/api/v1/approvals/approval-1/decision': () =>
+          jsonResponse({ ...pendingApproval, state: 'approved', decidedBy: admin.email }),
+      };
+      const handler = routes[url];
+      if (!handler) return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      return Promise.resolve(handler());
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+    const dialog = screen.getByRole('dialog', { name: 'Approve this approval' });
+    const confirmButton = within(dialog).getByRole('button', { name: 'Approve' });
+    fireEvent.click(confirmButton);
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    expect(
+      fetchMock.mock.calls.filter(([url]) => url === '/api/v1/approvals/approval-1/decision'),
+    ).toHaveLength(1);
+  });
+
+  it('ignores a stale approvals-list response that resolves after a newer filter change replaced it', async () => {
+    const stalePendingApproval = {
+      ...pendingApproval,
+      id: 'approval-stale',
+      summary: 'Stale pending decision.',
+    };
+    const freshApprovedApproval = {
+      ...pendingApproval,
+      id: 'approval-fresh',
+      state: 'approved' as const,
+      summary: 'Fresh approved decision.',
+    };
+    const stalePending = deferredResponse({ docs: [stalePendingApproval], count: 1 });
+
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/auth/me') return Promise.resolve(jsonResponse(admin));
+      if (url === '/api/v1/approvals?skip=0&limit=20&state=pending') return stalePending.response;
+      if (url === '/api/v1/approvals?skip=0&limit=20&state=approved') {
+        return Promise.resolve(jsonResponse({ docs: [freshApprovedApproval], count: 1 }));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    expect(screen.getByText('Loading approvals…')).toBeInTheDocument();
+
+    // Applies a new filter — and so a new fetch — before the initial 'pending' request above has
+    // resolved, exercising the list effect's own cleanup rather than a wall-clock race.
+    fireEvent.change(screen.getByLabelText('State'), { target: { value: 'approved' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+
+    expect(await screen.findByText(freshApprovedApproval.summary)).toBeInTheDocument();
+
+    // act's async exit crosses a macrotask boundary, which drains the released response's whole
+    // promise chain — no timer, so no wall-clock race.
+    await act(async () => {
+      stalePending.release();
+      await stalePending.response;
+    });
+
+    // The stale 'pending' response landing after the 'approved' filter was already applied must
+    // not have clobbered it.
+    expect(screen.getByText(freshApprovedApproval.summary)).toBeInTheDocument();
+    expect(screen.queryByText(stalePendingApproval.summary)).not.toBeInTheDocument();
   });
 });

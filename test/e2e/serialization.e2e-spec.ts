@@ -229,4 +229,65 @@ describe('Serialization (e2e)', () => {
     expect(Object.keys(body)).toContain('withdrawnCitedDocVersionIds');
     expect(body.withdrawnCitedDocVersionIds).toEqual([withdrawnVersion._id.toString()]);
   });
+
+  // Regression for the grounding-gate persistence fix: `outcome.claims` on a persisted `answered`
+  // Answer is the gate's own survivor set, never a model claim the gate already dropped — this
+  // seeds an Answer the way `groundingCheck`/`AnswerPersistenceService` now produce one (one
+  // surviving claim, one dropped, `verifiedClaimCount` below `totalClaimCount`) and asserts the
+  // response only ever surfaces the survivor, with the exact `outcome` key set catching a
+  // dropped-claim field re-added with no @Expose().
+  it('serializes an answered outcome with 0 < verifiedClaimCount < totalClaimCount to only the surviving claim, never the dropped one', async () => {
+    const { cookie, tenantId } = await registerTestUser(app, {
+      email: 'serialization-partial-verification-e2e@example.com',
+      password: 'correct-horse-battery',
+    });
+
+    const answerModel = app.get<Model<AnswerDocument>>(getModelToken(Answer.name));
+
+    const survivingCitation: Citation = {
+      docVersionId: 'version-surviving',
+      sha256: 'a'.repeat(64),
+      chunkId: 'chunk-surviving',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 1 },
+      quote: 'the surviving citation quote',
+    };
+    const seeded = await answerModel.create({
+      tenantId,
+      questionText: 'What is the cap rate and the vacancy rate?',
+      runStatus: 'completed',
+      outcome: {
+        kind: 'answered',
+        claims: [{ statement: 'The cap rate is 6.1%.', citations: [survivingCitation] }],
+      },
+      claims: [{ statement: 'The cap rate is 6.1%.', citations: [survivingCitation] }],
+      claimCoverage: 0.5,
+      verificationReport: {
+        verifiedClaimCount: 1,
+        totalClaimCount: 2,
+        droppedClaims: [
+          { statement: 'The vacancy rate is 4%.', reason: 'quote did not match the source chunk' },
+        ],
+      },
+    });
+
+    const response = await request(getTestServer(app))
+      .get(`/api/v1/answers/${seeded._id.toString()}`)
+      .set('Cookie', cookie);
+    const body = response.body as {
+      outcome: { kind: string; claims: Array<{ statement: string }> };
+      citations: Citation[];
+      verificationReport: { verifiedClaimCount: number; totalClaimCount: number };
+    };
+
+    expect(response.status).toBe(200);
+    expect(Object.keys(body.outcome).sort()).toEqual(['kind', 'claims'].sort());
+    expect(body.outcome.claims).toHaveLength(1);
+    expect(body.outcome.claims[0].statement).toBe('The cap rate is 6.1%.');
+    expect(body.outcome.claims.map((claim) => claim.statement)).not.toContain(
+      'The vacancy rate is 4%.',
+    );
+    expect(body.citations).toEqual([survivingCitation]);
+    expect(body.verificationReport.verifiedClaimCount).toBe(1);
+    expect(body.verificationReport.totalClaimCount).toBe(2);
+  });
 });

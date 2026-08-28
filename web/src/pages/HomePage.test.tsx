@@ -52,6 +52,18 @@ const documentNeedsOcr = {
   },
 };
 
+const documentFactsFailed = {
+  ...documentOk,
+  id: 'doc-4',
+  title: 'Northgate Rent Roll.xlsx',
+  currentVersion: {
+    ...documentOk.currentVersion,
+    id: 'version-4',
+    ingestionStatus: 'facts-failed',
+    ingestionFailureReason: 'Fact extraction failed: model returned no parseable output',
+  },
+};
+
 const sourceOk = {
   id: 'source-1',
   name: 'Deal Room Inbox',
@@ -141,14 +153,15 @@ interface RouteOverrides {
   failedDocuments?: () => Response;
   failedSources?: () => Response;
   needsOcrDocuments?: () => Response;
+  factsFailedDocuments?: () => Response;
   answers?: () => Response;
 }
 
 // Every list route is keyed by its exact URL, query string included — a stub that only
 // matched by path would silently accept a response from the wrong call. `documents`/`sources`
 // feed only the first-run checklist and empty-tenant check; `failedDocuments`/`failedSources`/
-// `needsOcrDocuments` feed corpus health, through the server's own status-filtered queries rather
-// than a client-side scan of the unfiltered page.
+// `needsOcrDocuments`/`factsFailedDocuments` feed corpus health, through the server's own
+// status-filtered queries rather than a client-side scan of the unfiltered page.
 function stubFetch(overrides: RouteOverrides = {}): ReturnType<typeof vi.fn> {
   const routes: Record<string, () => Response> = {
     '/api/v1/approvals?limit=5&state=pending':
@@ -165,6 +178,8 @@ function stubFetch(overrides: RouteOverrides = {}): ReturnType<typeof vi.fn> {
       overrides.failedSources ?? (() => jsonResponse({ docs: [], count: 0 })),
     '/api/v1/documents?limit=100&ingestionStatus=needs-ocr':
       overrides.needsOcrDocuments ?? (() => jsonResponse({ docs: [], count: 0 })),
+    '/api/v1/documents?limit=100&ingestionStatus=facts-failed':
+      overrides.factsFailedDocuments ?? (() => jsonResponse({ docs: [], count: 0 })),
     '/api/v1/answers?limit=5':
       overrides.answers ?? (() => jsonResponse({ docs: [answered], count: 1 })),
   };
@@ -254,11 +269,51 @@ describe('HomePage', () => {
     renderPage();
 
     expect(
-      await screen.findByText('1 ingestion failures · 1 sync failures · 5 need OCR'),
+      await screen.findByText(
+        '1 ingestion failures · 1 sync failures · 5 need OCR · 0 without extracted facts',
+      ),
     ).toBeInTheDocument();
     // The count in the card head is the whole surface for this status — no itemized row, unlike
     // an actual ingestion failure.
     expect(screen.queryByText('Scanned Site Plan.pdf')).not.toBeInTheDocument();
+  });
+
+  it('surfaces a facts-failed document as its own corpus-health row, cautioned rather than rejected', async () => {
+    stubFetch({
+      factsFailedDocuments: () => jsonResponse({ docs: [documentFactsFailed], count: 2 }),
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('Northgate Rent Roll.xlsx')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Northgate Rent Roll.xlsx' })).toHaveAttribute(
+      'href',
+      '/documents/doc-4',
+    );
+    expect(
+      screen.getByText(/Fact extraction failed: model returned no parseable output/),
+    ).toBeInTheDocument();
+
+    // The document is searchable and its chunks are citable, so the row carries the caution tone,
+    // not the 'rejected' tone an ingestion failure carries.
+    expect(screen.getByText('No facts extracted').className).toContain('badge--possible');
+
+    expect(
+      screen.getByText(
+        '0 ingestion failures · 0 sync failures · 0 need OCR · 2 without extracted facts',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('leaves the corpus-health queue empty when nothing failed, extracted no facts, or fell out of sync', async () => {
+    stubFetch();
+
+    renderPage();
+
+    expect(
+      await screen.findByText('No ingestion, extraction or sync failures'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('No facts extracted')).not.toBeInTheDocument();
   });
 
   it('surfaces a failure older than the newest-100 window, invisible to the unfiltered fetch that only feeds the checklist', async () => {

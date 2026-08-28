@@ -19,11 +19,11 @@ export const MIN_CONFLICTING_FACTS = 2;
 // stay `resolved` | `rejected` | `timed_out`). It marks a conflict whose disagreeing facts no
 // longer exist because their source document was deleted, so there is nothing left to decide.
 //
-// 'retracted' is reachable ONLY from `ConflictsService.retractConflicts` — a metric-pack rescan,
-// never `recordResolution`'s human-decision path — for an `open` conflict the tenant's newly
-// active pack no longer considers a disagreement. `status` becomes `'dismissed'`, not
-// `'resolved'`: `MeasuresService.getForTenant`'s `conflictsResolved` counts `status: 'resolved'`
-// only, and a machine retraction must not inflate a measure of human decisions.
+// 'retracted' marks a machine-dismissed conflict rather than a human decision — `status` becomes
+// `'dismissed'`, not `'resolved'`, so a machine retraction never inflates a measure of human
+// decisions. Written by `ConflictsService.detectAndPersist`'s `findRetractableConflicts`: an
+// `open` conflict whose group's current facts stop disagreeing on a later scan (a corrected
+// re-upload, most commonly) is closed this way rather than left open forever.
 export type ConflictResolutionOutcome =
   'resolved' | 'rejected' | 'timed_out' | 'superseded' | 'retracted';
 
@@ -63,9 +63,9 @@ export const CONFLICT_RULES_FIRED: readonly ConflictRuleFired[] = ['authority', 
  * capture existed has no proposal to compare against either — all three leave it absent rather than
  * fabricate a `false`.
  *
- * `packId`/`packVersion` are set only when `outcome === 'retracted'` — the tenant's active metric
- * pack at the moment `ConflictsService.retractConflicts` decided this conflict's disagreement no
- * longer clears the pack's tolerance, so a reviewer reading a retracted row can tell which pack
+ * `packId`/`packVersion` are set only on a historical `outcome === 'retracted'` row — the metric
+ * ontology in force at the moment a machine retraction decided the conflict's disagreement no
+ * longer cleared its tolerance, so a reviewer reading a retracted row can tell which ontology
  * caused it without cross-referencing the audit log. */
 export interface ConflictResolution {
   outcome: ConflictResolutionOutcome;
@@ -132,20 +132,19 @@ export class Conflict extends AuditableDocument {
    * The unit `magnitude` is expressed in — the metric's `canonicalUnit` in force when
    * `detectConflicts` computed this row's `max - min` spread, not a fixed unit for the collection.
    * A stored `0.0085` is 85 basis points only because `cap_rate`'s canonical unit is a ratio;
-   * without this field nothing on the row records that, and once a pack can edit a metric's
-   * canonical unit the same number would silently mean two different things across rows. Required,
-   * not optional, for the same reason `packId`/`packVersion` are: see those fields' comment.
+   * without this field nothing on the row records that. Required, not optional, for the same
+   * reason `packId`/`packVersion` are: see those fields' comment.
    */
   @Prop({ type: String, required: true })
   magnitudeUnit: string;
 
   /**
-   * The tenant's active metric pack (`MetricPacksService.resolveActive`) in force when
-   * `ConflictsService.scanForConflicts`/`scanForConflictsByMetrics` detected this conflict.
-   * Required for the same reason `ExtractedFact.packId`/`packVersion` are — see that schema's own
-   * doc comment. A conflict whose `(packId, packVersion)` no longer matches the tenant's current
-   * active pack is stale — `ConflictsService.list` surfaces that as `ConflictResponseDto.stale`
-   * rather than hiding or silently reinterpreting the row.
+   * The metric ontology (`metric-ontology.ts`'s `ACTIVE_PACK_ID`/`ACTIVE_PACK_VERSION`) in force
+   * when `ConflictsService.scanForConflicts` detected this conflict. Required for the same reason
+   * `ExtractedFact.packId`/`packVersion` are — see that schema's own doc comment. A conflict whose
+   * `(packId, packVersion)` no longer matches the current `ACTIVE_PACK_ID`/`ACTIVE_PACK_VERSION` is
+   * stale — `ConflictsService.list` surfaces that as `ConflictResponseDto.stale` rather than hiding
+   * or silently reinterpreting the row.
    */
   @Prop({ type: String, required: true })
   packId: string;

@@ -30,6 +30,7 @@ const northgate = {
   id: 'entity-1',
   canonicalName: 'Northgate Plaza',
   aliases: ['Northgate', 'Northgate Shopping Center'],
+  harvestedAliases: [],
   createdAt: '2026-07-01T00:00:00.000Z',
 };
 
@@ -37,10 +38,11 @@ const southpark = {
   id: 'entity-2',
   canonicalName: 'Southpark Commons',
   aliases: [],
+  harvestedAliases: [],
   createdAt: '2026-07-02T00:00:00.000Z',
 };
 
-// Dispatches by URL, matching ResolutionRulesPage.test.tsx's stubFetch shape.
+// Dispatches by URL, matching ApprovalsPage.test.tsx's stubFetch shape.
 function stubFetch(routes: Record<string, (init?: RequestInit) => Response>): void {
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     const handler = routes[url];
@@ -99,6 +101,7 @@ describe('CanonicalEntitiesPage', () => {
       id: 'entity-3',
       canonicalName: 'Riverside Tower',
       aliases: ['Riverside'],
+      harvestedAliases: [],
       createdAt: '2026-08-01T00:00:00.000Z',
     };
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {

@@ -7,6 +7,7 @@ import {
   CanonicalEntityService,
   type CanonicalEntityListing,
 } from '../../src/features/evidence/facts/canonical-entity.service';
+import { derivePeriodFromDateText } from '../../src/features/evidence/facts/derive-period';
 import { FactsService } from '../../src/features/evidence/facts/facts.service';
 import { IngestionService } from '../../src/features/evidence/ingestion/ingestion.service';
 import { AnswerPersistenceService } from '../../src/features/evidence/qa/answer-persistence.service';
@@ -19,17 +20,44 @@ import { SourcesService } from '../../src/features/evidence/sources/sources.serv
 import { APPROVAL_CHANNEL } from '../../src/providers/approval-channel/approval-channel.interface';
 import type { AlsContext } from '../../src/shared/types/als-context.type';
 import { createActivities } from '../../src/worker/activities';
+import { INGEST_HEARTBEAT_INTERVAL_MS } from '../../src/workflows/ingest-retry-policy';
+
+/**
+ * `Context.current()` resolves only inside a real activity invocation on a worker, which these
+ * unit tests never enter, so the activity context is mocked — `ingestDocumentVersion` reads it
+ * synchronously for its heartbeat pump and its cancellation signal. `jest.mock` is hoisted above
+ * this file's imports, so the mutable state lives inside the factory and is reached through
+ * `activityContext` below.
+ */
+jest.mock('@temporalio/activity', () => {
+  const state = { heartbeat: jest.fn(), controller: new AbortController() };
+  return {
+    Context: {
+      current: () => ({
+        heartbeat: state.heartbeat,
+        cancellationSignal: state.controller.signal,
+      }),
+    },
+    __state: state,
+  };
+});
+
+const activityContext = jest.requireMock('@temporalio/activity') as unknown as {
+  __state: { heartbeat: jest.Mock; controller: AbortController };
+};
 
 /**
  * `app.get` resolves each service by class token regardless of call order, so a single mock
  * returning the right stub per token (rather than per call index) mirrors every other service
  * `createActivities` needs, not just the one under test in a given `it`. `findCellFacts`,
- * `findConflictedFactGroupsForChunks` and `listCanonicalEntities` default to resolving `[]` — the
- * same "no grounding input" shape `GroundingGateService.verify` itself defaults to — so a test that
- * doesn't care about cell facts/conflicts/canonical entities doesn't have to stub them.
+ * `findConflictedFactGroupsForChunks`, `findConflictedFactGroupsForTenant` and
+ * `listCanonicalEntities` default to resolving `[]` — the same "no grounding input" shape
+ * `GroundingGateService.verify` itself defaults to — so a test that doesn't care about cell
+ * facts/conflicts/canonical entities doesn't have to stub them.
  */
 function buildApp(overrides: {
   ingestVersion?: jest.Mock;
+  recordFactExtractionFailure?: jest.Mock;
   extractFacts?: jest.Mock;
   scanForConflicts?: jest.Mock;
   findCellFacts?: jest.Mock;
@@ -38,6 +66,7 @@ function buildApp(overrides: {
   synthesizeAnswer?: jest.Mock;
   verify?: jest.Mock;
   findConflictedFactGroupsForChunks?: jest.Mock;
+  findConflictedFactGroupsForTenant?: jest.Mock;
   persist?: jest.Mock;
   loadConflictForResolution?: jest.Mock;
   recordResolution?: jest.Mock;
@@ -49,7 +78,13 @@ function buildApp(overrides: {
 }): INestApplicationContext {
   const services = new Map<unknown, unknown>([
     [AsyncLocalStorage, overrides.als ?? new AsyncLocalStorage<AlsContext>()],
-    [IngestionService, { ingestVersion: overrides.ingestVersion ?? jest.fn() }],
+    [
+      IngestionService,
+      {
+        ingestVersion: overrides.ingestVersion ?? jest.fn(),
+        recordFactExtractionFailure: overrides.recordFactExtractionFailure ?? jest.fn(),
+      },
+    ],
     [
       FactsService,
       {
@@ -63,6 +98,8 @@ function buildApp(overrides: {
         scanForConflicts: overrides.scanForConflicts ?? jest.fn(),
         findConflictedFactGroupsForChunks:
           overrides.findConflictedFactGroupsForChunks ?? jest.fn().mockResolvedValue([]),
+        findConflictedFactGroupsForTenant:
+          overrides.findConflictedFactGroupsForTenant ?? jest.fn().mockResolvedValue([]),
         loadConflictForResolution: overrides.loadConflictForResolution ?? jest.fn(),
         recordResolution: overrides.recordResolution ?? jest.fn(),
       },
@@ -146,6 +183,11 @@ function buildCanonicalEntity(
 }
 
 describe('createActivities', () => {
+  beforeEach(() => {
+    // A fresh signal per test — an abort in one test must not reach the next.
+    activityContext.__state.controller = new AbortController();
+  });
+
   afterEach(() => {
     jest.resetAllMocks();
   });
@@ -172,8 +214,66 @@ describe('createActivities', () => {
     const activities = createActivities(app);
     const result = await activities.ingestDocumentVersion('doc-1', 'acme-corp');
 
-    expect(mockIngestVersion).toHaveBeenCalledWith('doc-1', 'acme-corp');
+    // The activity's own cancellation signal is threaded through as the third argument: it is what
+    // lets `ingestVersion` observe an abandoned attempt and record it, instead of the version
+    // sitting `pending` with a live lease until the reconciler finds it.
+    expect(mockIngestVersion).toHaveBeenCalledWith(
+      'doc-1',
+      'acme-corp',
+      activityContext.__state.controller.signal,
+    );
     expect(result).toEqual({ chunksCreated: 3, alreadyIngested: false });
+  });
+
+  // A heartbeat is what keeps Temporal's `heartbeatTimeout` from firing on a healthy long ingest,
+  // and the pump must not outlive the activity that owns it.
+  it('should heartbeat on a timer while ingestDocumentVersion runs and clear it once the ingest settles', async () => {
+    // The timer globals are restored by assignment, not by `mockRestore`/`useRealTimers`: in this
+    // environment both leave `setInterval` undefined for every later test in the file.
+    const realSetInterval = global.setInterval;
+    const realClearInterval = global.clearInterval;
+    const setIntervalSpy = jest.spyOn(global, 'setInterval');
+    const clearIntervalSpy = jest.spyOn(global, 'clearInterval');
+    try {
+      const mockIngestVersion = jest
+        .fn()
+        .mockResolvedValue({ chunksCreated: 3, alreadyIngested: false });
+      const app = buildApp({ ingestVersion: mockIngestVersion });
+      const activities = createActivities(app);
+
+      await activities.ingestDocumentVersion('doc-1', 'acme-corp');
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(
+        expect.any(Function),
+        INGEST_HEARTBEAT_INTERVAL_MS,
+      );
+      const [pump] = setIntervalSpy.mock.calls[0];
+      pump();
+      expect(activityContext.__state.heartbeat).toHaveBeenCalledTimes(1);
+      expect(clearIntervalSpy).toHaveBeenCalledWith(setIntervalSpy.mock.results[0].value);
+    } finally {
+      global.setInterval = realSetInterval;
+      global.clearInterval = realClearInterval;
+    }
+  });
+
+  it('should delegate recordFactExtractionFailure to IngestionService, returning nothing to the workflow', async () => {
+    const mockRecordFactExtractionFailure = jest.fn().mockResolvedValue(true);
+    const app = buildApp({ recordFactExtractionFailure: mockRecordFactExtractionFailure });
+
+    const activities = createActivities(app);
+    const result = await activities.recordFactExtractionFailure(
+      'doc-1',
+      'acme-corp',
+      'daily spend ceiling reached',
+    );
+
+    expect(mockRecordFactExtractionFailure).toHaveBeenCalledWith(
+      'doc-1',
+      'acme-corp',
+      'daily spend ceiling reached',
+    );
+    expect(result).toBeUndefined();
   });
 
   /**
@@ -315,14 +415,39 @@ describe('createActivities', () => {
     const app = buildApp({ synthesizeAnswer: mockSynthesizeAnswer, als });
 
     const activities = createActivities(app);
+    // Non-empty chunks: an empty set now short-circuits before `SynthesisService.synthesizeAnswer`
+    // is ever called (see the test below), which would leave `observedTenant` unset here.
     await activities.synthesizeAnswer({
       questionText: 'What is the cap rate?',
-      chunks: [],
+      chunks: [buildRetrievedChunk()],
       tenantId: 'acme-corp',
     });
 
     expect(observedTenant).toBe('acme-corp');
     expect(als.getStore()).toBeUndefined();
+  });
+
+  it('should abstain with insufficient_evidence and never call SynthesisService.synthesizeAnswer when no chunks were retrieved', async () => {
+    // Regression: zero retrieved chunks means no claim could cite anything, so the gate would
+    // drop every claim and degrade to insufficient_evidence regardless of what the model returns
+    // — this short-circuit must reach that outcome without spending a model call.
+    const mockSynthesizeAnswer = jest.fn();
+    const app = buildApp({ synthesizeAnswer: mockSynthesizeAnswer });
+
+    const activities = createActivities(app);
+    const result = await activities.synthesizeAnswer({
+      questionText: 'What is the cap rate?',
+      chunks: [],
+      tenantId: 'acme-corp',
+    });
+
+    expect(mockSynthesizeAnswer).not.toHaveBeenCalled();
+    expect(result.contract).toEqual({
+      kind: 'insufficient_evidence',
+      reason:
+        'No evidence was retrieved for this question, so there is nothing to ground an answer in.',
+    });
+    expect(result.usage).toEqual({ promptTokens: 0, completionTokens: 0, costUsd: 0 });
   });
 
   it('should skip GroundingGateService.verify and pass the outcome through unchanged for a non-answered outcome', async () => {
@@ -680,6 +805,40 @@ describe('createActivities', () => {
     });
   });
 
+  it('should persist only the claims the gate verified, not the model raw claim set, when outcomeKind stays answered with one claim dropped', async () => {
+    // Regression: the model asserted two claims and one survived. `result.outcome.claims` must be
+    // the gate's survivors, matching `result.claims` — persisting `input.outcome` unchanged here
+    // would carry the dropped claim's citations forward as if they were still verified.
+    const survivingClaim = buildClaim();
+    const droppedClaim = buildClaim({ statement: 'The vacancy rate is 4%.' });
+    const droppedRecord = { statement: droppedClaim.statement, reason: 'quote did not match' };
+    const mockVerify = jest.fn().mockReturnValue({
+      outcomeKind: 'answered',
+      claims: [survivingClaim],
+      droppedClaims: [droppedRecord],
+      violations: [],
+      claimCoverage: 0.5,
+    });
+    const app = buildApp({ verify: mockVerify });
+    const outcome = { kind: 'answered' as const, claims: [survivingClaim, droppedClaim] };
+    const retrievedChunks: RetrievedChunk[] = [buildRetrievedChunk()];
+
+    const activities = createActivities(app);
+    const result = await activities.groundingCheck({
+      outcome,
+      retrievedChunks,
+      tenantId: 'default',
+    });
+
+    expect(result.outcome).toEqual({ kind: 'answered', claims: [survivingClaim] });
+    expect(result.claims).toEqual([survivingClaim]);
+    expect(result.verificationReport).toEqual({
+      verifiedClaimCount: 1,
+      totalClaimCount: 2,
+      droppedClaims: [droppedRecord],
+    });
+  });
+
   it('should load cell facts and conflicted fact keys scoped to the retrieved chunks and tenant, and project them for GroundingGateService.verify', async () => {
     const claim = buildClaim();
     const chunk = buildRetrievedChunk({ chunkId: 'chunk-xlsx' });
@@ -807,6 +966,325 @@ describe('createActivities', () => {
     // outcome kind changed — `conflicting_evidence` overrides the outcome, not the claim list.
     expect(result.claims).toEqual([claim]);
     expect(result.conflictIds).toEqual([conflictId]);
+  });
+
+  // Retrieval-independent forcing: `findConflictedFactGroupsForTenant` never scopes by
+  // `retrievedChunks`, so these prove the outcome no longer depends on retrieval luck or on what a
+  // claim happened to cite.
+  describe('retrieval-independent forcing off the question’s resolved entity and metric', () => {
+    const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+    const values = [
+      { value: 5.25, unit: 'percent', sourceChunkId: 'chunk-xlsx' },
+      { value: 6.1, unit: 'percent', sourceChunkId: 'chunk-prose' },
+    ];
+    const conflictId = 'conflict-1';
+
+    it('should force conflicting_evidence without ever calling GroundingGateService.verify, when the conflicting document was never retrieved and the model answered from unrelated evidence', async () => {
+      // The question below names no period, so the group's own period must be `unstated` for the
+      // force to fire. Minted through `derivePeriodFromDateText` rather than written out, so this
+      // spec exercises whatever key production actually produces for a source that stated no
+      // period — a change to that key that the force's filter does not follow turns this red.
+      const factKey = {
+        entity: 'Northgate Business Park',
+        metric: 'cap_rate',
+        period: derivePeriodFromDateText(''),
+      };
+      const mockFindConflictedFactGroupsForTenant = jest
+        .fn()
+        .mockResolvedValue([{ conflictId, factKey, values }]);
+      const mockListCanonicalEntities = jest
+        .fn()
+        .mockResolvedValue([buildCanonicalEntity({ canonicalName: 'Northgate Business Park' })]);
+      const mockVerify = jest.fn();
+      const app = buildApp({
+        findConflictedFactGroupsForTenant: mockFindConflictedFactGroupsForTenant,
+        listCanonicalEntities: mockListCanonicalEntities,
+        verify: mockVerify,
+      });
+      const claim = buildClaim({
+        statement: 'The building was constructed in 1998.',
+        citations: [
+          {
+            docVersionId: 'version-unrelated',
+            sha256: 'b'.repeat(64),
+            chunkId: 'chunk-unrelated',
+            locator: { kind: 'pdf-page', page: 1, extractorVersion: 'v1' },
+            quote: 'constructed in 1998',
+          },
+        ],
+      });
+      const outcome = { kind: 'answered' as const, claims: [claim] };
+
+      const activities = createActivities(app);
+      const result = await activities.groundingCheck({
+        outcome,
+        retrievedChunks: [buildRetrievedChunk({ chunkId: 'chunk-unrelated' })],
+        tenantId: 'acme-corp',
+        questionText: 'What is the cap rate for Northgate Business Park?',
+      });
+
+      expect(mockFindConflictedFactGroupsForTenant).toHaveBeenCalledWith('acme-corp');
+      expect(mockVerify).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        outcome: { kind: 'conflicting_evidence', factKey, values },
+        claims: [],
+        conflictIds: [conflictId],
+      });
+    });
+
+    it('should force conflicting_evidence even when zero chunks were retrieved', async () => {
+      const factKey = {
+        entity: 'Northgate Business Park',
+        metric: 'cap_rate',
+        period: derivePeriodFromDateText(''),
+      };
+      const app = buildApp({
+        findConflictedFactGroupsForTenant: jest
+          .fn()
+          .mockResolvedValue([{ conflictId, factKey, values }]),
+        listCanonicalEntities: jest
+          .fn()
+          .mockResolvedValue([buildCanonicalEntity({ canonicalName: 'Northgate Business Park' })]),
+      });
+      const outcome = {
+        kind: 'insufficient_evidence' as const,
+        reason:
+          'No evidence was retrieved for this question, so there is nothing to ground an answer in.',
+      };
+
+      const activities = createActivities(app);
+      const result = await activities.groundingCheck({
+        outcome,
+        retrievedChunks: [],
+        tenantId: 'acme-corp',
+        questionText: 'What is the cap rate for Northgate Business Park?',
+      });
+
+      expect(result).toEqual({
+        outcome: { kind: 'conflicting_evidence', factKey, values },
+        claims: [],
+        conflictIds: [conflictId],
+      });
+    });
+
+    it('should reach the identical outcome for two different phrasings naming the same entity and metric', async () => {
+      const factKey = {
+        entity: 'Northgate Business Park',
+        metric: 'cap_rate',
+        period: derivePeriodFromDateText(''),
+      };
+      const buildActivities = () =>
+        createActivities(
+          buildApp({
+            findConflictedFactGroupsForTenant: jest
+              .fn()
+              .mockResolvedValue([{ conflictId, factKey, values }]),
+            listCanonicalEntities: jest
+              .fn()
+              .mockResolvedValue([
+                buildCanonicalEntity({ canonicalName: 'Northgate Business Park' }),
+              ]),
+          }),
+        );
+      const outcome = {
+        kind: 'insufficient_evidence' as const,
+        reason: 'None of the retrieved evidence is relevant to this question.',
+        reasonCode: 'no_relevant_evidence' as const,
+      };
+
+      const first = await buildActivities().groundingCheck({
+        outcome,
+        retrievedChunks: [],
+        tenantId: 'acme-corp',
+        questionText: 'What is the cap rate for Northgate Business Park?',
+      });
+      const second = await buildActivities().groundingCheck({
+        outcome,
+        retrievedChunks: [],
+        tenantId: 'acme-corp',
+        questionText: 'What is the capitalization rate for Northgate Business Park?',
+      });
+
+      expect(first.outcome.kind).toBe('conflicting_evidence');
+      expect(second).toEqual(first);
+    });
+
+    it('should NOT force conflicting_evidence when the question names the entity but no recognized metric phrase', async () => {
+      const app = buildApp({
+        findConflictedFactGroupsForTenant: jest
+          .fn()
+          .mockResolvedValue([{ conflictId, factKey, values }]),
+        listCanonicalEntities: jest
+          .fn()
+          .mockResolvedValue([buildCanonicalEntity({ canonicalName: 'Northgate Business Park' })]),
+      });
+      const outcome = { kind: 'insufficient_evidence' as const, reason: 'none' };
+
+      const activities = createActivities(app);
+      const result = await activities.groundingCheck({
+        outcome,
+        retrievedChunks: [],
+        tenantId: 'acme-corp',
+        questionText: 'Tell me about Northgate Business Park.',
+      });
+
+      expect(result).toEqual({ outcome, claims: [] });
+    });
+
+    it('should NOT force conflicting_evidence when the resolved entity and metric name more than one open conflict group', async () => {
+      const app = buildApp({
+        findConflictedFactGroupsForTenant: jest.fn().mockResolvedValue([
+          { conflictId, factKey, values },
+          {
+            conflictId: 'conflict-2',
+            factKey: { ...factKey, period: '2025-06' },
+            values: [
+              { value: 5.0, unit: 'percent', sourceChunkId: 'chunk-a' },
+              { value: 5.5, unit: 'percent', sourceChunkId: 'chunk-b' },
+            ],
+          },
+        ]),
+        listCanonicalEntities: jest
+          .fn()
+          .mockResolvedValue([buildCanonicalEntity({ canonicalName: 'Northgate Business Park' })]),
+      });
+      const outcome = { kind: 'insufficient_evidence' as const, reason: 'none' };
+
+      const activities = createActivities(app);
+      const result = await activities.groundingCheck({
+        outcome,
+        retrievedChunks: [],
+        tenantId: 'acme-corp',
+        questionText: 'What is the cap rate for Northgate Business Park?',
+      });
+
+      expect(result).toEqual({ outcome, claims: [] });
+    });
+
+    it('should NOT force conflicting_evidence off a dated conflict group when the question does not resolve to that period', async () => {
+      // Regression for the period-blind force: `factKey.period` is `'2025-03'` and the question
+      // names 2019, two periods that share no calendar day — naming the group's exact entity and
+      // metric is not enough.
+      const app = buildApp({
+        findConflictedFactGroupsForTenant: jest
+          .fn()
+          .mockResolvedValue([{ conflictId, factKey, values }]),
+        listCanonicalEntities: jest
+          .fn()
+          .mockResolvedValue([buildCanonicalEntity({ canonicalName: 'Northgate Business Park' })]),
+      });
+      const outcome = { kind: 'insufficient_evidence' as const, reason: 'none' };
+
+      const activities = createActivities(app);
+      const result = await activities.groundingCheck({
+        outcome,
+        retrievedChunks: [],
+        tenantId: 'acme-corp',
+        questionText: 'What was the cap rate for Northgate Business Park in 2019?',
+      });
+
+      expect(result).toEqual({ outcome, claims: [] });
+    });
+
+    // The force is the one check in `groundingCheck` that does not depend on retrieval, and every
+    // case below drives its period through the production parser rather than a written-out key, so
+    // that a period model the filter stops agreeing with fails here instead of passing silently.
+    describe('period matching between the question and the conflict group', () => {
+      const buildDatedApp = (period: string) =>
+        buildApp({
+          findConflictedFactGroupsForTenant: jest
+            .fn()
+            .mockResolvedValue([{ conflictId, factKey: { ...factKey, period }, values }]),
+          listCanonicalEntities: jest
+            .fn()
+            .mockResolvedValue([
+              buildCanonicalEntity({ canonicalName: 'Northgate Business Park' }),
+            ]),
+        });
+      const outcome = { kind: 'insufficient_evidence' as const, reason: 'none' };
+
+      const force = async (period: string, questionText: string) =>
+        createActivities(buildDatedApp(period)).groundingCheck({
+          outcome,
+          retrievedChunks: [],
+          tenantId: 'acme-corp',
+          questionText,
+        });
+
+      it.each([
+        ['2025-03-14', 'What was the cap rate for Northgate Business Park in March 2025?'],
+        ['March 12, 2025', 'What was the cap rate for Northgate Business Park in 2025-03?'],
+        ['Q1 2025', 'What was the cap rate for Northgate Business Park in February 2025?'],
+        ['Mar 2025', 'What was the cap rate for Northgate Business Park in 2025?'],
+        ['2025', 'What was the cap rate for Northgate Business Park in March 2025?'],
+      ])(
+        'should force conflicting_evidence when a group dated from %p shares calendar days with the question',
+        async (periodText, questionText) => {
+          const period = derivePeriodFromDateText(periodText);
+
+          const result = await force(period, questionText);
+
+          expect(result).toEqual({
+            outcome: {
+              kind: 'conflicting_evidence',
+              factKey: { ...factKey, period },
+              values,
+            },
+            claims: [],
+            conflictIds: [conflictId],
+          });
+        },
+      );
+
+      it.each([
+        ['2025-03-14', 'What was the cap rate for Northgate Business Park in April 2025?'],
+        ['Q1 2025', 'What was the cap rate for Northgate Business Park in Q3 2025?'],
+        // A fiscal year has no calendar bounds without a tenant fiscal calendar, so it can never be
+        // shown to share days with anything — including the calendar year of the same number.
+        ['FY2025', 'What was the cap rate for Northgate Business Park in 2025?'],
+        // The extractor handed over text stating some period that the parser refused. A question
+        // naming a period must not match it, because nothing shows the two are the same period.
+        ['at closing', 'What was the cap rate for Northgate Business Park in 2025?'],
+      ])(
+        'should NOT force conflicting_evidence when a group dated from %p shares no calendar day with the question',
+        async (periodText, questionText) => {
+          const result = await force(derivePeriodFromDateText(periodText), questionText);
+
+          expect(result).toEqual({ outcome, claims: [] });
+        },
+      );
+
+      it('should NOT force conflicting_evidence off a group whose period text the parser refused, when the question names no period', async () => {
+        // The unstated branch must stay narrower than "has no calendar range": this source did
+        // state a period, so a question that stated none has not been shown to ask about it.
+        const result = await force(
+          derivePeriodFromDateText('sold in 2019'),
+          'What is the cap rate for Northgate Business Park?',
+        );
+
+        expect(result).toEqual({ outcome, claims: [] });
+      });
+
+      it('should NOT force conflicting_evidence when the question names more than one period', async () => {
+        const result = await force(
+          derivePeriodFromDateText('2025-03'),
+          'How did the cap rate for Northgate Business Park move from 2019 to March 2025?',
+        );
+
+        expect(result).toEqual({ outcome, claims: [] });
+      });
+
+      it('should NOT force conflicting_evidence off a stored period key this codebase no longer writes', async () => {
+        // Fails closed on an unrecognised key rather than widening it into a match — a row written
+        // by another version of the period model must not be read as overlapping anything.
+        const result = await force(
+          'H1-2025',
+          'What was the cap rate for Northgate Business Park in 2025?',
+        );
+
+        expect(result).toEqual({ outcome, claims: [] });
+      });
+    });
   });
 
   // Either-side widening (ADR-0004, sub-decision): the gate's own forcing above only ever fires

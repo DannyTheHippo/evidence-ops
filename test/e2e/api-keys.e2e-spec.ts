@@ -389,6 +389,9 @@ describe('ApiKeys (e2e)', () => {
         tokenPrefix: rawToken.slice(0, 13),
         name: 'Expired fixture',
         expiresAt: new Date('2020-01-01T00:00:00.000Z'),
+        // Stamped by `ApiKeysService.mint` on a real key; supplied here because the schema requires
+        // it and this fixture writes the row directly.
+        tokenVersion: 0,
       });
 
       const identity = await tokenVerifier.verify(rawToken);
@@ -402,7 +405,15 @@ describe('ApiKeys (e2e)', () => {
       expect(identity).toBeNull();
     });
 
-    it('resolves role live from the User row rather than the token, reflecting a mid-lifetime demotion', async () => {
+    /**
+     * The `User` row, not the key, is the authority on the identity a token resolves to — and on
+     * whether it resolves to one at all. A demotion is reflected on the next call, and raising
+     * `tokenVersion` refuses the key outright. That second half is what makes the session epoch a
+     * revocation lever over every credential an account holds: a personal access token is the MCP
+     * surface's only credential, so an epoch that moved the browser session alone would leave a
+     * compromised account holding a working one.
+     */
+    it('resolves identity live from the User row, reflecting a demotion and refusing a raised session epoch', async () => {
       const minted = await request(getTestServer(app))
         .post('/api/v1/api-keys')
         .set('Cookie', cookie)
@@ -417,8 +428,16 @@ describe('ApiKeys (e2e)', () => {
       const afterIdentity = await tokenVerifier.verify(mintedBody.token);
       expect(afterIdentity?.role).toBe(UserRole.Member);
 
-      // Restore for any later test in this file that assumes the registered admin role.
-      await userModel.updateOne({ _id: userId }, { role: UserRole.Admin });
+      await userModel.updateOne({ _id: userId }, { $inc: { tokenVersion: 1 } });
+
+      expect(await tokenVerifier.verify(mintedBody.token)).toBeNull();
+
+      // Restore for any later test in this file that assumes the registered admin role and the
+      // epoch its keys were minted at.
+      await userModel.updateOne(
+        { _id: userId },
+        { role: UserRole.Admin, $inc: { tokenVersion: -1 } },
+      );
     });
   });
 

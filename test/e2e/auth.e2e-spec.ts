@@ -1,7 +1,11 @@
 import type { INestApplication } from '@nestjs/common';
-import { getModelToken } from '@nestjs/mongoose';
-import type { Model } from 'mongoose';
+import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
+import type { Connection, Model } from 'mongoose';
 import request from 'supertest';
+import {
+  revokeUserSessions,
+  type RevokeUserSessionsResult,
+} from '../../scripts/lib/revoke-user-sessions';
 import { User, UserDocument } from '../../src/database/schemas/administration/user/user.schema';
 import { UserRole } from '../../src/shared/enums/user-role.enum';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
@@ -296,6 +300,83 @@ describe('Auth (e2e)', () => {
     expect(body.components?.securitySchemes).toHaveProperty('cookie');
   });
 
+  /**
+   * Sweep over the whole mutation class, not the demoted-admin instance of it: every user-derived
+   * claim the token carries is changed on the `User` row after the token was minted, and the next
+   * request must be refused in each case. `mints no claim this sweep does not cover` is what keeps
+   * the sweep exhaustive — a new claim added to `JwtPayload` reds that test until it has a mutation
+   * case here.
+   *
+   * Assertions run against `GET /api/v1/api-keys`, deliberately not `GET /api/v1/auth/me`: `me`
+   * performs its own `findById` and raises its own 401 on a missing row, so a pass there would not
+   * be attributable to `JwtAuthGuard`. The api-keys listing reads `request.user` and never reloads
+   * the row, so its 401 can only come from the guard.
+   */
+  describe('server-side identity mutation after a token is minted', () => {
+    const password = 'correct-horse-battery-staple';
+
+    // Registered JWT claims — minted by `JwtModule`'s `signOptions`, not derived from the `User`
+    // row, so they carry no identity the guard could revalidate.
+    const RESERVED_CLAIMS = ['iat', 'exp'];
+
+    const decodeClaims = (sessionCookie: string): Record<string, unknown> => {
+      const token = sessionCookie.slice(sessionCookie.indexOf('=') + 1);
+      const [, payload] = token.split('.');
+      return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Record<
+        string,
+        unknown
+      >;
+    };
+
+    // One mutation per user-derived claim, each invalidating exactly the claim it is keyed by.
+    // `sub` is the lookup key rather than a trusted attribute, so its member of the class is the
+    // row ceasing to exist.
+    const mutations: Record<string, (userId: string) => Promise<unknown>> = {
+      sub: (userId) => userModel.deleteOne({ _id: userId }),
+      email: (userId) =>
+        userModel.updateOne({ _id: userId }, { email: `renamed-${userId}@example.com` }),
+      role: (userId) => userModel.updateOne({ _id: userId }, { role: UserRole.Member }),
+      tenantId: (userId) => userModel.updateOne({ _id: userId }, { tenantId: `retenanted-tenant` }),
+      tokenVersion: (userId) => userModel.updateOne({ _id: userId }, { $inc: { tokenVersion: 1 } }),
+    };
+
+    it('mints no user-derived claim this sweep does not cover', async () => {
+      const session = await registerTestUser(app, {
+        email: 'auth-e2e-claim-inventory@example.com',
+        password,
+      });
+      const claims = Object.keys(decodeClaims(session.cookie)).filter(
+        (claim) => !RESERVED_CLAIMS.includes(claim),
+      );
+
+      expect(claims.sort()).toEqual(Object.keys(mutations).sort());
+    });
+
+    it.each(Object.keys(mutations))(
+      'refuses the next request once `%s` changes server-side',
+      async (claim) => {
+        const session = await registerTestUser(app, {
+          email: `auth-e2e-mutation-${claim.toLowerCase()}@example.com`,
+          password,
+        });
+
+        // Positive control: without the mutation the same cookie is accepted, so a passing case
+        // below is the mutation being refused rather than the request failing for another reason.
+        const before = await request(getTestServer(app))
+          .get('/api/v1/api-keys')
+          .set('Cookie', session.cookie);
+        expect(before.status).toBe(200);
+
+        await mutations[claim](session.userId);
+
+        const after = await request(getTestServer(app))
+          .get('/api/v1/api-keys')
+          .set('Cookie', session.cookie);
+        expect(after.status).toBe(401);
+      },
+    );
+  });
+
   describe('CsrfOriginMiddleware', () => {
     const email = 'auth-e2e-csrf@example.com';
     const password = 'correct-horse-battery-staple';
@@ -390,6 +471,69 @@ describe('Auth (e2e)', () => {
 
         expect(response.status).toBe(403);
       });
+    });
+  });
+
+  /**
+   * The operator revocation path (`scripts/lib/revoke-user-sessions.ts`) is what gives
+   * `User.tokenVersion` a handle: it is the same `$inc` the identity-mutation sweep above already
+   * proves `JwtAuthGuard` refuses, located by email instead of `_id`, so this covers the lever's
+   * own entry point rather than re-proving the guard's comparison.
+   */
+  describe('revoking a user’s sessions', () => {
+    it('refuses no such email rather than acting on it', async () => {
+      const db = app.get<Connection>(getConnectionToken()).db;
+      if (!db) {
+        throw new Error(
+          'revoke-user-sessions e2e: the Mongoose connection exposes no driver database',
+        );
+      }
+
+      const result = await revokeUserSessions(db, 'no-such-user@example.com');
+
+      expect(result).toEqual<RevokeUserSessionsResult>({ outcome: 'user-not-found' });
+    });
+
+    it('raises the epoch, refuses the live session, and lets a fresh login through', async () => {
+      const credentials = {
+        email: 'auth-e2e-revoke@example.com',
+        password: 'correct-horse-battery-staple',
+      };
+      const session = await registerTestUser(app, credentials);
+
+      const beforeRevoke = await request(getTestServer(app))
+        .get('/api/v1/api-keys')
+        .set('Cookie', session.cookie);
+      expect(beforeRevoke.status).toBe(200);
+
+      const db = app.get<Connection>(getConnectionToken()).db;
+      if (!db) {
+        throw new Error(
+          'revoke-user-sessions e2e: the Mongoose connection exposes no driver database',
+        );
+      }
+      const result = await revokeUserSessions(db, credentials.email);
+
+      expect(result).toEqual<RevokeUserSessionsResult>({
+        outcome: 'revoked',
+        previousTokenVersion: 0,
+        newTokenVersion: 1,
+      });
+
+      const afterRevoke = await request(getTestServer(app))
+        .get('/api/v1/api-keys')
+        .set('Cookie', session.cookie);
+      expect(afterRevoke.status).toBe(401);
+
+      const login = await request(getTestServer(app)).post('/api/v1/auth/login').send(credentials);
+      const freshCookie = sessionCookieFromResponse(
+        login.headers['set-cookie'] as unknown as string[] | undefined,
+      );
+
+      const afterLogin = await request(getTestServer(app))
+        .get('/api/v1/api-keys')
+        .set('Cookie', freshCookie);
+      expect(afterLogin.status).toBe(200);
     });
   });
 });

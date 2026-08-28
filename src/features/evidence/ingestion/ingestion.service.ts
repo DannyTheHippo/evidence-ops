@@ -30,9 +30,14 @@ import {
   createVectorChunkProbe,
   waitForIndexConvergence,
 } from '../retrieval/search-index-readiness.util';
+import { SOURCE_KIND_TO_MIME_TYPE } from '../documents/documents.constant';
 import { chunkElements } from './chunker';
 import { computeChunkId } from './compute-chunk-id';
-import { DocumentVersionNotFoundException } from './exceptions/ingestion.exception';
+import { EmailAttachmentService } from './email-attachment.service';
+import {
+  DocumentVersionNotFoundException,
+  IngestionAbandonedException,
+} from './exceptions/ingestion.exception';
 import { ParserRegistry } from './parser.registry';
 import { EmptyPdfTextLayerException } from './parsers/pdf.parser';
 import { screenInstructionInjection } from './screen-instruction-injection';
@@ -48,6 +53,11 @@ import { screenInstructionInjection } from './screen-instruction-injection';
 // (already-successful) ingest return.
 const CONVERGENCE_TIMEOUT_MS = 20_000;
 const CONVERGENCE_POLL_INTERVAL_MS = 1_000;
+
+/** The stored `contentType` of an `.eml` version — always the canonical MIME `resolveUploadKind`
+ * resolved to, never a client's raw value (`DocumentsService.upload`), so an exact match is the
+ * whole test for "this version is an email container". */
+const EMAIL_MIME_TYPE = SOURCE_KIND_TO_MIME_TYPE.eml;
 
 /** Shared by every place this service reports a caught error as text — `awaitSearchIndexConvergence`'s
  *  swallowed failures (a settled rejection on either wait, or a synchronous throw from a probe
@@ -81,6 +91,8 @@ export class IngestionService {
     private readonly embeddingProvider: EmbeddingProvider,
 
     private readonly parserRegistry: ParserRegistry,
+
+    private readonly emailAttachmentService: EmailAttachmentService,
 
     @InjectConnection()
     connection: Connection,
@@ -128,7 +140,11 @@ export class IngestionService {
    * specifically so that case (and a failed `insertMany` generally) never deletes rows a
    * concurrent, winning attempt already committed under a different token.
    */
-  async ingestVersion(documentVersionId: string, tenantId: string): Promise<IngestionResult> {
+  async ingestVersion(
+    documentVersionId: string,
+    tenantId: string,
+    abortSignal?: AbortSignal,
+  ): Promise<IngestionResult> {
     if (!Types.ObjectId.isValid(documentVersionId)) {
       throw new DocumentVersionNotFoundException(
         `Document version '${documentVersionId}' not found`,
@@ -163,130 +179,216 @@ export class IngestionService {
     // that no error surviving the claim can leave the version at `ingestionStatus: 'pending'`
     // with a stale lease token: a byte-identical re-upload would dedupe onto that same version by
     // sha256 (`DocumentsService.addVersion`) and never trigger a fresh ingestion attempt, leaving
-    // the document permanently stuck with no diagnosis anywhere.
+    // the document permanently stuck with no diagnosis anywhere. `abortSignal` extends that
+    // invariant to an attempt that is abandoned rather than failed — see `raceAgainstAbort`.
     try {
-      // Clean slate for this attempt now that it holds the current lease — anything left behind
-      // by an earlier attempt (crashed, or since-superseded) is safe to clear, because that
-      // attempt's own `finalizeCompletion` can no longer succeed once this claim has overwritten
-      // its token. `deleteMany` against zero matching documents is a cheap, indexed no-op on the
-      // ordinary first-ingest path.
-      await this.evidenceChunkModel.deleteMany({ documentVersionId: version._id, tenantId });
-
-      const stored = await this.documentStore.get(version.storageKey);
-      if (!stored) {
-        // Data-integrity fault, not a normal input-validation branch: `storageKey` is only ever
-        // set from a successful `documentStore.put()` (see `DocumentsService`), so a miss here
-        // means the store lost bytes it already confirmed writing — mirrors `DocumentsService
-        // .assertCurrentVersion`'s use of a bare `InternalServerErrorException` for the same class
-        // of impossible state.
-        throw new InternalServerErrorException(
-          `Document version '${documentVersionId}' has no resolvable content in the document store`,
-        );
-      }
-
-      const parser = this.parserRegistry.resolve(stored.contentType);
-      const parsed = await parser.parse(stored.content);
-
-      // Screened before chunking, not after: `chunkElements` merges a run of elements sharing a
-      // heading path (prose) or a window of rows (spreadsheet) into one `Chunk`, so screening a
-      // whole chunk would quarantine every legitimate element merged alongside the one flagged
-      // element — for this corpus, an entire comps table sharing one row-window, or (PDF elements
-      // carry no heading path at all, so `chunkProse` treats a whole document as a single run)
-      // every page of a PDF. An element is the finest unit a parser produces (`ParsedElement`'s
-      // own doc comment), so filtering here is the smallest quarantine the pipeline can express.
-      // It is still not free: a PDF page is also the finest unit `PdfPageLocator` can address
-      // (`pdf.parser.ts`), so a flagged page's legitimate text on the same page is quarantined
-      // along with it.
-      const safeElements = parsed.elements.filter(
-        (element) => !screenInstructionInjection(element.text),
+      return await this.raceAgainstAbort(
+        this.runAttempt(version, leaseToken, documentVersionId, tenantId),
+        abortSignal,
       );
-      const quarantinedCount = parsed.elements.length - safeElements.length;
-      if (quarantinedCount > 0) {
-        this.logger.debug(
-          `Document version '${documentVersionId}' quarantined ${quarantinedCount} element(s) flagged by the instruction-injection screen; excluded before chunking and embedding`,
-        );
-      }
-
-      const chunks = chunkElements(safeElements);
-
-      if (chunks.length === 0) {
-        // A version with zero extractable chunks is still a finished ingest, not a pending one —
-        // without marking it `completed` here too, `ingestVersion` would re-parse it from scratch
-        // on every future call forever.
-        const finalized = await this.finalizeCompletion(version._id, leaseToken);
-        if (!finalized) {
-          this.logger.debug(
-            `Document version '${documentVersionId}' ingest superseded by a newer attempt before finalizing zero chunks`,
-          );
-          return { chunksCreated: 0, alreadyIngested: true };
-        }
-        this.logger.debug(`Document version '${documentVersionId}' produced no chunks`);
-        return { chunksCreated: 0, alreadyIngested: false };
-      }
-
-      const embeddingResult = await this.embeddingProvider.embed({
-        inputs: chunks.map((chunk) => chunk.text),
-        inputType: 'document',
-      });
-
-      const chunkDocs = chunks.map((chunk, index) => ({
-        _id: computeChunkId({
-          tenantId: version.tenantId,
-          documentVersionSha256: version.sha256,
-          ordinal: index,
-          locator: chunk.locator,
-        }),
-        documentId: version.documentId,
-        documentVersionId: version._id,
-        text: chunk.text,
-        tokenCount: chunk.tokenCount,
-        embedding: embeddingResult.embeddings[index],
-        locator: chunk.locator,
-        tenantId: version.tenantId,
-        ingestionAttemptToken: leaseToken,
-      }));
-
-      try {
-        await this.evidenceChunkModel.insertMany(chunkDocs);
-      } catch (error) {
-        await this.rollbackChunks(version._id, leaseToken, tenantId);
-        throw error;
-      }
-
-      const finalized = await this.finalizeCompletion(version._id, leaseToken);
-      if (!finalized) {
-        // A newer attempt claimed the lease while this one was embedding/inserting — these rows
-        // are stale. Temporal already discards a superseded attempt's return value in favor of the
-        // retry that actually finalizes, so the exact result shape here is inert; `alreadyIngested:
-        // true` just avoids implying this attempt itself finished the job.
-        await this.rollbackChunks(version._id, leaseToken, tenantId);
-        this.logger.debug(
-          `Document version '${documentVersionId}' ingest superseded by a newer attempt; rolled back up to ${chunkDocs.length} chunk(s)`,
-        );
-        return { chunksCreated: 0, alreadyIngested: true };
-      }
-
-      this.logger.debug(
-        `Document version '${documentVersionId}' ingested into ${chunkDocs.length} chunks`,
-      );
-
-      // FAILURE DIRECTION: degrades, never blocks. Unlike the eval harness
-      // (`eval/ingest-fixtures.ts`, `onTimeout: 'throw'`), a user who just uploaded a document
-      // must not have this request hang, or an otherwise-successful ingest turn into a failure,
-      // because Atlas hasn't finished absorbing the last few chunks yet — see
-      // `awaitSearchIndexConvergence`'s own doc comment.
-      await this.awaitSearchIndexConvergence(
-        documentVersionId,
-        version.tenantId,
-        chunkDocs.length,
-        chunkDocs[0],
-      );
-
-      return { chunksCreated: chunkDocs.length, alreadyIngested: false };
     } catch (error) {
       await this.recordIngestionFailure(version._id, leaseToken, documentVersionId, error);
       throw error;
     }
+  }
+
+  /**
+   * Rejects as soon as `signal` aborts, so an abandoned attempt reaches `ingestVersion`'s catch
+   * and is recorded as `failed`. The Temporal activity passes its own cancellation signal
+   * (`src/worker/activities.ts`), which fires when the heartbeat timeout elapses or the workflow
+   * cancels the activity; an API-path caller passes nothing and the work is awaited unchanged.
+   *
+   * FAILURE DIRECTION: fails CLOSED toward recording a failure. Losing the race abandons the work
+   * rather than stopping it — nothing here can interrupt a parse or an embed already in flight —
+   * so the version is marked `failed` while that work is still running. The lease guard settles
+   * the overlap: `recordIngestionFailure` clears `ingestionLeaseToken`, which makes the abandoned
+   * attempt's own `finalizeCompletion` fail and roll its chunks back rather than marking a version
+   * `completed` after its failure was recorded. The abandoned promise's eventual rejection is
+   * marked handled here, since nothing downstream is left to await it.
+   */
+  private async raceAgainstAbort<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (!signal) {
+      return work;
+    }
+
+    void work.catch(() => undefined);
+
+    // Assigned by the executor below, which `new Promise` runs synchronously — so it always holds
+    // a handler by the time the `finally` deregisters it.
+    let onAbort!: () => void;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = (): void => {
+        // `AbortSignal.reason` is `any` by declaration; narrowed to `unknown` so the shared
+        // formatter below handles it rather than trusting it to be an `Error`.
+        const reason: unknown = signal.reason;
+        reject(
+          new IngestionAbandonedException(
+            `Ingestion attempt was abandoned before it finished: ${describeError(reason)}`,
+          ),
+        );
+      };
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+
+    try {
+      return await Promise.race([work, aborted]);
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+    }
+  }
+
+  /**
+   * One claimed attempt's work: recover, parse, chunk, embed, persist, finalize. Called only with
+   * the lease already held (`claimAttempt`), and only from `ingestVersion`'s try, whose catch owns
+   * recording whatever this throws.
+   */
+  private async runAttempt(
+    version: DocumentVersionDocument,
+    leaseToken: Types.ObjectId,
+    documentVersionId: string,
+    tenantId: string,
+  ): Promise<IngestionResult> {
+    // Clean slate for this attempt now that it holds the current lease — anything left behind
+    // by an earlier attempt (crashed, or since-superseded) is safe to clear, because that
+    // attempt's own `finalizeCompletion` can no longer succeed once this claim has overwritten
+    // its token. `deleteMany` against zero matching documents is a cheap, indexed no-op on the
+    // ordinary first-ingest path.
+    await this.evidenceChunkModel.deleteMany({ documentVersionId: version._id, tenantId });
+
+    const stored = await this.documentStore.get(version.storageKey);
+    if (!stored) {
+      // Data-integrity fault, not a normal input-validation branch: `storageKey` is only ever
+      // set from a successful `documentStore.put()` (see `DocumentsService`), so a miss here
+      // means the store lost bytes it already confirmed writing — mirrors `DocumentsService
+      // .assertCurrentVersion`'s use of a bare `InternalServerErrorException` for the same class
+      // of impossible state.
+      throw new InternalServerErrorException(
+        `Document version '${documentVersionId}' has no resolvable content in the document store`,
+      );
+    }
+
+    const parser = this.parserRegistry.resolve(stored.contentType);
+    const parsed = await parser.parse(stored.content);
+
+    // An email is a container, so ingesting one is two jobs: its own body becomes this version's
+    // chunks below, and each attachment becomes a document in its own right. Unwrapping happens
+    // here, before this version is finalized, so a refusal — a container limit, a malformed
+    // message, an attachment whose bytes contradict what it claims to be — fails this version and
+    // lands in `recordIngestionFailure`'s visible terminal state rather than leaving a `completed`
+    // email whose attachments silently never arrived.
+    if (stored.contentType === EMAIL_MIME_TYPE) {
+      await this.emailAttachmentService.unwrapAttachments(version, stored.content);
+    }
+
+    // Screened before chunking, not after: `chunkElements` merges a run of elements sharing a
+    // heading path (prose) or a window of rows (spreadsheet) into one `Chunk`, so screening a
+    // whole chunk would quarantine every legitimate element merged alongside the one flagged
+    // element — for this corpus, an entire comps table sharing one row-window, or (PDF elements
+    // carry no heading path at all, so `chunkProse` treats a whole document as a single run)
+    // every page of a PDF. An element is the finest unit a parser produces (`ParsedElement`'s
+    // own doc comment), so filtering here is the smallest quarantine the pipeline can express.
+    // It is still not free: a PDF page is also the finest unit `PdfPageLocator` can address
+    // (`pdf.parser.ts`), so a flagged page's legitimate text on the same page is quarantined
+    // along with it.
+    const safeElements = parsed.elements.filter(
+      (element) => !screenInstructionInjection(element.text),
+    );
+    const quarantinedCount = parsed.elements.length - safeElements.length;
+    if (quarantinedCount > 0) {
+      this.logger.debug(
+        `Document version '${documentVersionId}' quarantined ${quarantinedCount} element(s) flagged by the instruction-injection screen; excluded before chunking and embedding`,
+      );
+    }
+
+    const chunks = chunkElements(safeElements);
+
+    if (chunks.length === 0) {
+      // A version with zero extractable chunks is still a finished ingest, not a pending one —
+      // without marking it `completed` here too, `ingestVersion` would re-parse it from scratch
+      // on every future call forever.
+      const finalized = await this.finalizeCompletion(
+        version._id,
+        leaseToken,
+        parsed.reducedFidelityReasons ?? [],
+      );
+      if (!finalized) {
+        this.logger.debug(
+          `Document version '${documentVersionId}' ingest superseded by a newer attempt before finalizing zero chunks`,
+        );
+        return { chunksCreated: 0, alreadyIngested: true };
+      }
+      this.logger.debug(`Document version '${documentVersionId}' produced no chunks`);
+      return { chunksCreated: 0, alreadyIngested: false };
+    }
+
+    const embeddingResult = await this.embeddingProvider.embed({
+      inputs: chunks.map((chunk) => chunk.text),
+      inputType: 'document',
+    });
+
+    const chunkDocs = chunks.map((chunk, index) => ({
+      _id: computeChunkId({
+        tenantId: version.tenantId,
+        documentVersionSha256: version.sha256,
+        ordinal: index,
+        locator: chunk.locator,
+      }),
+      documentId: version.documentId,
+      documentVersionId: version._id,
+      text: chunk.text,
+      tokenCount: chunk.tokenCount,
+      embedding: embeddingResult.embeddings[index],
+      locator: chunk.locator,
+      elements: chunk.elements,
+      tenantId: version.tenantId,
+      ingestionAttemptToken: leaseToken,
+    }));
+
+    try {
+      await this.evidenceChunkModel.insertMany(chunkDocs);
+    } catch (error) {
+      await this.rollbackChunks(version._id, leaseToken, tenantId);
+      throw error;
+    }
+
+    const finalized = await this.finalizeCompletion(
+      version._id,
+      leaseToken,
+      parsed.reducedFidelityReasons ?? [],
+    );
+    if (!finalized) {
+      // A newer attempt claimed the lease while this one was embedding/inserting — these rows
+      // are stale. Temporal already discards a superseded attempt's return value in favor of the
+      // retry that actually finalizes, so the exact result shape here is inert; `alreadyIngested:
+      // true` just avoids implying this attempt itself finished the job.
+      await this.rollbackChunks(version._id, leaseToken, tenantId);
+      this.logger.debug(
+        `Document version '${documentVersionId}' ingest superseded by a newer attempt; rolled back up to ${chunkDocs.length} chunk(s)`,
+      );
+      return { chunksCreated: 0, alreadyIngested: true };
+    }
+
+    this.logger.debug(
+      `Document version '${documentVersionId}' ingested into ${chunkDocs.length} chunks`,
+    );
+
+    // FAILURE DIRECTION: degrades, never blocks. Unlike the eval harness
+    // (`eval/ingest-fixtures.ts`, `onTimeout: 'throw'`), a user who just uploaded a document
+    // must not have this request hang, or an otherwise-successful ingest turn into a failure,
+    // because Atlas hasn't finished absorbing the last few chunks yet — see
+    // `awaitSearchIndexConvergence`'s own doc comment.
+    await this.awaitSearchIndexConvergence(
+      documentVersionId,
+      version.tenantId,
+      chunkDocs.length,
+      chunkDocs[0],
+    );
+
+    return { chunksCreated: chunkDocs.length, alreadyIngested: false };
   }
 
   /**
@@ -419,14 +521,22 @@ export class IngestionService {
 
   /** Fails CLOSED: only succeeds while `leaseToken` is still the current one — if a newer attempt
    * has since claimed the version, this attempt's writes are stale and the caller must roll them
-   * back rather than mark the version `completed` out from under the newer attempt. */
+   * back rather than mark the version `completed` out from under the newer attempt.
+   *
+   * `reducedFidelityReasons` is stamped alongside `completed` rather than left to a separate
+   * write, so a version's fidelity flag is never observable as `completed` without it (or vice
+   * versa) partway through a concurrent read. */
   private async finalizeCompletion(
     versionId: Types.ObjectId,
     leaseToken: Types.ObjectId,
+    reducedFidelityReasons: readonly string[],
   ): Promise<boolean> {
     const finalized = await this.documentVersionModel.findOneAndUpdate(
       { _id: versionId, ingestionLeaseToken: leaseToken },
-      { $set: { ingestionStatus: 'completed' }, $unset: { ingestionLeaseToken: '' } },
+      {
+        $set: { ingestionStatus: 'completed', reducedFidelityReasons },
+        $unset: { ingestionLeaseToken: '' },
+      },
     );
     return finalized !== null;
   }
@@ -500,6 +610,92 @@ export class IngestionService {
         `Document version '${documentVersionId}' failed to record ingestion failure: ` +
           describeError(recordingError),
       );
+    }
+  }
+
+  /**
+   * Records that a version's chunks are committed and searchable but its fact extraction failed,
+   * moving it from `'completed'` to `'facts-failed'`. Called by
+   * `ingest-document-version.workflow.ts` when `extractFacts` exhausts its retries — without it
+   * the version stays `'completed'`, which claims the product knows what is in a document it has
+   * extracted nothing from.
+   *
+   * Fails CLOSED on the state it will overwrite: the compare-and-set matches
+   * `ingestionStatus: 'completed'` only, so a version this workflow's own ingest did not complete
+   * — one already `'failed'`, `'needs-ocr'`, or re-claimed as `'pending'` by a newer attempt — is
+   * left exactly as it is. Returns whether the transition happened, for the caller to log.
+   *
+   * No lease guard, unlike the ingest path's writes: fact extraction runs after
+   * `finalizeCompletion` has already cleared `ingestionLeaseToken`, so there is no lease left to
+   * compare against and `'completed'` is the state that stands in for it.
+   */
+  async recordFactExtractionFailure(
+    documentVersionId: string,
+    tenantId: string,
+    reason: string,
+  ): Promise<boolean> {
+    if (!Types.ObjectId.isValid(documentVersionId)) {
+      throw new DocumentVersionNotFoundException(
+        `Document version '${documentVersionId}' not found`,
+      );
+    }
+
+    const recorded = await this.documentVersionModel.findOneAndUpdate(
+      { _id: documentVersionId, tenantId, ingestionStatus: 'completed' },
+      { $set: { ingestionStatus: 'facts-failed', ingestionFailureReason: reason } },
+    );
+
+    if (!recorded) {
+      this.logger.debug(
+        `Document version '${documentVersionId}' was not 'completed' when its fact extraction failed; status left unchanged`,
+      );
+    }
+    return recorded !== null;
+  }
+
+  /**
+   * Moves every version that claimed an ingest attempt and never finished one to `'failed'`.
+   *
+   * A version is claimed when `claimAttempt` stamps `ingestionLeaseToken` on it, and every path
+   * out of `ingestVersion` clears that token. So `'pending'` with a token still set, older than
+   * `staleAfterMs`, means an attempt started and its process died without running any catch — an
+   * OOM kill, a `SIGKILL`, a lost worker — which is precisely the case no in-process recording can
+   * cover. `staleAfterMs` is the ingest activity's whole `scheduleToCloseTimeout`
+   * (`INGEST_SCHEDULE_TO_CLOSE_TIMEOUT_MS`), past which no attempt of it can still be running.
+   *
+   * The `ingestionLeaseToken` predicate is what keeps an approval-gated version out of the sweep:
+   * a version waiting on a human decision (up to `APPROVAL_TIMEOUT`, 24 hours) is `'pending'` with
+   * no token, because its ingest activity never ran, and is left alone.
+   *
+   * Runs across every tenant at once, deliberately: it is worker maintenance with no request to
+   * inherit a tenant from, and a version stuck in one tenant is invisible to every other.
+   *
+   * FAILS OPEN: a self-healing sweep, never a request-path gate. A write failure is logged and
+   * swallowed, leaving the same stuck versions for the next pass rather than throwing out of a
+   * maintenance task. Returns the number of versions swept, for the caller to log.
+   */
+  async reconcileStaleAttempts(staleAfterMs: number, now: Date = new Date()): Promise<number> {
+    const staleBefore = new Date(now.getTime() - staleAfterMs);
+
+    try {
+      const result = await this.documentVersionModel.updateMany(
+        {
+          ingestionStatus: 'pending',
+          ingestionLeaseToken: { $exists: true },
+          updatedAt: { $lt: staleBefore },
+        },
+        {
+          $set: {
+            ingestionStatus: 'failed',
+            ingestionFailureReason: `No ingestion attempt reported progress within ${staleAfterMs}ms of claiming this version; the attempt is presumed lost`,
+          },
+          $unset: { ingestionLeaseToken: '' },
+        },
+      );
+      return result.modifiedCount;
+    } catch (error) {
+      this.logger.error(`reconcileStaleAttempts failed: ${describeError(error)}`);
+      return 0;
     }
   }
 

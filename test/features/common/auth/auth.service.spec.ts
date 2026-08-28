@@ -15,6 +15,7 @@ import {
   InvalidInvitationException,
   InvitationEmailConflictException,
 } from '../../../../src/features/common/auth/exceptions/auth.exception';
+import { JwtPayload } from '../../../../src/features/common/auth/types/jwt-payload.type';
 import { InvitationsService } from '../../../../src/features/common/invitations/invitations.service';
 import { UserRole } from '../../../../src/shared/enums/user-role.enum';
 import { AuditService } from '../../../../src/shared/services/audit/audit.service';
@@ -40,6 +41,7 @@ describe('AuthService', () => {
     password: 'irrelevant-placeholder-hash',
     tenantId: DEFAULT_TENANT_ID,
     role: UserRole.Member,
+    tokenVersion: 3,
     createdAt: new Date('2026-07-01T00:00:00.000Z'),
     ...overrides,
   });
@@ -349,7 +351,7 @@ describe('AuthService', () => {
       expect((error as InvalidCredentialsException).message).toBe('Invalid email or password');
     });
 
-    it('should return an accessToken carrying sub+email+tenantId+role and the mapped user on success', async () => {
+    it('should return an accessToken carrying sub+email+tenantId+role+tokenVersion and the mapped user on success', async () => {
       const storedHash = await bcrypt.hash('correct-password', 12);
       mockUserModel.findOne.mockResolvedValueOnce(buildMockUser({ password: storedHash }));
 
@@ -358,16 +360,22 @@ describe('AuthService', () => {
         password: 'correct-password',
       });
 
-      const decoded = jwtService.verify<{
-        sub: string;
-        email: string;
-        tenantId: string;
-        role: UserRole;
-      }>(result.accessToken);
+      const decoded = jwtService.verify<JwtPayload & { iat: number; exp: number }>(
+        result.accessToken,
+      );
       expect(decoded.sub).toBe(mockUserId);
       expect(decoded.email).toBe('user@example.com');
       expect(decoded.tenantId).toBe(DEFAULT_TENANT_ID);
       expect(decoded.role).toBe(UserRole.Member);
+      // Read from the row, not defaulted: a hardcoded 0 here would mint a token the guard accepts
+      // for an account whose epoch has already been raised to revoke it.
+      expect(decoded.tokenVersion).toBe(3);
+      // Exact-key assertion: a claim the guard never learned to compare is a claim that survives
+      // its own revocation, so a new one reds the mutation-class sweep in `auth.e2e-spec.ts` here
+      // first.
+      expect(Object.keys(decoded).sort()).toEqual(
+        ['sub', 'email', 'tenantId', 'role', 'tokenVersion', 'iat', 'exp'].sort(),
+      );
       expect(result.user.id).toBe(mockUserId);
       expect(result.user.email).toBe('user@example.com');
       expect(result.user.role).toBe(UserRole.Member);

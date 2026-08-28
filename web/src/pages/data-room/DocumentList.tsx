@@ -7,7 +7,7 @@ import {
   type DocumentVersionIngestionStatus,
   type EvidenceDocument,
 } from '../../api/client';
-import Badge from '../../components/ui/Badge';
+import Badge, { type BadgeTone } from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import EmptyState from '../../components/ui/EmptyState';
 import Field from '../../components/ui/Field';
@@ -40,18 +40,22 @@ const INGESTION_STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: 'completed', label: 'Completed' },
   { value: 'failed', label: 'Failed' },
   { value: 'needs-ocr', label: 'Needs OCR' },
+  { value: 'facts-failed', label: 'No facts extracted' },
 ];
 
-// 'needs-ocr' falls through to the same 'caution' tone as 'pending' — deliberately, not merely by
-// omission: a scanned PDF with no text layer is a gap in the corpus to flag for attention, not the
-// verification-grade failure 'rejected' signals elsewhere in this app.
-function ingestionTone(
-  status: DocumentVersionIngestionStatus,
-): 'verified' | 'caution' | 'rejected' {
-  if (status === 'completed') return 'verified';
-  if (status === 'failed') return 'rejected';
-  return 'caution';
-}
+// 'needs-ocr' and 'facts-failed' carry the same 'caution' tone as 'pending', each deliberately: a
+// scanned PDF with no text layer is a gap in the corpus to flag for attention, and a 'facts-failed'
+// version has real, citable chunks and only lacks extracted facts. Neither is the
+// verification-grade failure 'rejected' signals elsewhere in this app. A total map rather than a
+// fallthrough, so a status added to the API's union fails the type-check here instead of silently
+// inheriting a tone nobody chose for it.
+const INGESTION_TONE: Record<DocumentVersionIngestionStatus, BadgeTone> = {
+  pending: 'caution',
+  completed: 'verified',
+  'facts-failed': 'caution',
+  failed: 'rejected',
+  'needs-ocr': 'caution',
+};
 
 export default function DocumentList() {
   const [documents, setDocuments] = useState<EvidenceDocument[] | null>(null);
@@ -306,7 +310,7 @@ export default function DocumentList() {
                     {formatBytes(doc.currentVersion.sizeBytes)}
                   </TableCell>
                   <TableCell label="Ingestion">
-                    <Badge tone={ingestionTone(doc.currentVersion.ingestionStatus)}>
+                    <Badge tone={INGESTION_TONE[doc.currentVersion.ingestionStatus]}>
                       {doc.currentVersion.ingestionStatus}
                     </Badge>
                     {doc.currentVersion.ingestionFailureReason && (

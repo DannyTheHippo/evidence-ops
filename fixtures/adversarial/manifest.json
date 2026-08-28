@@ -1,0 +1,125 @@
+{
+  "generatedAt": "2026-01-01T00:00:00.000Z",
+  "files": [
+    {
+      "path": "accounting-negative.xlsx",
+      "sha256": "f84cb01201a99ac0401f26c346c2a1a86bde0af07d99a06e705854273584f8c5",
+      "description": "Accounting-style negative (parens) and zero values under two- and four-section number formats."
+    },
+    {
+      "path": "bidi-override.docx",
+      "sha256": "f39276ff0d1a4e19806d52b6141e4f24b9a79886c4ac002197c86dc51b1d570a",
+      "description": "A paragraph containing a U+202E/U+202C bidi override pair."
+    },
+    {
+      "path": "disguised-pdf.txt",
+      "sha256": "052c6396c937677442db0d219c92bfcae1cc5724e383998f2393f21deff0b2a9",
+      "description": "A genuine PDF, saved under a .txt filename."
+    },
+    {
+      "path": "duplicates/folder-a/rent-roll-summary.pdf",
+      "sha256": "ceb5ffddb3c953d05dd4b26eb143d3cb67595225cf7dc47ab2e03d556edbbe20",
+      "description": "Byte-identical to duplicates/folder-b/rent-roll-summary.pdf, different path."
+    },
+    {
+      "path": "duplicates/folder-b/rent-roll-summary.pdf",
+      "sha256": "ceb5ffddb3c953d05dd4b26eb143d3cb67595225cf7dc47ab2e03d556edbbe20",
+      "description": "Byte-identical to duplicates/folder-a/rent-roll-summary.pdf, different path."
+    },
+    {
+      "path": "email-disguised-attachment.eml",
+      "sha256": "afa36d31f23f7e7677ebf88bbc402e1faa8ad09f59a53d11de4a409157036733",
+      "description": "An attachment declaring a spreadsheet MIME and .xlsx name, carrying PDF bytes."
+    },
+    {
+      "path": "email-empty-body.eml",
+      "sha256": "ef9db27baf13b9f333d11f43d0286d34c3dfaa0d5f0c620a0f989cbe5552ef4d",
+      "description": "A well-formed header block closed by an empty line, with nothing after it."
+    },
+    {
+      "path": "email-headerless.eml",
+      "sha256": "1b3afca951f16ffe3ee7f0f3a2afe7dad185c2ca610aa062b6f56188abcbc2e3",
+      "description": "Bytes with no empty line, so no header block ever closes."
+    },
+    {
+      "path": "email-hostile-filename.eml",
+      "sha256": "6dafd9ed4e46d928c2ffd93a8986df946127b78f6d0254a91d82848a2a11bd9c",
+      "description": "A CSV attachment whose declared filename is a path traversal."
+    },
+    {
+      "path": "email-html-only.eml",
+      "sha256": "c1d08fded496d93ca0d8c66fd6ffd23816583de64591fe195c563545ad01da39",
+      "description": "A multipart/alternative message whose only alternative is text/html."
+    },
+    {
+      "path": "email-nested-message.eml",
+      "sha256": "0fb582de4734b4c67a6e143f2449adc968698c57a9a41927b82b2647c2e4acde",
+      "description": "A message carrying another whole message as a message/rfc822 attachment."
+    },
+    {
+      "path": "email-single-part.eml",
+      "sha256": "41e16e888d9a4a21db1ba4b38baf0e6c0de2d621fea027eed5983997817778e7",
+      "description": "A message with no multipart structure: one plain-text body, no attachments."
+    },
+    {
+      "path": "email-truncated.eml",
+      "sha256": "2bf4ad1b4b4c377767e6976dfe3c10d29b4949eb143f33dc5a88796563d428d3",
+      "description": "The same message cut off mid-attachment, so its closing boundary never arrives."
+    },
+    {
+      "path": "email-with-xlsx-attachment.eml",
+      "sha256": "c5f2805f699b0ce584c2e3bfe2faa920562d960267023398f1bfebe836deaa65",
+      "description": "A multipart/mixed message: a plain-text body plus a real XLSX attachment."
+    },
+    {
+      "path": "encrypted.docx",
+      "sha256": "dfd23c3969f70edea334f572c288aeccb22630297b1cd715d24847b0495e4a7f",
+      "description": "A CFB-container stub, the byte shape real password-protected OOXML takes."
+    },
+    {
+      "path": "legacy-ledger.xls",
+      "sha256": "ee4d0d7d9e81fc44c6c1d25536b8105ea87e9b04d103f7b70223f46c127e42be",
+      "description": "A CFB-container stub standing in for a legacy Excel 97-2003 .xls file."
+    },
+    {
+      "path": "legacy-memo.doc",
+      "sha256": "519089fcc04c04797a8711320e0f2f0e8e9d1e2e5265e8e5ff7efa4f65f59656",
+      "description": "A CFB-container stub standing in for a legacy Word 97-2003 .doc file."
+    },
+    {
+      "path": "mixed-scanned-text.pdf",
+      "sha256": "6dec60ca94ed43080b5fa576a914dfed424e1124d2674e5f7d054b86b1fb22ae",
+      "description": "Page 1 has extractable text; page 2 has none, standing in for a scanned page."
+    },
+    {
+      "path": "semicolon-export.csv",
+      "sha256": "06de02abad174105e4e16bed876a5fafd89fc184ca2fd770cb56a41f445d36cc",
+      "description": "Plain UTF-8 CSV using a semicolon field delimiter."
+    },
+    {
+      "path": "truncated.pdf",
+      "sha256": "3e21d14480113aa870e630da4fcc53897bbda4bc8bec668881020c80309c4e93",
+      "description": "A well-formed PDF (Fixture Estate — Insurance Certificate) with its last 20% cut off."
+    },
+    {
+      "path": "two-column.pdf",
+      "sha256": "052c6396c937677442db0d219c92bfcae1cc5724e383998f2393f21deff0b2a9",
+      "description": "One page laid out as two side-by-side text blocks."
+    },
+    {
+      "path": "two-row-header.xlsx",
+      "sha256": "0b533f5155d8d834f173f43b489b9143bc67aa4fc5f4873380244231378590f5",
+      "description": "A repeated category band above the real field-name header row."
+    },
+    {
+      "path": "utf16-export.csv",
+      "sha256": "64888532a76bd96a1a4f67086328ffc3291daadf4458c045de1e3b2b50997e96",
+      "description": "Excel 'Unicode Text' style export: UTF-16LE with a byte-order mark."
+    },
+    {
+      "path": "windows-1252-export.csv",
+      "sha256": "dd72626fcbee5dc0a73136a50d1ffcfcb1f359f9f0aae356fdc6c12090c08901",
+      "description": "CRM-style export encoded as Windows-1252, no BOM."
+    }
+  ]
+}

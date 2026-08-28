@@ -37,16 +37,18 @@ export class RequiredSearchIndexesMissingError extends Error {
       // The subtlety worth stating loudly: `npm run migrate:up` alone will NOT recreate these.
       // Its `migrations` changelog collection lives in `/data/db`, which survives independently
       // of `/data/mongot` (the volume that actually holds the index build) — so migrate-mongo
-      // still considers "0003-search-indexes" applied and reports "nothing to migrate" even
-      // though the indexes it built are gone. Anyone who runs `migrate:up`, sees "nothing to
-      // do," and concludes the indexes are fine is repeating the exact incident this error
-      // exists to prevent.
+      // still considers "0001-baseline.ts" applied and reports "nothing to migrate" even
+      // though the search indexes it built are gone. Anyone who runs `migrate:up`, sees "nothing
+      // to do," and concludes the indexes are fine is repeating the exact incident this error
+      // exists to prevent. Clearing the changelog row re-applies the whole baseline, which is
+      // safe here: every collection and index it creates is idempotent against a store that
+      // already carries them, so the only observable effect is the search indexes coming back.
       parts.push(
         `Missing index(es) (${missing.map((p) => p.name).join(', ')}) will NOT be recreated by ` +
           '"npm run migrate:up" alone: migrate-mongo\'s "migrations" changelog collection still ' +
-          'records "0003-search-indexes.ts" as applied. Clear that changelog row first, in ' +
+          'records "0001-baseline.ts" as applied. Clear that changelog row first, in ' +
           "mongosh: db.getCollection('migrations').deleteOne({ fileName: " +
-          "'0003-search-indexes.ts' }) — then re-run migrate:up so it actually rebuilds the " +
+          "'0001-baseline.ts' }) — then re-run migrate:up so it actually rebuilds the " +
           'indexes.',
       );
     }

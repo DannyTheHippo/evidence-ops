@@ -3,6 +3,7 @@ import path from 'node:path';
 import {
   chunkOverlapsAnyLocator,
   chunkOverlapsLocator,
+  classifyOverlapScoringMethod,
   type OverlapCandidateChunk,
 } from '../../../eval/metrics/locator-overlap';
 import type { Locator } from '../../../eval/dataset/schema';
@@ -26,6 +27,7 @@ async function chunksFor(file: string): Promise<OverlapCandidateChunk[]> {
     filename: file,
     text: chunk.text,
     locator: chunk.locator,
+    elements: chunk.elements,
   }));
 }
 
@@ -119,6 +121,66 @@ describe('chunkOverlapsLocator', () => {
 
     expect(matches.some(Boolean)).toBe(false);
   });
+
+  describe('retained element locators', () => {
+    it("should match a chunk on a later page via its retained elements, even though the chunk's own anchor locator names only the first page", async () => {
+      const chunk: OverlapCandidateChunk = {
+        filename: 'multi-page.pdf',
+        text: 'page one text\n\npage four text',
+        locator: { kind: 'pdf-page', page: 1, extractorVersion: 'pdf-pdfjs-1' },
+        elements: [
+          {
+            locator: { kind: 'pdf-page', page: 1, extractorVersion: 'pdf-pdfjs-1' },
+            text: 'page one text',
+          },
+          {
+            locator: { kind: 'pdf-page', page: 4, extractorVersion: 'pdf-pdfjs-1' },
+            text: 'page four text',
+          },
+        ],
+      };
+      const locator: Locator = { kind: 'pdf-page', file: 'multi-page.pdf', page: 4 };
+
+      expect(await chunkOverlapsLocator(chunk, locator)).toBe(true);
+    });
+
+    it('should not match a page the chunk does not actually span', async () => {
+      const chunk: OverlapCandidateChunk = {
+        filename: 'multi-page.pdf',
+        text: 'page one text',
+        locator: { kind: 'pdf-page', page: 1, extractorVersion: 'pdf-pdfjs-1' },
+        elements: [
+          {
+            locator: { kind: 'pdf-page', page: 1, extractorVersion: 'pdf-pdfjs-1' },
+            text: 'page one text',
+          },
+        ],
+      };
+      const locator: Locator = { kind: 'pdf-page', file: 'multi-page.pdf', page: 9 };
+
+      expect(await chunkOverlapsLocator(chunk, locator)).toBe(false);
+    });
+
+    // Regression: a chunk resolved through `RetrievedChunk` carries no retained elements at all —
+    // `chunkOverlapsLocator` must still fall back to text-containment overlap for it, unchanged.
+    it('should fall back to text-containment overlap when the chunk carries no retained elements', async () => {
+      const chunks: OverlapCandidateChunk[] = (await chunksFor('lease-summary.docx')).map(
+        (chunk) => ({ filename: chunk.filename, text: chunk.text, locator: chunk.locator }),
+      );
+      const locator: Locator = {
+        kind: 'docx-paragraph',
+        file: 'lease-summary.docx',
+        paragraphIndex: 3,
+        headingPath: ['Lease Abstract — Northgate Business Park', 'Premises'],
+      };
+
+      const matches = await Promise.all(
+        chunks.map((chunk) => chunkOverlapsLocator(chunk, locator)),
+      );
+
+      expect(matches.some(Boolean)).toBe(true);
+    });
+  });
 });
 
 describe('chunkOverlapsAnyLocator', () => {
@@ -145,5 +207,30 @@ describe('chunkOverlapsAnyLocator', () => {
     );
 
     expect(results.some(Boolean)).toBe(false);
+  });
+});
+
+describe('classifyOverlapScoringMethod', () => {
+  it('should classify a chunk carrying retained elements as element-index', () => {
+    const chunk: Pick<OverlapCandidateChunk, 'elements'> = {
+      elements: [
+        {
+          locator: { kind: 'pdf-page', page: 1, extractorVersion: 'pdf-pdfjs-1' },
+          text: 'page one text',
+        },
+      ],
+    };
+
+    expect(classifyOverlapScoringMethod(chunk)).toBe('element-index');
+  });
+
+  it('should classify a chunk with an empty elements array as text-containment', () => {
+    expect(classifyOverlapScoringMethod({ elements: [] })).toBe('text-containment');
+  });
+
+  // Regression: a chunk resolved through `RetrievedChunk`, or a row ingested before `elements`
+  // existed, carries no `elements` field at all — `.lean()` never populates a Mongoose default.
+  it('should classify a chunk with no elements field at all as text-containment', () => {
+    expect(classifyOverlapScoringMethod({ elements: undefined })).toBe('text-containment');
   });
 });

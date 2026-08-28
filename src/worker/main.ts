@@ -4,9 +4,18 @@ import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NativeConnection, Worker } from '@temporalio/worker';
 import { TypedConfigService } from '../config/environment/typed-config.service';
-import { createTemporalOtelPlugin } from '../providers/telemetry/otel-temporal-plugin.factory';
+import { IngestionService } from '../features/evidence/ingestion/ingestion.service';
+import { INGEST_SCHEDULE_TO_CLOSE_TIMEOUT_MS } from '../workflows/ingest-retry-policy';
 import { createActivities } from './activities';
 import { WorkerModule } from './worker.module';
+
+/**
+ * How often the worker sweeps versions abandoned mid-ingest into `failed`
+ * (`IngestionService.reconcileStaleAttempts`). Well under the staleness threshold it sweeps
+ * against, so a lost attempt is visible within minutes of becoming provably lost rather than at
+ * the next deploy.
+ */
+const RECONCILE_INTERVAL_MS = 60 * 1000;
 
 /**
  * Second process, per ADR-0003. Boots the same DI graph as the API (`WorkerModule` mirrors the
@@ -21,6 +30,21 @@ async function run(): Promise<void> {
   const config = app.get(TypedConfigService);
 
   const connection = await NativeConnection.connect({ address: config.temporal.address });
+  // An activity whose process is killed outright runs no catch anywhere, so the version it claimed
+  // stays `pending` with a live lease and nobody is waiting on it. This sweep is the only thing
+  // that can see that case; `reconcileStaleAttempts` swallows its own write failures, so a bad
+  // pass costs the next interval, never the worker.
+  const ingestionService = app.get(IngestionService);
+  const reconciler = setInterval(() => {
+    void ingestionService
+      .reconcileStaleAttempts(INGEST_SCHEDULE_TO_CLOSE_TIMEOUT_MS)
+      .then((swept) => {
+        if (swept > 0) {
+          Logger.log(`Swept ${swept} abandoned ingestion attempt(s) to 'failed'`, 'Worker');
+        }
+      });
+  }, RECONCILE_INTERVAL_MS);
+
   try {
     const worker = await Worker.create({
       connection,
@@ -28,10 +52,6 @@ async function run(): Promise<void> {
       taskQueue: config.temporal.taskQueue,
       workflowsPath: require.resolve('../workflows'),
       activities: createActivities(app),
-      // 'evidence-ops-worker' mirrors the OTEL_SERVICE_NAME this process's own `instrumentation.ts`
-      // resolves via the `worker:dev` script, so worker-process spans and this plugin's
-      // client/activity/workflow-sandbox interceptor spans report the same service.name.
-      plugins: [createTemporalOtelPlugin('evidence-ops-worker', config.telemetry.otlpEndpoint)],
     });
 
     Logger.log(
@@ -45,6 +65,7 @@ async function run(): Promise<void> {
     // context cleanly.
     await worker.run();
   } finally {
+    clearInterval(reconciler);
     await connection.close();
     await app.close();
   }

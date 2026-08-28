@@ -13,6 +13,8 @@ export type CoTenantUserResult =
       previousTenantId: string;
       tenantName: string;
       apiKeysMoved: number;
+      /** The role the user holds in the target tenant — the one just set, or the one carried over. */
+      role: string;
     };
 
 /**
@@ -36,6 +38,7 @@ export const coTenantUser = async (
   db: Db,
   email: string,
   tenantId: string,
+  role?: string,
 ): Promise<CoTenantUserResult> => {
   const tenant = await db.collection('tenants').findOne({ tenantId });
   if (!tenant) {
@@ -56,14 +59,23 @@ export const coTenantUser = async (
     .collection('api_keys')
     .updateMany({ userId: user._id }, { $set: { tenantId }, $currentDate: { updatedAt: true } });
 
-  await db
-    .collection('users')
-    .updateOne({ _id: user._id }, { $set: { tenantId }, $currentDate: { updatedAt: true } });
+  // `role` joins the same `$set` rather than a second write: a move that lands the user in the
+  // target tenant but leaves the role unchanged is the half-state this parameter exists to avoid.
+  // Omitting it carries the user's existing role across, which for a self-registered account is
+  // `admin` — the reason a caller usually wants to pass it.
+  await db.collection('users').updateOne(
+    { _id: user._id },
+    {
+      $set: role === undefined ? { tenantId } : { tenantId, role },
+      $currentDate: { updatedAt: true },
+    },
+  );
 
   return {
     outcome: 'moved',
     previousTenantId,
     tenantName: tenant.name as string,
     apiKeysMoved: apiKeys.modifiedCount,
+    role: (role ?? user.role) as string,
   };
 };

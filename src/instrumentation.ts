@@ -1,22 +1,16 @@
 import 'dotenv/config';
 
 import { PrometheusExporter } from '@opentelemetry/exporter-prometheus';
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
-import { ExpressInstrumentation } from '@opentelemetry/instrumentation-express';
-import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
-import { MongooseInstrumentation } from '@opentelemetry/instrumentation-mongoose';
 import { NodeSDK } from '@opentelemetry/sdk-node';
-import { BatchSpanProcessor, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { validateEnvironment } from './config/environment/environment.config';
-import { OtlpFileSpanExporter } from './providers/telemetry/otlp-file-span.exporter';
 
 /**
  * `--import`/`-r` entrypoint (see the `start*`/`worker:dev` scripts in `package.json`), loaded
- * before `main.ts`/`worker/main.ts` so every http/express/mongoose call the process makes is
- * instrumented from the first request. `dotenv/config` runs here too, as the first statement,
- * because `--import` executes before `main.ts`'s own `import 'dotenv/config'` line — the OTLP
- * endpoint read below needs `.env` already loaded; re-loading it again in `main.ts` is a harmless
- * no-op (`dotenv` never overwrites an already-set var).
+ * before `main.ts`/`worker/main.ts` so every process exports metrics from the first request.
+ * `dotenv/config` runs here too, as the first statement, because `--import` executes before
+ * `main.ts`'s own `import 'dotenv/config'` line — the config read below needs `.env` already
+ * loaded; re-loading it again in `main.ts` is a harmless no-op (`dotenv` never overwrites an
+ * already-set var).
  *
  * `validateEnvironment(process.env)` rather than injecting `TypedConfigService`: this file runs
  * before Nest builds a DI graph, so injection isn't available yet. The "process.env read in
@@ -30,10 +24,6 @@ import { OtlpFileSpanExporter } from './providers/telemetry/otlp-file-span.expor
  * except for the one place below where each process's metrics port has to differ, which reads
  * `telemetry.serviceName` (the same env var, forwarded through the sanctioned parser like every
  * other value here) rather than guessing.
- *
- * Explicit registration only (never `getNodeAutoInstrumentations`): the task calls out http,
- * express, and mongoose by name — auto-instrumentation pulls in dozens of libraries this codebase
- * doesn't use.
  */
 const { telemetry } = validateEnvironment(process.env);
 
@@ -68,26 +58,14 @@ const metricReaders =
     : [new PrometheusExporter({ port: telemetry.metricsPort + metricsPortOffset })];
 
 const sdk = new NodeSDK({
-  spanProcessors: [
-    new BatchSpanProcessor(new OTLPTraceExporter({ url: `${telemetry.otlpEndpoint}/v1/traces` })),
-    // Simple, not Batch: a committed trace artifact (`artifacts/traces/`) should reflect every
-    // span as it completes, not whatever survived the last batch flush before process exit.
-    new SimpleSpanProcessor(new OtlpFileSpanExporter()),
-  ],
   // Process liveness comes free from Prometheus's own `up` series once a scrape target names this
   // process's port — no bespoke heartbeat metric needed.
   metricReaders,
-  instrumentations: [
-    new HttpInstrumentation(),
-    new ExpressInstrumentation(),
-    new MongooseInstrumentation(),
-  ],
 });
 
 sdk.start();
 
-// Flush both processors (OTLP batch + file) before the process actually exits — the batch
-// processor otherwise drops whatever hadn't hit its flush interval yet.
+// Flushes the metric reader before the process actually exits.
 ['SIGTERM', 'SIGINT'].forEach((signal) => {
   process.on(signal, () => {
     void sdk.shutdown();

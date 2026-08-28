@@ -150,11 +150,29 @@ describe('AnswerView', () => {
   });
 
   it('shows the reason for a dropped claim always, and the raw statement only behind its own disclosure', () => {
+    // `outcome.claims` carries only the surviving claim — the gate never persists a dropped
+    // claim's statement under `outcome` (see `activities.ts`'s `groundingCheck`), and a claim's
+    // `citations` is never empty (`claimSchema`'s `min(1)`). `totalClaimCount` above
+    // `outcome.claims.length` is what a real, post-verification answer with one dropped claim
+    // looks like.
     renderView(
       baseAnswer({
         outcome: {
           kind: 'answered',
-          claims: [{ statement: 'The cap rate is 6.1%.', citations: [] }],
+          claims: [
+            {
+              statement: 'The cap rate is 6.1%.',
+              citations: [
+                {
+                  docVersionId: 'docver-1',
+                  sha256: 'a'.repeat(64),
+                  chunkId: 'chunk-a',
+                  locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+                  quote: 'Cap rate: 6.1%',
+                },
+              ],
+            },
+          ],
         },
         verificationReport: {
           verifiedClaimCount: 1,

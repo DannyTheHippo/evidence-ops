@@ -14,7 +14,7 @@ this system runs on its own synthesized answers: a claim is graded `grounded` on
 a specific document version backs its citation, checked by code, never restated by a second model
 call. What that check establishes, and what it deliberately does not — a coverage-versus-overlap
 gap the design does not paper over — is bounded in
-[ADR-0023](docs/adr/0023-attestation-surface.md); read that ADR, not this summary, before trusting
+[ADR-0020](docs/adr/0020-attestation-surface.md); read that ADR, not this summary, before trusting
 the word "verified."
 
 Each deployment is single-tenant per engagement: one instance in the client's own VPC or on-prem,
@@ -22,9 +22,28 @@ calling out with the client's own model and embedding keys, never a shared servi
 clients' evidence in one place. Several engagements can still share one deployment — `tenantId` is
 the isolation mechanism, and "tenant" in this codebase names an engagement, not a paying customer.
 Mongo stays the only store — no second datastore, no sharding — a deliberate scope decision that
-keeps a single-host deployment auditable and cheap to operate. It targets roughly 50,000 documents
-per engagement; that is a stated design boundary, not a measured ceiling, and a corpus that
-outgrows it is a reason to revisit the decision, not evidence the decision was already wrong.
+keeps a single-host deployment auditable and cheap to operate.
+
+**Scale is unmeasured.** The largest corpus this repository has ever ingested is the nine-file
+synthetic fixture in `fixtures/data-room/` — 19 chunks and 74 facts, recorded in
+[ADR-0024](docs/adr/0024-what-the-first-measurements-say.md). No corpus at
+engagement scale has been ingested, timed, or measured for retrieval quality, so this README states
+no document ceiling: the single-store design targets a corpus a single host can hold, and what that
+number actually is has not been established. The step that would establish it (a ~500-document
+public corpus) is deferred to its own cycle — every measurement in ADR-0024 runs against the
+nine-file corpus precisely because the larger one has not been built yet.
+
+**What is deterministic, and what is not.** Deterministic here means three specific things: chunk
+identity (the same bytes produce the same chunk ids and the same content hash), the citation check
+(`verifyClaim` runs no model and reaches no network — the same claim against the same chunks always
+grades the same way), and the outcome contract (`answered` / `insufficient_evidence` /
+`conflicting_evidence` is computed server-side from the gate's result, never taken from the model).
+**The answer itself is not deterministic.** The same question over the same corpus can return
+different claims, different citations, and a different set of extracted facts on the next run.
+[ADR-0024](docs/adr/0024-what-the-first-measurements-say.md) measured that instability directly:
+four passes over the nine-file corpus, both pre-registered bars missed, with the drift landing
+downstream of retrieval — in what a pass drafts and cites, not in what it retrieves. A benchmark at
+engagement scale is a separate, larger step and stays deferred with the corpus cycle.
 
 A model is a function from a token sequence to a token sequence. It is not deterministic, it is
 stateless, and a prompt has no type system — nothing marks instructions from data. Every guarantee
@@ -160,7 +179,7 @@ backtest can still replay a decision made against it. Withdrawal is a retrieval 
 data-removal control; an operator who wants the underlying bytes actually gone uses the admin
 delete path instead. The full mechanism — including the guards that keep an unmounted or partially
 mounted source from withdrawing evidence it shouldn't — is in
-[ADR-0024](docs/adr/0024-evidence-lifecycle-and-withdrawal.md).
+[ADR-0021](docs/adr/0021-evidence-lifecycle-and-withdrawal.md).
 
 A scanned, image-only PDF — no embedded text layer — is quarantined as needing OCR rather than
 failing ingestion the same way a genuinely malformed file does, so an operator can tell "needs OCR,
@@ -169,7 +188,7 @@ scope; a quarantined version stays that way until different bytes replace it.
 
 ## In the browser
 
-- **Data Room** — upload PDF, DOCX, XLSX, PPTX, CSV, TSV, TXT or MD; watch ingestion complete.
+- **Data Room** — upload PDF, DOCX, XLSX, PPTX, CSV, TSV, TXT, MD or EML; watch ingestion complete.
   An upload whose declared MIME is ambiguous is resolved by an extension allowlist, and anything
   on neither list is refused rather than guessed.
 - **Sources** — connect a folder or export drop; the sync loop keeps it current. A source's own
@@ -308,28 +327,26 @@ Everything past `mongo` is opt-in:
 | Profile                   | Adds                                                                          | Resident memory (observed)          |
 | ------------------------- | ------------------------------------------------------------------------------ | ----------------------------------- |
 | _(default, no flag)_      | `mongo`                                                                       | ≈551 MiB                            |
-| `--profile observability` | + `jaeger`, `prometheus`                                                      | +≈38 MiB, plus `prometheus`         |
-| `--profile temporal`      | + `temporal`, `temporal-postgres`, `temporal-ui`                              | +≈431 MiB                           |
-| `--profile full`          | + `migrate` (one-shot), `api`, `worker`, `mcp`, `web`, and all of the above   | ≈1.4 GB, plus `prometheus` and `mcp` |
-| `--profile qdrant`        | + `qdrant`                                                                    | ≈63 MiB                             |
+| `--profile observability` | + `prometheus`                                                                | not measured                        |
+| `--profile temporal`      | + `temporal`, `temporal-postgres`                                             | +≈431 MiB                           |
+| `--profile temporal-ui`   | + `temporal-ui`, and the two services above                                   | not measured                        |
+| `--profile full`          | + `migrate` (one-shot), `api`, `worker`, `mcp`, `web`, `temporal`, `temporal-postgres` | ≈1.4 GB, plus `mcp`        |
 
-`prometheus` and `mcp` carry no figures because none were ever taken for them. Both are capped at
-256m, so budget against that rather than against the observed numbers beside them. The `jaeger`
-figure is an idle reading of a process that grows with every trace it receives; `MEMORY_MAX_TRACES`
-is what bounds it, not the reading.
+`prometheus`, `temporal-ui` and `mcp` carry no figures because none were ever taken for them.
+`prometheus` and `mcp` are capped at 256m, so budget against that rather than against the observed
+numbers beside them.
 
-`--profile qdrant` sits outside the demo path entirely: it exists solely for the Qdrant-vs-MongoDB
-retrieval benchmark behind `npm run eval -- --qdrant`, which is why it is deliberately absent from
-`full`. Qdrant is benchmark infrastructure, never a runtime dependency of the application — the
-production retrieval path is MongoDB Atlas Local in every profile.
+**`full` starts neither `prometheus` nor `temporal-ui`.** Both read across every tenant with no
+login of any kind, so each is asked for by name rather than arriving with the application stack.
+Combine profiles to get them alongside it (`docker compose --profile full --profile observability
+--profile temporal-ui up -d`).
 
 The rationale: someone doing retrieval or ingestion work against a compose-run `mongo` should not
 be paying for three Temporal containers and a monitoring stack they never look at. Reach for
 `--profile temporal` or `--profile observability` only when you need that piece in isolation;
 `--profile full` is for the end-to-end demo and for verifying a fresh clone, where you want
-everything the host loop runs — `mongo`, Temporal (`temporal` + `temporal-postgres` +
-`temporal-ui`), `jaeger`, `prometheus`, `api`, `worker`, `mcp`, `web`, and the one-shot `migrate` —
-as containers instead:
+everything the host loop runs — `mongo`, Temporal (`temporal` + `temporal-postgres`), `api`,
+`worker`, `mcp`, `web`, and the one-shot `migrate` — as containers instead:
 
 ```bash
 cp .env.example .env   # then set JWT_SECRET, the model-provider key, and VOYAGE_API_KEY
@@ -341,13 +358,14 @@ docker compose ps      # wait for api, worker, mcp, web healthy/running
 `NODE_ENV=production`, under which boot aborts without a `JWT_SECRET`.
 
 Then continue from **step 6** below (Create a user) — the SPA is at <http://localhost:8090>
-(`${WEB_HOST_PORT:-8090}:80` in `docker-compose.yml`, not port 80 and not 5173); Temporal's Web UI
-is at <http://localhost:8233>, matching the host dev-loop's URL so either path gives the same
-address; Prometheus is at <http://localhost:9090>, where `/targets` shows whether the `api`,
-`worker` and `mcp` scrape targets are actually up; the MCP surface is at `${MCP_HOST_PORT:-3002}`.
+(`${WEB_HOST_PORT:-8090}:80` in `docker-compose.yml`, not port 80 and not 5173); the MCP surface is
+at `${MCP_HOST_PORT:-3002}`. Temporal's Web UI (<http://localhost:8233>, matching the host
+dev-loop's URL) and Prometheus (<http://localhost:9090>, whose `/targets` shows whether the `api`,
+`worker` and `mcp` scrape targets are up) each need their own profile named alongside `full` —
+neither is started by `--profile full` on its own.
 `api`, `worker` and `mcp` wait on `mongo` and `temporal` reporting
 healthy **and** on `migrate` completing successfully before they start — the search/vector indexes
-`0003-search-indexes.ts` builds take tens of seconds on a fresh volume, and starting the API against
+`0001-baseline.ts` builds take tens of seconds on a fresh volume, and starting the API against
 an unindexed store would silently match nothing rather than fail loudly.
 
 Two things about this path are unverified rather than silently assumed: the `temporal` service's
@@ -367,7 +385,7 @@ unambiguous about what stops:
 
 ```bash
 docker compose stop api worker mcp web
-docker compose stop jaeger prometheus
+docker compose stop prometheus
 docker compose stop temporal temporal-ui temporal-postgres
 ```
 
@@ -379,11 +397,13 @@ below, which is a different failure mode with no other fix.
 
 There is one compose file, and the split between it and `.env` is deliberate:
 
-- **`.env` holds six values**: four credentials — `JWT_SECRET`, `ANTHROPIC_API_KEY`,
-  `OPENAI_API_KEY`, `VOYAGE_API_KEY` — one provider switch, `MODEL_PROVIDER`, and the one spend
-  ceiling, `MODEL_SPEND_DAILY_LIMIT_USD`. `api`, `worker` and `mcp` load it with `required: false`,
-  so a missing file does not fail `up`. Keeping it this short is what makes it auditable and safe to
-  talk about.
+- **`.env` holds seven values**: four credentials — `JWT_SECRET`, `ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `VOYAGE_API_KEY` — one provider switch, `MODEL_PROVIDER`, the one spend
+  ceiling, `MODEL_SPEND_DAILY_LIMIT_USD`, and the optional database-credential prefix `MONGO_AUTH`
+  (empty by default, which leaves Mongo unauthenticated —
+  [`docs/global/deployment-hardening.md`](docs/global/deployment-hardening.md) is the enablement
+  runbook). `api`, `worker` and `mcp` load it with `required: false`, so a missing file does not
+  fail `up`. Keeping it this short is what makes it auditable and safe to talk about.
 - **Every non-secret knob is declared in `docker-compose.yml`**, in the top-level
   `x-app-environment` anchor merged into `api`, `worker` and `mcp`. Worker-only knobs — Voyage
   settings, extraction concurrency, source inbox and sync interval — are added on `worker`, because
@@ -401,12 +421,21 @@ There is one compose file, and the split between it and `.env` is deliberate:
   of truth for what a default is; restating a value in compose is a claim that this deployment
   wants something different.
 
-**Nothing in this stack reduces host-port exposure.** Mongo, the API, the MCP surface, Jaeger,
-Prometheus, the Temporal UI and the Temporal gRPC port all publish to the host, and none of the
-observability services carry any authentication — anyone who can reach port 9090 or 16686 reads
-your traces and metrics. The MCP surface at least authenticates every call with a PAT, but nothing
-here bounds who can reach it. Restricting that reach is a network concern for whoever operates the
-host; the compose file does not do it.
+**Every published port binds `127.0.0.1`.** Mongo, the API, the MCP surface, Prometheus, the
+Temporal UI and the Temporal gRPC port all publish to loopback only, so reaching any of them from
+another machine is something a deployment states explicitly — `WEB_BIND_ADDRESS` and
+`MCP_BIND_ADDRESS` are the only two widening knobs, and both publish plaintext HTTP. `mongo`,
+`prometheus`, `temporal` and `temporal-ui` carry no knob at all, because none of them takes a
+credential: loopback _is_ their access control, and the supported remote path is an SSH tunnel.
+
+Stated plainly, because the binding is doing more work than it looks like: **until an operator
+enables the opt-in database credential, the loopback bind is the only thing protecting Mongo** —
+including from any other container on the compose network. `MONGO_AUTH` plus a
+`.env.mongo-auth.local` file turns authentication on;
+[`docs/global/deployment-hardening.md`](docs/global/deployment-hardening.md) carries that runbook,
+the reference TLS edge the widening knobs belong behind, and the reachability scan that proves the
+bind actually held. Nothing in this repository is a firewall, a bastion, or an authenticating
+proxy.
 
 [`docs/global/pilot-runbook.md`](docs/global/pilot-runbook.md) covers operating a single-host
 deployment.
@@ -422,8 +451,9 @@ cp .env.example .env
 ```
 
 `.env.example` is short by design — four credentials (`JWT_SECRET`, `ANTHROPIC_API_KEY`,
-`OPENAI_API_KEY`, `VOYAGE_API_KEY`), one provider switch (`MODEL_PROVIDER`), and one spend ceiling
-(`MODEL_SPEND_DAILY_LIMIT_USD`). Filling it in is not configuring the application; every other knob
+`OPENAI_API_KEY`, `VOYAGE_API_KEY`), one provider switch (`MODEL_PROVIDER`), one spend ceiling
+(`MODEL_SPEND_DAILY_LIMIT_USD`), and the optional `MONGO_AUTH` database-credential prefix, which
+stays empty for this walkthrough. Filling it in is not configuring the application; every other knob
 has a default that already works. Set `VOYAGE_API_KEY` and the key for whichever `MODEL_PROVIDER`
 is selected — `ANTHROPIC_API_KEY` by default.
 
@@ -468,7 +498,7 @@ docker compose ps
 npm run migrate:up
 ```
 
-`0003-search-indexes.ts` creates the `$search` and `$vectorSearch` indexes and then **blocks** until
+`0001-baseline.ts` creates the `$search` and `$vectorSearch` indexes and then **blocks** until
 both report `status: READY` and `queryable: true`. Atlas builds these asynchronously; a migration
 that returned early would hand the next reader a store that silently matches nothing. Expect this
 step to take tens of seconds.
@@ -600,47 +630,91 @@ that rejects is _retained_ — subsequent calls await the same rejected promise.
 start a workflow while Temporal is down, that process keeps failing until you restart it. Restarting
 the API is the fix.
 
-**`npm run eval` requires a recorded cache, and fails loudly on a miss.** Default mode is
-replay-only: no live API calls, zero cost, byte-stable. The committed cache holds 478 model entries
-and 216 embedding entries. `eval/dataset/cases.json` holds 35 cases, and the newest run committed
-under `eval/results/` (`caa98fb1c6d7c38e9e9927090a2c265610c987c6.json`) is a full 35-case replay at
-`Cache mode: replay` with 0 failing cases — answer-content accuracy 95.0%, conflict recall and
-conflict scope both 100.0%, zero canary leaks, all reproduced with zero live calls. A request whose key
-falls outside the cache — because the corpus, a prompt template, or the model/embedding version
-changed since the last recording — fails with `ModelReplayCacheMissError` or
-`EmbeddingReplayCacheMissError` rather than silently falling through to a live call.
-**That is the intended behaviour, not a bug** — the alternative would be a silent live call that
-quietly costs money and makes the run non-reproducible. Re-recording needs live keys and a
-reachable Mongo:
+**`npm run eval` is RED, deliberately, and three of its hard gates fail.** This is the current
+measured state, not a broken checkout. The most recent recording run
+(`npm run eval -- --record --ingest`, 2026-08-27, 59 model calls, $0.690 of real spend against the
+nine-file synthetic corpus) reports 34 of 35 cases passing and **three hard gates failing**:
+
+| Metric | Measured | Gate |
+| ------ | -------- | ---- |
+| recall@5 | 0.73 | **fails** an 0.80 floor |
+| answer-content accuracy | 0.895 | **fails** a 0.950 floor |
+| `ans-005` outcome | `insufficient_evidence` | **fails** — the case expects `answer` |
+| citation precision | 0.76 | informational, ungated |
+| mean claim coverage | 0.81 | informational, ungated |
+| abstention accuracy | 1.00 | passes |
+| conflict recall / conflict scope | 1.00 / 1.00 | passes |
+| canary own-voice leak rate | 0 | passes (must be 0) |
+| canary verified-quote leak rate | 0 | informational, ungated |
+
+Both halves matter. Every safety property is at its maximum — the product abstained on all eight
+unanswerable questions, surfaced all seven conflicts with correct scope, and leaked no planted
+injection marker on any of the seven adversarial cases. The retrieval and synthesis quality gates
+are the ones that fail.
+
+**These numbers stand on their own, and comparing them against an earlier figure needs a correction
+first.** An earlier `0.846` recall@5 figure exists in this project's history. The record that first
+compared it to `0.731` attributed the gap to the two having been scored by different methods and
+concluded the drop "is not a drop; it is not a comparison" — that explanation is wrong.
+`eval/run.ts` builds its recall candidates from `RetrievedChunk`, which carries no `elements` field
+and structurally cannot, so recall has never once been scored by element-index; both figures were
+scored by text-containment, the same way.
+[ADR-0024](docs/adr/0024-what-the-first-measurements-say.md) records the correction in full,
+including what survives it — the two corpus states still differ at the chunk-text level even though
+chunk counts held at 19 both times — and what does not: **a real retrieval regression between the
+two runs is an open possibility again**, neither confirmed nor excluded. The floors still stay where
+they are; changing one to match the run that fails it would turn the first gate that ever produced a
+real signal into decoration.
+
+Retrieval is not where the run-to-run instability lives, though. Four passes were recorded against
+the same nine-file corpus against two bars fixed in writing beforehand — zero abstention flips, and
+at least 90% of answered questions citing an identical citation set — and both were missed: two of
+22 safety-outcome questions flipped their abstention decision across the four passes, and only
+69.2% of answered questions held an identical citation set. Recall itself was recomputed across
+those same four passes at zero extra cost and came back identical every time, 73.1%, because
+retrieval returned a byte-identical ranked list — including rank order — on all four, given the
+query embeddings those passes replayed from cache. **The instability is downstream of retrieval**:
+which claims a pass drafts and which subset of an unchanging retrieved list it cites, not which
+evidence retrieval finds.
+
+Where the recall shortfall itself comes from: six of the seven recall@5 misses are adversarial
+cases whose expected locators mark the injection payload itself, which no pass ever retrieved; the
+seventh is a case retrieved below rank 5. Non-adversarial recall@5 is 95.0% (19/20). Whether an
+adversarial case belongs in the recall denominator at all is a genuine open question — the product
+may be penalised for correctly declining to surface a prompt-injection payload, or retrieval and
+refusal may be separate stages where the chunk should still be retrieved — and it is not resolved
+here; that decision, not a floor change, is the open next step.
+[ADR-0024](docs/adr/0024-what-the-first-measurements-say.md) records the run, the variance
+measurement and the correction in full, and is explicit about what none of it establishes: `n = 4`
+on nine self-authored files, with query embeddings replayed from cache, is a lower bound on
+instability, not a distribution.
+
+Note where the numbers live. `eval/run.ts` names its output by git sha, and
+`/eval/results/*-dirty.{json,md}` is gitignored, so a run recorded against a dirty working tree —
+which every run in this cycle was — leaves nothing committed. **The clean-sha results still tracked
+under `eval/results/` predate this cycle's parser, contract and corpus changes and are not the
+current state of the system.**
+
+**The harness itself is replay-only by default, and fails loudly on a miss.** No live API calls,
+zero cost, byte-stable. The cache holds 537 model entries and 216 embedding entries;
+`eval/dataset/cases.json` holds 35 cases. A request whose key falls outside the cache — because the
+corpus, a prompt template, or the model/embedding version changed since the last recording — fails
+with `ModelReplayCacheMissError` or `EmbeddingReplayCacheMissError` rather than silently falling
+through to a live call. **That is the intended behaviour, not a bug** — the alternative would be a
+silent live call that quietly costs money and makes the run non-reproducible. Re-recording needs
+live keys and a reachable Mongo:
 
 ```bash
-npm run eval -- --record
+npm run eval -- --record            # re-record against the corpus already ingested
+npm run eval -- --record --ingest   # re-ingest the fixture corpus first, then record
 ```
 
 Re-record deliberately after changing the corpus, the dataset questions, the prompt templates, or
 the model/embedding version — a stale entry silently freezes old behaviour for whichever request key
-did not change.
+did not change. `--ingest` is what spends real embedding budget, so it is opt-in rather than
+implied by `--record`.
 
-**The Qdrant benchmark is opt-in and needs its own container.** `--profile qdrant` (see
-[Containerized stack](#containerized-stack-one-command)) is not part of the demo stack and is never
-started by `docker compose up -d` alone:
-
-```bash
-docker compose --profile qdrant up -d
-npm run eval -- --qdrant
-```
-
-`--qdrant` adds a fourth `qdrant-vector` row to the retrieval-mode comparison table, built by
-reading the tenant's already-embedded `evidence_chunks` rows and loading them straight into a
-Qdrant collection — no re-embedding, no live model call. Like the rest of `npm run eval`, this runs
-in replay mode at zero API cost: the query embeddings it searches with are already in the cache,
-keyed on `{provider, model, dimensions, inputType, inputs}`. Those numbers feed ADR-0010. An
-unreachable Qdrant fails the run loudly rather than silently reporting an empty or missing row; pass
-`--qdrant-url` to point at a non-default instance. Qdrant is benchmark-only — the production
-retrieval path (`MongoHybridRetrievalStore`, `$search`/`$vectorSearch`/`$rankFusion`) is unchanged
-either way.
-
-**`VOYAGE_DIMENSIONS` is baked into the vector index at migration time.** `0003-search-indexes.ts`
+**`VOYAGE_DIMENSIONS` is baked into the vector index at migration time.** `0001-baseline.ts`
 reads it when building the index definition. Changing it afterwards requires re-running that
 migration, not just restarting the app.
 
@@ -668,11 +742,12 @@ recovery is `docker compose down -v` and a re-run of the migrations.
 | `npm run worker:dev`                  | Temporal worker (`src/worker/main.ts`); needs a running Temporal server                                                             |
 | `npm run mcp:dev`                     | MCP server (`src/mcp/main.ts`) on `MCP_PORT`; the containerized equivalent is the `mcp` service                                     |
 | `npm run fixtures:generate`           | regenerates the synthetic data room in `fixtures/`                                                                                  |
-| `npm run eval`                        | replay-mode eval run; `-- --record` for a live recording pass, `-- --qdrant` to add the Qdrant benchmark row                        |
+| `npm run eval`                        | replay-mode eval run; `-- --record` for a live recording pass, `-- --ingest` to re-ingest the corpus first, `-- --lane <name>` to select a lane |
 | `npm run smoke:providers`             | live check of the real model/Voyage request shapes — costs money, never run in CI                                                   |
 | `npm run backup:mongo` / `restore:mongo` | `mongodump`/`mongorestore` the `evidence-ops` database through the compose `mongo` service; takes an archive path outside the repo |
 | `npm run tenant:purge`                | removes one tenant's data, GridFS bytes included; dry-run unless `--yes`                                                            |
 | `npm run tenant:co-tenant-user`       | moves an existing user into an existing tenant — registration always provisions a fresh one                                        |
+| `npm run user:revoke-sessions`        | raises a user's session epoch, refusing every live session and personal access token they hold                                     |
 
 `format` and `lint` rewrite files and always exit 0, so they cannot serve as a gate. Anywhere a
 check must be able to fail — CI, a pre-merge hook — use `format:check` / `lint:check`, which is what

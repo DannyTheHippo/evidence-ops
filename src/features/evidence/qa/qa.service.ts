@@ -17,6 +17,7 @@ import {
   takeWhile,
   timer,
 } from 'rxjs';
+import { TypedConfigService } from '../../../config/environment/typed-config.service';
 import { User, UserDocument } from '../../../database/schemas/administration/user/user.schema';
 import { Answer, AnswerDocument } from '../../../database/schemas/evidence/answer/answer.schema';
 import type {
@@ -42,6 +43,7 @@ import type { DocumentResultWithCount } from '../../../shared/types/document-res
 import { reauthTicks$, shouldRecordStreamView } from '../../../shared/utils/stream-session.util';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import type { AnswerQuestionInput } from '../../../workflows/types';
+import { neutralizeForDisplay } from '../ingestion/sanitize-evidence-text';
 import type { AnswerContract, Citation, VerificationReport } from './contracts/answer.contract';
 import type { ListAnswersRequestDto } from './dtos/request/list-answers.request.dto';
 import { AnswerResponseDto } from './dtos/response/answer.response.dto';
@@ -117,6 +119,7 @@ export class QaService {
     @Inject(WORKFLOW_ENGINE)
     private readonly workflowEngine: WorkflowEngine,
 
+    private readonly config: TypedConfigService,
     private readonly auditService: AuditService,
     private readonly logger: AppLogger,
   ) {
@@ -312,6 +315,11 @@ export class QaService {
           SSE_REAUTH_INTERVAL_MS,
         ),
       ),
+      // Absolute ceiling on a single connection, independent of every other terminal condition
+      // here: a wedged answer that never reaches a terminal status, and a client that never
+      // disconnects, would otherwise hold one of the user's `SSE_MAX_CONNECTIONS_PER_USER` slots
+      // for as long as the process lives — past the session cookie's own expiry.
+      takeUntil(timer(this.config.sse.maxStreamLifetimeMs)),
       // Inclusive: the terminal answer event itself must reach the client before the stream ends —
       // an exclusive takeWhile would close the connection without ever sending the state the
       // caller most needs. Applied to the MERGED stream, not just `answer$`, so completing here
@@ -338,9 +346,10 @@ export class QaService {
   }
 
   /** Every distinct `docVersionId` this answer's server-verified citations name — the candidate
-   *  set `resolveWithdrawnDocVersionIds` checks against `DocumentVersion`. Reads `answer.claims`
-   *  (the surviving citations), matching `toAnswerEnvelope`'s own `citations` field below, not
-   *  `answer.outcome.claims` (the model's raw, pre-verification output). */
+   *  set `resolveWithdrawnDocVersionIds` checks against `DocumentVersion`. Reads `answer.claims`,
+   *  matching `toAnswerEnvelope`'s own `citations` field below: it carries the gate-verified
+   *  claim set for every outcome kind, whereas `answer.outcome.claims` only exists at all on the
+   *  `answered` variant. */
   private citedDocVersionIds(answer: AnswerDocument): string[] {
     return [
       ...new Set(answer.claims.flatMap((claim) => claim.citations.map((c) => c.docVersionId))),
@@ -385,6 +394,30 @@ export class QaService {
     return new Set(withdrawnVersions.map((version) => version._id.toString()));
   }
 
+  // The stored citation stays byte-faithful to its source (`locateQuote`'s verbatim match depends
+  // on it); this is the human-viewer boundary where display-only neutralization — stripping
+  // control/bidi/zero-width characters — belongs instead, per `neutralizeForDisplay`'s own doc
+  // comment. Matches `DocumentsService.toChunkDto`'s identical treatment of chunk text.
+  private neutralizeCitation(citation: Citation): Citation {
+    return { ...citation, quote: neutralizeForDisplay(citation.quote) };
+  }
+
+  // `outcome.claims[].citations[].quote` carries the same raw model-cited quote as the flattened
+  // `citations` field below — both need the same display-boundary neutralization, or the `answered`
+  // branch would still leak a raw quote through `outcome` alone.
+  private neutralizeOutcome(outcome: AnswerContract): AnswerContract {
+    if (outcome.kind !== 'answered') {
+      return outcome;
+    }
+    return {
+      ...outcome,
+      claims: outcome.claims.map((claim) => ({
+        ...claim,
+        citations: claim.citations.map((citation) => this.neutralizeCitation(citation)),
+      })),
+    };
+  }
+
   private toAnswerEnvelope(
     answer: AnswerDocument,
     withdrawnCitedDocVersionIds: string[],
@@ -397,17 +430,23 @@ export class QaService {
       // branch is the API-side half of "never present outcome as final ahead of runStatus" — a
       // client reading this envelope on a queued/running/failed answer must see no outcome at
       // all, not a stale or premature one.
-      outcome: answer.runStatus === 'completed' ? answer.outcome : undefined,
+      outcome:
+        answer.runStatus === 'completed' && answer.outcome
+          ? this.neutralizeOutcome(answer.outcome)
+          : undefined,
       // Same withholding rule as `outcome` above — `claimCoverage` is written alongside the
       // outcome on completion (see `answer-persistence.service.ts`), so it follows the same gate.
       claimCoverage: answer.runStatus === 'completed' ? answer.claimCoverage : undefined,
       // Same withholding rule as `outcome` above — the verification report is computed alongside
       // the outcome on completion (see `answer-persistence.service.ts`), so it follows the same gate.
       verificationReport: answer.runStatus === 'completed' ? answer.verificationReport : undefined,
-      // Flattened from `answer.claims` (the server-verified surviving claims), not
-      // `answer.outcome.claims` (the model's raw, pre-verification output) — see `Answer.claims`'s
-      // doc comment in `answer.schema.ts`.
-      citations: answer.claims.flatMap((claim) => claim.citations),
+      // Flattened from `answer.claims`, the server-verified surviving claims present for every
+      // outcome kind — see `Answer.claims`'s doc comment in `answer.schema.ts`. Neutralized for
+      // the same reason `outcome` above is: this is the response boundary, not storage or
+      // verification, both of which still see the raw byte-faithful quote.
+      citations: answer.claims.flatMap((claim) =>
+        claim.citations.map((citation) => this.neutralizeCitation(citation)),
+      ),
       conflictIds: answer.conflictIds.map((conflictId) => conflictId.toString()),
       createdAt: answer.createdAt,
       // Same withholding rule as `outcome` above — usage is written alongside outcome on

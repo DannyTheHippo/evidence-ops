@@ -44,7 +44,7 @@ describe('assertRequiredSearchIndexesExist', () => {
     expect((error as Error).message).toContain(VECTOR_INDEX);
     // The subtlety `migrate:up` alone does not fix: only surfaced for the "missing" kind.
     expect((error as Error).message).toContain('migrate:up');
-    expect((error as Error).message).toContain('0003-search-indexes.ts');
+    expect((error as Error).message).toContain('0001-baseline.ts');
   });
 
   it('should throw RequiredSearchIndexesMissingError when an index is present but status is not READY', async () => {

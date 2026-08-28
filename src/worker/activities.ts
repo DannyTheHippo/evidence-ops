@@ -1,14 +1,15 @@
 import type { INestApplicationContext } from '@nestjs/common';
+import { Context } from '@temporalio/activity';
 import { ApplicationFailure } from '@temporalio/common';
 import { Types } from 'mongoose';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
+import { normalizeEntityName } from '../database/schemas/evidence/canonical-entity/canonical-entity.schema';
 import type { FactKey } from '../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import {
   ConflictsService,
   type ConflictedFactGroup,
   type ConflictResolutionCandidate,
-  type ConflictRetractionResult,
   type ConflictScanResult,
   type RecordConflictResolutionInput,
   type RecordConflictResolutionResult,
@@ -17,7 +18,14 @@ import {
   CanonicalEntityService,
   type CanonicalEntityListing,
 } from '../features/evidence/facts/canonical-entity.service';
+import {
+  findStatedPeriods,
+  parsePeriodKey,
+  periodsOverlap,
+  type Period,
+} from '../features/evidence/facts/derive-period';
 import { FactsService, type FactsExtractionResult } from '../features/evidence/facts/facts.service';
+import { METRIC_ONTOLOGY, type MetricId } from '../features/evidence/facts/metric-ontology';
 import { extractNumericTokens } from '../features/evidence/qa/extract-numeric-tokens';
 import {
   filterGroupsByEntity,
@@ -26,6 +34,7 @@ import {
 } from '../features/evidence/qa/scope-conflict-to-question';
 import { IngestionService } from '../features/evidence/ingestion/ingestion.service';
 import { SourcesService, type RunSyncResult } from '../features/evidence/sources/sources.service';
+import { ApprovalsService } from '../features/evidence/approvals/approvals.service';
 import {
   AnswerPersistenceService,
   type PersistAnswerInput,
@@ -58,6 +67,7 @@ import {
   type ApprovalResult,
 } from '../providers/approval-channel/approval-channel.interface';
 import type { AlsContext } from '../shared/types/als-context.type';
+import { INGEST_HEARTBEAT_INTERVAL_MS } from '../workflows/ingest-retry-policy';
 import type { IngestDocumentVersionResult } from '../workflows/types';
 
 /**
@@ -73,7 +83,8 @@ import type { IngestDocumentVersionResult } from '../workflows/types';
  * itself one of a known conflict's values, sourced from a chunk that claim's own citations name —
  * never merely because the claim cites a chunk that also happens to hold an unrelated conflicted
  * fact. Inherits bound 3's known remainders for the same reason the gate's own check does: a claim
- * stating a conflicted value in words ("six percent") is invisible to `extractNumericTokens`, and
+ * stating a conflicted value as an ordinal, a fraction, or in a non-English numeral vocabulary is
+ * invisible to `extractNumericTokens`, and
  * two distinct facts sharing the exact same `value` on the same cited chunk would still cross-touch.
  *
  * `scopedEntity`, when given, narrows `conflictGroups` to the ones belonging to it
@@ -103,6 +114,119 @@ function findEitherSideConflict(
     }
   }
   return undefined;
+}
+
+/** Whole-token occurrence of `needle` in `haystack`. Both arguments must already be
+ *  `normalizeEntityName`-normalized (`canonical-entity.schema.ts`) — this normalizes nothing
+ *  itself, so a caller passing raw text gets a match against raw bytes. A hit counts only when
+ *  neither the character before nor the character after is `[a-z0-9]`, so `'northgate'` matches
+ *  `'northgate business park'` but not `'northgateway'`. */
+function occursAsWholeToken(haystack: string, needle: string): boolean {
+  if (!needle) {
+    return false;
+  }
+  const isWordChar = (char: string | undefined): boolean =>
+    char !== undefined && /[a-z0-9]/.test(char);
+
+  let searchFrom = 0;
+  for (;;) {
+    const index = haystack.indexOf(needle, searchFrom);
+    if (index === -1) {
+      return false;
+    }
+    const before = haystack[index - 1];
+    const after = haystack[index + needle.length];
+    if (!isWordChar(before) && !isWordChar(after)) {
+      return true;
+    }
+    searchFrom = index + 1;
+  }
+}
+
+/**
+ * The single metric `questionText` names from the fixed `METRIC_ONTOLOGY` allowlist, or
+ * `undefined` when that cannot be determined safely — same fail-closed shape as
+ * `resolveQuestionEntity` (`scope-conflict-to-question.ts`): naming zero metrics or naming more
+ * than one distinct metric both return `undefined` rather than guessing. Matched against every
+ * metric's `label` and `aliases` on whole-token boundaries, exact and alias-only, never fuzzy — a
+ * fuzzy match here would force `conflicting_evidence` off a metric the question never actually
+ * named.
+ */
+function resolveQuestionMetric(questionText: string): MetricId | undefined {
+  const normalizedQuestion = normalizeEntityName(questionText);
+  const namedMetrics = METRIC_ONTOLOGY.filter((metric) =>
+    [metric.label, ...metric.aliases].some((phrase) =>
+      occursAsWholeToken(normalizedQuestion, normalizeEntityName(phrase)),
+    ),
+  );
+  const distinctIds = new Set(namedMetrics.map((metric) => metric.id));
+  return distinctIds.size === 1 ? namedMetrics[0].id : undefined;
+}
+
+/**
+ * The single period `questionText` names, or `undefined` when it names none or names more than
+ * one — the same fail-closed shape as `resolveQuestionEntity` and {@link resolveQuestionMetric},
+ * for the same reason: a question mentioning both `2019` and `2024` gives no basis for picking
+ * either, and picking one would force `conflicting_evidence` off a period the reader did not ask
+ * about. Read in sentence semantics (`findStatedPeriods`), where a bare plausible year counts as a
+ * period reference.
+ */
+function resolveQuestionPeriod(questionText: string): Period | undefined {
+  const stated = findStatedPeriods(questionText);
+  return stated.length === 1 ? stated[0] : undefined;
+}
+
+/**
+ * The single open `ConflictedFactGroup` `questionText` names by its resolved entity
+ * (`resolveQuestionEntity`), its resolved metric ({@link resolveQuestionMetric}), and a period
+ * that answers to the one the question named ({@link resolveQuestionPeriod}) — or `undefined`
+ * when any of the three fails to resolve to exactly one, or more than one group answers to them.
+ * Intended to run over `conflictGroups` loaded tenant-wide
+ * (`ConflictsService.findConflictedFactGroupsForTenant`), never scoped to which chunks a request
+ * happened to retrieve — this is the retrieval-independent force `groundingCheck` applies ahead of
+ * every claim- or chunk-dependent check, so a conflicting document that never lands in a request's
+ * top-k retrieval can still force `conflicting_evidence`, and a differently worded question that
+ * still names the same entity, metric and period reaches the same outcome.
+ *
+ * Period matching has two branches, and both fail CLOSED — this force replaces an answer rather
+ * than annotating one (`conflicting_evidence` returns no claims), so a period it cannot show to
+ * match must never produce a match:
+ *
+ * - The question names a period: the group's own period, recovered from its stored key
+ *   (`parsePeriodKey`), must share a calendar day with it (`periodsOverlap`). A group whose period
+ *   has no calendar bounds — a fiscal year, an unstated period, a period text the extractor could
+ *   not read — overlaps nothing and cannot match, and a conflict dated `2024` cannot force for a
+ *   question about `2019`.
+ * - The question names none: only a group whose period is itself `unstated` matches. A group whose
+ *   period is unreadable is excluded here too, because its source did state a period — matching it
+ *   against a question that stated none would attach a disagreement about an unknown time to a
+ *   question that asked about no particular time.
+ *
+ * A dated conflict group the question does not name still reaches `conflicting_evidence` through
+ * the claim- and chunk-scoped checks below (`findEitherSideConflict`, `scopeConflictToQuestion`),
+ * which key off the claim's own cited chunk and stated value rather than a period.
+ */
+function resolveQuestionScopedConflictGroup(
+  questionText: string,
+  conflictGroups: readonly ConflictedFactGroup[],
+  canonicalEntities: readonly CanonicalEntityListing[],
+): ConflictedFactGroup | undefined {
+  const entity = resolveQuestionEntity(questionText, canonicalEntities);
+  const metricId = resolveQuestionMetric(questionText);
+  if (!entity || !metricId) {
+    return undefined;
+  }
+  const questionPeriod = resolveQuestionPeriod(questionText);
+  const matches = filterGroupsByEntity(conflictGroups, entity).filter((group) => {
+    if (group.factKey.metric !== metricId) {
+      return false;
+    }
+    const groupPeriod = parsePeriodKey(group.factKey.period);
+    return questionPeriod
+      ? periodsOverlap(questionPeriod, groupPeriod)
+      : groupPeriod.granularity === 'unstated';
+  });
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 export interface LoadConflictActivityInput {
@@ -158,19 +282,16 @@ export interface Activities {
     tenantId: string,
   ): Promise<IngestDocumentVersionResult>;
   extractFacts(documentVersionId: string, tenantId: string): Promise<FactsExtractionResult>;
+  /** Backs `ingest-document-version.workflow.ts`'s handling of an `extractFacts` failure — moves
+   *  a version whose chunks are committed but whose facts are missing from `completed` to
+   *  `facts-failed` (`IngestionService.recordFactExtractionFailure`), so the two are
+   *  distinguishable to `DocumentsService.list` and the Data Room UI. */
+  recordFactExtractionFailure(
+    documentVersionId: string,
+    tenantId: string,
+    reason: string,
+  ): Promise<void>;
   scanForConflicts(tenantId: string, factKeys?: readonly FactKey[]): Promise<ConflictScanResult>;
-  /** `rescan-conflicts.workflow.ts`'s scan half — see `ConflictsService.scanForConflictsByMetrics`'s
-   *  own doc comment for why this is metric-scoped rather than sharing `scanForConflicts` above. */
-  scanForConflictsByMetrics(
-    tenantId: string,
-    metricIds: readonly string[],
-  ): Promise<ConflictScanResult>;
-  /** `rescan-conflicts.workflow.ts`'s retract half — the complement of `scanForConflictsByMetrics`
-   *  (`ConflictsService.retractConflicts`'s own doc comment). */
-  retractConflicts(
-    tenantId: string,
-    metricIds: readonly string[],
-  ): Promise<ConflictRetractionResult>;
   retrieveEvidence(input: RetrieveEvidenceInput): Promise<RetrievedChunk[]>;
   synthesizeAnswer(input: SynthesizeAnswerActivityInput): Promise<SynthesizeAnswerResult>;
   groundingCheck(input: GroundingCheckActivityInput): Promise<GroundingCheckActivityResult>;
@@ -184,6 +305,11 @@ export interface Activities {
   // calls it makes rather than a name that says "conflict" to a caller that isn't one.
   requestIngestApproval(request: ApprovalRequest): Promise<ApprovalHandle>;
   getApprovalDecision(approvalId: string, tenantId: string): Promise<ApprovalResult>;
+  /** Backs `resolveConflict`'s timeout branch (`resolve-conflict.workflow.ts`) — moves the
+   *  `Approval` row itself to `timed_out` (`ApprovalsService.expire`) so it leaves the pending
+   *  inbox and can never be decided afterwards, closing the gap where a human could still approve
+   *  a row a dead workflow already gave up waiting on. */
+  expireApproval(approvalId: string, tenantId: string): Promise<void>;
   recordConflictResolution(
     input: RecordConflictResolutionInput,
   ): Promise<RecordConflictResolutionResult>;
@@ -257,28 +383,41 @@ export function createActivities(app: INestApplicationContext): Activities {
   const groundingGateService = app.get(GroundingGateService);
   const answerPersistenceService = app.get(AnswerPersistenceService);
   const approvalChannel = app.get<ApprovalChannel>(APPROVAL_CHANNEL);
+  const approvalsService = app.get(ApprovalsService);
   const sourcesService = app.get(SourcesService);
   const als = app.get<AsyncLocalStorage<AlsContext>>(AsyncLocalStorage);
 
   return {
-    ingestDocumentVersion: (documentVersionId, tenantId) =>
-      withTenantScope(als, tenantId, () =>
-        ingestionService.ingestVersion(documentVersionId, tenantId),
-      ),
+    // The only activity here that heartbeats, because it is the only one that can run for minutes
+    // over bytes of unknown size. `INGEST_HEARTBEAT_TIMEOUT_MS`
+    // (`ingest-document-version.workflow.ts`'s `heartbeatTimeout`) is what gives these heartbeats
+    // an effect: without it Temporal never fails a stalled attempt early, and — because
+    // cancellation reaches a running activity on the heartbeat response — never tells this one it
+    // has been abandoned. `cancellationSignal` carries that news into `ingestVersion`, whose catch
+    // records the version `failed` instead of leaving it `pending` with a live lease.
+    ingestDocumentVersion: (documentVersionId, tenantId) => {
+      const context = Context.current();
+      const heartbeats = setInterval(() => {
+        context.heartbeat();
+      }, INGEST_HEARTBEAT_INTERVAL_MS);
+
+      return withTenantScope(als, tenantId, () =>
+        ingestionService.ingestVersion(documentVersionId, tenantId, context.cancellationSignal),
+      ).finally(() => {
+        clearInterval(heartbeats);
+      });
+    },
 
     extractFacts: (documentVersionId, tenantId) =>
       withTenantScope(als, tenantId, () => factsService.extractFacts(documentVersionId, tenantId)),
 
+    recordFactExtractionFailure: (documentVersionId, tenantId, reason) =>
+      withTenantScope(als, tenantId, async () => {
+        await ingestionService.recordFactExtractionFailure(documentVersionId, tenantId, reason);
+      }),
+
     scanForConflicts: (tenantId, factKeys) =>
       withTenantScope(als, tenantId, () => conflictsService.scanForConflicts(tenantId, factKeys)),
-
-    scanForConflictsByMetrics: (tenantId, metricIds) =>
-      withTenantScope(als, tenantId, () =>
-        conflictsService.scanForConflictsByMetrics(tenantId, metricIds),
-      ),
-
-    retractConflicts: (tenantId, metricIds) =>
-      withTenantScope(als, tenantId, () => conflictsService.retractConflicts(tenantId, metricIds)),
 
     retrieveEvidence: (input) =>
       withTenantScope(als, input.tenantId, () => evidenceRetrievalService.retrieve(input)),
@@ -289,13 +428,30 @@ export function createActivities(app: INestApplicationContext): Activities {
     // needs the same ALS scope every other tenant-carrying activity opens, or its `createdBy`/
     // `updatedBy` stamp nothing.
     synthesizeAnswer: (input) =>
-      withTenantScope(als, input.tenantId, () =>
-        synthesisService.synthesizeAnswer({
+      withTenantScope(als, input.tenantId, async () => {
+        // Zero retrieved chunks means no claim the model could produce would cite anything real —
+        // `groundingCheck` below would drop every claim and degrade `outcomeKind` to
+        // `insufficient_evidence` regardless of what synthesis returns, so this reaches that same
+        // outcome without spending a model call synthesis can never ground. No `reasonCode`: this
+        // abstention happens before the model is ever asked, so it is the server's own, not a
+        // model-authored one — same distinction `insufficientEvidenceOutcomeSchema`'s doc comment
+        // draws, which is what `ProvenanceRail` (SPA) keys its degraded-state rendering on.
+        if (input.chunks.length === 0) {
+          return {
+            contract: {
+              kind: 'insufficient_evidence' as const,
+              reason:
+                'No evidence was retrieved for this question, so there is nothing to ground an answer in.',
+            },
+            usage: { promptTokens: 0, completionTokens: 0, costUsd: 0 },
+          };
+        }
+        return synthesisService.synthesizeAnswer({
           question: input.questionText,
           chunks: input.chunks,
           tenantId: input.tenantId,
-        }),
-      ),
+        });
+      }),
 
     // `GroundingGateService.verify`'s input type only accepts the `answered` branch of
     // `AnswerContract` (see its own doc comment) — the model itself already said there was
@@ -315,20 +471,59 @@ export function createActivities(app: INestApplicationContext): Activities {
     // a bogus/injected code just never matches this literal and falls through to "unchanged".
     groundingCheck: (input) =>
       withTenantScope(als, input.tenantId, async () => {
+        // Retrieval-independent force, ahead of every kind-based branch below: loads every one of
+        // the tenant's `open` conflicts (`findConflictedFactGroupsForTenant`, never scoped to
+        // `input.retrievedChunks`) and, when the question's own text resolves to exactly one entity
+        // and exactly one metric naming exactly one `undated` group among those, forces
+        // `conflicting_evidence` immediately — regardless of what the model claimed, cited, or
+        // abstained on, and even when zero chunks were retrieved at all. This is what closes the
+        // gap every check below still has: each of them only ever considers a conflict "in play"
+        // when a *retrieved* chunk's own fact touches it, so a conflicting document that never
+        // lands in top-k can otherwise never force this outcome, and a differently worded question
+        // that still names the same entity and metric could otherwise reach a different outcome
+        // depending on what got retrieved. Restricted to `undated` groups because this function
+        // never derives the question's own period (`resolveQuestionScopedConflictGroup`'s own doc
+        // comment) — a dated group is left to the claim- and chunk-scoped checks below instead.
+        const [tenantConflictGroups, canonicalEntities] = await Promise.all([
+          conflictsService.findConflictedFactGroupsForTenant(input.tenantId),
+          canonicalEntityService.listCanonicalEntities(input.tenantId),
+        ]);
+        const questionScopedGroup = resolveQuestionScopedConflictGroup(
+          input.questionText ?? '',
+          tenantConflictGroups,
+          canonicalEntities,
+        );
+        if (questionScopedGroup) {
+          return {
+            outcome: {
+              kind: 'conflicting_evidence',
+              factKey: questionScopedGroup.factKey,
+              // `AnswerContract`'s `values` (mutable, zod-inferred) doesn't accept
+              // `ConflictedFactGroup.values`'s `readonly ConflictedFactValue[]` directly.
+              values: [...questionScopedGroup.values],
+            },
+            claims: [],
+            conflictIds: [questionScopedGroup.conflictId],
+          };
+        }
+
         if (input.outcome.kind === 'insufficient_evidence') {
           if (input.outcome.reasonCode === 'retrieved_evidence_contradicts_itself') {
             const chunkIds = input.retrievedChunks.map((chunk) => chunk.chunkId);
-            const [conflictGroups, canonicalEntities] = await Promise.all([
-              conflictsService.findConflictedFactGroupsForChunks(chunkIds, input.tenantId),
-              canonicalEntityService.listCanonicalEntities(input.tenantId),
-            ]);
+            const conflictGroups = await conflictsService.findConflictedFactGroupsForChunks(
+              chunkIds,
+              input.tenantId,
+            );
             // Scopes the open conflict touched by the retrieved evidence to the question's own
             // subject (`scopeConflictToQuestion`, `scope-conflict-to-question.ts`): attaches only
             // when the question names exactly one canonical entity and exactly one retrieved
             // conflict group belongs to it. There is no per-claim citation to narrow the choice by
             // here (the model abstained, so there are no claims at all), only the retrieval scope
             // and the question's own text — any other case falls through to the abstention below
-            // rather than guessing which property's disagreement the question meant.
+            // rather than guessing which property's disagreement the question meant. A narrower,
+            // entity-only fallback of the check above: reached only when that one failed (no
+            // metric named, or more than one group per entity+metric), so it still has something to
+            // offer a question that names the entity but not a recognized metric phrase.
             const scopedGroup = scopeConflictToQuestion(
               input.questionText ?? '',
               conflictGroups,
@@ -359,19 +554,17 @@ export function createActivities(app: INestApplicationContext): Activities {
         // gets returned as `outcome` (and, via `answer-question.workflow.ts`, what gets persisted).
         // "The model proposes, the application disposes": a model that claimed `answered` with every
         // citation later dropped must not have that claim persisted as-is (see ADR-0004's decision
-        // section for the outcome-level degradation rule this mirrors). `cellFacts`,
-        // `conflictedFactKeys` and the tenant's canonical entities are all loaded here, `cellFacts`/
-        // `conflictedFactKeys` scoped to `input.retrievedChunks` and `input.tenantId` (never the
+        // section for the outcome-level degradation rule this mirrors). `cellFacts` and
+        // `conflictedFactKeys` are scoped to `input.retrievedChunks` and `input.tenantId` (never the
         // tenant's whole `extracted_facts`/`conflicts` collections) — see `FactsService.findCellFacts`
         // and `ConflictsService.findConflictedFactGroupsForChunks` for why that scoping is
-        // load-bearing, not just an optimization. The canonical entities feed
-        // `resolveQuestionEntity` below, which the either-side widening check reuses to scope its own
-        // candidate groups to the question's subject.
+        // load-bearing, not just an optimization; `canonicalEntities` was already loaded above for
+        // the retrieval-independent check, and is reused here by the either-side widening check to
+        // scope its own candidate groups to the question's subject.
         const chunkIds = input.retrievedChunks.map((chunk) => chunk.chunkId);
-        const [cellFactDocs, conflictGroups, canonicalEntities] = await Promise.all([
+        const [cellFactDocs, conflictGroups] = await Promise.all([
           factsService.findCellFacts(chunkIds, input.tenantId),
           conflictsService.findConflictedFactGroupsForChunks(chunkIds, input.tenantId),
-          canonicalEntityService.listCanonicalEntities(input.tenantId),
         ]);
 
         const cellFacts: GroundingCellFact[] = cellFactDocs.map((fact) => ({
@@ -418,7 +611,11 @@ export function createActivities(app: INestApplicationContext): Activities {
             };
             conflictIds = [eitherSideMatch.conflictId];
           } else {
-            outcome = input.outcome;
+            // `input.outcome.claims` is the model's raw claim set; `report.claims` is what
+            // actually survived the gate. Persisting the former here would contradict this
+            // function's own doc comment above ("the application disposes") and the `claims`/
+            // `verificationReport` fields returned below, which already reflect the survivors.
+            outcome = { kind: 'answered', claims: [...report.claims] };
           }
         } else if (report.outcomeKind === 'insufficient_evidence') {
           outcome = {
@@ -501,6 +698,9 @@ export function createActivities(app: INestApplicationContext): Activities {
 
     getApprovalDecision: (approvalId, tenantId) =>
       withTenantScope(als, tenantId, () => approvalChannel.getDecision(approvalId, tenantId)),
+
+    expireApproval: (approvalId, tenantId) =>
+      withTenantScope(als, tenantId, () => approvalsService.expire(approvalId, tenantId)),
 
     recordConflictResolution: (input) =>
       withTenantScope(als, input.tenantId, () => conflictsService.recordResolution(input)),

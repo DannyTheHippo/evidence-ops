@@ -7,6 +7,7 @@ import {
   Post,
   Res,
   UnauthorizedException,
+  UseGuards,
   Version,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -26,6 +27,7 @@ import {
 import { resolveSessionCookieName } from './auth.constant';
 import { AuthService } from './auth.service';
 import { CurrentUser } from './decorators/current-user.decorator';
+import { CredentialThrottleGuard } from './guards/credential-throttle.guard';
 import { LoginRequestDto } from './dtos/request/login.request.dto';
 import { RegisterRequestDto } from './dtos/request/register.request.dto';
 import { AuthTokenResponseDto } from './dtos/response/auth-token.response.dto';
@@ -44,6 +46,7 @@ export class AuthController {
   @Post('register')
   @Version('1')
   @PublicRoute()
+  @UseGuards(CredentialThrottleGuard)
   @HttpCode(HttpStatus.CREATED)
   @ApiResponse(registerApiExamples.created)
   @ApiResponse(registerApiExamples.conflict)
@@ -56,9 +59,11 @@ export class AuthController {
   @Post('login')
   @Version('1')
   @PublicRoute()
+  @UseGuards(CredentialThrottleGuard)
   @HttpCode(HttpStatus.OK)
   @ApiResponse(loginApiExamples.success)
   @ApiResponse(loginApiExamples.unauthorized)
+  @ApiResponse(loginApiExamples.tooManyRequests)
   async login(
     @Body() dto: LoginRequestDto,
     @Res({ passthrough: true }) res: Response,

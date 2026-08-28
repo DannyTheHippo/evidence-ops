@@ -2,7 +2,8 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types, WithTimestamps } from 'mongoose';
 import { AuditableDocument } from '../../../global/auditable-document/auditable-document.schema';
 
-export type DocumentSourceKind = 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv' | 'tsv' | 'txt' | 'md';
+export type DocumentSourceKind =
+  'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv' | 'tsv' | 'txt' | 'md' | 'eml';
 
 export const DOCUMENT_SOURCE_KINDS: readonly DocumentSourceKind[] = [
   'pdf',
@@ -13,6 +14,7 @@ export const DOCUMENT_SOURCE_KINDS: readonly DocumentSourceKind[] = [
   'tsv',
   'txt',
   'md',
+  'eml',
 ];
 
 /**
@@ -32,6 +34,48 @@ export const DOCUMENT_SOURCE_CLASSES: readonly DocumentSourceClass[] = [
   'report',
   'unclassified',
 ];
+
+/**
+ * Where an attachment document came from, when its bytes were unwrapped out of an `.eml` rather
+ * than uploaded or synced on their own (`EmailAttachmentService`). Absent on every other document,
+ * including the `.eml` document itself — the email is the origin, it does not have one.
+ *
+ * `partIndex` is the attachment's ordinal within its parent message, counted over the parts the
+ * MIME walk reached in order. Together with `parentVersionId` it identifies one attachment
+ * uniquely, which is what makes unwrapping idempotent across the at-least-once retries of the
+ * ingest activity that performs it.
+ *
+ * `messageId`, `from` and `sentAt` are copied from the parent message's headers and are therefore
+ * sender-controlled text, recorded as provenance rather than trusted as identity: none of them is
+ * used to resolve, dedupe, or authorize anything.
+ */
+@Schema({ _id: false })
+export class DocumentEmailOrigin {
+  @Prop({ type: Types.ObjectId, ref: 'DocumentVersion', required: true })
+  parentVersionId: Types.ObjectId;
+
+  @Prop({ type: Types.ObjectId, ref: 'Document', required: true })
+  parentDocumentId: Types.ObjectId;
+
+  @Prop({ type: Number, required: true })
+  partIndex: number;
+
+  @Prop({ type: String })
+  messageId?: string;
+
+  @Prop({ type: String })
+  from?: string;
+
+  @Prop({ type: Date })
+  sentAt?: Date;
+
+  /** The attachment's own filename as the message declared it, sanitized for display. Never used
+   * as a filesystem path — stored bytes are addressed by `DocumentVersion.storageKey`. */
+  @Prop({ type: String, required: true })
+  attachmentFilename: string;
+}
+
+export const DocumentEmailOriginSchema = SchemaFactory.createForClass(DocumentEmailOrigin);
 
 export type DocumentDocument = HydratedDocument<WithTimestamps<Document>>;
 
@@ -81,6 +125,11 @@ export class Document extends AuditableDocument {
    */
   @Prop({ type: Types.ObjectId, ref: 'Source' })
   sourceId?: Types.ObjectId;
+
+  /** Present only on a document unwrapped out of an email attachment — see
+   * {@link DocumentEmailOrigin}. */
+  @Prop({ type: DocumentEmailOriginSchema })
+  emailOrigin?: DocumentEmailOrigin;
 }
 
 export const DocumentSchema = SchemaFactory.createForClass(Document);
@@ -92,3 +141,20 @@ export const DocumentSchema = SchemaFactory.createForClass(Document);
  * from this source" lookup without a collection scan.
  */
 DocumentSchema.index({ tenantId: 1, sourceId: 1 }, { name: 'documents_tenantId_sourceId' });
+
+/**
+ * Declared here as well as in `migrations/0038-document-email-origin-index.ts`, with the same key
+ * pattern, options and name, for the same reason as the index above.
+ *
+ * Unique, and partial on `emailOrigin.parentVersionId` existing: it is what makes email-attachment
+ * unwrapping idempotent across the at-least-once retries of the ingest activity that performs it,
+ * while leaving every document without an `emailOrigin` out of the index entirely.
+ */
+DocumentSchema.index(
+  { tenantId: 1, 'emailOrigin.parentVersionId': 1, 'emailOrigin.partIndex': 1 },
+  {
+    name: 'documents_emailOrigin_part_unique',
+    unique: true,
+    partialFilterExpression: { 'emailOrigin.parentVersionId': { $exists: true } },
+  },
+);

@@ -18,6 +18,7 @@ import { ExtractedFact } from '../../../../src/database/schemas/evidence/extract
 import { DOCUMENTS_STREAM_INTERVAL_MS } from '../../../../src/features/evidence/documents/documents.constant';
 import { DocumentsService } from '../../../../src/features/evidence/documents/documents.service';
 import {
+  ContentTypeMismatchException,
   DocumentNotFoundException,
   DocumentVersionNotFoundException,
   MissingFileException,
@@ -73,6 +74,11 @@ describe('DocumentsService', () => {
   const documentId = new Types.ObjectId();
   const versionId = new Types.ObjectId();
   const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  // A ZIP local-file-header signature — `upload`'s magic-byte gate (`contentMatchesDeclaredKind`)
+  // now requires xlsx bytes to actually look like a ZIP container, so a fixture buffer with no
+  // signature at all would fail every upload test in this suite, not just the ones exercising the
+  // gate directly.
+  const ZIP_MAGIC_BYTES = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 
   const buildMockDocument = (overrides: Record<string, unknown> = {}) => ({
     _id: documentId,
@@ -93,6 +99,7 @@ describe('DocumentsService', () => {
     sizeBytes: 1024,
     storageKey: 'gridfs-id-1',
     ingestionStatus: 'pending',
+    reducedFidelityReasons: [],
     createdAt: new Date('2026-07-01T00:00:00.000Z'),
     ...overrides,
   });
@@ -101,7 +108,7 @@ describe('DocumentsService', () => {
     originalname: 'comps.xlsx',
     mimetype: XLSX_MIME,
     size: 1024,
-    buffer: Buffer.from('workbook-bytes'),
+    buffer: Buffer.concat([ZIP_MAGIC_BYTES, Buffer.from('workbook-bytes')]),
     ...overrides,
   });
 
@@ -160,6 +167,29 @@ describe('DocumentsService', () => {
 
       await expect(service.upload(file, {}, 'tenant-a')).rejects.toBeInstanceOf(
         UnresolvableContentTypeException,
+      );
+      expect(mockDocumentStore.put).not.toHaveBeenCalled();
+    });
+
+    it('should throw ContentTypeMismatchException for a PDF sent as text/plain — the declared kind resolves but the bytes disagree', async () => {
+      const file = buildFile({
+        mimetype: 'text/plain',
+        originalname: 'report.txt',
+        buffer: Buffer.from('%PDF-1.7\n%\xE2\xE3\xCF\xD3\n', 'binary'),
+      });
+
+      await expect(service.upload(file, {}, 'tenant-a')).rejects.toBeInstanceOf(
+        ContentTypeMismatchException,
+      );
+      expect(mockDocumentModel.findOne).not.toHaveBeenCalled();
+      expect(mockDocumentStore.put).not.toHaveBeenCalled();
+    });
+
+    it('should throw ContentTypeMismatchException when declared xlsx bytes carry no ZIP signature at all', async () => {
+      const file = buildFile({ buffer: Buffer.from('not actually a zip container') });
+
+      await expect(service.upload(file, {}, 'tenant-a')).rejects.toBeInstanceOf(
+        ContentTypeMismatchException,
       );
       expect(mockDocumentStore.put).not.toHaveBeenCalled();
     });
@@ -332,6 +362,33 @@ describe('DocumentsService', () => {
       expect(mockDocumentModel.create).toHaveBeenCalledWith(expect.objectContaining({ sourceId }));
     });
 
+    it('should stamp the email origin onto a document created from an unwrapped attachment', async () => {
+      // `EmailAttachmentService` is the only caller that supplies this, and the document it creates
+      // is how an attachment keeps the message it came out of as its provenance.
+      const file = buildFile();
+      const emailOrigin = {
+        parentVersionId: new Types.ObjectId(),
+        parentDocumentId: new Types.ObjectId(),
+        partIndex: 0,
+        attachmentFilename: 'comps.xlsx',
+        messageId: 'q3-comps@example',
+      };
+      mockDocumentModel.create.mockResolvedValueOnce(buildMockDocument());
+      mockDocumentStore.put.mockResolvedValueOnce({
+        id: 'gridfs-id-1',
+        content: file.buffer,
+        contentType: file.mimetype,
+        metadata: {},
+      });
+      mockDocumentVersionModel.create.mockResolvedValueOnce(buildMockVersion());
+
+      await service.upload(file, { title: 'comps.xlsx' }, 'tenant-a', { emailOrigin });
+
+      expect(mockDocumentModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ emailOrigin }),
+      );
+    });
+
     it('should thread requireApproval through to the ingest workflow input when set on the upload dto', async () => {
       const file = buildFile();
       const mockDocument = buildMockDocument();
@@ -420,7 +477,9 @@ describe('DocumentsService', () => {
       const newVersionId = new Types.ObjectId();
       const newVersion = buildMockVersion({ _id: newVersionId, versionNumber: 2 });
       mockDocumentVersionModel.create.mockResolvedValueOnce(newVersion);
-      const file = buildFile({ buffer: Buffer.from('different-bytes') });
+      const file = buildFile({
+        buffer: Buffer.concat([ZIP_MAGIC_BYTES, Buffer.from('different-bytes')]),
+      });
 
       const result = await service.upload(file, { documentId: documentId.toString() }, 'tenant-a');
 
@@ -650,7 +709,13 @@ describe('DocumentsService', () => {
     it('should return the full version history with the current version identified', async () => {
       const mockDocument = buildMockDocument();
       mockDocumentModel.findOne.mockResolvedValueOnce(mockDocument);
-      const v1 = buildMockVersion({ _id: new Types.ObjectId(), versionNumber: 1 });
+      const v1 = buildMockVersion({
+        _id: new Types.ObjectId(),
+        versionNumber: 1,
+        reducedFidelityReasons: [
+          'Scanned pages 2-3 have no embedded text layer; OCR-only extraction was used',
+        ],
+      });
       const v2 = buildMockVersion({ _id: versionId, versionNumber: 2 });
       mockDocumentVersionModel.find.mockReturnValueOnce({
         sort: jest.fn().mockResolvedValueOnce([v1, v2]),
@@ -665,6 +730,10 @@ describe('DocumentsService', () => {
       expect(result.versions).toHaveLength(2);
       expect(result.currentVersion.id).toBe(versionId.toString());
       expect(result.currentVersion.versionNumber).toBe(2);
+      expect(result.currentVersion.reducedFidelityReasons).toEqual([]);
+      expect(result.versions[0].reducedFidelityReasons).toEqual([
+        'Scanned pages 2-3 have no embedded text layer; OCR-only extraction was used',
+      ]);
     });
 
     it('should throw when the current version id matches none of the fetched versions', async () => {
@@ -858,6 +927,20 @@ describe('DocumentsService', () => {
         subject: { entityType: 'DocumentVersion', entityId: versionId.toString() },
         tenantId: 'tenant-a',
       });
+    });
+
+    it('should neutralize a bidi override and a zero-width character in the returned chunk text — the human-viewer rendering boundary', async () => {
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(buildMockVersion());
+      const rightToLeftOverride = String.fromCharCode(0x202e);
+      const zeroWidthSpace = String.fromCharCode(0x200b);
+      const chunk = buildMockChunk({
+        text: `North${rightToLeftOverride}gate${zeroWidthSpace} Plaza`,
+      });
+      mockEvidenceChunkModel.find.mockResolvedValueOnce([chunk]);
+
+      const result = await service.listVersionChunks(versionId.toString(), actorId, 'tenant-a');
+
+      expect(result.docs[0].text).toBe('Northgate Plaza');
     });
 
     it('should query with embedding excluded by projection, and sort every locator kind application-side', async () => {

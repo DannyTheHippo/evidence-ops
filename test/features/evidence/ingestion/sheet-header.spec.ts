@@ -1,5 +1,7 @@
 import {
   detectHeaderRow,
+  parseHeaderUnitMarker,
+  resolveHeaderRow,
   type HeaderDetectionCell,
 } from '../../../../src/features/evidence/ingestion/sheet-header';
 
@@ -99,5 +101,94 @@ describe('detectHeaderRow', () => {
     ];
 
     expect(detectHeaderRow(cells)).toBe(2);
+  });
+});
+
+describe('resolveHeaderRow', () => {
+  it('should return no reducedFidelityReason for a clean single-row header', () => {
+    const cells = [
+      cell(1, 'Property Name'),
+      cell(1, 'Sale Date'),
+      cell(2, 'Acme Tower'),
+      cell(2, '2025-01-15'),
+    ];
+
+    expect(resolveHeaderRow(cells)).toEqual({ headerRow: 1 });
+  });
+
+  it('should return no reducedFidelityReason for an empty cell list', () => {
+    expect(resolveHeaderRow([])).toEqual({ headerRow: 1 });
+  });
+
+  // The two-row-header shape: a grouping row ("Sale", "Sale", "Metrics", "Metrics") repeats a
+  // value across its own cells even though it clears the 2-distinct-values bar — the real column
+  // labels sit one row below it and would otherwise be read as data.
+  it('should flag a reduced-fidelity reason when the chosen header row repeats a value across its own cells', () => {
+    const cells = [
+      cell(1, 'Sale'),
+      cell(1, 'Sale'),
+      cell(1, 'Metrics'),
+      cell(1, 'Metrics'),
+      cell(2, 'Property Name'),
+      cell(2, 'Sale Date'),
+      cell(2, 'Price'),
+      cell(2, 'Cap Rate'),
+      cell(3, 'Acme Tower'),
+      cell(3, '2025-01-15'),
+      cell(3, '$1,000'),
+      cell(3, '5%'),
+    ];
+
+    const result = resolveHeaderRow(cells);
+
+    expect(result.headerRow).toBe(1);
+    expect(result.reducedFidelityReason).toContain('row 1');
+    expect(result.reducedFidelityReason).toContain('repeats a value');
+  });
+
+  // The header-less shape: no scanned row ever clears the 2-distinct-values-with-a-row-after bar,
+  // so the fallback to the topmost occupied row fires — this is the same fallback `detectHeaderRow`
+  // has always had, now named rather than silent.
+  it('should flag a reduced-fidelity reason when no scanned row qualifies as a header', () => {
+    const cells = [cell(1, 'note one'), cell(2, 'note two'), cell(3, 'note three')];
+
+    const result = resolveHeaderRow(cells);
+
+    expect(result.headerRow).toBe(1);
+    expect(result.reducedFidelityReason).toContain('no row within the first');
+  });
+});
+
+describe('parseHeaderUnitMarker', () => {
+  it('should return the header unchanged with no unit when there is no trailing marker', () => {
+    expect(parseHeaderUnitMarker('Cap Rate')).toEqual({ baseText: 'Cap Rate', unit: undefined });
+  });
+
+  it('should split a "(%)" marker off the header and report it as percent', () => {
+    expect(parseHeaderUnitMarker('Cap Rate (%)')).toEqual({
+      baseText: 'Cap Rate',
+      unit: 'percent',
+    });
+  });
+
+  it('should split a "(ratio)" marker off the header and report it as ratio', () => {
+    expect(parseHeaderUnitMarker('Cap Rate (ratio)')).toEqual({
+      baseText: 'Cap Rate',
+      unit: 'ratio',
+    });
+  });
+
+  it('should split a "(percent)" marker off the header and report it as percent', () => {
+    expect(parseHeaderUnitMarker('Cap Rate (percent)')).toEqual({
+      baseText: 'Cap Rate',
+      unit: 'percent',
+    });
+  });
+
+  it('should match the marker case-insensitively', () => {
+    expect(parseHeaderUnitMarker('Cap Rate (RATIO)')).toEqual({
+      baseText: 'Cap Rate',
+      unit: 'ratio',
+    });
   });
 });

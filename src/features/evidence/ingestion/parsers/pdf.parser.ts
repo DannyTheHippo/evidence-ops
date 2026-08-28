@@ -36,6 +36,28 @@ const CMAP_URL = `${join(PDFJS_ROOT, 'cmaps')}/`;
 // single word that pdf.js happened to split into adjacent runs (e.g. a font change mid-word).
 const WORD_GAP_RATIO = 0.25;
 
+// A gap this many times wider than an ordinary word gap is no longer plausible as word spacing —
+// it is a column of its own, the shape a table cell separator produces (a run of spaces or a tab
+// stop between columns of a row). Ten times `WORD_GAP_RATIO` keeps this well clear of a wide
+// single word-space so prose with generous kerning never trips it.
+const TABLE_CELL_GAP_RATIO = WORD_GAP_RATIO * 10;
+// A page needs at least this many lines with two-or-more such cell-sized gaps before it is
+// treated as table-heavy — one stray wide gap (an em-dash rendered as separate items, a run of
+// dot leaders) is not a table.
+const MIN_TABLE_LINES_PER_PAGE = 3;
+
+// Two lines are treated as starting the same column when their left edges fall within this many
+// viewport points of each other — wide enough to absorb pdf.js's own item-boundary jitter, narrow
+// enough not to blur two genuinely distinct columns together.
+const COLUMN_X_CLUSTER_TOLERANCE = 15;
+// The minimum distance between two line-start clusters for them to read as separate columns
+// rather than one column's paragraph indent (a first-line indent is typically 20-40pt; a real
+// second column starts much further across the page).
+const MIN_COLUMN_GAP = 100;
+// Each candidate column needs at least this many lines starting at (approximately) the same x —
+// two or three coincidentally aligned lines is not a column, it is noise.
+const MIN_LINES_PER_COLUMN = 3;
+
 type PdfjsModule = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
 
 let pdfjsModule: PdfjsModule | undefined;
@@ -213,6 +235,133 @@ function buildPageContent(items: readonly PdfTextItem[], viewport: PageViewport)
   return { text, boundingBox };
 }
 
+/** One visual line of a page: the viewport-space x its first item starts at, and its items in
+ *  stream order. Grouped the same way `buildPageContent` decides where to insert a newline — a
+ *  run of items terminated by an item whose `hasEOL` pdf.js has set. */
+interface PageLine {
+  readonly startX: number;
+  readonly items: readonly PdfTextItem[];
+}
+
+function groupIntoLines(items: readonly PdfTextItem[], viewport: PageViewport): PageLine[] {
+  const lines: PageLine[] = [];
+  let current: PdfTextItem[] = [];
+
+  const flush = (): void => {
+    if (current.length === 0) {
+      return;
+    }
+    const origin = itemOrigin(current[0]);
+    const startX = toViewportPoint(viewport.transform, origin.x, origin.y).x;
+    lines.push({ startX, items: current });
+    current = [];
+  };
+
+  for (const item of items) {
+    current.push(item);
+    if (item.hasEOL) {
+      flush();
+    }
+  }
+  flush();
+
+  return lines;
+}
+
+/**
+ * True when `line` reads as a table row: at least two gaps between adjacent items wide enough
+ * that they can only be a cell separator (`TABLE_CELL_GAP_RATIO`), not ordinary word spacing.
+ */
+function isTabularLine(line: PageLine): boolean {
+  // pdf.js's own text-content builder already merges same-baseline runs a long horizontal
+  // distance apart into one line, bridging the visual gap with a synthetic whitespace-only item
+  // whose `width` is the gap itself (and whose `height` is 0, so it never contributes to the line
+  // height computed below) — this is exactly what a row of table cells or a same-baseline
+  // multi-column layout produces. `lineHeight` therefore comes from the line's real (non-blank)
+  // items only.
+  const lineHeight = Math.max(0, ...line.items.map((item) => (item.str.trim() ? item.height : 0)));
+  if (lineHeight === 0) {
+    return false;
+  }
+  const threshold = lineHeight * TABLE_CELL_GAP_RATIO;
+
+  let wideGaps = 0;
+  for (const item of line.items) {
+    if (item.str.trim().length === 0 && item.width > threshold) {
+      wideGaps += 1;
+    }
+  }
+  // Belt-and-braces for a source that places two runs on the same line with no such filler item
+  // in between (e.g. two independently positioned items pdf.js did not choose to bridge).
+  for (let index = 1; index < line.items.length; index += 1) {
+    const previous = line.items[index - 1];
+    const current = line.items[index];
+    if (previous.str.trim().length === 0 || current.str.trim().length === 0) {
+      continue;
+    }
+    const previousEndX = itemOrigin(previous).x + previous.width;
+    const gap = itemOrigin(current).x - previousEndX;
+    if (gap > threshold) {
+      wideGaps += 1;
+    }
+  }
+  return wideGaps >= 2;
+}
+
+/**
+ * True when a page's lines cluster around two or more distinct left-edge x-positions, each
+ * carrying enough lines and far enough apart that the shape reads as separate columns rather
+ * than one column's paragraph indent. Deliberately coarse — bucketing by rounding to
+ * `COLUMN_X_CLUSTER_TOLERANCE` rather than a proper clustering algorithm, because the signal only
+ * needs to catch an obviously multi-column page, not measure column boundaries precisely.
+ */
+function isMultiColumn(lines: readonly PageLine[]): boolean {
+  const clusters = new Map<number, number>();
+  for (const line of lines) {
+    const bucket =
+      Math.round(line.startX / COLUMN_X_CLUSTER_TOLERANCE) * COLUMN_X_CLUSTER_TOLERANCE;
+    clusters.set(bucket, (clusters.get(bucket) ?? 0) + 1);
+  }
+
+  const populatedBuckets = [...clusters.entries()]
+    .filter(([, count]) => count >= MIN_LINES_PER_COLUMN)
+    .map(([bucket]) => bucket)
+    .sort((a, b) => a - b);
+
+  for (let i = 0; i < populatedBuckets.length; i += 1) {
+    for (let j = i + 1; j < populatedBuckets.length; j += 1) {
+      if (populatedBuckets[j] - populatedBuckets[i] >= MIN_COLUMN_GAP) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+interface PageLayoutSignals {
+  readonly multiColumn: boolean;
+  readonly tableHeavy: boolean;
+}
+
+/**
+ * Per-page reduced-fidelity signals. This parser reconstructs neither multi-column reading order
+ * nor table structure (both explicitly out of scope — see the module's `EXTRACTOR_VERSION`
+ * comment for what a change here would and would not need to bump); this only detects that
+ * either shape is present, so the version can be flagged instead of completing silently.
+ */
+function detectPageLayoutSignals(
+  items: readonly PdfTextItem[],
+  viewport: PageViewport,
+): PageLayoutSignals {
+  const lines = groupIntoLines(items, viewport);
+  const tabularLineCount = lines.filter(isTabularLine).length;
+
+  return {
+    multiColumn: isMultiColumn(lines),
+    tableHeavy: tabularLineCount >= MIN_TABLE_LINES_PER_PAGE,
+  };
+}
+
 /**
  * Extracts one `ParsedElement` per page via pdf.js's text-content API — no canvas, no rendering,
  * text-only. `pdfjs-dist`'s Node fallback runs the worker logic in-process (`PDFWorker` disables
@@ -249,15 +398,22 @@ export class PdfParser implements DocumentParser {
     try {
       const doc: PDFDocumentProxy = await loadingTask.promise;
       const elements: ParsedElement[] = [];
+      let multiColumnPageCount = 0;
+      let tableHeavyPageCount = 0;
 
       for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
         const page = await doc.getPage(pageNumber);
         const textContent = await page.getTextContent();
         const viewport = page.getViewport({ scale: 1 });
-        const { text, boundingBox } = buildPageContent(
-          textContent.items.filter(isTextItem),
-          viewport,
-        );
+        const textItems = textContent.items.filter(isTextItem);
+        const { text, boundingBox } = buildPageContent(textItems, viewport);
+        const layoutSignals = detectPageLayoutSignals(textItems, viewport);
+        if (layoutSignals.multiColumn) {
+          multiColumnPageCount += 1;
+        }
+        if (layoutSignals.tableHeavy) {
+          tableHeavyPageCount += 1;
+        }
 
         const locator: PdfPageLocator = {
           kind: 'pdf-page',
@@ -273,14 +429,43 @@ export class PdfParser implements DocumentParser {
         });
       }
 
-      if (doc.numPages > 0 && elements.every((element) => element.text.trim().length === 0)) {
+      const emptyPageCount = elements.filter((element) => element.text.trim().length === 0).length;
+
+      if (doc.numPages > 0 && emptyPageCount === elements.length) {
         throw new EmptyPdfTextLayerException(
           `Document has ${doc.numPages} page(s) but no extractable text on any of them ` +
             '(likely a scanned image with no embedded text layer); OCR is out of scope for this parser',
         );
       }
 
-      return { elements, extractorVersion: EXTRACTOR_VERSION };
+      // Detection only, per this parser's scope: neither a multi-column reading order nor a
+      // table's row/column structure is reconstructed, so a document exhibiting either is flagged
+      // reduced-fidelity rather than left indistinguishable from a fully and correctly extracted
+      // one. A mixed scanned/text document reaches here (rather than the quarantine above) exactly
+      // when some but not all pages are empty; the fully-empty case is caught first.
+      const reducedFidelityReasons: string[] = [];
+      if (emptyPageCount > 0) {
+        reducedFidelityReasons.push(
+          `${emptyPageCount} of ${doc.numPages} page(s) have no extractable text (likely ` +
+            'scanned images without an embedded text layer); those pages are missing from this version',
+        );
+      }
+      if (multiColumnPageCount > 0) {
+        reducedFidelityReasons.push(
+          `Detected a likely multi-column layout on ${multiColumnPageCount} of ${doc.numPages} ` +
+            'page(s); this parser does not reconstruct multi-column reading order, so text from ' +
+            'different columns may be interleaved',
+        );
+      }
+      if (tableHeavyPageCount > 0) {
+        reducedFidelityReasons.push(
+          `Detected table-like content on ${tableHeavyPageCount} of ${doc.numPages} page(s); ` +
+            'this parser does not reconstruct table structure, so rows and columns may read as a ' +
+            'run-on string',
+        );
+      }
+
+      return { elements, extractorVersion: EXTRACTOR_VERSION, reducedFidelityReasons };
     } catch (error) {
       if (error instanceof EmptyPdfTextLayerException) {
         throw error;

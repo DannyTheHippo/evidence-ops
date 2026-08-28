@@ -36,3 +36,36 @@ export function sanitizeEvidenceText(text: string): string {
   // actually said — this neutralizes the delimiter without editing the evidence.
   return text.replace(DELIMITER_PATTERN, '&lt;$1$2');
 }
+
+// Every C0 control except tab/LF/CR, plus DEL and every C1 control — code points a renderer treats
+// as invisible or as a raw escape, never as document content. Tab/LF/CR survive: they are the
+// paragraph/line structure a chunk's own block splitting is built from.
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g;
+
+// Every Unicode format character (`\p{Cf}`): zero-width space/joiner/non-joiner, a byte-order-mark
+// code point appearing mid-string rather than as a stripped BOM, soft hyphen, and every explicit
+// bidi control — LRE/RLE/PDF/LRO/RLO, the LRI/RLI/FSI/PDI isolates, LRM/RLM, ALM. All of these can
+// make what a viewer sees differ from the bytes verified at upload: a bidi override reorders the
+// glyphs on screen, and a zero-width character hides itself entirely.
+const FORMAT_CHARACTER_PATTERN = /\p{Cf}/gu;
+
+/**
+ * Neutralizes evidence text for the boundary where it is shown to a human or handed to a model —
+ * never applied at parse time, and never called from a parser. `ParsedElement.text`'s own contract
+ * is that the prompt builder and the grounding gate's quote-containment check compare against the
+ * exact bytes stored at parse time; running this earlier would make a stored citation diverge from
+ * what a model actually cites, the same failure this codebase's own `checkQuoteAlignment`
+ * (`qa/check-quote-alignment.ts`) avoids by keeping its comparison-only canonicalization out of
+ * `locateQuote`'s verbatim path.
+ *
+ * Strips control characters and every Unicode format character (including every bidi-override and
+ * zero-width code point), then NFC-normalizes — canonical composition only, never NFKC's
+ * compatibility folding, which would visibly alter evidence (a ligature or full-width digit
+ * rendering as a different character than the source document actually shows).
+ */
+export function neutralizeForDisplay(text: string): string {
+  return text
+    .replace(CONTROL_CHARACTER_PATTERN, '')
+    .replace(FORMAT_CHARACTER_PATTERN, '')
+    .normalize('NFC');
+}

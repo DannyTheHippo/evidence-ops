@@ -1,4 +1,5 @@
 import { Inject, Injectable, InternalServerErrorException } from '@nestjs/common';
+import { normalizeEntityName } from '../../../database/schemas/evidence/canonical-entity/canonical-entity.schema';
 import type { FactKey } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import {
   MODEL_PROVIDER,
@@ -22,7 +23,7 @@ import { extractNumericTokens } from './extract-numeric-tokens';
 import { factKeysMatch } from './grounding-gate.service';
 import { assembleVerifyClaimMessages } from './prompts/assemble-verify-claim-messages';
 import type { RetrievedChunk } from './types/retrieved-chunk.type';
-import { verifyClaim, type GroundingCellFact } from './verify-claim';
+import { containsNormalizedToken, verifyClaim, type GroundingCellFact } from './verify-claim';
 
 export interface VerifyClaimsInput {
   readonly claims: readonly string[];
@@ -35,9 +36,17 @@ export interface VerifyClaimsInput {
  *  sentence, which needs a narrow shortlist. */
 const CANDIDATE_LIMIT = 5;
 
-/** The model's entire output for one claim is a boolean, an index, and a short quote — not a
- *  multi-claim answer — so this stays far below `SynthesisService`'s output/spend caps. */
-const MAX_OUTPUT_TOKENS = 512;
+/** Bounds this call's output spend. The emitted verdict is small — a boolean, an index, and up to
+ *  three short quotes — but the cap covers the model's thinking tokens too: adaptive thinking draws
+ *  from the same `maxTokens` budget as the visible output, so a claim whose verification needs a
+ *  comparison across several candidates spends most of this on reasoning and the rest on JSON. Sized
+ *  for that reasoning rather than for the verdict; a cap sized for the verdict alone truncates the
+ *  JSON mid-token and the call fails rather than returning a wrong verdict.
+ *
+ *  `MAX_COST_USD` binds well above this: at the verification model's rate it admits an output cap in
+ *  the thousands of tokens for a typical five-candidate prompt, so the token cap is the operative
+ *  limit and the cost cap is the backstop. */
+const MAX_OUTPUT_TOKENS = 4096;
 const MAX_COST_USD = 0.25;
 
 /**
@@ -194,11 +203,17 @@ export class ClaimVerificationService {
    * fact as authoritative for numbers and disables its raw-chunk-text fallback accordingly, a
    * behavior this method must not disturb. Computed independently: every fact — any locator kind —
    * on the claim's own cited chunks, kept only when its value is one the claim's statement actually
-   * states (mirrors check 4's value match) and its `factKey.entity`, trimmed and lowercased, occurs
-   * as a substring of the claim statement lowercased the same way. Exact/substring only, never
-   * fuzzy — a chunk carrying several entities' facts (an xlsx row window, a prose page) must not
-   * attach an unrelated entity's conflict to this claim, the defect `scope-conflict-to-question.ts`
-   * exists to prevent on the answer path.
+   * states (mirrors check 4's value match) and its `factKey.entity` occurs as a whole token in the
+   * claim statement, both sides folded through {@link normalizeEntityName} — the same fold
+   * `groupKey`, `factKeysMatch`, and `verifyClaim`'s own subject-entity check use, so an entity
+   * arriving in a different Unicode encoding (fullwidth Latin, a compatibility ligature, a
+   * non-breaking space, a doubled space from a PDF text layer) still matches. Whole-token via
+   * {@link containsNormalizedToken}, never fuzzy — a chunk carrying several entities' facts (an
+   * xlsx row window, a prose page) must not attach an unrelated entity's conflict to this claim,
+   * the defect `scope-conflict-to-question.ts` exists to prevent on the answer path. This is a
+   * veto-widening check on the downgrade path, not a permission gate: under-matching here is the
+   * unsafe direction (a conflict that should have downgraded a claim silently does not), so it
+   * folds toward matching rather than toward excluding an entity it cannot prove distinct.
    */
   private async findProseTouchedFactKeys(
     claim: Claim,
@@ -208,20 +223,17 @@ export class ClaimVerificationService {
     const facts = await this.factsService.findFactsForChunks(citedChunkIds, tenantId);
 
     const statedNumbers = new Set(extractNumericTokens(claim.statement));
-    const normalizedStatement = claim.statement.trim().toLowerCase();
+    const normalizedStatement = normalizeEntityName(claim.statement);
 
-    return (
-      facts
-        .filter((fact) => statedNumbers.has(fact.value.amount))
-        // `factKey.entity` is a schema-required, trimmed field (`extracted-fact.schema.ts`), so it
-        // is never empty here — no guard needed against an empty string vacuously "occurring" in
-        // every statement.
-        .filter((fact) => normalizedStatement.includes(fact.factKey.entity.trim().toLowerCase()))
-        .map((fact) => ({
-          entity: fact.factKey.entity,
-          metric: fact.factKey.metric,
-          period: fact.factKey.period,
-        }))
-    );
+    return facts
+      .filter((fact) => statedNumbers.has(fact.value.amount))
+      .filter((fact) =>
+        containsNormalizedToken(normalizedStatement, normalizeEntityName(fact.factKey.entity)),
+      )
+      .map((fact) => ({
+        entity: fact.factKey.entity,
+        metric: fact.factKey.metric,
+        period: fact.factKey.period,
+      }));
   }
 }

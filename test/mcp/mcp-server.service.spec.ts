@@ -37,6 +37,7 @@ import {
 } from '../../src/mcp/mcp-tools';
 import { PatTokenVerifier } from '../../src/mcp/pat-token.verifier';
 import {
+  MCP_RATE_LIMIT_SWEEP_BATCH_SIZE,
   MCP_TOOL_CALL_EXECUTED_ACTION,
   MCP_TOOL_CALL_FAILED_ACTION,
   MCP_TOOL_CALL_REFUSED_ACTION,
@@ -162,7 +163,7 @@ async function buildHarness(
       preAuthIpRateLimitWindowMs,
       preAuthIpRateLimitMaxRequests,
     },
-    spend: { dailyLimitUsd },
+    spend: { dailyLimitUsd, ingestDailyLimitUsd: undefined },
   });
 
   const module: TestingModule = await Test.createTestingModule({
@@ -301,7 +302,7 @@ describe('McpServerService', () => {
       expect(Object.keys(verifyClaimsSchema.properties ?? {})).toEqual(['claims']);
     });
 
-    // ADR-0016's whole point for this surface: the tool that *proposes* a conflict resolution
+    // ADR-0014's whole point for this surface: the tool that *proposes* a conflict resolution
     // must never share a process with a tool that could *decide* one — ADR-0009's two-key control
     // only holds if no approval-deciding tool ever exists here, not merely that none is
     // advertised. `tools/call` routes any name through the step allowlists below regardless of
@@ -903,51 +904,129 @@ describe('McpServerService', () => {
     });
 
     // Fails CLOSED: the audit write is awaited before the tool result goes back, so a failed write
-    // surfaces as a protocol error rather than disclosing tool output with no record of the call.
-    it('should fail the call when the audit write fails, rather than returning the tool result unrecorded', async () => {
-      const { service, auditService } = await buildHarness();
-      auditService.record.mockRejectedValue(new Error('audit write failed'));
+    // replaces whatever the handler produced with the same fixed-message result a handler throw
+    // itself gets — the handler's own result is never disclosed without a record of the call, and
+    // the audit write's own error message never reaches the client either. The audit write throws
+    // inside the inner `finally`, which the inner `catch` cannot see (a `finally` throw supersedes
+    // whatever the `try` returned) — this is the outer `catch` in `buildServer`'s own path, not the
+    // inner one the handler-throw tests above exercise.
+    it('should return the fixed message when the audit write rejects with a Mongo-shaped Error, leaking neither message nor code', async () => {
+      const { service, auditService, logger } = await buildHarness();
+      const mongoError = Object.assign(
+        new Error('E11000 duplicate key error collection: evidence.auditEvents'),
+        { code: 11000 },
+      );
+      auditService.record.mockRejectedValue(mongoError);
       const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
 
-      // A throw from the handler becomes a JSON-RPC error response, so the client rejects and no
-      // `CallToolResult` — and therefore no chunk text — ever reaches the caller.
-      await expect(
-        client.callTool({ name: SEARCH_EVIDENCE_TOOL_NAME, arguments: { query: 'cap rate' } }),
-      ).rejects.toThrow('audit write failed');
+      const result = await client.callTool({
+        name: SEARCH_EVIDENCE_TOOL_NAME,
+        arguments: { query: 'cap rate' },
+      });
+
+      expect(result.isError).toBe(true);
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0].text).toBe('Internal server error');
+      expect(content[0].text).not.toContain('E11000');
+      expect(content[0].text).not.toContain('11000');
+      expect(JSON.stringify(result)).not.toContain('E11000');
+      expect(JSON.stringify(result)).not.toContain('11000');
+
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('E11000 duplicate key error collection'),
+        mongoError.stack,
+      );
+    });
+
+    // The `error instanceof Error` branch this test drives is otherwise unreachable: nothing else
+    // in this file rejects the audit write with a non-`Error` value, so without this the outer
+    // `catch`'s `false` branch — `String(error)` for the message, `undefined` for the (missing)
+    // stack — never runs.
+    it('should return the fixed message when the audit write rejects with a non-Error value, without throwing on the missing stack', async () => {
+      const { service, auditService, logger } = await buildHarness();
+      auditService.record.mockRejectedValue('a thrown string, not an Error instance');
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: SEARCH_EVIDENCE_TOOL_NAME,
+        arguments: { query: 'cap rate' },
+      });
+
+      expect(result.isError).toBe(true);
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0].text).toBe('Internal server error');
+      expect(content[0].text).not.toContain('a thrown string');
+      expect(JSON.stringify(result)).not.toContain('a thrown string');
+
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('a thrown string, not an Error instance'),
+        undefined,
+      );
     });
 
     // Regression for the id-enumeration gap: a fully authenticated, fully authorized `get_answer`
     // for a non-existent id previously threw before the audit write ran at all, leaving no row —
     // silent on every miss. The write now sits in a `finally` around the executor call, so a
     // handler throw still leaves exactly one row, carrying a distinct action from both a success
-    // and a chokepoint refusal.
-    it('should leave an audit row with the failed action when the handler throws, never silently emitting no row', async () => {
-      const { service, auditService, qaService } = await buildHarness();
-      qaService.getAnswerById.mockRejectedValue(
-        new AnswerNotFoundException("Answer 'missing' not found"),
-      );
-      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+    // and a chokepoint refusal. Parameterised over the error shapes a tool handler can actually
+    // produce — this process has neither `GlobalExceptionFilter` nor the SSE streams' `catchError`,
+    // so none of them may reach the client with its own message, not only the Mongo duplicate-key
+    // case.
+    it.each([
+      [
+        'a Mongo duplicate-key error',
+        Object.assign(new Error('E11000 duplicate key error collection: evidence.answers'), {
+          code: 11000,
+        }),
+      ],
+      [
+        'a Mongoose validation error',
+        Object.assign(new Error('Answer validation failed: id: Path `id` is required.'), {
+          name: 'ValidationError',
+        }),
+      ],
+      ['a plain Error', new Error('a very specific internal detail')],
+      ['a BaseException', new AnswerNotFoundException("Answer 'missing' not found")],
+      ['a thrown non-Error value', 'a thrown string'],
+    ])(
+      'should return the fixed message and leave a failed-action audit row for %s, never the exception detail',
+      async (_label, thrown) => {
+        const { service, auditService, qaService, logger } = await buildHarness();
+        qaService.getAnswerById.mockRejectedValue(thrown);
+        const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
 
-      await expect(
-        client.callTool({ name: GET_ANSWER_TOOL_NAME, arguments: { answerId: 'missing' } }),
-      ).rejects.toThrow("Answer 'missing' not found");
+        const result = await client.callTool({
+          name: GET_ANSWER_TOOL_NAME,
+          arguments: { answerId: 'missing' },
+        });
 
-      expect(auditService.record.mock.calls).toEqual([
-        [
-          {
-            action: MCP_TOOL_CALL_FAILED_ACTION,
-            actorId: 'actor-a',
-            subject: { entityType: 'User', entityId: 'actor-a' },
-            tenantId: 'tenant-a',
-            origin: 'mcp',
-            toolName: GET_ANSWER_TOOL_NAME,
-            refusalReason: undefined,
-          },
-        ],
-      ]);
-      expect(MCP_TOOL_CALL_FAILED_ACTION).not.toBe(MCP_TOOL_CALL_EXECUTED_ACTION);
-      expect(MCP_TOOL_CALL_FAILED_ACTION).not.toBe(MCP_TOOL_CALL_REFUSED_ACTION);
-    });
+        expect(result.isError).toBe(true);
+        const content = result.content as Array<{ type: string; text: string }>;
+        expect(content[0].text).toBe('Internal server error');
+
+        const realDetail = thrown instanceof Error ? thrown.message : String(thrown);
+        expect(logger.error).toHaveBeenCalledWith(
+          expect.stringContaining(realDetail),
+          thrown instanceof Error ? thrown.stack : undefined,
+        );
+
+        expect(auditService.record.mock.calls).toEqual([
+          [
+            {
+              action: MCP_TOOL_CALL_FAILED_ACTION,
+              actorId: 'actor-a',
+              subject: { entityType: 'User', entityId: 'actor-a' },
+              tenantId: 'tenant-a',
+              origin: 'mcp',
+              toolName: GET_ANSWER_TOOL_NAME,
+              refusalReason: undefined,
+            },
+          ],
+        ]);
+        expect(MCP_TOOL_CALL_FAILED_ACTION).not.toBe(MCP_TOOL_CALL_EXECUTED_ACTION);
+        expect(MCP_TOOL_CALL_FAILED_ACTION).not.toBe(MCP_TOOL_CALL_REFUSED_ACTION);
+      },
+    );
   });
 
   describe('authenticate', () => {
@@ -1017,6 +1096,26 @@ describe('McpServerService', () => {
       expect(service.checkRateLimit('actor-b')).toBe(true);
     });
 
+    // Fails CLOSED over the whole domain `cost` accepts, not only its non-positive values: a
+    // non-integral or non-finite cost must be refused too, because the admission check
+    // (`spent + cost > limit`) is only sound once every stored charge is a positive integer.
+    // `NaN` is the sharpest instance — `spent + NaN > limit` is `false`, so an unguarded `NaN`
+    // charge is admitted for free *and* poisons the key: every later comparison against a
+    // `NaN`-bearing running total is also `false`, admitting charges past the budget forever.
+    // `countRateLimitCost` floors the cost it derives from a request body at 1 elsewhere; this is
+    // the defence-in-depth guard for whatever a future caller passes directly.
+    it.each([0, -1, -100, NaN, Infinity, -Infinity, 0.5, -0.5])(
+      'should refuse a call whose cost is %p, admitting nothing and leaving the budget intact',
+      async (cost) => {
+        const { service } = await buildHarness(5);
+
+        expect(service.checkRateLimit('actor-a', cost)).toBe(false);
+        // The invalid cost stored no charge and poisoned nothing — a legitimate charge afterward
+        // still has the full budget available.
+        expect(service.checkRateLimit('actor-a', 5)).toBe(true);
+      },
+    );
+
     // Regression coverage for the JSON-RPC batching bypass: a batch of N tool calls must consume
     // N units from the limiter — never the flat 1-per-POST cost that let an arbitrarily large batch
     // array spend one unit of budget while the SDK dispatched every request inside it.
@@ -1046,7 +1145,7 @@ describe('McpServerService', () => {
       expect(service.checkRateLimit('actor-a', 10)).toBe(true);
     });
 
-    // Bounds `rateLimitWindows`' growth to currently active actors — without this, a map entry
+    // Bounds the charge map's growth to currently active actors — without this, a map entry
     // survives forever once a caller's window has fully elapsed and is never checked again.
     it('should evict an actor whose window has fully elapsed once any call runs, freeing the entry', async () => {
       const { service } = await buildHarness(1);
@@ -1055,8 +1154,10 @@ describe('McpServerService', () => {
       expect(service.checkRateLimit('actor-a')).toBe(true);
 
       nowSpy.mockReturnValue(60_001);
-      // A different actor's call still sweeps `actor-a`'s expired window — eviction happens on
-      // every call, not only on the evicted key's own next lookup.
+      // A different actor's call still evicts `actor-a`'s expired window: the amortised sweep
+      // visits every key present in a map this small within one call's batch, so eviction is not
+      // limited to the evicted key's own next lookup even though the sweep no longer walks the
+      // whole map unconditionally on every call.
       expect(service.checkRateLimit('actor-b')).toBe(true);
       // `actor-a`'s budget of 1 is fresh again: the entry was evicted, not merely stale-but-present.
       expect(service.checkRateLimit('actor-a')).toBe(true);
@@ -1099,6 +1200,215 @@ describe('McpServerService', () => {
       expect(service.checkRateLimit('actor-a')).toBe(true);
       expect(service.checkRateLimit('actor-a')).toBe(false);
       expect(service.checkPreAuthIpRateLimit('1.2.3.4')).toBe(true);
+    });
+  });
+
+  // Regression coverage for the O(active keys)-per-call eviction defect: a whole-map sweep on
+  // every call means the number of `Map.prototype.delete` calls one call makes scales with how
+  // many keys are tracked, not with the amortised sweep's own batch size. `Map.prototype.delete`
+  // is spied on rather than timed, per this codebase's own guidance against wall-clock assertions
+  // that are flaky on a loaded machine — the call count is exact and deterministic either way.
+  describe('amortised sweep bookkeeping stays bounded per call', () => {
+    function primeIp(index: number): string {
+      return `10.0.${Math.floor(index / 250)}.${index % 250}`;
+    }
+
+    it("should touch at most one sweep batch of the pre-auth IP map's keys per call, independent of how many are tracked", async () => {
+      const trackedKeys = MCP_RATE_LIMIT_SWEEP_BATCH_SIZE * 50;
+      const { service } = await buildHarness(60, trackedKeys + 10, 60_000);
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(0);
+
+      for (let index = 0; index < trackedKeys; index += 1) {
+        expect(service.checkPreAuthIpRateLimit(primeIp(index))).toBe(true);
+      }
+
+      nowSpy.mockReturnValue(60_001);
+
+      const deleteSpy = jest.spyOn(Map.prototype, 'delete');
+      try {
+        expect(service.checkPreAuthIpRateLimit('fresh-caller')).toBe(true);
+
+        // A per-call whole-map sweep would delete every one of `trackedKeys` now-expired entries
+        // here; the amortised sweep deletes at most one batch, which is what keeps this call's
+        // own cost independent of how many keys the map is tracking.
+        expect(deleteSpy.mock.calls.length).toBeLessThanOrEqual(MCP_RATE_LIMIT_SWEEP_BATCH_SIZE);
+        expect(deleteSpy.mock.calls.length).toBeLessThan(trackedKeys);
+      } finally {
+        deleteSpy.mockRestore();
+      }
+    });
+
+    it('should reclaim every stale key across a bounded run of calls, resuming rather than restarting each time', async () => {
+      const trackedKeys = MCP_RATE_LIMIT_SWEEP_BATCH_SIZE * 2;
+      const { service } = await buildHarness(60, trackedKeys + 20, 60_000);
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(0);
+
+      for (let index = 0; index < trackedKeys; index += 1) {
+        expect(service.checkPreAuthIpRateLimit(primeIp(index))).toBe(true);
+      }
+
+      nowSpy.mockReturnValue(60_001);
+
+      const deleteSpy = jest.spyOn(Map.prototype, 'delete');
+      let totalDeleted = 0;
+      try {
+        for (let call = 0; call < 10; call += 1) {
+          deleteSpy.mockClear();
+          expect(service.checkPreAuthIpRateLimit(`fresh-caller-${call}`)).toBe(true);
+
+          // Bounded on every one of these calls too, not just the first.
+          expect(deleteSpy.mock.calls.length).toBeLessThanOrEqual(MCP_RATE_LIMIT_SWEEP_BATCH_SIZE);
+          totalDeleted += deleteSpy.mock.calls.length;
+        }
+
+        // Spread across a small, bounded run of calls, the persisted cursor reaches every stale
+        // key rather than re-sweeping the same batch forever — the resumption a cursor cleared
+        // only on a completed pass exists for.
+        expect(totalDeleted).toBe(trackedKeys);
+      } finally {
+        deleteSpy.mockRestore();
+      }
+    });
+  });
+
+  // The admission property both limiters carry, stated over every window-length interval rather
+  // than over the intervals a counter happens to align to: for any key and any instant `t`, the
+  // units admitted for that key in `[t, t + windowMs)` never exceed the configured limit. A
+  // fixed-window counter violates it by up to 2x — a full budget spent just before a boundary and
+  // again just after sits inside one window-wide interval — so the sweep below drives generated
+  // schedules whose timestamps land on and around boundaries, with varying costs and interleaved
+  // keys, instead of a fixed list of examples that can only find the instances it names.
+  describe('admission property across every window-length interval', () => {
+    interface ScheduleEvent {
+      readonly at: number;
+      readonly cost: number;
+      readonly key: string;
+    }
+
+    const SWEEP_KEYS = ['caller-a', 'caller-b'];
+
+    /** Deterministic LCG (Numerical Recipes constants) — a failing seed reproduces exactly, which
+     *  a `Math.random` schedule would not. */
+    function createRandom(seed: number): (bound: number) => number {
+      let state = seed;
+      return (bound: number) => {
+        state = (state * 1664525 + 1013904223) % 4294967296;
+        return state % bound;
+      };
+    }
+
+    /** Timestamps advance by deltas drawn from a set that lands on, just before, and just after a
+     *  window boundary — the instants a fixed window is wrong at, which uniformly random deltas
+     *  would only occasionally hit. */
+    function generateSchedule(seed: number, windowMs: number, maxCost: number): ScheduleEvent[] {
+      const random = createRandom(seed);
+      const deltas = [0, 1, Math.floor(windowMs / 3), windowMs - 1, windowMs, windowMs + 1];
+      const events: ScheduleEvent[] = [];
+      let at = 0;
+
+      for (let index = 0; index < 40; index += 1) {
+        at += deltas[random(deltas.length)];
+        events.push({
+          at,
+          cost: 1 + random(maxCost),
+          key: SWEEP_KEYS[random(SWEEP_KEYS.length)],
+        });
+      }
+
+      return events;
+    }
+
+    /** The oracle, pinned to the same half-open interval the limiter's own eviction implies: an
+     *  admission at `at` counts against every interval starting in `(at - windowMs, at]`. Checking
+     *  intervals that start at an admission is sufficient — any interval's admissions are a subset
+     *  of the one starting at its earliest admission. */
+    function worstWindowLoad(admitted: ScheduleEvent[], windowMs: number): number {
+      let worst = 0;
+
+      for (const key of SWEEP_KEYS) {
+        const forKey = admitted.filter((event) => event.key === key);
+        for (const start of forKey) {
+          const load = forKey
+            .filter((event) => event.at >= start.at && event.at < start.at + windowMs)
+            .reduce((sum, event) => sum + event.cost, 0);
+          worst = Math.max(worst, load);
+        }
+      }
+
+      return worst;
+    }
+
+    function drive(
+      admit: (key: string, cost: number) => boolean,
+      events: readonly ScheduleEvent[],
+    ): ScheduleEvent[] {
+      const nowSpy = jest.spyOn(Date, 'now');
+      const admitted: ScheduleEvent[] = [];
+
+      for (const event of events) {
+        nowSpy.mockReturnValue(event.at);
+        if (admit(event.key, event.cost)) {
+          admitted.push(event);
+        }
+      }
+
+      return admitted;
+    }
+
+    it('should never admit more than the actor limit in any window-length interval', async () => {
+      const limit = 5;
+
+      for (let seed = 1; seed <= 200; seed += 1) {
+        const { service } = await buildHarness(limit);
+        const events = generateSchedule(seed, 60_000, 3);
+        const admitted = drive((key, cost) => service.checkRateLimit(key, cost), events);
+        const worst = worstWindowLoad(admitted, 60_000);
+
+        // Compared as an object so a failing sweep names the seed and the overshoot that produced
+        // it, which is what makes the counterexample reproducible.
+        expect({ seed, worst, exceeded: worst > limit }).toEqual({
+          seed,
+          worst,
+          exceeded: false,
+        });
+      }
+    });
+
+    it('should never admit more than the pre-auth IP limit in any window-length interval', async () => {
+      const limit = 4;
+      const windowMs = 30_000;
+
+      for (let seed = 1; seed <= 200; seed += 1) {
+        const { service } = await buildHarness(60, limit, windowMs);
+        const events = generateSchedule(seed, windowMs, 1);
+        const admitted = drive((key) => service.checkPreAuthIpRateLimit(key), events);
+        const worst = worstWindowLoad(admitted, windowMs);
+
+        expect({ seed, worst, exceeded: worst > limit }).toEqual({
+          seed,
+          worst,
+          exceeded: false,
+        });
+      }
+    });
+
+    // The sharpest instance of the property above, kept as its own case so a failure names the
+    // mechanism rather than a seed. A counter anchored at a key's first request returns the whole
+    // budget the instant that anchor elapses, no matter how recently the budget was spent: the
+    // second and third calls here are 2ms apart and together spend 3 units against a limit of 2.
+    it('should not return budget spent milliseconds ago just because an older spend elapsed', async () => {
+      const { service } = await buildHarness(2);
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(0);
+
+      expect(service.checkRateLimit('actor-a', 1)).toBe(true);
+
+      nowSpy.mockReturnValue(59_999);
+      expect(service.checkRateLimit('actor-a', 1)).toBe(true);
+
+      nowSpy.mockReturnValue(60_001);
+      expect(service.checkRateLimit('actor-a', 2)).toBe(false);
+      // Exactly one unit came back — the one spent at t=0, which is now a full window behind.
+      expect(service.checkRateLimit('actor-a', 1)).toBe(true);
     });
   });
 

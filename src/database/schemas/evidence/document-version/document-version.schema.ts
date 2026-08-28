@@ -10,16 +10,26 @@ export type DocumentVersionDocument = HydratedDocument<WithTimestamps<DocumentVe
 // `IngestionService.recordIngestionFailure` for where it is chosen over 'failed', and
 // `ingest-document-version.workflow.ts`'s `nonRetryableErrorTypes` for why the underlying activity
 // never retries it either.
-export type DocumentVersionIngestionStatus = 'pending' | 'completed' | 'failed' | 'needs-ocr';
+// 'facts-failed' is the other partial-success state: the version's chunks are committed and
+// searchable, but the fact extraction that follows the ingest never completed, so the version
+// carries no `ExtractedFact` rows and no conflict scan has seen it. It is distinct from
+// 'completed' because a document the product answers from while knowing nothing in it is not the
+// same as one fully ingested, and distinct from 'failed' because the chunks are real and cited
+// answers over them are honest — see `IngestionService.recordFactExtractionFailure`, which is the
+// only writer, and `ingest-document-version.workflow.ts`, which calls it.
+export type DocumentVersionIngestionStatus =
+  'pending' | 'completed' | 'facts-failed' | 'failed' | 'needs-ocr';
 
-// Adding 'needs-ocr' needs no migration: `enum` on a `@Prop` is a Mongoose-side validator, not a
+// Adding a status needs no migration: `enum` on a `@Prop` is a Mongoose-side validator, not a
 // database index, so a deployed collection already accepts the new value the moment this file
-// ships. The one existing query pattern over this field — `document_versions_tenantId_ingestionStatus`
-// below, backing `DocumentsService.list`'s filter — indexes the whole field regardless of which
-// values it holds, so it already covers 'needs-ocr' without a migration touching it either.
+// ships. The existing query patterns over this field — `document_versions_tenantId_ingestionStatus`
+// below, backing `DocumentsService.list`'s filter, and
+// `document_versions_ingestionStatus_updatedAt`, backing the reconciler — index the whole field
+// regardless of which values it holds, so they cover a new value without a migration too.
 export const DOCUMENT_VERSION_INGESTION_STATUSES: readonly DocumentVersionIngestionStatus[] = [
   'pending',
   'completed',
+  'facts-failed',
   'failed',
   'needs-ocr',
 ];
@@ -77,8 +87,10 @@ export class DocumentVersion extends AuditableDocument {
   ingestionLeaseToken?: Types.ObjectId;
 
   /**
-   * Populated when `ingestionStatus` is `'failed'` or `'needs-ocr'` — the parser exception
-   * message, verbatim, from the attempt that set that status (`IngestionService.ingestVersion`).
+   * Populated when `ingestionStatus` is `'failed'`, `'needs-ocr'` or `'facts-failed'` — the
+   * exception message, verbatim, from the attempt that set that status
+   * (`IngestionService.ingestVersion` for the first two, `recordFactExtractionFailure` for the
+   * third).
    * Optional and unindexed: a version predating this field has no failure to record and there is
    * no query pattern over this field, so no migration accompanies its addition
    * (`.claude/rules/mongoose.md` requires one only for an index or a backfill).
@@ -90,8 +102,8 @@ export class DocumentVersion extends AuditableDocument {
    * Soft-withdrawal marker: unset for every retrievable version. Set (never unset by `remove`'s
    * hard delete, which removes the row instead) when `SourcesService.runSync` decides the
    * originating source file is gone. Chunks and facts under this version are deliberately
-   * retained — a past `Answer` still cites them and `ResolutionBacktestService` still replays them
-   * — only retrieval exclusion (a later step) and `withdrawnReason` read this field.
+   * retained — a past `Answer` still cites them — only retrieval exclusion (a later step) and
+   * `withdrawnReason` read this field.
    */
   @Prop({ type: Date })
   withdrawnAt?: Date;
@@ -103,6 +115,10 @@ export class DocumentVersion extends AuditableDocument {
 
   @Prop({ type: String, required: true })
   tenantId: string;
+
+  /** Non-empty when this version was ingested with known fidelity loss; each entry states one reason. */
+  @Prop({ type: [String], default: [] })
+  reducedFidelityReasons: string[];
 }
 
 export const DocumentVersionSchema = SchemaFactory.createForClass(DocumentVersion);
@@ -130,5 +146,20 @@ DocumentVersionSchema.index(
   {
     name: 'document_versions_tenantId_withdrawnAt',
     partialFilterExpression: { withdrawnAt: { $exists: true } },
+  },
+);
+
+/**
+ * Declared here as well as in `migrations/0035-document-version-stale-attempt-index.ts`, with the
+ * same keys, name and options — same reasoning as the indexes above. Backs
+ * `IngestionService.reconcileStaleAttempts`, which sweeps every tenant at once and so cannot use
+ * the `tenantId`-leading index. Partial: only `'pending'` versions are ever swept, which is a
+ * small minority of the collection at any moment.
+ */
+DocumentVersionSchema.index(
+  { ingestionStatus: 1, updatedAt: 1 },
+  {
+    name: 'document_versions_ingestionStatus_updatedAt',
+    partialFilterExpression: { ingestionStatus: 'pending' },
   },
 );

@@ -35,3 +35,15 @@ export class MissingFileException extends BaseException {
     super(message, HttpStatus.BAD_REQUEST, cause);
   }
 }
+
+// Distinct from both exceptions above: those are about what the client *declared* (an
+// unrecognized MIME, or an ambiguous MIME an extension couldn't resolve). This is about what the
+// bytes actually are — `resolveUploadKind` resolved a kind from MIME/filename, but
+// `contentMatchesDeclaredKind`'s magic-byte sniff found content that does not match it. A 400: the
+// declared type/filename combination the client sent is the malformed part, not the media type in
+// the abstract.
+export class ContentTypeMismatchException extends BaseException {
+  constructor(message: string, cause?: unknown) {
+    super(message, HttpStatus.BAD_REQUEST, cause);
+  }
+}

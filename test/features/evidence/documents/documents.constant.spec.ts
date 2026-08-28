@@ -1,4 +1,7 @@
-import { resolveUploadKind } from '../../../../src/features/evidence/documents/documents.constant';
+import {
+  contentMatchesDeclaredKind,
+  resolveUploadKind,
+} from '../../../../src/features/evidence/documents/documents.constant';
 
 describe('resolveUploadKind', () => {
   describe('unambiguous MIME types — trusted outright regardless of filename', () => {
@@ -68,5 +71,57 @@ describe('resolveUploadKind', () => {
 
   it('rejects a MIME type that is neither unambiguous nor in the ambiguous set', () => {
     expect(resolveUploadKind('image/png', 'photo.png')).toBeUndefined();
+  });
+});
+
+describe('contentMatchesDeclaredKind', () => {
+  const pdfBytes = Buffer.from('%PDF-1.7\nrest of the file', 'ascii');
+  const zipBytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]);
+  const plainTextBytes = Buffer.from('Northgate Business Park comps', 'utf-8');
+
+  it('matches a PDF-signed buffer declared as pdf', () => {
+    expect(contentMatchesDeclaredKind(pdfBytes, 'pdf')).toBe(true);
+  });
+
+  it('rejects a PDF-signed buffer declared as txt — the report.txt-sent-as-a-PDF case', () => {
+    expect(contentMatchesDeclaredKind(pdfBytes, 'txt')).toBe(false);
+  });
+
+  it.each([['docx'], ['xlsx'], ['pptx']] as const)(
+    'matches a ZIP-signed buffer declared as %s',
+    (sourceKind) => {
+      expect(contentMatchesDeclaredKind(zipBytes, sourceKind)).toBe(true);
+    },
+  );
+
+  it('rejects a ZIP-signed buffer declared as pdf — the two binary families never cross-match', () => {
+    expect(contentMatchesDeclaredKind(zipBytes, 'pdf')).toBe(false);
+  });
+
+  it('rejects a declared binary kind whose bytes carry no recognized signature at all', () => {
+    expect(contentMatchesDeclaredKind(plainTextBytes, 'xlsx')).toBe(false);
+  });
+
+  it.each([['txt'], ['md'], ['csv'], ['tsv']] as const)(
+    'matches ordinary text bytes declared as %s — no binary signature to contradict them',
+    (sourceKind) => {
+      expect(contentMatchesDeclaredKind(plainTextBytes, sourceKind)).toBe(true);
+    },
+  );
+
+  it('rejects a declared text kind whose bytes actually carry a PDF signature', () => {
+    expect(contentMatchesDeclaredKind(pdfBytes, 'csv')).toBe(false);
+  });
+
+  it('rejects a declared text kind whose bytes actually carry a ZIP signature', () => {
+    expect(contentMatchesDeclaredKind(zipBytes, 'md')).toBe(false);
+  });
+
+  it('matches a buffer shorter than any known signature against a declared text kind', () => {
+    expect(contentMatchesDeclaredKind(Buffer.from([0x61]), 'txt')).toBe(true);
+  });
+
+  it('rejects a buffer shorter than the PDF signature against a declared pdf kind', () => {
+    expect(contentMatchesDeclaredKind(Buffer.from([0x25, 0x50]), 'pdf')).toBe(false);
   });
 });

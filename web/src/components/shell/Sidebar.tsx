@@ -3,7 +3,6 @@ import { NavLink } from 'react-router-dom';
 import {
   IconActivity,
   IconAlertTriangle,
-  IconBarChart,
   IconCheck,
   IconClipboard,
   IconDatabase,
@@ -11,7 +10,6 @@ import {
   IconFolder,
   IconHome,
   IconKey,
-  IconLayers,
   IconMessageCircle,
   IconPanelLeft,
   IconSearch,
@@ -40,7 +38,6 @@ interface NavGroup {
 // eslint-disable-next-line react-refresh/only-export-components -- non-component export: App.tsx's breadcrumb lookup and this file's own nav-group builder both read it
 export const NAV_LABELS: { to: string; label: string }[] = [
   { to: '/', label: 'Home' },
-  { to: '/measures', label: 'Measures' },
   { to: '/ask', label: 'Ask' },
   { to: '/answers', label: 'Answers' },
   { to: '/search', label: 'Search' },
@@ -52,18 +49,13 @@ export const NAV_LABELS: { to: string; label: string }[] = [
   { to: '/api-keys', label: 'API Keys' },
   { to: '/audit-events', label: 'Audit Log' },
   { to: '/invitations', label: 'Invitations' },
-  { to: '/resolution-rules', label: 'Resolution Rules' },
   { to: '/canonical-entities', label: 'Canonical Entities' },
-  { to: '/metric-packs', label: 'Metric Packs' },
 ];
 
 function buildNavGroups(isAdmin: boolean): NavGroup[] {
   return [
     {
-      items: [
-        { to: '/', label: 'Home', icon: <IconHome />, end: true },
-        { to: '/measures', label: 'Measures', icon: <IconBarChart /> },
-      ],
+      items: [{ to: '/', label: 'Home', icon: <IconHome />, end: true }],
     },
     {
       heading: 'Ask',
@@ -96,9 +88,7 @@ function buildNavGroups(isAdmin: boolean): NavGroup[] {
           ? [
               { to: '/audit-events', label: 'Audit Log', icon: <IconClipboard /> },
               { to: '/invitations', label: 'Invitations', icon: <IconUserPlus /> },
-              { to: '/resolution-rules', label: 'Resolution Rules', icon: <IconAlertTriangle /> },
               { to: '/canonical-entities', label: 'Canonical Entities', icon: <IconTag /> },
-              { to: '/metric-packs', label: 'Metric Packs', icon: <IconLayers /> },
             ]
           : []),
       ],

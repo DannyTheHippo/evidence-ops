@@ -4,21 +4,19 @@ import type {
   FactKey,
   FactValue,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
-// The pack schema's `MetricDefinition` (`id: string`), not `metric-ontology.ts`'s own
-// (`id: MetricId`) — `ontology` here is a resolved `MetricPackData`'s metrics, per-tenant, not
-// necessarily the closed CRE ontology.
-import type { MetricDefinition } from '../../../database/schemas/evidence/metric-pack/metric-pack.schema';
 import type { ModelProvider } from '../../../providers/model/model-provider.interface';
 import { locateQuote } from '../../../shared/utils/locate-quote.util';
+import { normalizeQuoteText } from '../../../shared/utils/normalize-quote-text.util';
 import { EVIDENCE_DELIMITER_TAG } from '../ingestion/sanitize-evidence-text';
 import type { ParsedElement } from '../ingestion/parsers/parsed-element.type';
 import { agreeFacts, type AgreementReport } from './agree-facts';
+import type { CanonicalEntityResolution } from './canonical-entity.service';
 import {
   buildFactExtractionResultSchema,
   type FactCandidateOutput,
 } from './contracts/fact-extraction.contract';
 import { derivePeriodFromDateText } from './derive-period';
-import { findMetricById } from './metric-ontology';
+import { findMetricById, type MetricDefinition } from './metric-ontology';
 import { parseCalendarDate } from './parse-calendar-date';
 
 export interface ExtractedFactInput {
@@ -35,6 +33,29 @@ export interface ExtractedFactInput {
   readonly observedAt?: Date;
 }
 
+/**
+ * An {@link ExtractedFactInput} whose `factKey.entity` has been through the tenant's
+ * `CanonicalEntity` registry — the form every candidate carries from the moment resolution runs,
+ * which is before agreement, not after it.
+ */
+export interface ResolvedFactInput extends ExtractedFactInput {
+  /** True when the registry resolved the extracted span to a canonical name, so `factKey.entity`
+   * is that canonical name. False when no row matched: `factKey.entity` is the span exactly as the
+   * source wrote it, never a guess, and the miss stays visible for a human to close the registry's
+   * gap. */
+  readonly entityMatched: boolean;
+}
+
+/**
+ * Resolves a batch of raw entity names against one tenant's `CanonicalEntity` registry, returning
+ * one resolution per input name, in the same order and at the same length —
+ * `CanonicalEntityService.resolveMany` bound to a tenant. Injected rather than imported so this
+ * module stays free of Mongoose and DI while still resolving entities before agreement.
+ */
+export type EntityResolver = (
+  rawNames: readonly string[],
+) => Promise<readonly CanonicalEntityResolution[]>;
+
 export interface RejectedFactCandidate {
   readonly candidate: FactCandidateOutput;
   readonly reason: string;
@@ -45,7 +66,7 @@ export interface ProseFactExtractionResult {
    * `agree-facts.ts`. Empty (with `skippedForInsufficientPasses: true`) rather than a single
    * pass's raw output whenever fewer than `MIN_SUCCESSFUL_PASSES` passes returned usable output
    * at all. */
-  readonly accepted: ExtractedFactInput[];
+  readonly accepted: ResolvedFactInput[];
   /** Every rejected candidate from every successful pass, concatenated — diagnostic only
    * (`FactsService` logs each at `debug`), so a candidate rejected identically by more than one
    * pass appears more than once here. */
@@ -98,6 +119,7 @@ function buildSystemPrompt(ontology: readonly MetricDefinition[]): string {
     'Only extract facts for the following allowlisted metrics — never invent a metric id:',
     metricLines,
     'For each fact, quote the exact sentence or phrase the value comes from, verbatim and unmodified from the source text.',
+    'State entityQuote as the span of the chunk that names the entity the fact is about, copied character-for-character from the source text — never your own wording, never an expansion, never a name the chunk does not contain.',
     "State periodText as the literal date/time phrase the source states for this fact (e.g. 'March 2025', '2025-03-14'), or an empty string if the source states no period for it.",
     "State observedAtText as an ISO 'YYYY-MM-DD' date only when the source text explicitly states the date this value was observed or recorded, or an empty string otherwise — never infer, guess, or derive it from surrounding context.",
   ].join('\n');
@@ -132,11 +154,31 @@ function resolveFactLocator(
 }
 
 /**
+ * The entity name a candidate's `entityQuote` span stands for, or `undefined` when that span is not
+ * really in the chunk. Fails CLOSED — an unlocatable span drops the candidate rather than falling
+ * back to the model's text as written — for the same reason `quote` is verified: a name the chunk
+ * does not contain is a name the document never attributed the value to, and persisting it would
+ * file a fact under an entity the evidence never named.
+ *
+ * The span is returned through `normalizeQuoteText`, the same fold `locateQuote` verifies through,
+ * so two passes copying one source phrase produce byte-identical entity strings even when they
+ * differ in whitespace runs or in a smart-quote/dash/NBSP variant. Case and every other character
+ * are the source's own: this is the display name a fact is filed under when the registry has no row
+ * for it.
+ */
+function resolveEntitySpan(entityQuote: string, chunkText: string): string | undefined {
+  if (locateQuote(entityQuote, chunkText).kind !== 'exact') {
+    return undefined;
+  }
+  return normalizeQuoteText(entityQuote);
+}
+
+/**
  * Applies the grounding and ontology checks to one pass's raw candidates. The model proposes;
  * this disposes: a candidate is only accepted if (a) its metric and unit are both valid per the
- * ontology and (b) its quote is a literal substring of the chunk — verified here, not trusted
- * from the model's own claim, because a hallucinated or paraphrased quote would let an ungrounded
- * claim pass as cited evidence.
+ * ontology and (b) its quote and its entity span are both literal substrings of the chunk —
+ * verified here, not trusted from the model's own claim, because a hallucinated or paraphrased
+ * quote would let an ungrounded claim pass as cited evidence.
  */
 function evaluateCandidates(
   candidates: readonly FactCandidateOutput[],
@@ -180,9 +222,15 @@ function evaluateCandidates(
       continue;
     }
 
+    const entity = resolveEntitySpan(candidate.entityQuote, chunkText);
+    if (entity === undefined) {
+      rejected.push({ candidate, reason: 'entity span not found verbatim in source chunk' });
+      continue;
+    }
+
     accepted.push({
       factKey: {
-        entity: candidate.entity.trim(),
+        entity,
         metric: metric.id,
         period: derivePeriodFromDateText(candidate.periodText),
       },
@@ -202,11 +250,46 @@ function evaluateCandidates(
 }
 
 /**
+ * Swaps every pass's `factKey.entity` for the canonical name the tenant's registry resolves it to,
+ * in one batched lookup covering every candidate of every pass rather than one lookup per pass.
+ *
+ * Runs before `agreeFacts`, because agreement groups candidates by `(entity, metric, period)`: two
+ * passes that copy different spans naming one entity — its full name and a registered short form,
+ * or a definite-article reference the registry lists as an alias — are one group only once both
+ * have been resolved to the same canonical name. Resolved afterwards they are two singleton groups,
+ * neither reaches `MIN_AGREEING_PASSES`, and both facts drop.
+ */
+async function resolvePassEntities(
+  passResults: readonly (readonly ExtractedFactInput[])[],
+  resolveEntities: EntityResolver,
+): Promise<ResolvedFactInput[][]> {
+  const resolutions = await resolveEntities(
+    passResults.flatMap((passFacts) => passFacts.map((fact) => fact.factKey.entity)),
+  );
+
+  let cursor = 0;
+  return passResults.map((passFacts) =>
+    passFacts.map((fact) => {
+      const resolution = resolutions[cursor];
+      cursor += 1;
+      return {
+        ...fact,
+        factKey: { ...fact.factKey, entity: resolution.name },
+        entityMatched: resolution.matched,
+      };
+    }),
+  );
+}
+
+/**
  * Extracts facts from one already-ingested chunk of PDF/DOCX text via `ModelProvider`, run as
  * `PASS_COUNT` independent passes over identical input rather than one call — a single call has
  * measurably returned a different fact count for byte-identical input across live runs, so one
- * sample is not trustworthy evidence. `agreeFacts` (`agree-facts.ts`) keeps only the
- * `(entity, metric, period)` groups at least `MIN_SUCCESSFUL_PASSES` passes agreed on.
+ * sample is not trustworthy evidence. Every pass's candidates are resolved against the tenant's
+ * `CanonicalEntity` registry (`resolvePassEntities`) before `agreeFacts` (`agree-facts.ts`) keeps
+ * only the `(entity, metric, period)` groups at least `MIN_SUCCESSFUL_PASSES` passes agreed on —
+ * agreement is measured on canonical entity names, not on whichever span each pass happened to
+ * copy.
  *
  * Passes run concurrently: nothing in this project throttles calls to the Anthropic model
  * provider (the 3 RPM throttle in `providers/embedding/voyage-embedding.provider.ts` is Voyage
@@ -221,8 +304,17 @@ export async function extractProseFacts(params: {
   readonly modelProvider: ModelProvider;
   readonly ontology: readonly MetricDefinition[];
   readonly tenantId: string;
+  readonly resolveEntities: EntityResolver;
 }): Promise<ProseFactExtractionResult> {
-  const { chunkText, chunkLocator, sourceElements, modelProvider, ontology, tenantId } = params;
+  const {
+    chunkText,
+    chunkLocator,
+    sourceElements,
+    modelProvider,
+    ontology,
+    tenantId,
+    resolveEntities,
+  } = params;
 
   // Fenced for the model call only; every verification below (`evaluateCandidates`,
   // `resolveFactLocator`) still compares against the raw `chunkText`, since that is what the
@@ -273,7 +365,10 @@ export async function extractProseFacts(params: {
     rejected.push(...passRejected);
   }
 
-  const { facts, report } = agreeFacts(passResults, ontology);
+  const { facts, report } = agreeFacts(
+    await resolvePassEntities(passResults, resolveEntities),
+    ontology,
+  );
 
   return {
     accepted: facts,

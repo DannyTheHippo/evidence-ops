@@ -736,7 +736,7 @@ unaddressed boundary.
 
 ## 012 — Structural enforcement versus discipline, and what a negative control actually proves
 
-**ADR:** [0011](./adr/0011-structural-tenant-isolation-and-minimal-roles.md) · **Code:**
+**ADR:** [0010](./adr/0010-structural-tenant-isolation-and-minimal-roles.md) · **Code:**
 `src/database/plugins/tenant-scope.plugin.ts`
 
 **The concept.** A cross-cutting invariant — "every query for tenant-scoped data is filtered by the
@@ -841,7 +841,7 @@ permanently accurate.
 
 ## 013 — A tool surface for a model is not an API with a different transport
 
-**ADR:** [0016](./adr/0016-mcp-server-surface.md) · **Code:** `src/mcp/`
+**ADR:** [0014](./adr/0014-mcp-server-surface.md) · **Code:** `src/mcp/`
 
 **The concept.** An HTTP API is designed against a caller that read the documentation, holds its own
 credentials, and means what it sends. A tool surface exposed to an AI client keeps the credentials
@@ -936,9 +936,9 @@ than its role, so a token that clears a step's floor can call every tool that st
 
 ## 014 — Agentic retrieval: the loop gathers, and that boundary is the safety property
 
-**ADR:** [0015](./adr/0015-agentic-retrieval-mode.md), whose Status line carries the removal
-record — the mechanism this entry teaches was later removed from the codebase, so the code
-references below describe a design that no longer exists on disk.
+**ADR:** none — the decision record was deleted along with the mechanism it described. The concept
+this entry teaches outlived the code, but the code references below describe a design that no longer
+exists on disk.
 
 **The concept.** Single-shot retrieval runs one search per question and hands whatever it finds to
 whatever comes next. It is correct for a question the corpus answers in one search and blind to a
@@ -1205,7 +1205,7 @@ to be wrong for a fail-closed spend control, but it is a real over-refusal, not 
 
 ## 017 — Survivorship: which disagreeing value wins is a policy question, not a model question
 
-**ADR:** [0017](./adr/0017-survivorship-policy.md) · **Code:**
+**ADR:** [0015](./adr/0015-survivorship-policy.md) · **Code:**
 `src/features/evidence/conflicts/resolve-conflict-policy.ts`
 
 **The concept.** Once a system can notice that two sources disagree about the same thing, the
