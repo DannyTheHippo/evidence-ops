@@ -16,10 +16,13 @@ process.env.MONGO_MEMORY_SERVER = 'true';
  * wired and enforces whatever it is configured with) for a fraction of the work.
  *
  * Buckets are keyed per handler, not globally, so this ceiling applies to each route
- * independently and leaves ample headroom for the other suites. The production default is asserted
- * separately by the environment config's own spec, which this override does not reach.
+ * independently. 40 rather than 30: `api-keys.e2e-spec.ts` alone drives close to 30 requests
+ * through the `mint` handler's own bucket across its fixtures, leaving no real room for another
+ * suite sharing that bucket to add coverage without tripping the burst test's own assertions. The
+ * production default is asserted separately by the environment config's own spec, which this
+ * override does not reach.
  */
-process.env.THROTTLE_LIMIT = '30';
+process.env.THROTTLE_LIMIT = '40';
 
 /**
  * Raises only the per-address half of `CredentialThrottleGuard` for e2e, from the production

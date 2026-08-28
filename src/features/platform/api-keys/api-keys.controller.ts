@@ -84,4 +84,23 @@ export class ApiKeysController {
 
     await this.apiKeysService.revoke(id, user.userId, user.tenantId);
   }
+
+  @Post(':id/rotate')
+  @Version('1')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiResponse(apiKeysApiExamples.rotated)
+  @ApiResponse(apiKeysApiExamples.notFound)
+  async rotate(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedRequest['user'],
+  ): Promise<MintedApiKeyResponseDto> {
+    if (!user) {
+      throw new UnauthorizedException('No token provided');
+    }
+
+    return toResponseDto(
+      MintedApiKeyResponseDto,
+      await this.apiKeysService.rotate(id, user.userId, user.tenantId),
+    );
+  }
 }

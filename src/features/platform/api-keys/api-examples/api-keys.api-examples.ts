@@ -59,6 +59,18 @@ export const apiKeysApiExamples: Record<string, ApiResponseOptions> = {
     status: HttpStatus.NO_CONTENT,
     description: 'The key was revoked.',
   },
+  rotated: {
+    status: HttpStatus.CREATED,
+    description:
+      'The key rotated onto a fresh token — same id, name and creation date, new plaintext token ' +
+      'shown exactly once. The previous token stops working immediately.',
+    examples: {
+      example: {
+        summary: 'Rotated API key',
+        value: exampleMintedKey,
+      },
+    },
+  },
   notFound: {
     status: HttpStatus.NOT_FOUND,
     description: 'API key does not exist for this user.',

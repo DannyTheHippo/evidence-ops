@@ -743,6 +743,13 @@ export async function revokeApiKey(id: string): Promise<void> {
   await request<void>(`/api-keys/${id}`, { method: 'DELETE' });
 }
 
+// Rotates the key's token onto its existing row — same id, name and creation date, a fresh
+// plaintext token shown exactly once. The previous token stops working the moment this call
+// succeeds; only its hash was ever stored, so there is nothing to fall back to.
+export function rotateApiKey(id: string): Promise<MintedApiKey> {
+  return request<MintedApiKey>(`/api-keys/${id}/rotate`, { method: 'POST' });
+}
+
 // ── Invitations ──────────────────────────────────────────────────────────
 
 export interface Invitation {

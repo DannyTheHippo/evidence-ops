@@ -177,6 +177,68 @@ export class ApiKeysService implements TokenVerifier {
   }
 
   /**
+   * Rotates the key's token on its existing row — identity, name, creation date and audit history
+   * all survive; only the token, its hash and its prefix move. Follows `mint`'s own token
+   * generation, hashing and prefix rather than a second path. The previous token stops working the
+   * moment this succeeds — only its hash was ever stored, so there is nothing to fall back to.
+   *
+   * Stamps the caller's session epoch fresh from the live `User` row rather than carrying the
+   * existing key's `tokenVersion` forward: `verify` refuses any key whose stored epoch does not
+   * match the user's current one, so a key minted under a stale epoch would otherwise come back
+   * rotated and still fail its very first use.
+   *
+   * Scoped by userId as well as tenantId, same as `revoke`, and refuses an already-revoked key —
+   * a foreign-tenant id, another user's key id, and a revoked key are all indistinguishable from a
+   * missing one.
+   */
+  async rotate(id: string, actorId: string, tenantId: string): Promise<MintedApiKeyResult> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new ApiKeyNotFoundException(`API key '${id}' not found`);
+    }
+
+    const user = await this.userModel.findById(actorId);
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    const token = `${TOKEN_PREFIX}${randomBytes(TOKEN_RANDOM_BYTES).toString('base64url')}`;
+    const tokenHash = this.hash(token);
+    const tokenPrefix = token.slice(0, TOKEN_DISPLAY_PREFIX_LENGTH);
+
+    const apiKey = await this.apiKeyModel.findOneAndUpdate(
+      {
+        _id: id,
+        userId: new Types.ObjectId(actorId),
+        tenantId,
+        revokedAt: { $exists: false },
+      },
+      { $set: { tokenHash, tokenPrefix, tokenVersion: user.tokenVersion } },
+    );
+    if (!apiKey) {
+      throw new ApiKeyNotFoundException(`API key '${id}' not found`);
+    }
+
+    await this.auditService.record({
+      action: 'api-keys.rotated',
+      actorId,
+      subject: { entityType: 'ApiKey', entityId: id },
+      tenantId,
+    });
+
+    this.logger.debug(`Rotated API key '${id}'`);
+
+    // `token` is the only place the plaintext ever appears — not persisted, not logged above.
+    return {
+      id: apiKey._id.toString(),
+      name: apiKey.name,
+      token,
+      tokenPrefix,
+      expiresAt: apiKey.expiresAt,
+      createdAt: apiKey.createdAt,
+    };
+  }
+
+  /**
    * Fails CLOSED at every step: a malformed token, an unrecognized hash, a revoked or expired
    * key, a key whose user row no longer exists, and a key whose session epoch no longer matches
    * that row all return `null` rather than an identity — never throws. `role` and `tenantId` are

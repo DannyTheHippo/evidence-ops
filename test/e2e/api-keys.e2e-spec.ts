@@ -2,6 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
 import { createHash } from 'node:crypto';
 import type { Connection, Model } from 'mongoose';
+import { Types } from 'mongoose';
 import request from 'supertest';
 import { coTenantUser, type CoTenantUserResult } from '../../scripts/lib/co-tenant-user';
 import {
@@ -335,6 +336,117 @@ describe('ApiKeys (e2e)', () => {
 
       const stored = await apiKeyModel.findById(mintedBody.id);
       expect(stored?.revokedAt).toBeDefined();
+    });
+  });
+
+  describe('POST /api-keys/:id/rotate', () => {
+    it('rejects an unauthenticated request', async () => {
+      // `JwtAuthGuard` refuses before the route param is ever read, so no key needs to exist for
+      // this — an arbitrary, validly-shaped id proves the same 401.
+      const response = await request(getTestServer(app)).post(
+        `/api/v1/api-keys/${new Types.ObjectId().toString()}/rotate`,
+      );
+
+      expect(response.status).toBe(401);
+    });
+
+    it('returns 404 for a malformed id', async () => {
+      const response = await request(getTestServer(app))
+        .post('/api/v1/api-keys/not-an-id/rotate')
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(404);
+    });
+
+    it('returns 404, not 403, for another user’s key', async () => {
+      const other = await registerTestUser(app, {
+        email: 'api-keys-e2e-rotate-cross-user@example.com',
+        password: 'correct-horse-battery',
+      });
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Cookie', other.cookie)
+        .send({ name: 'Not yours to rotate' });
+      const mintedBody = minted.body as MintedKeyBody;
+
+      const response = await request(getTestServer(app))
+        .post(`/api/v1/api-keys/${mintedBody.id}/rotate`)
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(404);
+    });
+
+    it('returns 404 for an already-revoked key', async () => {
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Cookie', cookie)
+        .send({ name: 'Revoked, then rotate attempt' });
+      const mintedBody = minted.body as MintedKeyBody;
+      await request(getTestServer(app))
+        .delete(`/api/v1/api-keys/${mintedBody.id}`)
+        .set('Cookie', cookie);
+
+      const response = await request(getTestServer(app))
+        .post(`/api/v1/api-keys/${mintedBody.id}/rotate`)
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(404);
+    });
+
+    /**
+     * The acceptance criterion for rotation, exercised in one lifecycle rather than split across
+     * calls to stay inside this suite's shared per-handler request budget (`setup-env.ts`): the
+     * response carries the exact mint key set with the same id and name, the old token
+     * authenticates before rotation and is refused after, the rotated token authenticates in its
+     * place, and no later read exposes either plaintext. The refuse-then-authenticate pair is what
+     * catches a rotated key stamped with a stale or missing `tokenVersion` — a wrong epoch would
+     * leave the rotated token 401ing on its very first use while `rotate` itself still reports
+     * success.
+     */
+    it('rotates onto a fresh token that authenticates in place of the refused old one, exposing the exact mint key set', async () => {
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Cookie', cookie)
+        .send({ name: 'Rotation lifecycle key' });
+      const mintedBody = minted.body as MintedKeyBody;
+
+      const beforeIdentity = await tokenVerifier.verify(mintedBody.token);
+      expect(beforeIdentity).toEqual({
+        userId,
+        tenantId,
+        role: UserRole.Admin,
+        email: 'api-keys-e2e@example.com',
+      });
+
+      const rotateResponse = await request(getTestServer(app))
+        .post(`/api/v1/api-keys/${mintedBody.id}/rotate`)
+        .set('Cookie', cookie);
+      const rotatedBody = rotateResponse.body as MintedKeyBody;
+
+      expect(rotateResponse.status).toBe(201);
+      expect(Object.keys(rotatedBody).sort()).toEqual(MINTED_KEY_KEYS);
+      expect(rotatedBody.id).toBe(mintedBody.id);
+      expect(rotatedBody.name).toBe(mintedBody.name);
+      expect(rotatedBody.token).not.toBe(mintedBody.token);
+
+      const afterOldIdentity = await tokenVerifier.verify(mintedBody.token);
+      expect(afterOldIdentity).toBeNull();
+
+      const rotatedIdentity = await tokenVerifier.verify(rotatedBody.token);
+      expect(rotatedIdentity).toEqual({
+        userId,
+        tenantId,
+        role: UserRole.Admin,
+        email: 'api-keys-e2e@example.com',
+      });
+
+      const listResponse = await request(getTestServer(app))
+        .get('/api/v1/api-keys')
+        .set('Cookie', cookie);
+      const listBody = listResponse.body as { docs: ApiKeyBody[]; count: number };
+      const listedKey = listBody.docs.find((doc) => doc.id === mintedBody.id);
+      expect(listedKey).toBeDefined();
+      expect(listedKey).not.toHaveProperty('token');
     });
   });
 

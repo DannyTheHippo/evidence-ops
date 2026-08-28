@@ -320,6 +320,79 @@ describe('ApiKeysService', () => {
     });
   });
 
+  describe('rotate', () => {
+    it('should throw ApiKeyNotFoundException for a malformed id', async () => {
+      await expect(service.rotate('not-an-id', actorId, 'tenant-a')).rejects.toBeInstanceOf(
+        ApiKeyNotFoundException,
+      );
+      expect(mockApiKeyModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('should throw ApiKeyNotFoundException when no active key matches the user and tenant', async () => {
+      mockApiKeyModel.findOneAndUpdate.mockResolvedValueOnce(null);
+
+      await expect(service.rotate(apiKeyId.toString(), actorId, 'tenant-a')).rejects.toBeInstanceOf(
+        ApiKeyNotFoundException,
+      );
+    });
+
+    // Fails CLOSED: no row means no epoch to stamp the rotated token against, so nothing is written.
+    it('should refuse to rotate when the caller’s user row is gone', async () => {
+      mockUserModel.findById.mockResolvedValueOnce(null);
+
+      await expect(service.rotate(apiKeyId.toString(), actorId, 'tenant-a')).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(mockApiKeyModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('should rotate the token, scoped to the owning user, tenant, and non-revoked status, and record an audit event', async () => {
+      mockApiKeyModel.findOneAndUpdate.mockResolvedValueOnce(buildMockApiKey());
+
+      const result = await service.rotate(apiKeyId.toString(), actorId, 'tenant-a');
+
+      const [rotateFilter, rotateUpdate] = mockApiKeyModel.findOneAndUpdate.mock.calls[0] as [
+        Record<string, unknown>,
+        { $set: { tokenHash: string; tokenPrefix: string; tokenVersion: number } },
+      ];
+      expect(rotateFilter).toEqual({
+        _id: apiKeyId.toString(),
+        userId,
+        tenantId: 'tenant-a',
+        revokedAt: { $exists: false },
+      });
+      expect(rotateUpdate.$set.tokenHash).toBe(hashOf(result.token));
+      expect(rotateUpdate.$set.tokenPrefix.startsWith('eo_pat_')).toBe(true);
+      expect(result.token.startsWith('eo_pat_')).toBe(true);
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'api-keys.rotated',
+        actorId,
+        subject: { entityType: 'ApiKey', entityId: apiKeyId.toString() },
+        tenantId: 'tenant-a',
+      });
+    });
+
+    /**
+     * The whole of the trap this guards: `ApiKey.tokenVersion` is `required` with no default, and
+     * `verify` refuses any key whose stored epoch does not match the user's current one. Carrying
+     * the existing row's `tokenVersion` forward — rather than reading the live `User` row — would
+     * hand back a token that authenticates against a stale epoch and fails its very first use.
+     */
+    it('should stamp the caller’s current session epoch onto the rotated key, read fresh from the User row', async () => {
+      mockUserModel.findById.mockResolvedValueOnce(buildMockUser({ tokenVersion: 4 }));
+      mockApiKeyModel.findOneAndUpdate.mockResolvedValueOnce(buildMockApiKey({ tokenVersion: 4 }));
+
+      await service.rotate(apiKeyId.toString(), actorId, 'tenant-a');
+
+      expect(mockUserModel.findById).toHaveBeenCalledWith(actorId);
+      const [, rotateUpdate] = mockApiKeyModel.findOneAndUpdate.mock.calls[0] as [
+        Record<string, unknown>,
+        { $set: { tokenVersion: number } },
+      ];
+      expect(rotateUpdate.$set.tokenVersion).toBe(4);
+    });
+  });
+
   describe('verify', () => {
     it('should refuse a token of the wrong length without touching the database', async () => {
       const result = await service.verify('eo_pat_too-short');
