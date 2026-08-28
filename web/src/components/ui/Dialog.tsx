@@ -4,6 +4,9 @@ interface DialogProps {
   open: boolean;
   onClose: () => void;
   title: string;
+  // Points aria-describedby at a caller-owned element id, e.g. a confirmation's body text, so a
+  // screen reader announces the explanation alongside the title rather than only the title.
+  describedBy?: string;
   children: ReactNode;
 }
 
@@ -11,7 +14,7 @@ interface DialogProps {
  * inertness are browser behaviour, not hand-rolled here. The native `close` event (Escape, or a
  * programmatic `close()`) is the single path to `onClose`, so a caller-triggered close and a
  * keyboard-triggered one both flow through the same prop. */
-export default function Dialog({ open, onClose, title, children }: DialogProps) {
+export default function Dialog({ open, onClose, title, describedBy, children }: DialogProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const restoreFocusTo = useRef<HTMLElement | null>(null);
   const titleId = useId();
@@ -57,7 +60,13 @@ export default function Dialog({ open, onClose, title, children }: DialogProps) 
   if (!open) return null;
 
   return (
-    <dialog ref={dialogRef} className="dialog" aria-labelledby={titleId} onClose={onClose}>
+    <dialog
+      ref={dialogRef}
+      className="dialog"
+      aria-labelledby={titleId}
+      aria-describedby={describedBy}
+      onClose={onClose}
+    >
       <h2 id={titleId} className="dialog-title">
         {title}
       </h2>
