@@ -103,6 +103,12 @@ It is **confirmed** the first time a database carrying real documents takes the 
 
 **Resolution:** at the first `migrate:up` against a non-empty database. **Status: Open.**
 
+**Process consequence, independent of that trigger:** until the baseline has been applied against a
+production database, it is treated as **living** — new named indexes are added directly to its `INDEXES`
+table, and `test/migrations/baseline.spec.ts` enforces that every schema-declared named index appears there.
+At the first production `migrate:up`, the baseline freezes: from that point it is an applied migration like
+any other, and a new index or backfill goes in a new `NNNN-description.ts` instead.
+
 ## Related
 
 - `docs/global/pilot-runbook.md` — the operator procedure for a missing search index

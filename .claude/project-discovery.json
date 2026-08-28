@@ -119,7 +119,7 @@
   ],
   "protect": {
     "patterns": ["*/package-lock.json", "*/dist/*", "*/coverage/*"],
-    "note": ".env is already blocked by the hook's hardcoded security baseline; migrations are deliberately not listed so new ones can be created — never edit an applied migration."
+    "note": ".env is already blocked by the hook's hardcoded security baseline; migrations are deliberately not listed because migrations/0001-baseline.ts is living while no production database exists — it freezes at the first production migrate:up, after which edits go to a new numbered migration instead."
   },
   "agentDefaults": {
     "model": "sonnet",

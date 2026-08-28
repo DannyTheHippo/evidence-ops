@@ -34,9 +34,9 @@ Mongoose 9 `pre` middleware is promise-native — there is no `next` callback to
 
 `migrate-mongo` in TypeScript, run via `tsx`. Files in `migrations/`, numeric prefix (`0001-baseline.ts`), exporting `up(db)` and `down(db)`. Commands: `npm run migrate:up` / `npm run migrate:down`.
 
-- A schema change that needs an index or a backfill needs a migration. `@Prop({ index: true })` does not create the index in a deployed database.
-- Atlas Search / Vector Search index definitions are created explicitly in a migration — they are not Mongoose indexes.
-- Never edit an applied migration; add a new one.
+- A schema change that needs an index or a backfill needs a migration entry. `@Prop({ index: true })` does not create the index in a deployed database.
+- Atlas Search / Vector Search index definitions are created explicitly in a migration, through `createSearchIndexesWhenReady` — they are not Mongoose indexes.
+- While no production database exists, `0001-baseline.ts` is living: add a new named index to its table rather than a new file. It freezes at the first production `migrate:up` — after that, add a new migration instead of editing an applied one.
 
 ## Query rules
 

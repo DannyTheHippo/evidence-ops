@@ -34,8 +34,9 @@ This one bites twice over. It is a **runtime** throw, not a type error, so `tsc`
 
 - Tool: `migrate-mongo`, configured in `migrate-mongo-config.js`, run through `tsx`. Commands: `npm run migrate:up` / `npm run migrate:down`.
 - Migrations are **TypeScript**, in `migrations/`, exporting `up(db)` and `down(db)`. Follow the existing numeric-prefix naming (`0001-baseline.ts`).
-- **MUST** include a migration for every schema change that needs an index or a backfill. Schema decorators alone do not create indexes in a deployed database.
-- **FORBIDDEN** to edit a migration that has already been applied anywhere — add a new one. `down()` is the correction path.
+- **MUST** add a migration entry for every schema change that needs an index or a backfill. Schema decorators alone do not create indexes in a deployed database.
+- **The baseline is living while no production database exists.** Add a new named index directly to `migrations/0001-baseline.ts`'s `INDEXES` table — `test/migrations/baseline.spec.ts` requires every schema-declared named index to appear there. **FORBIDDEN** to edit `0001-baseline.ts` once a production database has taken it — from that point add a new `NNNN-description.ts` instead. `down()` is the correction path.
+- A new Atlas Search / Vector Search index must still be created through `createSearchIndexesWhenReady` (`src/features/evidence/retrieval/search-index-readiness.util.ts`), never directly — it gives the Search Index Management service up to 120s to become reachable on a cold container, and a direct `createSearchIndexes` call races that service, making `npm run migrate:up` fail intermittently.
 
 ## Indexes and search
 

@@ -26,14 +26,18 @@ Scaffold the schema described by "$ARGUMENTS". The domain is the folder under `s
 
 Every mutable entity extends `AuditableDocument` so `createdBy`/`updatedBy` are stamped by the global plugin. If a new entity deliberately should not be audited, state why in the summary.
 
-## 3. Generate the migration
+## 3. Add the migration entries
 
-`migrations/{NNNN}-{description}.ts`, next number in sequence, exporting `up(db)` and `down(db)`.
+`migrations/0001-baseline.ts` is living while no production database exists (`rules/mongoose.md` §
+Migrations) — add the new collection's indexes directly to its `INDEXES` table rather than a new file;
+`COLLECTIONS` derives from `INDEXES`, so a new collection needs no separate list update.
 
-- Create the collection's indexes here. `@Prop({ index: true })` does **not** create an index in a deployed database.
-- Atlas Search / Vector Search index definitions belong here too — they are not Mongoose indexes. Local MongoDB is `mongodb/mongodb-atlas-local` precisely so those work.
-- `down()` must actually reverse `up()`.
-- Never edit an applied migration; add a new one.
+- `@Prop({ index: true })` does **not** create an index in a deployed database — the table entry is what does.
+- Atlas Search / Vector Search indexes go in the table too, created through `createSearchIndexesWhenReady`
+  (`src/features/evidence/retrieval/search-index-readiness.util.ts`) rather than directly — a direct call
+  races the Search Index Management service on a cold container.
+- After the first production `migrate:up`, `0001-baseline.ts` freezes: add a new
+  `{NNNN}-{description}.ts` instead, exporting `up(db)`/`down(db)`, with `down()` reversing `up()`.
 
 ## 4. Wire and verify
 
