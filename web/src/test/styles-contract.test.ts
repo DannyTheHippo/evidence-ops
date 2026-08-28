@@ -12,10 +12,12 @@ import primitivesCss from '../styles/primitives.css?raw';
 import shellCss from '../styles/shell.css?raw';
 import railCss from '../styles/rail.css?raw';
 import viewsCss from '../styles/views.css?raw';
+import featuresCss from '../styles/features.css?raw';
+import printCss from '../styles/print.css?raw';
 import mainTsx from '../main.tsx?raw';
 
 /**
- * Guards the token register in `tokens.css` against the six stylesheets drifting back to literal
+ * Guards the token register in `tokens.css` against the seven stylesheets drifting back to literal
  * values. Every check here fails CLOSED: a `?raw` import that resolves to an empty string, a
  * selector this file's regex-based rule extraction cannot locate, or a sweep that stops matching
  * anything all raise an assertion failure rather than letting the surrounding `it` pass over an
@@ -46,6 +48,8 @@ const NON_TOKEN_SHEETS: readonly Stylesheet[] = [
   { file: 'shell.css', css: shellCss },
   { file: 'rail.css', css: railCss },
   { file: 'views.css', css: viewsCss },
+  { file: 'features.css', css: featuresCss },
+  { file: 'print.css', css: printCss },
 ];
 
 const ALL_SHEETS: readonly Stylesheet[] = [
@@ -70,7 +74,7 @@ const BARE_HEIGHT_EXEMPTIONS: readonly BareSizeExemption[] = [
   { file: 'primitives.css', selector: '.badge::before', property: 'height' },
   { file: 'shell.css', selector: '.brand-mark', property: 'height' },
   { file: 'shell.css', selector: '.theme-toggle > span', property: 'height' },
-  { file: 'views.css', selector: '.live-dot', property: 'height' },
+  { file: 'features.css', selector: '.live-dot', property: 'height' },
 ];
 
 /** Comments can mention "@media", a property name, or a px value in prose (e.g. primitives.css's
@@ -117,7 +121,7 @@ describe('styles contract', () => {
         }
       }
     }
-    // Canary against a regex that silently stops matching: today's six stylesheets carry seven
+    // Canary against a regex that silently stops matching: today's eight stylesheets carry seven
     // min-/max-width occurrences inside @media preludes (primitives.css x2, shell.css x3,
     // rail.css x1, views.css x1). A future breakpoint use can only raise this floor.
     expect(occurrences).toBeGreaterThanOrEqual(7);
@@ -183,7 +187,7 @@ describe('styles contract', () => {
     expect(normalizeBody(firstBody).length).toBeGreaterThan(0);
   });
 
-  it('imports the six stylesheets from main.tsx in cascade order', () => {
+  it('imports the eight stylesheets from main.tsx in cascade order', () => {
     const imported = [...mainTsx.matchAll(/import '\.\/styles\/([\w.-]+)';/g)].map(
       (match) => match[1],
     );
@@ -194,7 +198,19 @@ describe('styles contract', () => {
       'shell.css',
       'rail.css',
       'views.css',
+      'features.css',
+      'print.css',
     ]);
+  });
+
+  it('keeps print.css last of the main.tsx style imports', () => {
+    const imported = [...mainTsx.matchAll(/import '\.\/styles\/([\w.-]+)';/g)].map(
+      (match) => match[1],
+    );
+    // print.css's @media print block overrides an unconditional rule from every earlier
+    // stylesheet and carries no specificity of its own, so it only wins the cascade by sitting
+    // last; an import reordered ahead of it would silently drop every print override.
+    expect(imported.at(-1)).toBe('print.css');
   });
 });
 

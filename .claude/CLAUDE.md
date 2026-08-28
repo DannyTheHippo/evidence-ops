@@ -51,7 +51,7 @@ src/
 └── main.ts
 test/                  mirrors src/; e2e/ and utils/ (shared mock factories)
 migrations/            migrate-mongo, TypeScript, numeric prefix
-web/src/               main.tsx, App.tsx, api/client.ts, components/, lib/, pages/, styles.css, test/
+web/src/               main.tsx, App.tsx, api/client.ts, components/, lib/, pages/, styles/, test/
 ```
 
 Tests are **not** colocated with API sources — `test/` mirrors `src/`. SPA tests **are** colocated.

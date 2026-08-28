@@ -8,6 +8,8 @@ import './styles/primitives.css';
 import './styles/shell.css';
 import './styles/rail.css';
 import './styles/views.css';
+import './styles/features.css';
+import './styles/print.css';
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('Root element not found');

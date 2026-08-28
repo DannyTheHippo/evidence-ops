@@ -64,15 +64,6 @@
 /* The claim/evidence treatment inside each rail node: a display-treated claim line, the quote as
    the body column at reading measure, and the locator/digest as a right-aligned mono slug. */
 
-/* Named containment scope for the apparatus's 2-up citation layout, declared on the answer's own
-   outcome wrapper — not the shared .card class, which would make every card on sixteen pages a
-   containment context for a layout only one page needs. A media query cannot stand in for this:
-   the persisted sidebar-collapse state swings card inner width by 156px with no viewport change
-   to observe. */
-.answer-outcome {
-  container: answer / inline-size;
-}
-
 .apparatus-claim {
   margin: 0 0 var(--space-2);
   font-size: var(--text-md);
@@ -91,6 +82,10 @@
   grid-template-columns: 1fr;
   gap: var(--apparatus-gap);
 }
+/* The named `answer` container this query reads is established by `container: answer /
+   inline-size` on `.answer-outcome` in features.css, not in this file — a container query
+   resolves against DOM ancestry, not stylesheet order, so the two rules do not need to sit
+   together or in any particular cascade position relative to each other. */
 @container answer (min-width: 880px) {
   .apparatus-citations {
     grid-template-columns: repeat(2, 1fr);

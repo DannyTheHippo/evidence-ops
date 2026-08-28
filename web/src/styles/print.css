@@ -1,0 +1,98 @@
+/* ── Print ───────────────────────────────────────────────────────────────── */
+/* Deliberately last in the cascade: every rule below overrides an unconditional rule from an
+   earlier stylesheet (base, primitives, shell, rail, views, features), and @media print carries no
+   specificity of its own — the tie is broken by source order alone, so this block only works
+   sitting after all seven imports. No selector here needed raised specificity or !important; each
+   one either ties and wins on file order, or sets a property (print-color-adjust) nothing else
+   declares. */
+@media print {
+  /* body/#root/.shell/.shell-main/.container/.panel form a fixed-height, scroll-clipped chain
+     built for an on-screen viewport (base.css's `body { overflow: hidden }` and
+     `#root { height: 100vh }`); on paper that chain crops everything past the first page instead
+     of letting the document flow across as many as it needs. */
+  body {
+    overflow: visible;
+  }
+  #root,
+  .shell,
+  .shell-main,
+  .container,
+  .panel {
+    display: block;
+    height: auto;
+    overflow: visible;
+  }
+
+  /* Chrome that exists to operate the app, not to be read on paper. `.toast-stack` is
+     `position: fixed`, which print pagination repeats on every page it would otherwise land on
+     if left visible. */
+  .skip-link,
+  .sidebar,
+  .topbar,
+  .toast-stack {
+    display: none;
+  }
+
+  /* Meaning carried purely by `background` is dropped by default printing (the browser's own
+     "background graphics" option, off by default) unless told to render exactly as authored.
+     Scoped to the three places state or proportion is encoded that way — the funnel bar, the
+     rail's filled-vs-outline node marker, the badge's status silhouette — rather than applied
+     globally, which would also print every card and surface tint. */
+  .ledger-bar,
+  .rail-node::before,
+  .badge::before {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  /* The 2-up citation grid is sized for an 880px-plus screen container; a printed page's content
+     box is narrower than that at standard letter/A4 margins, and a two-column layout there would
+     cramp both the quote and its locator/digest slug. Force a single column regardless of the
+     container query's own verdict. */
+  .apparatus-citations {
+    grid-template-columns: 1fr;
+  }
+
+  /* Native table-header repetition needs the header row out of `position: sticky` — sticky has
+     no print-time viewport to stick to, so left on it would pin the header to one page instead of
+     repeating it on every page the table spans. */
+  .grid thead {
+    display: table-header-group;
+  }
+  .grid thead th {
+    position: static;
+  }
+  .grid tbody tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Keep one citation card, one dropped-claim entry, and the ledger block from splitting midway
+     across a page boundary. The citations grid as a whole still paginates freely across pages —
+     this only protects each individual card's own legibility. */
+  .apparatus-citation,
+  .dropped-claim,
+  .ledger {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* A heading — or the apparatus's claim line, which functions as one here — stranded alone at
+     the foot of a page reads as a mistake; keep each attached to the content that follows it. The
+     head group it sits inside stays intact for the same reason. */
+  h1,
+  h2,
+  .page-title,
+  .card-title,
+  .eyebrow,
+  .apparatus-claim {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+  .page-head,
+  .card-head,
+  .section-head {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
