@@ -129,6 +129,23 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Too many credential attempts from this address, or against this email address, within the configured window. Carries no information about whether the account exists.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Credential attempts exhausted",
+                    "value": {
+                      "statusCode": 429,
+                      "message": "ThrottlerException: Too Many Requests",
+                      "error": "Too Many Requests"
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "tags": [
@@ -251,7 +268,7 @@
             }
           },
           "403": {
-            "description": "Only an admin may mint or list invitations.",
+            "description": "Only an admin may mint, list, revoke or resend invitations.",
             "content": {
               "application/json": {
                 "examples": {
@@ -354,7 +371,7 @@
             }
           },
           "403": {
-            "description": "Only an admin may mint or list invitations.",
+            "description": "Only an admin may mint, list, revoke or resend invitations.",
             "content": {
               "application/json": {
                 "examples": {
@@ -364,6 +381,137 @@
                       "statusCode": 403,
                       "message": "Insufficient role for this action",
                       "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "invitations"
+        ]
+      }
+    },
+    "/invitations/{id}": {
+      "delete": {
+        "operationId": "InvitationsController_revoke",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The invitation was revoked. Both verify and accept refuse its token from here on."
+          },
+          "403": {
+            "description": "Only an admin may mint, list, revoke or resend invitations.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Invitation does not exist for this tenant, or is already accepted or revoked.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown invitation",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Invitation '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "invitations"
+        ]
+      }
+    },
+    "/invitations/{id}/resend": {
+      "post": {
+        "operationId": "InvitationsController_resend",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The newly minted invitation, including its plaintext token — shown exactly once.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Minted invitation",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "email": "colleague@example.com",
+                      "role": "member",
+                      "token": "eo_inv_9f8c12ab34cd56ef",
+                      "expiresAt": "2026-07-08T00:00:00.000Z",
+                      "createdAt": "2026-07-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Only an admin may mint, list, revoke or resend invitations.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Invitation does not exist for this tenant, or is already accepted or revoked.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown invitation",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Invitation '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
                     }
                   }
                 }
@@ -432,6 +580,338 @@
         },
         "tags": [
           "Info"
+        ]
+      }
+    },
+    "/users": {
+      "get": {
+        "operationId": "UsersController_list",
+        "parameters": [
+          {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's members.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "One member",
+                    "value": {
+                      "docs": [
+                        {
+                          "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "email": "colleague@example.com",
+                          "role": "member",
+                          "createdAt": "2026-07-01T00:00:00.000Z"
+                        }
+                      ],
+                      "count": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Only an admin may manage tenant members.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/users/{id}/role": {
+      "patch": {
+        "operationId": "UsersController_changeRole",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeRoleRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The member's updated role.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Role changed",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "email": "colleague@example.com",
+                      "role": "admin",
+                      "createdAt": "2026-07-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Only an admin may manage tenant members.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User does not exist in this tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown user",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "User '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This change would leave the tenant with no admin.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Last admin protected",
+                    "value": {
+                      "statusCode": 409,
+                      "message": "Tenant 'tenant-a' must always keep at least one admin; changing user '65f1c2e4a1b2c3d4e5f6a7b8' to 'member' would leave none",
+                      "error": "Conflict"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/users/{id}": {
+      "delete": {
+        "operationId": "UsersController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The member was removed from the tenant."
+          },
+          "403": {
+            "description": "Only an admin may manage tenant members.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User does not exist in this tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown user",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "User '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This change would leave the tenant with no admin.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Last admin protected",
+                    "value": {
+                      "statusCode": 409,
+                      "message": "Tenant 'tenant-a' must always keep at least one admin; changing user '65f1c2e4a1b2c3d4e5f6a7b8' to 'member' would leave none",
+                      "error": "Conflict"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/users/{id}/revoke-sessions": {
+      "post": {
+        "operationId": "UsersController_revokeSessions",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Signs the member out of every browser session and disables every API key they hold — raising their session epoch invalidates both, since API keys are checked against the same epoch as session cookies.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Sessions revoked",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "email": "colleague@example.com",
+                      "role": "member",
+                      "createdAt": "2026-07-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Only an admin may manage tenant members.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User does not exist in this tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown user",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "User '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "users"
         ]
       }
     },
@@ -993,6 +1473,20 @@
                           "aliases": [
                             "Northgate Bus. Park"
                           ],
+                          "harvestedAliases": [
+                            {
+                              "alias": "Property",
+                              "status": "proposed",
+                              "quote": "Northgate Business Park (the \"Property\")",
+                              "locator": {
+                                "kind": "pdf-page",
+                                "page": 4,
+                                "extractorVersion": "pdf-1"
+                              },
+                              "documentVersionId": "65f1c2e4a1b2c3d4e5f6a7c9",
+                              "harvestedAt": "2026-07-02T00:00:00.000Z"
+                            }
+                          ],
                           "createdAt": "2026-07-01T00:00:00.000Z"
                         }
                       ],
@@ -1026,6 +1520,9 @@
             "description": "The canonical entity row that was created.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanonicalEntityResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "Created entity",
@@ -1034,6 +1531,20 @@
                       "canonicalName": "Northgate Business Park",
                       "aliases": [
                         "Northgate Bus. Park"
+                      ],
+                      "harvestedAliases": [
+                        {
+                          "alias": "Property",
+                          "status": "proposed",
+                          "quote": "Northgate Business Park (the \"Property\")",
+                          "locator": {
+                            "kind": "pdf-page",
+                            "page": 4,
+                            "extractorVersion": "pdf-1"
+                          },
+                          "documentVersionId": "65f1c2e4a1b2c3d4e5f6a7c9",
+                          "harvestedAt": "2026-07-02T00:00:00.000Z"
+                        }
                       ],
                       "createdAt": "2026-07-01T00:00:00.000Z"
                     }
@@ -1082,6 +1593,52 @@
         ]
       }
     },
+    "/canonical-entities/near-matches/scan": {
+      "post": {
+        "operationId": "CanonicalEntitiesController_scanNearMatches",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Proposals recorded for this scan. Each lands as a proposed harvestedAliases entry on the row it was attributed to; a subsequent GET surfaces it for review.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanNearMatchesResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Two near matches proposed",
+                    "value": {
+                      "proposed": 2
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not hold the admin role required to author this registry.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "canonical-entities"
+        ]
+      }
+    },
     "/canonical-entities/{id}": {
       "patch": {
         "operationId": "CanonicalEntitiesController_update",
@@ -1110,6 +1667,9 @@
             "description": "The canonical entity row after this update.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanonicalEntityResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "Updated entity",
@@ -1118,6 +1678,20 @@
                       "canonicalName": "Northgate Business Park",
                       "aliases": [
                         "Northgate Bus. Park"
+                      ],
+                      "harvestedAliases": [
+                        {
+                          "alias": "Property",
+                          "status": "proposed",
+                          "quote": "Northgate Business Park (the \"Property\")",
+                          "locator": {
+                            "kind": "pdf-page",
+                            "page": 4,
+                            "extractorVersion": "pdf-1"
+                          },
+                          "documentVersionId": "65f1c2e4a1b2c3d4e5f6a7c9",
+                          "harvestedAt": "2026-07-02T00:00:00.000Z"
+                        }
                       ],
                       "createdAt": "2026-07-01T00:00:00.000Z"
                     }
@@ -1238,6 +1812,266 @@
         ]
       }
     },
+    "/canonical-entities/{id}/harvested-aliases/apply": {
+      "post": {
+        "operationId": "CanonicalEntitiesController_applyHarvestedAlias",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeHarvestedAliasRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The canonical entity row after the proposed harvested alias was applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanonicalEntityResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Applied alias, now resolving",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "canonicalName": "Northgate Business Park",
+                      "aliases": [
+                        "Northgate Bus. Park"
+                      ],
+                      "harvestedAliases": [
+                        {
+                          "alias": "Property",
+                          "status": "applied",
+                          "quote": "Northgate Business Park (the \"Property\")",
+                          "locator": {
+                            "kind": "pdf-page",
+                            "page": 4,
+                            "extractorVersion": "pdf-1"
+                          },
+                          "documentVersionId": "65f1c2e4a1b2c3d4e5f6a7c9",
+                          "harvestedAt": "2026-07-02T00:00:00.000Z"
+                        }
+                      ],
+                      "createdAt": "2026-07-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not hold the admin role required to author this registry.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This canonical entity carries no harvested alias by that name.\n\nNo canonical entity with this id exists for the caller's tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown id",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Canonical entity '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This harvested alias is not in the proposed state and cannot be applied again.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Already applied or revoked",
+                    "value": {
+                      "statusCode": 409,
+                      "message": "Harvested alias 'Property' on canonical entity '65f1c2e4a1b2c3d4e5f6a7b8' is 'revoked', not 'proposed'",
+                      "error": "Conflict"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "canonical-entities"
+        ]
+      }
+    },
+    "/canonical-entities/{id}/harvested-aliases/revoke": {
+      "post": {
+        "operationId": "CanonicalEntitiesController_revokeHarvestedAlias",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeHarvestedAliasRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The canonical entity row after the harvested alias was revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanonicalEntityResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Revoked alias, no longer resolving",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "canonicalName": "Northgate Business Park",
+                      "aliases": [
+                        "Northgate Bus. Park"
+                      ],
+                      "harvestedAliases": [
+                        {
+                          "alias": "Property",
+                          "status": "revoked",
+                          "quote": "Northgate Business Park (the \"Property\")",
+                          "locator": {
+                            "kind": "pdf-page",
+                            "page": 4,
+                            "extractorVersion": "pdf-1"
+                          },
+                          "documentVersionId": "65f1c2e4a1b2c3d4e5f6a7c9",
+                          "harvestedAt": "2026-07-02T00:00:00.000Z"
+                        }
+                      ],
+                      "createdAt": "2026-07-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not hold the admin role required to author this registry.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This canonical entity carries no harvested alias by that name.\n\nNo canonical entity with this id exists for the caller's tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown id",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Canonical entity '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "canonical-entities"
+        ]
+      }
+    },
+    "/metrics": {
+      "get": {
+        "operationId": "MetricsController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Every metric METRIC_ONTOLOGY defines, projected to its id, label and canonicalUnit. Read-only: there is no endpoint to add, edit or remove a metric.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MetricResponseDto"
+                  }
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Two of the built-in metrics",
+                    "value": [
+                      {
+                        "id": "cap_rate",
+                        "label": "Cap Rate",
+                        "canonicalUnit": "ratio"
+                      },
+                      {
+                        "id": "sale_price",
+                        "label": "Sale Price",
+                        "canonicalUnit": "usd"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "metrics"
+        ]
+      }
+    },
     "/conflicts": {
       "get": {
         "operationId": "ConflictsController_list",
@@ -1298,6 +2132,12 @@
             "description": "Paginated list of detected conflicts.",
             "content": {
               "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConflictResponseDto"
+                  }
+                },
                 "examples": {
                   "example": {
                     "summary": "One open conflict",
@@ -1342,6 +2182,7 @@
                             }
                           ],
                           "magnitude": 0.0085,
+                          "magnitudeUnit": "ratio",
                           "status": "open",
                           "createdAt": "2026-07-01T00:00:00.000Z",
                           "ruleFired": "none",
@@ -1491,13 +2332,47 @@
               "example": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
               "type": "string"
             }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "Filter by run status. Matches the stored row only — this endpoint never queries the live workflow engine, so a run whose engine-side status has since moved on can still match its previous stored status here.",
+            "schema": {
+              "example": "running",
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "completed",
+                "failed"
+              ]
+            }
+          },
+          {
+            "name": "workflowType",
+            "required": false,
+            "in": "query",
+            "description": "Filter by which workflow the run projects. Includes 'rescan-conflicts', a legacy type no current workflow writes — accepted so a tenant with an existing legacy row can still filter it into view, not because new rows of that type can appear.",
+            "schema": {
+              "example": "resolve-conflict",
+              "type": "string",
+              "enum": [
+                "resolve-conflict",
+                "sync-source",
+                "rescan-conflicts"
+              ]
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Runs for the caller's tenant, most recent first. Filters to a single workflow when workflowId is given; omitting it lists every run.",
+            "description": "Runs for the caller's tenant, most recent first. Filters to a single workflow when workflowId is given, and/or to a status or workflowType — both match the durable row, never the live engine (see WorkflowRunResponseDto.status). Omitting every filter lists every run.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "One running run",
@@ -1508,6 +2383,8 @@
                           "workflowId": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
                           "workflowType": "resolve-conflict",
                           "status": "running",
+                          "subjectId": "65f1c2e4a1b2c3d4e5f6a7c0",
+                          "subjectType": "Answer",
                           "createdAt": "2026-07-01T00:00:00.000Z"
                         }
                       ],
@@ -1590,6 +2467,8 @@
                       "workflowId": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
                       "workflowType": "resolve-conflict",
                       "status": "running",
+                      "subjectId": "65f1c2e4a1b2c3d4e5f6a7c0",
+                      "subjectType": "Answer",
                       "createdAt": "2026-07-01T00:00:00.000Z"
                     }
                   }
@@ -2131,6 +3010,9 @@
             "description": "Hybrid retrieval hits for the query, ranked as the store returns them.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetrievedChunkResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "One matching chunk",
@@ -2145,7 +3027,10 @@
                             "kind": "pdf-page",
                             "extractorVersion": "v1",
                             "page": 3
-                          }
+                          },
+                          "documentId": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "documentTitle": "Northgate Business Park — Q3 Rent Roll",
+                          "score": 0.0164
                         }
                       ],
                       "count": 1
@@ -3027,6 +3912,63 @@
           "api-keys"
         ]
       }
+    },
+    "/api-keys/{id}/rotate": {
+      "post": {
+        "operationId": "ApiKeysController_rotate",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The key rotated onto a fresh token — same id, name and creation date, new plaintext token shown exactly once. The previous token stops working immediately.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Rotated API key",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "name": "CI integration",
+                      "token": "eo_pat_9f8c12ab34cd56ef",
+                      "tokenPrefix": "eo_pat_9f8c12",
+                      "expiresAt": "2026-12-31T00:00:00.000Z",
+                      "createdAt": "2026-07-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "API key does not exist for this user.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown key",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "API key '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "api-keys"
+        ]
+      }
     }
   },
   "info": {
@@ -3191,6 +4133,23 @@
           "version"
         ]
       },
+      "ChangeRoleRequestDto": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "example": "admin",
+            "enum": [
+              "admin",
+              "member"
+            ],
+            "description": "Role to assign to this member."
+          }
+        },
+        "required": [
+          "role"
+        ]
+      },
       "DocumentVersionResponseDto": {
         "type": "object",
         "properties": {
@@ -3282,7 +4241,8 @@
               "csv",
               "tsv",
               "txt",
-              "md"
+              "md",
+              "eml"
             ],
             "description": "Extractor pipeline kind."
           },
@@ -3348,7 +4308,8 @@
               "csv",
               "tsv",
               "txt",
-              "md"
+              "md",
+              "eml"
             ],
             "description": "Extractor pipeline kind."
           },
@@ -3433,6 +4394,19 @@
           "locator"
         ]
       },
+      "ScanNearMatchesResponseDto": {
+        "type": "object",
+        "properties": {
+          "proposed": {
+            "type": "number",
+            "example": 3,
+            "description": "Number of near-match proposals recorded by this scan. Each lands as a proposed harvestedAliases entry on the row it was attributed to, resolving nothing until confirmed."
+          }
+        },
+        "required": [
+          "proposed"
+        ]
+      },
       "CreateCanonicalEntityRequestDto": {
         "type": "object",
         "properties": {
@@ -3456,6 +4430,104 @@
           "canonicalName"
         ]
       },
+      "HarvestedAliasResponseDto": {
+        "type": "object",
+        "properties": {
+          "alias": {
+            "type": "string",
+            "example": "Property",
+            "description": "Alias as the document wrote it."
+          },
+          "status": {
+            "type": "string",
+            "example": "proposed",
+            "enum": [
+              "proposed",
+              "applied",
+              "revoked"
+            ],
+            "description": "Whether this alias resolves (applied), is recorded only (proposed), or has been rejected (revoked)."
+          },
+          "quote": {
+            "type": "string",
+            "example": "Northgate Business Park (the \"Property\")",
+            "description": "Verbatim span of the document that defines this alias."
+          },
+          "locator": {
+            "type": "object",
+            "example": {
+              "kind": "pdf-page",
+              "page": 4,
+              "extractorVersion": "pdf-1"
+            },
+            "description": "Where the quote sits in the document version it was read from."
+          },
+          "documentVersionId": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Document version the definition was read from."
+          },
+          "harvestedAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "When the definition was harvested."
+          }
+        },
+        "required": [
+          "alias",
+          "status",
+          "quote",
+          "locator",
+          "documentVersionId",
+          "harvestedAt"
+        ]
+      },
+      "CanonicalEntityResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Canonical entity identifier."
+          },
+          "canonicalName": {
+            "type": "string",
+            "example": "Northgate Business Park",
+            "description": "Canonical display name this row registers alternate spellings against."
+          },
+          "aliases": {
+            "example": [
+              "Northgate Bus. Park"
+            ],
+            "description": "Alternate spellings that resolve to canonicalName.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "harvestedAliases": {
+            "description": "Aliases read out of documents, each with the quote and locator defining it.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HarvestedAliasResponseDto"
+            }
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "When this row was first authored."
+          }
+        },
+        "required": [
+          "id",
+          "canonicalName",
+          "aliases",
+          "harvestedAliases",
+          "createdAt"
+        ]
+      },
       "UpdateCanonicalEntityRequestDto": {
         "type": "object",
         "properties": {
@@ -3476,6 +4548,184 @@
           }
         }
       },
+      "RevokeHarvestedAliasRequestDto": {
+        "type": "object",
+        "properties": {
+          "alias": {
+            "type": "string",
+            "example": "Property",
+            "description": "Harvested alias to revoke. Matched on the same normalized form resolution uses, so any spelling of the alias that resolves to it identifies it here."
+          }
+        },
+        "required": [
+          "alias"
+        ]
+      },
+      "MetricResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "cap_rate",
+            "description": "Metric identifier, one of METRIC_ONTOLOGY's METRIC_IDS."
+          },
+          "label": {
+            "type": "string",
+            "example": "Cap Rate",
+            "description": "Human-readable label for id."
+          },
+          "canonicalUnit": {
+            "type": "string",
+            "example": "ratio",
+            "description": "The unit every normalized value for this metric is expressed in."
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "canonicalUnit"
+        ]
+      },
+      "ConflictResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Conflict identifier."
+          },
+          "factKey": {
+            "type": "object",
+            "example": {
+              "entity": "Northgate Business Park",
+              "metric": "cap_rate",
+              "period": "2025-03"
+            },
+            "description": "The fact key every disagreeing ExtractedFact in this conflict shares."
+          },
+          "factIds": {
+            "description": "Identifiers of the two or more disagreeing ExtractedFact documents.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "values": {
+            "example": [
+              {
+                "factId": "65f1c2e4a1b2c3d4e5f6a7b9",
+                "value": 5.25,
+                "unit": "percent",
+                "sourceChunkId": "chunk-xlsx",
+                "documentVersionId": "65f1c2e4a1b2c3d4e5f6a7c0",
+                "locator": {
+                  "kind": "xlsx-cell",
+                  "extractorVersion": "v1",
+                  "sheetName": "Comps",
+                  "cell": "F2"
+                },
+                "withdrawn": false
+              },
+              {
+                "factId": "65f1c2e4a1b2c3d4e5f6a7ba",
+                "value": 6.1,
+                "unit": "percent",
+                "sourceChunkId": "chunk-prose",
+                "documentVersionId": "65f1c2e4a1b2c3d4e5f6a7c1",
+                "locator": {
+                  "kind": "pdf-page",
+                  "extractorVersion": "v1",
+                  "page": 2
+                },
+                "withdrawn": false
+              }
+            ],
+            "description": "Every disagreeing ExtractedFact's value and provenance, in the same order as factIds — what a human weighs to choose which one wins.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "magnitude": {
+            "type": "number",
+            "example": 0.0085,
+            "description": "Normalized disagreement magnitude between the group's values."
+          },
+          "magnitudeUnit": {
+            "type": "string",
+            "example": "ratio",
+            "description": "The unit magnitude is expressed in — the metric's canonicalUnit at detection time, not a fixed unit for the collection. Distinguishes, for example, a cap-rate spread from a dollar spread, which would otherwise render as an identical bare number."
+          },
+          "status": {
+            "type": "string",
+            "example": "open",
+            "enum": [
+              "open",
+              "resolved",
+              "dismissed"
+            ],
+            "description": "Conflict status."
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "Conflict creation timestamp."
+          },
+          "stale": {
+            "type": "boolean",
+            "example": false,
+            "description": "True when this conflict's packId/packVersion stamp does not match the deployed ACTIVE_PACK_ID/ACTIVE_PACK_VERSION — a row detected under a superseded ontology may no longer match what the current ontology would compute today. Always present, independent of unscorable — the two are unrelated failure modes and a row can carry either, both, or neither. Never hidden: a stale row stays in the list, shown and labelled, rather than silently dropped."
+          },
+          "staleReason": {
+            "type": "string",
+            "example": "Detected under pack 'cre' v1; the active pack is now 'cre' v2.",
+            "description": "Present only when stale is true — which pack detected this row versus which is active now."
+          },
+          "unscorable": {
+            "type": "boolean",
+            "example": false,
+            "description": "True when one or more of this conflict's factIds no longer resolve to an ExtractedFact — the document that produced them was deleted after this conflict left 'open' status, so the delete cascade's fact removal was never mirrored back onto this conflict's factIds. The row is still returned rather than dropped from the list: a reviewer must be able to see that the conflict once existed and that its evidence is now gone. proposedWinnerFactId, ruleFired and explanation are all absent when this is true — no survivorship policy runs over a fact set already known to be incomplete."
+          },
+          "unscorableReason": {
+            "type": "string",
+            "example": "1 of 2 disagreeing fact(s) no longer resolve to an ExtractedFact.",
+            "description": "Present only when unscorable is true — why this conflict could not be evaluated."
+          },
+          "proposedWinnerFactId": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b9",
+            "description": "The ExtractedFact id the survivorship policy proposes as the winner, computed fresh on every read. Absent when ruleFired is 'none' (the policy has no proposal to make) or when unscorable is true."
+          },
+          "ruleFired": {
+            "type": "string",
+            "example": "authority",
+            "enum": [
+              "authority",
+              "recency",
+              "none"
+            ],
+            "description": "Which survivorship rule produced this proposal, or 'none' if the policy declined to propose a winner. Absent when unscorable is true. Never decides anything on its own — a human still resolves the conflict."
+          },
+          "explanation": {
+            "type": "string",
+            "example": "Fact 65f1c2e4a1b2c3d4e5f6a7b9's source class 'crm-export' outranks 'memo' in the configured authorityOrder.",
+            "description": "Human-readable justification for ruleFired/proposedWinnerFactId's value. Absent when unscorable is true."
+          }
+        },
+        "required": [
+          "id",
+          "factKey",
+          "factIds",
+          "values",
+          "magnitude",
+          "magnitudeUnit",
+          "status",
+          "createdAt",
+          "stale",
+          "unscorable"
+        ]
+      },
       "RequestConflictResolutionRequestDto": {
         "type": "object",
         "properties": {
@@ -3487,6 +4737,69 @@
         },
         "required": [
           "winningFactId"
+        ]
+      },
+      "WorkflowRunResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "WorkflowRun identifier."
+          },
+          "workflowId": {
+            "type": "string",
+            "example": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
+            "description": "Underlying Temporal workflow id."
+          },
+          "workflowType": {
+            "type": "string",
+            "example": "resolve-conflict",
+            "enum": [
+              "resolve-conflict",
+              "sync-source",
+              "rescan-conflicts"
+            ],
+            "description": "Which workflow this run projects. Absent on rows written before the field existed."
+          },
+          "status": {
+            "type": "string",
+            "example": "running",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed"
+            ],
+            "description": "Run status. On GET /workflow-runs/:id and the SSE stream, best-effort refreshed from the live engine (cached up to 15s, falling back to this durable value on an engine failure). On the list endpoint, always the durable row as last written by the workflow — the list never queries the engine, so a status filter there matches stored state, not live state."
+          },
+          "errorMessage": {
+            "type": "string",
+            "example": "Timed out waiting for approval",
+            "description": "Error detail, present only when status is failed."
+          },
+          "subjectId": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7c0",
+            "description": "Identifier of the entity this run acted on, present when the run carries a subject reference. Read alongside subjectType, never alone."
+          },
+          "subjectType": {
+            "type": "string",
+            "example": "Answer",
+            "description": "The subjectId's entity type, present exactly when subjectId is."
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "Run creation timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "workflowId",
+          "status",
+          "createdAt"
         ]
       },
       "DecideApprovalRequestDto": {
@@ -3719,6 +5032,65 @@
           "conflictIds",
           "createdAt",
           "withdrawnCitedDocVersionIds"
+        ]
+      },
+      "RetrievedChunkResponseDto": {
+        "type": "object",
+        "properties": {
+          "chunkId": {
+            "type": "string",
+            "example": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+            "description": "Content-addressed chunk identifier."
+          },
+          "docVersionId": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b9",
+            "description": "Identifier of the document version this chunk belongs to."
+          },
+          "sha256": {
+            "type": "string",
+            "example": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85",
+            "description": "sha256 of the owning document version's bytes — what a citation pins."
+          },
+          "text": {
+            "type": "string",
+            "example": "The cap rate for Northgate Business Park is approximately 6.10%.",
+            "description": "Chunk text, exactly as stored at ingestion."
+          },
+          "locator": {
+            "type": "object",
+            "example": {
+              "kind": "pdf-page",
+              "extractorVersion": "v1",
+              "page": 3
+            },
+            "description": "Where this chunk's text came from in the source document."
+          },
+          "documentId": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Identifier of the document this chunk belongs to — distinct from docVersionId, which identifies one version of it."
+          },
+          "documentTitle": {
+            "type": "string",
+            "example": "Northgate Business Park — Q3 Rent Roll",
+            "description": "The owning document's title, for display alongside a citation."
+          },
+          "score": {
+            "type": "number",
+            "example": 0.0164,
+            "description": "Fused hybrid-retrieval relevance score (reciprocal rank fusion across the lexical and vector pipelines). Not a 0-1 similarity: it is bounded above by a small constant (2 pipelines / (60 + best rank 1), about 0.0328 today) that shrinks as the query widens, so rendering it as a percentage misrepresents it — use it only to rank this response's hits against each other, never against another query's hits or a fixed threshold."
+          }
+        },
+        "required": [
+          "chunkId",
+          "docVersionId",
+          "sha256",
+          "text",
+          "locator",
+          "documentId",
+          "documentTitle",
+          "score"
         ]
       },
       "CreateSourceRequestDto": {

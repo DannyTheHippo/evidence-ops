@@ -84,6 +84,38 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/invitations/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete: operations['InvitationsController_revoke'];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/invitations/{id}/resend': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations['InvitationsController_resend'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/health': {
     parameters: {
       query?: never;
@@ -110,6 +142,70 @@ export interface paths {
     get: operations['InfoController_getVersion'];
     put?: never;
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/users': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['UsersController_list'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/users/{id}/role': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch: operations['UsersController_changeRole'];
+    trace?: never;
+  };
+  '/users/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete: operations['UsersController_remove'];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/users/{id}/revoke-sessions': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations['UsersController_revokeSessions'];
     delete?: never;
     options?: never;
     head?: never;
@@ -212,6 +308,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/canonical-entities/near-matches/scan': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations['CanonicalEntitiesController_scanNearMatches'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/canonical-entities/{id}': {
     parameters: {
       query?: never;
@@ -226,6 +338,54 @@ export interface paths {
     options?: never;
     head?: never;
     patch: operations['CanonicalEntitiesController_update'];
+    trace?: never;
+  };
+  '/canonical-entities/{id}/harvested-aliases/apply': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations['CanonicalEntitiesController_applyHarvestedAlias'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/canonical-entities/{id}/harvested-aliases/revoke': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations['CanonicalEntitiesController_revokeHarvestedAlias'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/metrics': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['MetricsController_list'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
     trace?: never;
   };
   '/conflicts': {
@@ -548,6 +708,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api-keys/{id}/rotate': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations['ApiKeysController_rotate'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -642,6 +818,14 @@ export interface components {
        */
       version: string;
     };
+    ChangeRoleRequestDto: {
+      /**
+       * @description Role to assign to this member.
+       * @example admin
+       * @enum {string}
+       */
+      role: 'admin' | 'member';
+    };
     DocumentVersionResponseDto: {
       /**
        * @description Version identifier.
@@ -704,7 +888,7 @@ export interface components {
        * @example xlsx
        * @enum {string}
        */
-      sourceKind: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv' | 'tsv' | 'txt' | 'md';
+      sourceKind: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv' | 'tsv' | 'txt' | 'md' | 'eml';
       /**
        * @description Raw content type as uploaded.
        * @example application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
@@ -740,7 +924,7 @@ export interface components {
        * @example xlsx
        * @enum {string}
        */
-      sourceKind: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv' | 'tsv' | 'txt' | 'md';
+      sourceKind: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv' | 'tsv' | 'txt' | 'md' | 'eml';
       /**
        * @description Raw content type as uploaded.
        * @example application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
@@ -788,6 +972,13 @@ export interface components {
        */
       locator: Record<string, never>;
     };
+    ScanNearMatchesResponseDto: {
+      /**
+       * @description Number of near-match proposals recorded by this scan. Each lands as a proposed harvestedAliases entry on the row it was attributed to, resolving nothing until confirmed.
+       * @example 3
+       */
+      proposed: number;
+    };
     CreateCanonicalEntityRequestDto: {
       /**
        * @description Canonical display name this row registers alternate spellings against.
@@ -801,6 +992,71 @@ export interface components {
        *     ]
        */
       aliases?: string[];
+    };
+    HarvestedAliasResponseDto: {
+      /**
+       * @description Alias as the document wrote it.
+       * @example Property
+       */
+      alias: string;
+      /**
+       * @description Whether this alias resolves (applied), is recorded only (proposed), or has been rejected (revoked).
+       * @example proposed
+       * @enum {string}
+       */
+      status: 'proposed' | 'applied' | 'revoked';
+      /**
+       * @description Verbatim span of the document that defines this alias.
+       * @example Northgate Business Park (the "Property")
+       */
+      quote: string;
+      /**
+       * @description Where the quote sits in the document version it was read from.
+       * @example {
+       *       "kind": "pdf-page",
+       *       "page": 4,
+       *       "extractorVersion": "pdf-1"
+       *     }
+       */
+      locator: Record<string, never>;
+      /**
+       * @description Document version the definition was read from.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      documentVersionId: string;
+      /**
+       * Format: date-time
+       * @description When the definition was harvested.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      harvestedAt: string;
+    };
+    CanonicalEntityResponseDto: {
+      /**
+       * @description Canonical entity identifier.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      id: string;
+      /**
+       * @description Canonical display name this row registers alternate spellings against.
+       * @example Northgate Business Park
+       */
+      canonicalName: string;
+      /**
+       * @description Alternate spellings that resolve to canonicalName.
+       * @example [
+       *       "Northgate Bus. Park"
+       *     ]
+       */
+      aliases: string[];
+      /** @description Aliases read out of documents, each with the quote and locator defining it. */
+      harvestedAliases: components['schemas']['HarvestedAliasResponseDto'][];
+      /**
+       * Format: date-time
+       * @description When this row was first authored.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      createdAt: string;
     };
     UpdateCanonicalEntityRequestDto: {
       /**
@@ -816,12 +1072,190 @@ export interface components {
        */
       aliases?: string[];
     };
+    RevokeHarvestedAliasRequestDto: {
+      /**
+       * @description Harvested alias to revoke. Matched on the same normalized form resolution uses, so any spelling of the alias that resolves to it identifies it here.
+       * @example Property
+       */
+      alias: string;
+    };
+    MetricResponseDto: {
+      /**
+       * @description Metric identifier, one of METRIC_ONTOLOGY's METRIC_IDS.
+       * @example cap_rate
+       */
+      id: string;
+      /**
+       * @description Human-readable label for id.
+       * @example Cap Rate
+       */
+      label: string;
+      /**
+       * @description The unit every normalized value for this metric is expressed in.
+       * @example ratio
+       */
+      canonicalUnit: string;
+    };
+    ConflictResponseDto: {
+      /**
+       * @description Conflict identifier.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      id: string;
+      /**
+       * @description The fact key every disagreeing ExtractedFact in this conflict shares.
+       * @example {
+       *       "entity": "Northgate Business Park",
+       *       "metric": "cap_rate",
+       *       "period": "2025-03"
+       *     }
+       */
+      factKey: Record<string, never>;
+      /** @description Identifiers of the two or more disagreeing ExtractedFact documents. */
+      factIds: string[];
+      /**
+       * @description Every disagreeing ExtractedFact's value and provenance, in the same order as factIds — what a human weighs to choose which one wins.
+       * @example [
+       *       {
+       *         "factId": "65f1c2e4a1b2c3d4e5f6a7b9",
+       *         "value": 5.25,
+       *         "unit": "percent",
+       *         "sourceChunkId": "chunk-xlsx",
+       *         "documentVersionId": "65f1c2e4a1b2c3d4e5f6a7c0",
+       *         "locator": {
+       *           "kind": "xlsx-cell",
+       *           "extractorVersion": "v1",
+       *           "sheetName": "Comps",
+       *           "cell": "F2"
+       *         },
+       *         "withdrawn": false
+       *       },
+       *       {
+       *         "factId": "65f1c2e4a1b2c3d4e5f6a7ba",
+       *         "value": 6.1,
+       *         "unit": "percent",
+       *         "sourceChunkId": "chunk-prose",
+       *         "documentVersionId": "65f1c2e4a1b2c3d4e5f6a7c1",
+       *         "locator": {
+       *           "kind": "pdf-page",
+       *           "extractorVersion": "v1",
+       *           "page": 2
+       *         },
+       *         "withdrawn": false
+       *       }
+       *     ]
+       */
+      values: string[];
+      /**
+       * @description Normalized disagreement magnitude between the group's values.
+       * @example 0.0085
+       */
+      magnitude: number;
+      /**
+       * @description The unit magnitude is expressed in — the metric's canonicalUnit at detection time, not a fixed unit for the collection. Distinguishes, for example, a cap-rate spread from a dollar spread, which would otherwise render as an identical bare number.
+       * @example ratio
+       */
+      magnitudeUnit: string;
+      /**
+       * @description Conflict status.
+       * @example open
+       * @enum {string}
+       */
+      status: 'open' | 'resolved' | 'dismissed';
+      /**
+       * Format: date-time
+       * @description Conflict creation timestamp.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      createdAt: string;
+      /**
+       * @description True when this conflict's packId/packVersion stamp does not match the deployed ACTIVE_PACK_ID/ACTIVE_PACK_VERSION — a row detected under a superseded ontology may no longer match what the current ontology would compute today. Always present, independent of unscorable — the two are unrelated failure modes and a row can carry either, both, or neither. Never hidden: a stale row stays in the list, shown and labelled, rather than silently dropped.
+       * @example false
+       */
+      stale: boolean;
+      /**
+       * @description Present only when stale is true — which pack detected this row versus which is active now.
+       * @example Detected under pack 'cre' v1; the active pack is now 'cre' v2.
+       */
+      staleReason?: string;
+      /**
+       * @description True when one or more of this conflict's factIds no longer resolve to an ExtractedFact — the document that produced them was deleted after this conflict left 'open' status, so the delete cascade's fact removal was never mirrored back onto this conflict's factIds. The row is still returned rather than dropped from the list: a reviewer must be able to see that the conflict once existed and that its evidence is now gone. proposedWinnerFactId, ruleFired and explanation are all absent when this is true — no survivorship policy runs over a fact set already known to be incomplete.
+       * @example false
+       */
+      unscorable: boolean;
+      /**
+       * @description Present only when unscorable is true — why this conflict could not be evaluated.
+       * @example 1 of 2 disagreeing fact(s) no longer resolve to an ExtractedFact.
+       */
+      unscorableReason?: string;
+      /**
+       * @description The ExtractedFact id the survivorship policy proposes as the winner, computed fresh on every read. Absent when ruleFired is 'none' (the policy has no proposal to make) or when unscorable is true.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b9
+       */
+      proposedWinnerFactId?: string;
+      /**
+       * @description Which survivorship rule produced this proposal, or 'none' if the policy declined to propose a winner. Absent when unscorable is true. Never decides anything on its own — a human still resolves the conflict.
+       * @example authority
+       * @enum {string}
+       */
+      ruleFired?: 'authority' | 'recency' | 'none';
+      /**
+       * @description Human-readable justification for ruleFired/proposedWinnerFactId's value. Absent when unscorable is true.
+       * @example Fact 65f1c2e4a1b2c3d4e5f6a7b9's source class 'crm-export' outranks 'memo' in the configured authorityOrder.
+       */
+      explanation?: string;
+    };
     RequestConflictResolutionRequestDto: {
       /**
        * @description ExtractedFact id proposed as this conflict's correct value — the workflow gates this proposal behind a human, it does not choose it.
        * @example 65f1c2e4a1b2c3d4e5f6a7b9
        */
       winningFactId: string;
+    };
+    WorkflowRunResponseDto: {
+      /**
+       * @description WorkflowRun identifier.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      id: string;
+      /**
+       * @description Underlying Temporal workflow id.
+       * @example a3f1b2c4-5678-4d9e-9abc-1234567890ab
+       */
+      workflowId: string;
+      /**
+       * @description Which workflow this run projects. Absent on rows written before the field existed.
+       * @example resolve-conflict
+       * @enum {string}
+       */
+      workflowType?: 'resolve-conflict' | 'sync-source' | 'rescan-conflicts';
+      /**
+       * @description Run status. On GET /workflow-runs/:id and the SSE stream, best-effort refreshed from the live engine (cached up to 15s, falling back to this durable value on an engine failure). On the list endpoint, always the durable row as last written by the workflow — the list never queries the engine, so a status filter there matches stored state, not live state.
+       * @example running
+       * @enum {string}
+       */
+      status: 'queued' | 'running' | 'completed' | 'failed';
+      /**
+       * @description Error detail, present only when status is failed.
+       * @example Timed out waiting for approval
+       */
+      errorMessage?: string;
+      /**
+       * @description Identifier of the entity this run acted on, present when the run carries a subject reference. Read alongside subjectType, never alone.
+       * @example 65f1c2e4a1b2c3d4e5f6a7c0
+       */
+      subjectId?: string;
+      /**
+       * @description The subjectId's entity type, present exactly when subjectId is.
+       * @example Answer
+       */
+      subjectType?: string;
+      /**
+       * Format: date-time
+       * @description Run creation timestamp.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      createdAt: string;
     };
     DecideApprovalRequestDto: {
       /**
@@ -955,6 +1389,52 @@ export interface components {
       withdrawnCitedDocVersionIds: string[];
       /** @description Token and cost accounting for the QA synthesis call, present only once runStatus is 'completed'. */
       usage?: components['schemas']['AnswerUsageResponseDto'];
+    };
+    RetrievedChunkResponseDto: {
+      /**
+       * @description Content-addressed chunk identifier.
+       * @example a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6
+       */
+      chunkId: string;
+      /**
+       * @description Identifier of the document version this chunk belongs to.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b9
+       */
+      docVersionId: string;
+      /**
+       * @description sha256 of the owning document version's bytes — what a citation pins.
+       * @example e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85
+       */
+      sha256: string;
+      /**
+       * @description Chunk text, exactly as stored at ingestion.
+       * @example The cap rate for Northgate Business Park is approximately 6.10%.
+       */
+      text: string;
+      /**
+       * @description Where this chunk's text came from in the source document.
+       * @example {
+       *       "kind": "pdf-page",
+       *       "extractorVersion": "v1",
+       *       "page": 3
+       *     }
+       */
+      locator: Record<string, never>;
+      /**
+       * @description Identifier of the document this chunk belongs to — distinct from docVersionId, which identifies one version of it.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      documentId: string;
+      /**
+       * @description The owning document's title, for display alongside a citation.
+       * @example Northgate Business Park — Q3 Rent Roll
+       */
+      documentTitle: string;
+      /**
+       * @description Fused hybrid-retrieval relevance score (reciprocal rank fusion across the lexical and vector pipelines). Not a 0-1 similarity: it is bounded above by a small constant (2 pipelines / (60 + best rank 1), about 0.0328 today) that shrinks as the query widens, so rendering it as a percentage misrepresents it — use it only to rank this response's hits against each other, never against another query's hits or a fixed threshold.
+       * @example 0.0164
+       */
+      score: number;
     };
     CreateSourceRequestDto: {
       /**
@@ -1264,6 +1744,15 @@ export interface operations {
           'application/json': unknown;
         };
       };
+      /** @description Too many credential attempts from this address, or against this email address, within the configured window. Carries no information about whether the account exists. */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
     };
   };
   AuthController_logout: {
@@ -1347,7 +1836,7 @@ export interface operations {
           'application/json': unknown;
         };
       };
-      /** @description Only an admin may mint or list invitations. */
+      /** @description Only an admin may mint, list, revoke or resend invitations. */
       403: {
         headers: {
           [name: string]: unknown;
@@ -1380,7 +1869,7 @@ export interface operations {
           'application/json': unknown;
         };
       };
-      /** @description Only an admin may mint or list invitations. */
+      /** @description Only an admin may mint, list, revoke or resend invitations. */
       403: {
         headers: {
           [name: string]: unknown;
@@ -1391,6 +1880,84 @@ export interface operations {
       };
       /** @description The invited email already has an account. */
       409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  InvitationsController_revoke: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The invitation was revoked. Both verify and accept refuse its token from here on. */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Only an admin may mint, list, revoke or resend invitations. */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description Invitation does not exist for this tenant, or is already accepted or revoked. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  InvitationsController_resend: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The newly minted invitation, including its plaintext token — shown exactly once. */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description Only an admin may mint, list, revoke or resend invitations. */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description Invitation does not exist for this tenant, or is already accepted or revoked. */
+      404: {
         headers: {
           [name: string]: unknown;
         };
@@ -1436,6 +2003,182 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['InfoResponseDto'];
+        };
+      };
+    };
+  };
+  UsersController_list: {
+    parameters: {
+      query?: {
+        /** @description Comma-separated fields to include; `_id` is always returned. */
+        select?: string;
+        /** @description Number of documents to skip (offset). */
+        skip?: number;
+        /** @description Maximum number of documents to return. */
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The tenant's members. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description Only an admin may manage tenant members. */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  UsersController_changeRole: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ChangeRoleRequestDto'];
+      };
+    };
+    responses: {
+      /** @description The member's updated role. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description Only an admin may manage tenant members. */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description User does not exist in this tenant. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description This change would leave the tenant with no admin. */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  UsersController_remove: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The member was removed from the tenant. */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Only an admin may manage tenant members. */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description User does not exist in this tenant. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description This change would leave the tenant with no admin. */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  UsersController_revokeSessions: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Signs the member out of every browser session and disables every API key they hold — raising their session epoch invalidates both, since API keys are checked against the same epoch as session cookies. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description Only an admin may manage tenant members. */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description User does not exist in this tenant. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
         };
       };
     };
@@ -1727,7 +2470,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['CanonicalEntityResponseDto'];
         };
       };
       /** @description Caller does not hold the admin role required to author this registry. */
@@ -1741,6 +2484,35 @@ export interface operations {
       };
       /** @description A canonical entity with this name already exists for this tenant. */
       409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  CanonicalEntitiesController_scanNearMatches: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Proposals recorded for this scan. Each lands as a proposed harvestedAliases entry on the row it was attributed to; a subsequent GET surfaces it for review. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScanNearMatchesResponseDto'];
+        };
+      };
+      /** @description Caller does not hold the admin role required to author this registry. */
+      403: {
         headers: {
           [name: string]: unknown;
         };
@@ -1809,7 +2581,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['CanonicalEntityResponseDto'];
         };
       };
       /** @description Caller does not hold the admin role required to author this registry. */
@@ -1841,6 +2613,131 @@ export interface operations {
       };
     };
   };
+  CanonicalEntitiesController_applyHarvestedAlias: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['RevokeHarvestedAliasRequestDto'];
+      };
+    };
+    responses: {
+      /** @description The canonical entity row after the proposed harvested alias was applied. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['CanonicalEntityResponseDto'];
+        };
+      };
+      /** @description Caller does not hold the admin role required to author this registry. */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /**
+       * @description This canonical entity carries no harvested alias by that name.
+       *
+       *     No canonical entity with this id exists for the caller's tenant.
+       */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description This harvested alias is not in the proposed state and cannot be applied again. */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  CanonicalEntitiesController_revokeHarvestedAlias: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['RevokeHarvestedAliasRequestDto'];
+      };
+    };
+    responses: {
+      /** @description The canonical entity row after the harvested alias was revoked. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['CanonicalEntityResponseDto'];
+        };
+      };
+      /** @description Caller does not hold the admin role required to author this registry. */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /**
+       * @description This canonical entity carries no harvested alias by that name.
+       *
+       *     No canonical entity with this id exists for the caller's tenant.
+       */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  MetricsController_list: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Every metric METRIC_ONTOLOGY defines, projected to its id, label and canonicalUnit. Read-only: there is no endpoint to add, edit or remove a metric. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MetricResponseDto'][];
+        };
+      };
+    };
+  };
   ConflictsController_list: {
     parameters: {
       query?: {
@@ -1865,7 +2762,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['ConflictResponseDto'][];
         };
       };
     };
@@ -1925,6 +2822,10 @@ export interface operations {
         limit?: number;
         /** @description Underlying Temporal workflow id to filter by. Omit it to list every run for the caller's tenant, most recent first. */
         workflowId?: string;
+        /** @description Filter by run status. Matches the stored row only — this endpoint never queries the live workflow engine, so a run whose engine-side status has since moved on can still match its previous stored status here. */
+        status?: 'queued' | 'running' | 'completed' | 'failed';
+        /** @description Filter by which workflow the run projects. Includes 'rescan-conflicts', a legacy type no current workflow writes — accepted so a tenant with an existing legacy row can still filter it into view, not because new rows of that type can appear. */
+        workflowType?: 'resolve-conflict' | 'sync-source' | 'rescan-conflicts';
       };
       header?: never;
       path?: never;
@@ -1932,13 +2833,13 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description Runs for the caller's tenant, most recent first. Filters to a single workflow when workflowId is given; omitting it lists every run. */
+      /** @description Runs for the caller's tenant, most recent first. Filters to a single workflow when workflowId is given, and/or to a status or workflowType — both match the durable row, never the live engine (see WorkflowRunResponseDto.status). Omitting every filter lists every run. */
       200: {
         headers: {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['WorkflowRunResponseDto'];
         };
       };
     };
@@ -2225,7 +3126,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['RetrievedChunkResponseDto'];
         };
       };
     };
@@ -2603,6 +3504,37 @@ export interface operations {
           [name: string]: unknown;
         };
         content?: never;
+      };
+      /** @description API key does not exist for this user. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  ApiKeysController_rotate: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The key rotated onto a fresh token — same id, name and creation date, new plaintext token shown exactly once. The previous token stops working immediately. */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
       };
       /** @description API key does not exist for this user. */
       404: {
