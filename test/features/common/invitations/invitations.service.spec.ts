@@ -330,6 +330,83 @@ describe('InvitationsService', () => {
     });
   });
 
+  describe('preview', () => {
+    it('should refuse an unrecognized token without resolving an inviter', async () => {
+      mockInvitationModel.findOne.mockResolvedValueOnce(null);
+
+      const result = await service.preview(buildPresentableToken());
+
+      expect(result).toBeNull();
+      expect(mockUserModel.findById).not.toHaveBeenCalled();
+    });
+
+    it('should fail closed for an expired invitation, identically to an unrecognized one', async () => {
+      const token = buildPresentableToken();
+      mockInvitationModel.findOne.mockResolvedValueOnce(
+        buildMockInvitation({
+          tokenHash: hashOf(token),
+          expiresAt: new Date('2020-01-01T00:00:00.000Z'),
+        }),
+      );
+
+      const result = await service.preview(token);
+
+      expect(result).toBeNull();
+      expect(mockUserModel.findById).not.toHaveBeenCalled();
+    });
+
+    it('should resolve the inviting admin’s email for a live token', async () => {
+      const token = buildPresentableToken();
+      const inviterId = new Types.ObjectId();
+      mockInvitationModel.findOne.mockResolvedValueOnce(
+        buildMockInvitation({ tokenHash: hashOf(token), createdBy: inviterId }),
+      );
+      mockUserModel.findById.mockResolvedValueOnce({ email: 'admin@example.com' });
+
+      const result = await service.preview(token);
+
+      expect(mockUserModel.findById).toHaveBeenCalledWith(inviterId);
+      expect(result).toEqual({
+        email: 'colleague@example.com',
+        role: UserRole.Member,
+        invitedBy: 'admin@example.com',
+      });
+    });
+
+    it('should omit invitedBy when the invitation carries no createdBy', async () => {
+      const token = buildPresentableToken();
+      mockInvitationModel.findOne.mockResolvedValueOnce(
+        buildMockInvitation({ tokenHash: hashOf(token), createdBy: undefined }),
+      );
+
+      const result = await service.preview(token);
+
+      expect(mockUserModel.findById).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        email: 'colleague@example.com',
+        role: UserRole.Member,
+        invitedBy: undefined,
+      });
+    });
+
+    it('should omit invitedBy when the inviting admin no longer exists', async () => {
+      const token = buildPresentableToken();
+      const inviterId = new Types.ObjectId();
+      mockInvitationModel.findOne.mockResolvedValueOnce(
+        buildMockInvitation({ tokenHash: hashOf(token), createdBy: inviterId }),
+      );
+      mockUserModel.findById.mockResolvedValueOnce(null);
+
+      const result = await service.preview(token);
+
+      expect(result).toEqual({
+        email: 'colleague@example.com',
+        role: UserRole.Member,
+        invitedBy: undefined,
+      });
+    });
+  });
+
   describe('accept', () => {
     it('should atomically reserve a pending invitation, scoped to its tenant, and record an audit event attributed to the joining user', async () => {
       mockInvitationModel.findOneAndUpdate.mockResolvedValueOnce(buildMockInvitation());

@@ -1,7 +1,8 @@
 import type { FormEvent } from 'react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { ApiError, login, registerWithInvitation } from '../api/client';
+import type { InvitationPreview } from '../api/client';
+import { ApiError, login, previewInvitation, registerWithInvitation } from '../api/client';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import PasswordRules from '../components/ui/PasswordRules';
@@ -25,6 +26,29 @@ export default function InvitePage() {
   // same form can never fix, so it drives hiding the form in favor of the two paths that can:
   // a fresh link, or signing in.
   const [invitationRejected, setInvitationRejected] = useState(false);
+  // Who is inviting and to what role, fetched before the form renders so accepting is an informed
+  // decision rather than a blind one. Absent while the fetch is pending, and stays absent (falling
+  // into the invitationRejected recovery path instead) if it fails — see the effect below.
+  const [preview, setPreview] = useState<InvitationPreview | null>(null);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+
+    previewInvitation(token)
+      .then((result) => {
+        if (!cancelled) setPreview(result);
+      })
+      .catch(() => {
+        // A preview failure means the token is unusable, same as a rejected redemption — folding it
+        // into that same recovery path is what keeps the visitor off a blank or stuck form.
+        if (!cancelled) setInvitationRejected(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -81,13 +105,19 @@ export default function InvitePage() {
     );
   }
 
+  const inviteSummary = preview
+    ? preview.invitedBy
+      ? `${preview.invitedBy} invited you to join as ${preview.role}. Set a password to accept.`
+      : `You've been invited to join as ${preview.role}. Set a password to accept.`
+    : 'Set a password to accept the invitation and sign in.';
+
   return (
     <div className="view">
       <div className="page-head">
         <div>
           <span className="eyebrow">You're invited</span>
           <h1 className="page-title">Join your team</h1>
-          <p className="page-sub">Set a password to accept the invitation and sign in.</p>
+          <p className="page-sub">{inviteSummary}</p>
         </div>
       </div>
 

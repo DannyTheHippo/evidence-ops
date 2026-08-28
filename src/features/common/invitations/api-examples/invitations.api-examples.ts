@@ -1,6 +1,7 @@
 import { HttpStatus } from '@nestjs/common';
 import type { ApiResponseOptions } from '@nestjs/swagger';
 import { UserRole } from '../../../../shared/enums/user-role.enum';
+import { InvitationPreviewResponseDto } from '../dtos/response/invitation-preview.response.dto';
 
 const exampleMintedInvitation = {
   id: '65f1c2e4a1b2c3d4e5f6a7b8',
@@ -20,6 +21,39 @@ const exampleInvitation = {
 };
 
 export const invitationsApiExamples: Record<string, ApiResponseOptions> = {
+  preview: {
+    status: HttpStatus.OK,
+    type: InvitationPreviewResponseDto,
+    description:
+      'Who the token invites and what role it grants — enough for an anonymous visitor to judge ' +
+      'whether the invitation is one they recognize before they set a password.',
+    examples: {
+      example: {
+        summary: 'Invitation preview',
+        value: {
+          email: 'colleague@example.com',
+          role: UserRole.Member,
+          invitedBy: 'admin@example.com',
+        },
+      },
+    },
+  },
+  previewInvalid: {
+    status: HttpStatus.BAD_REQUEST,
+    description:
+      'The token is unknown, expired, revoked, or already accepted — the four cases are ' +
+      'indistinguishable on purpose.',
+    examples: {
+      example: {
+        summary: 'Invalid invitation',
+        value: {
+          statusCode: HttpStatus.BAD_REQUEST,
+          message: 'Invitation is invalid, expired, or already used',
+          error: 'Bad Request',
+        },
+      },
+    },
+  },
   minted: {
     status: HttpStatus.CREATED,
     description: 'The newly minted invitation, including its plaintext token — shown exactly once.',

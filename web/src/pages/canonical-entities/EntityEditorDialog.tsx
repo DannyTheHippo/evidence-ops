@@ -7,6 +7,7 @@ import {
 import Button from '../../components/ui/Button';
 import Dialog from '../../components/ui/Dialog';
 import Field from '../../components/ui/Field';
+import Textarea from '../../components/ui/Textarea';
 import { notify } from '../../components/ui/toast';
 
 function aliasesToText(aliases?: string[]): string {
@@ -77,17 +78,14 @@ export default function EntityEditorDialog({ entity, onClose, onSaved }: EntityE
             />
           )}
         </Field>
-        <Field label="Aliases" hint="One alias per line. Blank lines are ignored.">
-          {(inputProps) => (
-            <textarea
-              rows={5}
-              value={aliasesText}
-              onChange={(e) => setAliasesText(e.target.value)}
-              placeholder={'Northgate\nNorthgate Shopping Center'}
-              {...inputProps}
-            />
-          )}
-        </Field>
+        <Textarea
+          label="Aliases"
+          hint="One alias per line. Blank lines are ignored."
+          rows={5}
+          value={aliasesText}
+          onChange={setAliasesText}
+          placeholder={'Northgate\nNorthgate Shopping Center'}
+        />
       </div>
 
       {saveError && (

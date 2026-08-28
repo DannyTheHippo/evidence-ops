@@ -43,11 +43,13 @@ describe('resolveDocumentVersions', () => {
       documentId: 'doc-docver-1',
       documentTitle: 'Title for docver-1',
       withdrawn: false,
+      sourceKind: 'pdf',
     });
     expect(index.get('docver-2')).toEqual({
       documentId: 'doc-docver-2',
       documentTitle: 'Title for docver-2',
       withdrawn: false,
+      sourceKind: 'pdf',
     });
   });
 
@@ -94,6 +96,7 @@ describe('resolveDocumentVersions', () => {
       documentId: 'doc-docver-20',
       documentTitle: 'Title for docver-20',
       withdrawn: false,
+      sourceKind: 'pdf',
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

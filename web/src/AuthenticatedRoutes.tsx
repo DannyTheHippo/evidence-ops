@@ -12,8 +12,10 @@ import AuditEventsPage from './pages/AuditEventsPage';
 import CanonicalEntitiesPage from './pages/CanonicalEntitiesPage';
 import ConflictsPage from './pages/ConflictsPage';
 import DataRoomPage from './pages/DataRoomPage';
+import DocumentWorkbenchPage from './pages/DocumentWorkbenchPage';
 import HomePage from './pages/HomePage';
 import InvitationsPage from './pages/InvitationsPage';
+import PeoplePage from './pages/PeoplePage';
 import RunsPage from './pages/RunsPage';
 import SearchPage from './pages/SearchPage';
 import SourceDetailPage from './pages/SourceDetailPage';
@@ -124,6 +126,14 @@ export default function AuthenticatedRoutes() {
         }
       />
       <Route
+        path="/documents/:documentId/versions/:versionId"
+        element={
+          <RequireAuth>
+            <DocumentWorkbenchPage />
+          </RequireAuth>
+        }
+      />
+      <Route
         path="/sources"
         element={
           <RequireAuth>
@@ -188,13 +198,14 @@ export default function AuthenticatedRoutes() {
         }
       />
       <Route
-        path="/invitations"
+        path="/people"
         element={
           <RequireAdmin>
-            <InvitationsPage />
+            <PeoplePage />
           </RequireAdmin>
         }
       />
+      <Route path="/invitations" element={<InvitationsPage />} />
       <Route
         path="/canonical-entities"
         element={

@@ -3,21 +3,27 @@ import {
   documentEventsUrl,
   listDocuments,
   uploadDocument,
+  type DocumentSortField,
   type DocumentSourceClass,
   type DocumentVersionIngestionStatus,
   type EvidenceDocument,
+  type SortDirection,
 } from '../../api/client';
 import Badge, { type BadgeTone } from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import EmptyState from '../../components/ui/EmptyState';
 import Field from '../../components/ui/Field';
+import FilterBar from '../../components/ui/FilterBar';
 import Pager from '../../components/ui/Pager';
 import Select from '../../components/ui/Select';
 import Skeleton from '../../components/ui/Skeleton';
+import SortableHeaderCell from '../../components/ui/SortableHeaderCell';
 import Table, { RowLink, TableCell, TableHeaderCell, TableRow } from '../../components/ui/Table';
 import { notify } from '../../components/ui/toast';
 import { IconFolder } from '../../components/icons';
+import { workbenchHref } from '../../lib/citation-link';
 import { useEventStream } from '../../lib/use-event-stream';
+import { useUrlState } from '../../lib/use-url-state';
 import { formatBytes } from './format-size';
 
 const POLL_INTERVAL_MS = 3000;
@@ -57,20 +63,28 @@ const INGESTION_TONE: Record<DocumentVersionIngestionStatus, BadgeTone> = {
   'needs-ocr': 'caution',
 };
 
+// Declared at module scope: `useUrlState` adopts `defaults` once on mount and keeps that
+// identity, but only needs it stable in value — a module-level object satisfies both.
+const URL_DEFAULTS: Record<'ingestionStatus' | 'sort' | 'sortDir' | 'skip', string> = {
+  ingestionStatus: '',
+  sort: 'createdAt',
+  sortDir: 'desc',
+  skip: '0',
+};
+
 export default function DocumentList() {
+  const [urlState, setUrlState] = useUrlState(URL_DEFAULTS);
+  const appliedIngestionStatus = urlState.ingestionStatus as DocumentVersionIngestionStatus | '';
+  const sort = urlState.sort as DocumentSortField;
+  const sortDir = urlState.sortDir as SortDirection;
+  const skip = Number(urlState.skip);
+
   const [documents, setDocuments] = useState<EvidenceDocument[] | null>(null);
   const [count, setCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [skip, setSkip] = useState(0);
-  const [ingestionStatusFilter, setIngestionStatusFilter] = useState<
-    DocumentVersionIngestionStatus | ''
-  >('');
-  // Only this, not `ingestionStatusFilter` itself, drives the fetch — the filter applies on
-  // submit, not on every selection change, matching `AnswersPage`'s input-state/applied-state
-  // split.
-  const [appliedIngestionStatus, setAppliedIngestionStatus] = useState<
-    DocumentVersionIngestionStatus | ''
-  >('');
+  // Only this, not `appliedIngestionStatus` itself, drives the `Select` — the filter applies on
+  // submit, not on every selection change, matching `AnswersPage`'s draft/applied split.
+  const [draftIngestionStatus, setDraftIngestionStatus] = useState(appliedIngestionStatus);
   const [title, setTitle] = useState('');
   const [sourceClass, setSourceClass] = useState<DocumentSourceClass | ''>('');
   const [files, setFiles] = useState<File[]>([]);
@@ -86,6 +100,8 @@ export default function DocumentList() {
       skip,
       limit: PAGE_SIZE,
       ingestionStatus: appliedIngestionStatus === '' ? undefined : appliedIngestionStatus,
+      sort,
+      sortDir,
     })
       .then(({ docs, count: total }) => {
         setDocuments(docs);
@@ -95,16 +111,20 @@ export default function DocumentList() {
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'Failed to load documents');
       });
-  }, [skip, appliedIngestionStatus]);
+  }, [skip, appliedIngestionStatus, sort, sortDir]);
 
-  // The SSE stream (`documents.service.ts`'s `streamList`) has no `ingestionStatus` parameter of
-  // its own — `DocumentsController.streamEvents` only takes `skip`/`limit` — so a filter in effect
-  // disables the stream (`url: null`, per `useEventStream`'s own doc comment) rather than let an
-  // unfiltered tick silently overwrite the filtered list. The effect below covers the fetch the
-  // stream would otherwise have driven. Unfiltered, the URL still follows whichever page `skip`
-  // names, so it stays live on every page, not only the first.
+  // The SSE stream (`documents.service.ts`'s `streamList`) has no `ingestionStatus`, `sort` or
+  // `sortDir` parameter of its own — `DocumentsController.streamEvents` only takes `skip`/`limit`
+  // — so a filter or a non-default sort in effect disables the stream (`url: null`, per
+  // `useEventStream`'s own doc comment) rather than let an unfiltered, default-ordered tick
+  // silently overwrite the view a reader chose. The effect below covers the fetch the stream would
+  // otherwise have driven. Unfiltered and default-sorted, the URL still follows whichever page
+  // `skip` names, so it stays live on every page, not only the first.
+  const isDefaultView =
+    appliedIngestionStatus === '' && sort === URL_DEFAULTS.sort && sortDir === URL_DEFAULTS.sortDir;
+
   const streamState = useEventStream<{ docs: EvidenceDocument[]; count: number }>({
-    url: appliedIngestionStatus === '' ? documentEventsUrl({ skip, limit: PAGE_SIZE }) : null,
+    url: isDefaultView ? documentEventsUrl({ skip, limit: PAGE_SIZE }) : null,
     events: ['documents', 'heartbeat'],
     onEvent: (name, data) => {
       // Heartbeat only keeps the connection's liveness fresh; only a `documents` frame carries a
@@ -117,12 +137,13 @@ export default function DocumentList() {
     onFallback: refetch,
   });
 
-  // Plain fetch-on-change while a filter is applied — the stream above is disabled for exactly
-  // this case, so nothing else drives the initial load or a page/filter change.
+  // Plain fetch-on-change while a filter or a non-default sort is applied — the stream above is
+  // disabled for exactly this case, so nothing else drives the initial load or a page/filter/sort
+  // change.
   useEffect(() => {
-    if (appliedIngestionStatus === '') return;
+    if (isDefaultView) return;
     refetch();
-  }, [appliedIngestionStatus, skip, refetch]);
+  }, [isDefaultView, refetch]);
 
   const hasPending =
     documents?.some((doc) => doc.currentVersion.ingestionStatus === 'pending') ?? false;
@@ -172,10 +193,20 @@ export default function DocumentList() {
     if (errors.length > 0) setUploadError(errors.join('; '));
   }
 
-  function handleFilter(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setSkip(0);
-    setAppliedIngestionStatus(ingestionStatusFilter);
+  function handleFilterApply() {
+    setUrlState({ ingestionStatus: draftIngestionStatus, skip: URL_DEFAULTS.skip });
+  }
+
+  function handleFilterClear() {
+    setDraftIngestionStatus('');
+    setUrlState({ ingestionStatus: '', skip: URL_DEFAULTS.skip });
+  }
+
+  function handleSort(field: DocumentSortField) {
+    // Switching to a different column always starts it at `desc`; clicking the active column
+    // toggles direction, matching AnswersPage.tsx and PeoplePage.tsx.
+    const nextDir: SortDirection = field === sort && sortDir === 'desc' ? 'asc' : 'desc';
+    setUrlState({ sort: field, sortDir: nextDir, skip: URL_DEFAULTS.skip });
   }
 
   const hasFilter = appliedIngestionStatus !== '';
@@ -213,18 +244,18 @@ export default function DocumentList() {
             value={sourceClass}
             onChange={(value) => setSourceClass(value as DocumentSourceClass | '')}
           />
-          {/* Mirrors UPLOAD_EXTENSION_ALLOWLIST in documents.constant.ts — the eight kinds the
+          {/* Mirrors UPLOAD_EXTENSION_ALLOWLIST in documents.constant.ts — the nine kinds the
               upload gate accepts. A narrower list here hides formats the server would take. */}
           <Field
             label="File"
-            hint="PDF, Word, Excel, PowerPoint, CSV, TSV, Markdown or text, up to 50 MB each"
+            hint="PDF, Word, Excel, PowerPoint, CSV, TSV, Markdown, text or Email, up to 50 MB each"
           >
             {(inputProps) => (
               <input
                 type="file"
                 required
                 multiple
-                accept=".pdf,.docx,.xlsx,.pptx,.csv,.tsv,.txt,.md"
+                accept=".pdf,.docx,.xlsx,.pptx,.csv,.tsv,.txt,.md,.eml"
                 onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
                 {...inputProps}
               />
@@ -243,19 +274,16 @@ export default function DocumentList() {
         )}
       </section>
 
-      <form onSubmit={handleFilter} className="control-row">
+      <FilterBar onApply={handleFilterApply} onClear={handleFilterClear} hasFilter={hasFilter}>
         <Select
           label="Ingestion status"
           options={INGESTION_STATUS_OPTIONS}
-          value={ingestionStatusFilter}
+          value={draftIngestionStatus}
           onChange={(value) =>
-            setIngestionStatusFilter(value as DocumentVersionIngestionStatus | '')
+            setDraftIngestionStatus(value as DocumentVersionIngestionStatus | '')
           }
         />
-        <Button type="submit" variant="primary">
-          Apply filters
-        </Button>
-      </form>
+      </FilterBar>
 
       {error && (
         <p className="error error--page" role="alert">
@@ -286,45 +314,70 @@ export default function DocumentList() {
           <Table caption="Documents uploaded to the data room, with their ingestion status.">
             <thead>
               <tr>
-                <TableHeaderCell>Title</TableHeaderCell>
-                <TableHeaderCell>Source</TableHeaderCell>
+                <SortableHeaderCell<DocumentSortField>
+                  field="title"
+                  label="Title"
+                  sort={sort}
+                  direction={sortDir}
+                  onSort={handleSort}
+                />
+                <SortableHeaderCell<DocumentSortField>
+                  field="sourceKind"
+                  label="Source"
+                  sort={sort}
+                  direction={sortDir}
+                  onSort={handleSort}
+                />
                 <TableHeaderCell>Version</TableHeaderCell>
                 <TableHeaderCell>Size</TableHeaderCell>
                 <TableHeaderCell>Ingestion</TableHeaderCell>
               </tr>
             </thead>
             <tbody>
-              {documents.map((doc) => (
-                <TableRow key={doc.id} to={`/documents/${doc.id}`}>
-                  <TableCell label="Title">
-                    <RowLink to={`/documents/${doc.id}`}>{doc.title}</RowLink>
-                  </TableCell>
-                  <TableCell label="Source">
-                    {doc.sourceKind}
-                    <p className="cell-sub">{doc.mimeType}</p>
-                  </TableCell>
-                  <TableCell label="Version" className="num">
-                    v{doc.currentVersion.versionNumber}
-                  </TableCell>
-                  <TableCell label="Size" className="num">
-                    {formatBytes(doc.currentVersion.sizeBytes)}
-                  </TableCell>
-                  <TableCell label="Ingestion">
-                    <Badge tone={INGESTION_TONE[doc.currentVersion.ingestionStatus]}>
-                      {doc.currentVersion.ingestionStatus}
-                    </Badge>
-                    {doc.currentVersion.ingestionFailureReason && (
-                      <p className="cell-sub">{doc.currentVersion.ingestionFailureReason}</p>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
+              {documents.map((doc) => {
+                const href = workbenchHref({
+                  documentId: doc.id,
+                  versionId: doc.currentVersion.id,
+                });
+                return (
+                  <TableRow key={doc.id} to={href}>
+                    <TableCell label="Title">
+                      <RowLink to={href}>{doc.title}</RowLink>
+                    </TableCell>
+                    <TableCell label="Source">
+                      {doc.sourceKind}
+                      <p className="cell-sub">{doc.mimeType}</p>
+                    </TableCell>
+                    <TableCell label="Version" className="num">
+                      v{doc.currentVersion.versionNumber}
+                    </TableCell>
+                    <TableCell label="Size" className="num">
+                      {formatBytes(doc.currentVersion.sizeBytes)}
+                    </TableCell>
+                    <TableCell label="Ingestion">
+                      <Badge tone={INGESTION_TONE[doc.currentVersion.ingestionStatus]}>
+                        {doc.currentVersion.ingestionStatus}
+                      </Badge>
+                      {doc.currentVersion.ingestionFailureReason && (
+                        <p className="cell-sub">{doc.currentVersion.ingestionFailureReason}</p>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </tbody>
           </Table>
         </section>
       )}
 
-      {documents && <Pager count={count} skip={skip} pageSize={PAGE_SIZE} onSkipChange={setSkip} />}
+      {documents && (
+        <Pager
+          count={count}
+          skip={skip}
+          pageSize={PAGE_SIZE}
+          onSkipChange={(next) => setUrlState({ skip: String(next) })}
+        />
+      )}
     </div>
   );
 }

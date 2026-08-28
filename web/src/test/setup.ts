@@ -9,3 +9,9 @@ import { afterEach } from 'vitest';
 afterEach(() => {
   cleanup();
 });
+
+// jsdom implements no layout engine, so `Element.prototype.scrollIntoView` is absent entirely —
+// any component that scrolls a deep-linked target into view throws without this stand-in.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {};
+}

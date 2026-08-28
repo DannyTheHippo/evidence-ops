@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clearSession } from '../lib/auth';
+import { formatRelativeTimestamp } from '../lib/format-timestamp';
 import { clearToasts, getToasts } from '../components/ui/toast';
 import SourceDetailPage from './SourceDetailPage';
 
@@ -121,6 +122,21 @@ describe('SourceDetailPage', () => {
     expect(screen.queryByText('Loading source…')).not.toBeInTheDocument();
   });
 
+  it('leads with health, not the filesystem path — path renders as metadata further down', async () => {
+    stubFetch({
+      [GET_URL]: () => jsonResponse(sourceWithFileStates),
+      [DRIFT_URL]: () => jsonResponse({ count: 0 }),
+    });
+
+    renderAt('source-1');
+
+    const heading = await screen.findByRole('heading', { name: 'Sync health' });
+    expect(heading.tagName).toBe('H2');
+    const path = screen.getByText('deal-room');
+    expect(path.className).toContain('mono');
+    expect(path.className).toContain('cell-sub');
+  });
+
   it('shows a failing file and its error, distinct from an ok file', async () => {
     stubFetch({
       [GET_URL]: () => jsonResponse(sourceWithFileStates),
@@ -162,7 +178,7 @@ describe('SourceDetailPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Source unavailable');
   });
 
-  it('surfaces the sync interval and a carried sync error in the caution register', async () => {
+  it('surfaces the sync interval, the last-sync time and a carried sync error in the caution register', async () => {
     stubFetch({
       [GET_URL]: () => jsonResponse({ ...sourceWithFileStates, intervalMs: 300_000 }),
       [DRIFT_URL]: () => jsonResponse({ count: 0 }),
@@ -172,8 +188,22 @@ describe('SourceDetailPage', () => {
 
     expect(await screen.findByText('Every 5 minutes')).toBeInTheDocument();
     expect(
+      screen.getByText(formatRelativeTimestamp(sourceWithFileStates.lastSyncAt)),
+    ).toBeInTheDocument();
+    expect(
       screen.getByText('Last sync failed: connector refused an oversized file'),
     ).toBeInTheDocument();
+  });
+
+  it('shows "Never synced" rather than a Timestamp when the source has never synced', async () => {
+    stubFetch({
+      [GET_URL]: () => jsonResponse({ ...sourceWithFileStates, lastSyncAt: undefined }),
+      [DRIFT_URL]: () => jsonResponse({ count: 0 }),
+    });
+
+    renderAt('source-1');
+
+    expect(await screen.findByText('Never synced')).toBeInTheDocument();
   });
 
   it('shows a default-interval label for a source with no configured interval', async () => {
@@ -185,6 +215,28 @@ describe('SourceDetailPage', () => {
     renderAt('source-1');
 
     expect(await screen.findByText('Default interval')).toBeInTheDocument();
+  });
+
+  it('shows "No class drift." in the health card when the source carries none', async () => {
+    stubFetch({
+      [GET_URL]: () => jsonResponse(sourceWithFileStates),
+      [DRIFT_URL]: () => jsonResponse({ count: 0 }),
+    });
+
+    renderAt('source-1');
+
+    expect(await screen.findByText('No class drift.')).toBeInTheDocument();
+  });
+
+  it('shows a drift count in the health card when the source carries some', async () => {
+    stubFetch({
+      [GET_URL]: () => jsonResponse(sourceWithFileStates),
+      [DRIFT_URL]: () => jsonResponse({ previousClass: 'memo', count: 2 }),
+    });
+
+    renderAt('source-1');
+
+    expect(await screen.findByText('2 documents pending class drift.')).toBeInTheDocument();
   });
 
   it('enables and disables the source without leaving the page', async () => {
@@ -283,7 +335,7 @@ describe('SourceDetailPage', () => {
     renderAt('source-1');
 
     await screen.findByText('Deal Room Inbox');
-    expect(screen.queryByText('Class drift')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Class drift' })).not.toBeInTheDocument();
   });
 
   it('shows the drift card with the count read from one server value, opens and cancels the dialog', async () => {
@@ -351,7 +403,7 @@ describe('SourceDetailPage', () => {
     );
     // The re-fetch after apply reports count: 0, so the card disappears with the number rather
     // than being patched locally to some derived value.
-    expect(screen.queryByText('Class drift')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Class drift' })).not.toBeInTheDocument();
     expect(driftCall).toBe(2);
   });
 

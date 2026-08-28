@@ -5,16 +5,14 @@ import {
   applySourceClassDrift,
   getSourceById,
   getSourceClassDrift,
-  getWorkflowRunById,
-  requestSourceSync,
   updateSource,
   type DocumentSourceClass,
   type SourceClassDrift,
   type SourceConnectivity,
   type SourceReachability,
   type SourceWithFileStates,
-  type WorkflowRun,
 } from '../api/client';
+import { IconDatabase } from '../components/icons';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import Dialog from '../components/ui/Dialog';
@@ -23,13 +21,11 @@ import Field from '../components/ui/Field';
 import Select from '../components/ui/Select';
 import Skeleton from '../components/ui/Skeleton';
 import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
+import Timestamp from '../components/ui/Timestamp';
 import { notify } from '../components/ui/toast';
-import { IconDatabase } from '../components/icons';
 import { formatInterval } from '../lib/format-interval';
+import { syncRunLabel, useSourceSync } from '../lib/use-source-sync';
 import { useSession } from '../lib/use-session';
-import { isTerminalRun } from '../lib/workflow-runs';
-
-const DEFAULT_POLL_INTERVAL_MS = 1500;
 
 const CONNECTIVITY_OPTIONS: { value: SourceConnectivity; label: string }[] = [
   { value: 'connector', label: 'Connector' },
@@ -57,22 +53,13 @@ const TRACKED_OPTIONS = [
   { value: 'false', label: 'Catalogued only' },
 ];
 
-// Keeps the sync action's name stable across its whole lifecycle — 'Sync now' on the button, then
-// this label for the resulting run: an in-flight run always reads as the same gerund, a terminal
-// one as a past-tense confirmation, never `run.status`'s raw enum value.
-function syncRunLabel(run: WorkflowRun): string {
-  if (!isTerminalRun(run.status)) return 'Syncing…';
-  return run.status === 'completed' ? 'Synced' : 'Sync failed';
-}
-
 interface SourceDetailPageProps {
-  // Overridable so tests can poll on a short interval instead of stubbing timers.
+  // Overridable so tests can poll on a short interval instead of stubbing timers. Forwarded to
+  // `useSourceSync`, which supplies the default poll cadence when this is omitted.
   pollIntervalMs?: number;
 }
 
-export default function SourceDetailPage({
-  pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
-}: SourceDetailPageProps) {
+export default function SourceDetailPage({ pollIntervalMs }: SourceDetailPageProps) {
   const { id } = useParams<{ id: string }>();
   const session = useSession();
   // Fails CLOSED on the still-loading probe too, matching DocumentDetail.tsx's canDelete — a
@@ -89,9 +76,7 @@ export default function SourceDetailPage({
   const [error, setError] = useState<string | null>(null);
   const [toggling, setToggling] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
-  const [starting, setStarting] = useState(false);
-  const [syncError, setSyncError] = useState<string | null>(null);
-  const [run, setRun] = useState<WorkflowRun | null>(null);
+  const { run, isPolling, starting, syncError, startSync } = useSourceSync(pollIntervalMs);
   const [drift, setDrift] = useState<SourceClassDrift | null>(null);
   const [driftError, setDriftError] = useState<string | null>(null);
   const [applyDialogOpen, setApplyDialogOpen] = useState(false);
@@ -215,51 +200,6 @@ export default function SourceDetailPage({
     }
   }
 
-  async function handleSync() {
-    if (!source) return;
-    setStarting(true);
-    setSyncError(null);
-    try {
-      const started = await requestSourceSync(source.id);
-      setRun(started);
-      notify('success', `Sync started for ${source.name}.`);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to start sync';
-      setSyncError(message);
-      notify('error', message);
-    } finally {
-      setStarting(false);
-    }
-  }
-
-  const runId = run?.id;
-  const runStatus = run?.status;
-
-  // Polls the triggered sync's workflow run while it is in flight, stopping the moment its status
-  // reaches a terminal state rather than polling forever. Mirrors SourcesPage's row-level poll —
-  // this page only ever has the one source in view, so it is a single interval, not a per-row one.
-  useEffect(() => {
-    if (!runId || !runStatus || isTerminalRun(runStatus)) return;
-    let cancelled = false;
-
-    const timer = setInterval(() => {
-      getWorkflowRunById(runId)
-        .then((next) => {
-          if (!cancelled) setRun(next);
-        })
-        .catch((err: unknown) => {
-          if (cancelled) return;
-          setSyncError(err instanceof Error ? err.message : 'Failed to poll sync run');
-        });
-    }, pollIntervalMs);
-
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [runId, runStatus, pollIntervalMs]);
-
-  const isPolling = !!run && !isTerminalRun(run.status);
   // A carried lastSyncError under the "enabled" label reads as caution, not verified-green — the
   // same register the list page's combined status carries for the same state, so the badge here
   // never contradicts the "Last sync failed" notice sitting directly beneath it.
@@ -301,22 +241,36 @@ export default function SourceDetailPage({
 
       {source && (
         <>
+          {/*
+            Leads with health and drift — the state this source is in, and whether it has
+            diverged — rather than its filesystem path, which is metadata further down.
+          */}
           <section className="card">
             <div className="card-head">
-              <div>
-                <h2 className="card-title mono">{source.path}</h2>
-                <p className="cell-sub">{formatInterval(source.intervalMs)}</p>
-              </div>
+              <h2 className="card-title">Sync health</h2>
               <Badge tone={status.tone}>{status.label}</Badge>
             </div>
             <p className="cell-sub">
-              {source.lastSyncAt
-                ? `Last synced ${new Date(source.lastSyncAt).toLocaleString()}`
-                : 'Never synced'}
+              {source.lastSyncAt ? (
+                <>
+                  Last synced <Timestamp value={source.lastSyncAt} />
+                </>
+              ) : (
+                'Never synced'
+              )}
             </p>
             {source.lastSyncError && (
               <p className="notice notice--warn">Last sync failed: {source.lastSyncError}</p>
             )}
+            {drift && (
+              <p className="cell-sub">
+                {drift.count > 0
+                  ? `${drift.count} document${drift.count === 1 ? '' : 's'} pending class drift.`
+                  : 'No class drift.'}
+              </p>
+            )}
+            <p className="cell-sub mono">{source.path}</p>
+            <p className="cell-sub">{formatInterval(source.intervalMs)}</p>
             <div className="form-actions">
               {canManage && (
                 <Button
@@ -332,7 +286,7 @@ export default function SourceDetailPage({
                 variant="primary"
                 size="sm"
                 disabled={starting}
-                onClick={() => void handleSync()}
+                onClick={() => void startSync(source.id, source.name)}
               >
                 {starting ? 'Syncing…' : 'Sync now'}
               </Button>
@@ -518,7 +472,7 @@ export default function SourceDetailPage({
                         {fileState.lastError ?? '—'}
                       </TableCell>
                       <TableCell label="Last modified" className="cell-sub">
-                        {new Date(fileState.mtimeMs).toLocaleString()}
+                        <Timestamp value={new Date(fileState.mtimeMs).toISOString()} />
                       </TableCell>
                     </tr>
                   ))}

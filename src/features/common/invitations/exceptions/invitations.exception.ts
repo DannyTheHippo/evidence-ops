@@ -18,3 +18,14 @@ export class InvitationNotFoundException extends BaseException {
     super(message, HttpStatus.NOT_FOUND, cause);
   }
 }
+
+/** Thrown by the preview endpoint for an unknown, expired, revoked, or already-accepted token —
+ *  the same message and status in every case, mirroring `InvalidInvitationException` on the
+ *  registration path this preview precedes. An unauthenticated endpoint that takes a token as its
+ *  only credential must not let those four cases differ in status, message, or shape; doing so
+ *  would turn the endpoint into an oracle for which tokens exist. */
+export class InvitationInvalidException extends BaseException {
+  constructor(message: string, cause?: unknown) {
+    super(message, HttpStatus.BAD_REQUEST, cause);
+  }
+}

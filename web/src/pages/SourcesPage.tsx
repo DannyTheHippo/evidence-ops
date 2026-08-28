@@ -3,35 +3,55 @@ import { Link } from 'react-router-dom';
 import {
   ApiError,
   createSource,
-  getWorkflowRunById,
   listSources,
-  requestSourceSync,
   updateSource,
   type Source,
   type SourceReachability,
-  type WorkflowRun,
+  type SourceSortField,
+  type SortDirection,
 } from '../api/client';
+import { IconDatabase } from '../components/icons';
 import Badge, { type BadgeTone } from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import Field from '../components/ui/Field';
+import FilterBar from '../components/ui/FilterBar';
+import Input from '../components/ui/Input';
 import Pager from '../components/ui/Pager';
 import Select from '../components/ui/Select';
 import Skeleton from '../components/ui/Skeleton';
+import SortableHeaderCell from '../components/ui/SortableHeaderCell';
 import Table, { RowLink, TableCell, TableHeaderCell, TableRow } from '../components/ui/Table';
+import Timestamp from '../components/ui/Timestamp';
 import { notify } from '../components/ui/toast';
-import { IconDatabase } from '../components/icons';
 import { formatInterval } from '../lib/format-interval';
+import { syncRunLabel, useSourceSync } from '../lib/use-source-sync';
 import { useSession } from '../lib/use-session';
-import { isTerminalRun } from '../lib/workflow-runs';
+import { useUrlState } from '../lib/use-url-state';
 
-const DEFAULT_POLL_INTERVAL_MS = 1500;
 const PAGE_SIZE = 20;
 
 const TRACKED_OPTIONS = [
   { value: 'true', label: 'Synced by a connector' },
   { value: 'false', label: 'Catalogued only' },
 ];
+
+type SourceView = 'tracked' | 'inventory';
+
+// Declared at module scope: `useUrlState` adopts `defaults` once on mount and keeps that
+// identity, but only needs it stable in value — a module-level object satisfies both. Typed as
+// plain `string` fields, not `as const` literals, so the values written back through
+// `setUrlState` — themselves unions like `SourceSortField` — stay assignable. Two skip keys, not
+// one: this page runs two independently paginated lists behind a single switch, and each list
+// keeps its own page position while the other is off screen.
+const URL_DEFAULTS: Record<'view' | 'q' | 'sort' | 'sortDir' | 'skip' | 'invSkip', string> = {
+  view: 'tracked',
+  q: '',
+  sort: 'name',
+  sortDir: 'asc',
+  skip: '0',
+  invSkip: '0',
+};
 
 // live -> verified, possible -> caution (the class is literally badge--possible), prohibited ->
 // neutral. Never `rejected` — that octagon is reserved for verification-grade failure, and
@@ -55,12 +75,17 @@ function sourceStatusTone(source: Source, isPolling: boolean): { tone: BadgeTone
   return { tone: 'verified', label: 'enabled' };
 }
 
-// Keeps the sync action's name stable across its whole lifecycle — 'Sync now' on the button, then
-// this label for the resulting run: an in-flight run always reads as the same gerund, a terminal
-// one as a past-tense confirmation, never `run.status`'s raw enum value.
-function syncRunLabel(run: WorkflowRun): string {
-  if (!isTerminalRun(run.status)) return 'Syncing…';
-  return run.status === 'completed' ? 'Synced' : 'Sync failed';
+// Client-side only: `ListSourcesRequestDto` has no free-text parameter, so this filters whatever
+// page is already on screen rather than the whole list — the `Pager`'s count still reflects the
+// server total for that reason.
+function matchesSearch(source: Source, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return (
+    source.name.toLowerCase().includes(q) ||
+    source.path.toLowerCase().includes(q) ||
+    (source.owner ?? '').toLowerCase().includes(q)
+  );
 }
 
 function SourceRow({
@@ -70,15 +95,13 @@ function SourceRow({
   onToggled,
 }: {
   source: Source;
-  pollIntervalMs: number;
+  pollIntervalMs: number | undefined;
   canManage: boolean;
   onToggled: (updated: Source) => void;
 }) {
   const [toggling, setToggling] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
-  const [starting, setStarting] = useState(false);
-  const [syncError, setSyncError] = useState<string | null>(null);
-  const [run, setRun] = useState<WorkflowRun | null>(null);
+  const { run, isPolling, starting, syncError, startSync } = useSourceSync(pollIntervalMs);
 
   async function handleToggle() {
     setToggling(true);
@@ -93,53 +116,6 @@ function SourceRow({
     }
   }
 
-  async function handleSync() {
-    setStarting(true);
-    setSyncError(null);
-    try {
-      const started = await requestSourceSync(source.id);
-      setRun(started);
-      notify('success', `Sync started for ${source.name}.`);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to start sync';
-      setSyncError(message);
-      notify('error', message);
-    } finally {
-      setStarting(false);
-    }
-  }
-
-  const runId = run?.id;
-  const runStatus = run?.status;
-
-  // Polls the triggered sync's workflow run while it is in flight, stopping the moment its status
-  // reaches a terminal state rather than polling forever. Depends on the id and status values, not
-  // the `run` object, so one interval spans every tick that reports the same status and the poll
-  // cadence stays fixed rather than drifting by the response latency of each tick. `cancelled`
-  // drops a response that lands after this effect is torn down — after unmount, or after a newer
-  // tick moved the run on — instead of overwriting fresher state.
-  useEffect(() => {
-    if (!runId || !runStatus || isTerminalRun(runStatus)) return;
-    let cancelled = false;
-
-    const timer = setInterval(() => {
-      getWorkflowRunById(runId)
-        .then((next) => {
-          if (!cancelled) setRun(next);
-        })
-        .catch((err: unknown) => {
-          if (cancelled) return;
-          setSyncError(err instanceof Error ? err.message : 'Failed to poll sync run');
-        });
-    }, pollIntervalMs);
-
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [runId, runStatus, pollIntervalMs]);
-
-  const isPolling = !!run && !isTerminalRun(run.status);
   const status = sourceStatusTone(source, isPolling);
 
   return (
@@ -167,9 +143,12 @@ function SourceRow({
       </TableCell>
       <TableCell label="Class">{source.sourceClass}</TableCell>
       <TableCell label="Last sync" className="cell-sub">
-        {source.lastSyncAt ? new Date(source.lastSyncAt).toLocaleString() : 'Never synced'}
+        {source.lastSyncAt ? <Timestamp value={source.lastSyncAt} /> : 'Never synced'}
         {source.lastSyncStatus && <div>{source.lastSyncStatus}</div>}
         {source.lastSyncError && <div>{source.lastSyncError}</div>}
+      </TableCell>
+      <TableCell label="Created" className="cell-sub">
+        <Timestamp value={source.createdAt} />
       </TableCell>
       <TableCell label="Files" className="num">
         {source.fileCount}
@@ -186,7 +165,12 @@ function SourceRow({
               {toggling ? 'Updating…' : source.enabled ? 'Disable' : 'Enable'}
             </Button>
           )}
-          <Button variant="primary" size="sm" disabled={starting} onClick={() => void handleSync()}>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={starting}
+            onClick={() => void startSync(source.id, source.name)}
+          >
             {starting ? 'Syncing…' : 'Sync now'}
           </Button>
           {run && (
@@ -232,18 +216,29 @@ function InventoryRow({ source }: { source: Source }) {
         <div className="cell-sub">{source.connectivity}</div>
       </TableCell>
       <TableCell label="Class">{source.sourceClass}</TableCell>
+      <TableCell label="Created" className="cell-sub">
+        <Timestamp value={source.createdAt} />
+      </TableCell>
     </TableRow>
   );
 }
 
+// The status a switchable list is in — loading, blank (an error with nothing to show yet), empty,
+// or ready — mirroring `RecordListStatus`'s shape by hand, since this page renders one of two such
+// regions depending on `view` rather than the single region `RecordListPage` provides.
+type ListStatus =
+  | { kind: 'loading'; label: string }
+  | { kind: 'blank' }
+  | { kind: 'empty'; title: string; description: string }
+  | { kind: 'ready' };
+
 interface SourcesPageProps {
-  // Overridable so tests can poll on a short interval instead of stubbing timers.
+  // Overridable so tests can poll on a short interval instead of stubbing timers. Forwarded to
+  // `useSourceSync`, which supplies the default poll cadence when this is omitted.
   pollIntervalMs?: number;
 }
 
-export default function SourcesPage({
-  pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
-}: SourcesPageProps) {
+export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
   const session = useSession();
   // Fails CLOSED on the still-loading probe too, matching DocumentDetail.tsx's canDelete — a
   // member (or a session that hasn't resolved yet) never sees the create form or a toggle flash in
@@ -253,15 +248,25 @@ export default function SourcesPage({
   // never told they are not one while the session resolves.
   const sessionResolved = session.status !== 'loading';
 
+  const [urlState, setUrlState] = useUrlState(URL_DEFAULTS);
+  const view = urlState.view as SourceView;
+  const appliedQ = urlState.q;
+  const sort = urlState.sort as SourceSortField;
+  const sortDir = urlState.sortDir as SortDirection;
+  const trackedSkip = Number(urlState.skip);
+  const inventorySkip = Number(urlState.invSkip);
+
+  // Only this, not the search input's own value, drives the client-side filter — search applies
+  // on submit, not on every keystroke, matching every other list page's filter bar.
+  const [draftQ, setDraftQ] = useState(appliedQ);
+
   const [trackedSources, setTrackedSources] = useState<Source[] | null>(null);
   const [trackedCount, setTrackedCount] = useState(0);
   const [trackedError, setTrackedError] = useState<string | null>(null);
-  const [trackedSkip, setTrackedSkip] = useState(0);
 
   const [inventorySources, setInventorySources] = useState<Source[] | null>(null);
   const [inventoryCount, setInventoryCount] = useState(0);
   const [inventoryError, setInventoryError] = useState<string | null>(null);
-  const [inventorySkip, setInventorySkip] = useState(0);
 
   const [name, setName] = useState('');
   const [path, setPath] = useState('');
@@ -277,8 +282,11 @@ export default function SourcesPage({
   // `disabled={creating}` alone only takes effect once React has committed it.
   const createInFlightRef = useRef(false);
 
+  // Both lists load regardless of which one is on screen — the create form below reloads
+  // whichever list a new source actually lands in, and that logic stays correct only if both
+  // stay live rather than one going stale while it is switched away from.
   const loadTracked = useCallback(() => {
-    return listSources({ tracked: true, skip: trackedSkip, limit: PAGE_SIZE })
+    return listSources({ tracked: true, skip: trackedSkip, limit: PAGE_SIZE, sort, sortDir })
       .then(({ docs, count: total }) => {
         setTrackedSources(docs);
         setTrackedCount(total);
@@ -287,14 +295,14 @@ export default function SourcesPage({
       .catch((err: unknown) => {
         setTrackedError(err instanceof Error ? err.message : 'Failed to load sources');
       });
-  }, [trackedSkip]);
+  }, [trackedSkip, sort, sortDir]);
 
   useEffect(() => {
     void loadTracked();
   }, [loadTracked]);
 
   const loadInventory = useCallback(() => {
-    return listSources({ tracked: false, skip: inventorySkip, limit: PAGE_SIZE })
+    return listSources({ tracked: false, skip: inventorySkip, limit: PAGE_SIZE, sort, sortDir })
       .then(({ docs, count: total }) => {
         setInventorySources(docs);
         setInventoryCount(total);
@@ -303,7 +311,7 @@ export default function SourcesPage({
       .catch((err: unknown) => {
         setInventoryError(err instanceof Error ? err.message : 'Failed to load inventory sources');
       });
-  }, [inventorySkip]);
+  }, [inventorySkip, sort, sortDir]);
 
   useEffect(() => {
     void loadInventory();
@@ -325,16 +333,15 @@ export default function SourcesPage({
         tracked: tracked === 'true',
         intervalMs: intervalMs.trim() ? Number(intervalMs) : undefined,
       });
-      // A source created untracked belongs in the inventory list, not the synced one — reload
-      // whichever list the new row actually landed in from the server, rather than prepending it
-      // optimistically into the wrong one.
+      // A source created untracked belongs in the inventory list, not the synced one — switch the
+      // page to whichever list the new row actually landed in and reload it from the server,
+      // rather than prepending it optimistically into the wrong one.
       if (created.tracked) {
         if (trackedSkip === 0) void loadTracked();
-        else setTrackedSkip(0);
-      } else if (inventorySkip === 0) {
-        void loadInventory();
+        setUrlState({ view: 'tracked', skip: URL_DEFAULTS.skip });
       } else {
-        setInventorySkip(0);
+        if (inventorySkip === 0) void loadInventory();
+        setUrlState({ view: 'inventory', invSkip: URL_DEFAULTS.invSkip });
       }
       notify('success', `Added ${created.name}.`);
       setName('');
@@ -361,6 +368,75 @@ export default function SourcesPage({
     setTrackedSources(
       (current) => current?.map((s) => (s.id === updated.id ? updated : s)) ?? current,
     );
+  }
+
+  function handleSwitchView(nextView: SourceView) {
+    if (nextView === view) return;
+    const patch: Partial<typeof urlState> = { view: nextView };
+    // `lastSyncAt` has no column on the inventory table — an untracked source is never synced, so
+    // the value is always absent there. Carrying that sort across the switch would leave a column
+    // header claiming a direction for a column that isn't rendered.
+    if (nextView === 'inventory' && sort === 'lastSyncAt') {
+      patch.sort = URL_DEFAULTS.sort;
+      patch.sortDir = URL_DEFAULTS.sortDir;
+    }
+    setUrlState(patch);
+  }
+
+  function handleSort(field: SourceSortField) {
+    // Switching to a different column always starts it at `desc`; clicking the active column
+    // toggles direction. A per-field default direction would make a URL written by one column
+    // read back with the wrong direction once shared or reloaded, since `useUrlState` carries
+    // exactly one default `sortDir` for every field.
+    const nextDir: SortDirection = field === sort && sortDir === 'desc' ? 'asc' : 'desc';
+    const patch: Partial<typeof urlState> = { sort: field, sortDir: nextDir };
+    if (view === 'tracked') patch.skip = URL_DEFAULTS.skip;
+    else patch.invSkip = URL_DEFAULTS.invSkip;
+    setUrlState(patch);
+  }
+
+  function handleApplySearch() {
+    setUrlState({ q: draftQ, skip: URL_DEFAULTS.skip, invSkip: URL_DEFAULTS.invSkip });
+  }
+
+  function handleClearSearch() {
+    setDraftQ('');
+    setUrlState({ q: '', skip: URL_DEFAULTS.skip, invSkip: URL_DEFAULTS.invSkip });
+  }
+
+  const hasFilter = appliedQ !== '';
+  const activeSources = view === 'tracked' ? trackedSources : inventorySources;
+  const activeCount = view === 'tracked' ? trackedCount : inventoryCount;
+  const activeError = view === 'tracked' ? trackedError : inventoryError;
+  const activeSkip = view === 'tracked' ? trackedSkip : inventorySkip;
+  const filteredSources =
+    activeSources?.filter((source) => matchesSearch(source, appliedQ)) ?? null;
+
+  let status: ListStatus;
+  if (activeSources === null) {
+    status = activeError
+      ? { kind: 'blank' }
+      : { kind: 'loading', label: view === 'tracked' ? 'Loading sources…' : 'Loading inventory…' };
+  } else if (filteredSources && filteredSources.length === 0) {
+    status = hasFilter
+      ? {
+          kind: 'empty',
+          title:
+            view === 'tracked'
+              ? 'No sources match your search'
+              : 'No repositories match your search',
+          description: 'Clear or adjust the search above.',
+        }
+      : {
+          kind: 'empty',
+          title: view === 'tracked' ? 'No sources yet' : 'No inventory-only repositories yet',
+          description:
+            view === 'tracked'
+              ? 'A source is a watched folder that keeps this data room current — use the form above to add one.'
+              : 'A repository with no connector still belongs in the estate map — add one and leave it catalogued only.',
+        };
+  } else {
+    status = { kind: 'ready' };
   }
 
   return (
@@ -450,45 +526,99 @@ export default function SourcesPage({
         )}
       </section>
 
-      <div className="section-head">
-        <h2 className="card-title">Synced sources</h2>
+      {/*
+        Two independently paginated lists behind one switch, not `RecordListPage` — that scaffold
+        carries exactly one status region and one footer, and this page needs one of each per list
+        rather than stacking both lists' regions on screen at once.
+      */}
+      <div className="control-row" role="group" aria-label="Source list">
+        <Button
+          type="button"
+          variant={view === 'tracked' ? 'primary' : 'secondary'}
+          aria-pressed={view === 'tracked'}
+          onClick={() => handleSwitchView('tracked')}
+        >
+          Tracked sources
+        </Button>
+        <Button
+          type="button"
+          variant={view === 'inventory' ? 'primary' : 'secondary'}
+          aria-pressed={view === 'inventory'}
+          onClick={() => handleSwitchView('inventory')}
+        >
+          Repository inventory
+        </Button>
       </div>
 
-      {trackedError && (
+      <FilterBar onApply={handleApplySearch} onClear={handleClearSearch} hasFilter={hasFilter}>
+        <Input
+          label="Search"
+          value={draftQ}
+          onChange={setDraftQ}
+          placeholder="Name, path or owner"
+        />
+      </FilterBar>
+
+      {activeError && (
         <p className="error error--page" role="alert">
-          {trackedError}
+          {activeError}
         </p>
       )}
 
-      {!trackedSources && !trackedError && <Skeleton label="Loading sources…" />}
+      {status.kind === 'loading' && <Skeleton label={status.label} />}
 
-      {trackedSources && trackedSources.length === 0 && trackedCount === 0 && (
+      {status.kind === 'empty' && (
         <EmptyState
           icon={<IconDatabase size={24} />}
-          title="No sources yet"
-          description="A source is a watched folder that keeps this data room current — use the form above to add one."
+          title={status.title}
+          description={status.description}
         />
       )}
 
-      {trackedSources && trackedSources.length > 0 && (
+      {status.kind === 'ready' && filteredSources && view === 'tracked' && (
         <section className="panel">
           <Table caption="Sources syncing documents into this data room">
             <thead>
               <tr>
-                <TableHeaderCell>Name</TableHeaderCell>
+                <SortableHeaderCell<SourceSortField>
+                  field="name"
+                  label="Name"
+                  sort={sort}
+                  direction={sortDir}
+                  onSort={handleSort}
+                />
                 <TableHeaderCell>Path</TableHeaderCell>
-                <TableHeaderCell>Owner</TableHeaderCell>
+                <SortableHeaderCell<SourceSortField>
+                  field="owner"
+                  label="Owner"
+                  sort={sort}
+                  direction={sortDir}
+                  onSort={handleSort}
+                />
                 <TableHeaderCell>Interval</TableHeaderCell>
                 <TableHeaderCell>Status</TableHeaderCell>
                 <TableHeaderCell>Reach</TableHeaderCell>
                 <TableHeaderCell>Class</TableHeaderCell>
-                <TableHeaderCell>Last sync</TableHeaderCell>
+                <SortableHeaderCell<SourceSortField>
+                  field="lastSyncAt"
+                  label="Last sync"
+                  sort={sort}
+                  direction={sortDir}
+                  onSort={handleSort}
+                />
+                <SortableHeaderCell<SourceSortField>
+                  field="createdAt"
+                  label="Created"
+                  sort={sort}
+                  direction={sortDir}
+                  onSort={handleSort}
+                />
                 <TableHeaderCell>Files</TableHeaderCell>
                 <TableHeaderCell>Actions</TableHeaderCell>
               </tr>
             </thead>
             <tbody>
-              {trackedSources.map((source) => (
+              {filteredSources.map((source) => (
                 <SourceRow
                   key={source.id}
                   source={source}
@@ -502,50 +632,39 @@ export default function SourcesPage({
         </section>
       )}
 
-      {trackedSources && (
-        <Pager
-          count={trackedCount}
-          skip={trackedSkip}
-          pageSize={PAGE_SIZE}
-          onSkipChange={setTrackedSkip}
-        />
-      )}
-
-      <div className="section-head">
-        <h2 className="card-title">Inventory</h2>
-        <span className="card-meta card-meta--end">Catalogued, never synced.</span>
-      </div>
-
-      {inventoryError && (
-        <p className="error error--page" role="alert">
-          {inventoryError}
-        </p>
-      )}
-
-      {!inventorySources && !inventoryError && <Skeleton label="Loading inventory…" />}
-
-      {inventorySources && inventorySources.length === 0 && inventoryCount === 0 && (
-        <EmptyState
-          icon={<IconDatabase size={24} />}
-          title="No inventory-only repositories yet"
-          description="A repository with no connector still belongs in the estate map — add one and leave it catalogued only."
-        />
-      )}
-
-      {inventorySources && inventorySources.length > 0 && (
+      {status.kind === 'ready' && filteredSources && view === 'inventory' && (
         <section className="panel">
           <Table caption="Repositories catalogued for the estate but never synced">
             <thead>
               <tr>
-                <TableHeaderCell>Name</TableHeaderCell>
+                <SortableHeaderCell<SourceSortField>
+                  field="name"
+                  label="Name"
+                  sort={sort}
+                  direction={sortDir}
+                  onSort={handleSort}
+                />
                 <TableHeaderCell>Path</TableHeaderCell>
-                <TableHeaderCell>Owner</TableHeaderCell>
+                <SortableHeaderCell<SourceSortField>
+                  field="owner"
+                  label="Owner"
+                  sort={sort}
+                  direction={sortDir}
+                  onSort={handleSort}
+                />
                 <TableHeaderCell>Reach</TableHeaderCell>
                 <TableHeaderCell>Class</TableHeaderCell>
+                <SortableHeaderCell<SourceSortField>
+                  field="createdAt"
+                  label="Created"
+                  sort={sort}
+                  direction={sortDir}
+                  onSort={handleSort}
+                />
               </tr>
             </thead>
             <tbody>
-              {inventorySources.map((source) => (
+              {filteredSources.map((source) => (
                 <InventoryRow key={source.id} source={source} />
               ))}
             </tbody>
@@ -553,12 +672,14 @@ export default function SourcesPage({
         </section>
       )}
 
-      {inventorySources && (
+      {activeSources && (
         <Pager
-          count={inventoryCount}
-          skip={inventorySkip}
+          count={activeCount}
+          skip={activeSkip}
           pageSize={PAGE_SIZE}
-          onSkipChange={setInventorySkip}
+          onSkipChange={(next) =>
+            setUrlState(view === 'tracked' ? { skip: String(next) } : { invSkip: String(next) })
+          }
         />
       )}
     </div>

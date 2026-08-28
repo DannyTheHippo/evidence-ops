@@ -1,17 +1,34 @@
 import { useCallback, useEffect, useState } from 'react';
-import { deleteCanonicalEntity, listCanonicalEntities, type CanonicalEntity } from '../api/client';
+import {
+  deleteCanonicalEntity,
+  listCanonicalEntities,
+  type CanonicalEntity,
+  type CanonicalEntitySortField,
+  type SortDirection,
+} from '../api/client';
 import { IconTag } from '../components/icons';
+import RecordListPage, { type RecordListStatus } from '../components/RecordListPage';
 import Button from '../components/ui/Button';
-import Dialog from '../components/ui/Dialog';
-import EmptyState from '../components/ui/EmptyState';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Pager from '../components/ui/Pager';
-import Skeleton from '../components/ui/Skeleton';
+import SortableHeaderCell from '../components/ui/SortableHeaderCell';
 import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
 import { notify } from '../components/ui/toast';
+import { useUrlState } from '../lib/use-url-state';
 import EntityEditorDialog from './canonical-entities/EntityEditorDialog';
 import ProposalsQueue from './canonical-entities/ProposalsQueue';
 
 const PAGE_SIZE = 25;
+
+// Declared at module scope; see AnswersPage for why `useUrlState` only needs `defaults` stable in
+// value, not identity. Sorts on the normalised name — the field the unique index and the server's
+// default order are built on — while every row still renders the raw, operator-authored
+// `canonicalName`; the registry is read by name, not by recency, hence ascending.
+const URL_DEFAULTS: Record<'sort' | 'sortDir' | 'skip', string> = {
+  sort: 'canonicalNameNormalized',
+  sortDir: 'asc',
+  skip: '0',
+};
 
 function EntityRow({
   entity,
@@ -52,45 +69,36 @@ function EntityRow({
         <Button variant="secondary" size="sm" onClick={() => setConfirmOpen(true)}>
           Delete
         </Button>
-        <Dialog
+        <ConfirmDialog
           open={confirmOpen}
           onClose={() => setConfirmOpen(false)}
           title={`Delete "${entity.canonicalName}"?`}
-        >
-          <p>
-            Deleting removes this canonical mapping only. Facts already extracted keep whatever
-            entity they were grouped under — this does not retroactively regroup them. This cannot
-            be undone.
-          </p>
-          <div className="form-actions">
-            <Button variant="ghost" onClick={() => setConfirmOpen(false)}>
-              Cancel
-            </Button>
-            <Button variant="danger" disabled={deleting} onClick={() => void handleDelete()}>
-              {deleting ? 'Deleting…' : 'Delete entity'}
-            </Button>
-          </div>
-          {deleteError && (
-            <p className="error" role="alert">
-              {deleteError}
-            </p>
-          )}
-        </Dialog>
+          body="Deleting removes this canonical mapping only. Facts already extracted keep whatever entity they were grouped under — this does not retroactively regroup them. This cannot be undone."
+          confirmLabel="Delete entity"
+          destructive
+          busy={deleting}
+          error={deleteError ?? undefined}
+          onConfirm={() => void handleDelete()}
+        />
       </TableCell>
     </tr>
   );
 }
 
 export default function CanonicalEntitiesPage() {
+  const [urlState, setUrlState] = useUrlState(URL_DEFAULTS);
+  const sort = urlState.sort as CanonicalEntitySortField;
+  const sortDir = urlState.sortDir as SortDirection;
+  const skip = Number(urlState.skip);
+
   const [entities, setEntities] = useState<CanonicalEntity[] | null>(null);
   const [count, setCount] = useState(0);
-  const [skip, setSkip] = useState(0);
   const [error, setError] = useState<string | null>(null);
   // 'new' opens the dialog in create mode; an entity opens it prefilled for that row.
   const [editorTarget, setEditorTarget] = useState<CanonicalEntity | 'new' | null>(null);
 
   const load = useCallback(() => {
-    return listCanonicalEntities({ skip, limit: PAGE_SIZE })
+    return listCanonicalEntities({ skip, limit: PAGE_SIZE, sort, sortDir })
       .then(({ docs, count: total }) => {
         setEntities(docs);
         setCount(total);
@@ -99,7 +107,7 @@ export default function CanonicalEntitiesPage() {
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'Failed to load canonical entities');
       });
-  }, [skip]);
+  }, [skip, sort, sortDir]);
 
   useEffect(() => {
     void load();
@@ -130,77 +138,85 @@ export default function CanonicalEntitiesPage() {
     );
   }
 
+  function handleSort(field: CanonicalEntitySortField) {
+    const nextDir: SortDirection = field === sort && sortDir === 'desc' ? 'asc' : 'desc';
+    setUrlState({ sort: field, sortDir: nextDir, skip: URL_DEFAULTS.skip });
+  }
+
+  let status: RecordListStatus;
+  if (entities === null) {
+    status = error ? { kind: 'blank' } : { kind: 'loading', label: 'Loading canonical entities…' };
+  } else if (entities.length === 0) {
+    status = {
+      kind: 'empty',
+      icon: <IconTag size={24} />,
+      title: 'No canonical entities registered yet',
+      description:
+        'Add one to start grouping alternate spellings of a property under a single canonical name.',
+    };
+  } else {
+    status = { kind: 'ready' };
+  }
+
   return (
-    <div className="view">
-      <div className="page-head">
-        <div>
-          <span className="eyebrow">Admin</span>
-          <h1 className="page-title">Canonical Entities</h1>
-          <p className="page-sub">
-            Confirm or reject proposed spellings below, or register one yourself — an unregistered
-            property never has its conflicts surfaced, and renaming or deleting a row here does not
-            retroactively regroup facts already extracted.
-          </p>
-        </div>
-      </div>
-
-      {error && (
-        <p className="error error--page" role="alert">
-          {error}
-        </p>
-      )}
-
-      {!entities && !error && <Skeleton label="Loading canonical entities…" />}
-
-      {entities && (
-        <ProposalsQueue
-          entities={entities}
-          onEntityChanged={handleEntityChanged}
-          onScanned={load}
-        />
-      )}
-
-      {entities && (
+    <RecordListPage
+      eyebrow="Admin"
+      title="Canonical Entities"
+      description="Confirm or reject proposed spellings below, or register one yourself — an unregistered property never has its conflicts surfaced, and renaming or deleting a row here does not retroactively regroup facts already extracted."
+      actions={
+        <Button variant="primary" onClick={() => setEditorTarget('new')}>
+          Add entity
+        </Button>
+      }
+      filters={
+        entities && (
+          <ProposalsQueue
+            entities={entities}
+            onEntityChanged={handleEntityChanged}
+            onScanned={load}
+          />
+        )
+      }
+      error={error ?? undefined}
+      status={status}
+      footer={
+        entities && (
+          <Pager
+            count={count}
+            skip={skip}
+            pageSize={PAGE_SIZE}
+            onSkipChange={(next) => setUrlState({ skip: String(next) })}
+          />
+        )
+      }
+    >
+      {entities && entities.length > 0 && (
         <section className="panel">
-          <div className="card-head">
-            <h2 className="card-title">Registered entities</h2>
-            <Button variant="primary" onClick={() => setEditorTarget('new')}>
-              Add entity
-            </Button>
-          </div>
-
-          {entities.length === 0 && (
-            <EmptyState
-              className="empty-state--inline"
-              icon={<IconTag size={24} />}
-              title="No canonical entities registered yet"
-              description="Add one above to start grouping alternate spellings of a property under a single canonical name."
-            />
-          )}
-
-          {entities.length > 0 && (
-            <Table caption="Registered canonical entities and their aliases.">
-              <thead>
-                <tr>
-                  <TableHeaderCell>Canonical name</TableHeaderCell>
-                  <TableHeaderCell>Aliases</TableHeaderCell>
-                  <TableHeaderCell>Actions</TableHeaderCell>
-                </tr>
-              </thead>
-              <tbody>
-                {entities.map((entity) => (
-                  <EntityRow
-                    key={entity.id}
-                    entity={entity}
-                    onEdit={setEditorTarget}
-                    onDeleted={handleDeleted}
-                  />
-                ))}
-              </tbody>
-            </Table>
-          )}
-
-          <Pager count={count} skip={skip} pageSize={PAGE_SIZE} onSkipChange={setSkip} />
+          <Table caption="Registered canonical entities and their aliases.">
+            <thead>
+              <tr>
+                <SortableHeaderCell<CanonicalEntitySortField>
+                  field="canonicalNameNormalized"
+                  label="Canonical name"
+                  sort={sort}
+                  direction={sortDir}
+                  onSort={handleSort}
+                />
+                <TableHeaderCell>Aliases</TableHeaderCell>
+                <TableHeaderCell>Actions</TableHeaderCell>
+              </tr>
+            </thead>
+            <tbody>
+              {entities.map((entity) => (
+                <EntityRow
+                  key={entity.id}
+                  entity={entity}
+                  onEdit={setEditorTarget}
+                  onDeleted={handleDeleted}
+                />
+              ))}
+            </tbody>
+          </Table>
         </section>
       )}
 
@@ -211,6 +227,6 @@ export default function CanonicalEntitiesPage() {
           onSaved={handleSaved}
         />
       )}
-    </div>
+    </RecordListPage>
   );
 }

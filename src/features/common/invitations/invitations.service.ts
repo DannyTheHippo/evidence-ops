@@ -69,6 +69,12 @@ export interface VerifiedInvitation {
   readonly role: UserRole;
 }
 
+export interface InvitationPreview {
+  readonly email: string;
+  readonly role: UserRole;
+  readonly invitedBy?: string;
+}
+
 @Injectable()
 export class InvitationsService {
   constructor(
@@ -160,31 +166,16 @@ export class InvitationsService {
   }
 
   /**
-   * Fails CLOSED at every step: a malformed token, an unrecognized hash, an expired, revoked, or
-   * already-redeemed invitation all return `null` rather than an identity — never throws. Read-only:
-   * this checks whether a token is currently valid, it does not consume it. Consumption happens in
-   * `accept`, which `AuthService.registerWithInvitation` calls once it has reserved a user id but
-   * before it creates the user, so two concurrent redemptions of the same token cannot both proceed
-   * to `create`.
+   * `findLiveInvitation` fails CLOSED at every step, so a malformed token, an unrecognized hash, an
+   * expired, revoked, or already-redeemed invitation all return `null` here too — never throws.
+   * Read-only: this checks whether a token is currently valid, it does not consume it. Consumption
+   * happens in `accept`, which `AuthService.registerWithInvitation` calls once it has reserved a
+   * user id but before it creates the user, so two concurrent redemptions of the same token cannot
+   * both proceed to `create`.
    */
   async verify(presentedToken: string): Promise<VerifiedInvitation | null> {
-    if (presentedToken.length !== TOKEN_LENGTH || !presentedToken.startsWith(TOKEN_PREFIX)) {
-      return null;
-    }
-
-    const computedHash = this.hash(presentedToken);
-    const invitation = await this.invitationModel.findOne({ tokenHash: computedHash });
-    if (!invitation || !this.digestsMatch(computedHash, invitation.tokenHash)) {
-      return null;
-    }
-
-    if (invitation.acceptedAt) {
-      return null;
-    }
-    if (invitation.revokedAt) {
-      return null;
-    }
-    if (invitation.expiresAt.getTime() < Date.now()) {
+    const invitation = await this.findLiveInvitation(presentedToken);
+    if (!invitation) {
       return null;
     }
 
@@ -193,6 +184,31 @@ export class InvitationsService {
       tenantId: invitation.tenantId,
       email: invitation.email,
       role: invitation.role,
+    };
+  }
+
+  /**
+   * The unauthenticated counterpart to `verify`: what an invite-page visitor may learn about their
+   * own token before they commit to a password. Shares `findLiveInvitation`, so an unknown,
+   * expired, revoked, or already-accepted token is refused identically here too — `null`, never a
+   * distinguishing error. Resolves `createdBy` to the inviting admin's email for display; that
+   * admin's account existing is not the secret this endpoint protects; the invited email's account
+   * status is, and this never queries for it.
+   */
+  async preview(presentedToken: string): Promise<InvitationPreview | null> {
+    const invitation = await this.findLiveInvitation(presentedToken);
+    if (!invitation) {
+      return null;
+    }
+
+    const inviter = invitation.createdBy
+      ? await this.userModel.findById(invitation.createdBy)
+      : null;
+
+    return {
+      email: invitation.email,
+      role: invitation.role,
+      invitedBy: inviter?.email,
     };
   }
 
@@ -319,6 +335,38 @@ export class InvitationsService {
       expiresAt,
       createdAt: invitation.createdAt,
     };
+  }
+
+  /**
+   * Shared by `verify` and `preview`: fails CLOSED at every step, a malformed token, an
+   * unrecognized hash, an expired, revoked, or already-redeemed invitation all resolve to `null`
+   * rather than a document — never throws. Read-only: this checks whether a token is currently
+   * valid, it does not consume it. Consumption happens in `accept`, which
+   * `AuthService.registerWithInvitation` calls once it has reserved a user id but before it creates
+   * the user, so two concurrent redemptions of the same token cannot both proceed to `create`.
+   */
+  private async findLiveInvitation(presentedToken: string): Promise<InvitationDocument | null> {
+    if (presentedToken.length !== TOKEN_LENGTH || !presentedToken.startsWith(TOKEN_PREFIX)) {
+      return null;
+    }
+
+    const computedHash = this.hash(presentedToken);
+    const invitation = await this.invitationModel.findOne({ tokenHash: computedHash });
+    if (!invitation || !this.digestsMatch(computedHash, invitation.tokenHash)) {
+      return null;
+    }
+
+    if (invitation.acceptedAt) {
+      return null;
+    }
+    if (invitation.revokedAt) {
+      return null;
+    }
+    if (invitation.expiresAt.getTime() < Date.now()) {
+      return null;
+    }
+
+    return invitation;
   }
 
   /** `timingSafeEqual` throws on unequal-length buffers rather than returning `false` — sha256 hex

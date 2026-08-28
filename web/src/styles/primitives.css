@@ -484,6 +484,27 @@
   }
 }
 
+/* `.card` used as a clickable queue row in a master-detail pane. It carries only the button reset
+   `.card` doesn't have as a plain `<div>` — border, background, padding and margin all come from
+   `.card` unchanged, so `.queue-item` is always written alongside it, never on its own. The
+   `--signal-line`/`--signal-soft` pairing on `.is-active` is the one
+   `.value-compare-item--recommended` uses, so "selected" reads the same across both panes. */
+.queue-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.queue-item:hover {
+  background: var(--surface-2);
+}
+.queue-item.is-active {
+  border-color: var(--signal-line);
+  background: var(--signal-soft);
+}
+
 /* ── Field / Select ──────────────────────────────────────────────────────── */
 
 .field {

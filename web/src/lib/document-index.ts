@@ -1,4 +1,4 @@
-import { lookupDocumentVersions } from '../api/client';
+import { lookupDocumentVersions, type DocumentSourceKind } from '../api/client';
 
 export interface ResolvedVersion {
   documentId: string;
@@ -6,6 +6,10 @@ export interface ResolvedVersion {
   // Whether the document version currently carries withdrawnAt — the source file behind a
   // resolved citation is no longer at its origin, even though the citation itself stays genuine.
   withdrawn: boolean;
+  // The document's own file kind — distinct from a citation's locator kind, which a csv/tsv
+  // extractor may record as `text-block` rather than a spreadsheet-shaped locator. Optional so a
+  // caller building this map by hand (existing component tests) is not forced to supply it.
+  sourceKind?: DocumentSourceKind;
 }
 
 /**
@@ -28,6 +32,7 @@ export async function resolveDocumentVersions(
       documentId: doc.documentId,
       documentTitle: doc.documentTitle,
       withdrawn: doc.withdrawn,
+      sourceKind: doc.sourceKind,
     });
   }
   return index;

@@ -1,21 +1,26 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   listAuditEvents,
   type AuditEventOrigin,
+  type AuditEventSortField,
   type AuditEventSubject,
   type AuditEventView,
+  type SortDirection,
 } from '../api/client';
-import { IconClipboard } from '../components/icons';
+import { IconClipboard, IconSearch } from '../components/icons';
+import RecordListPage, { type RecordListStatus } from '../components/RecordListPage';
 import Badge from '../components/ui/Badge';
-import Button from '../components/ui/Button';
-import EmptyState from '../components/ui/EmptyState';
-import Field from '../components/ui/Field';
+import FilterBar from '../components/ui/FilterBar';
+import IconButton from '../components/ui/IconButton';
+import Input from '../components/ui/Input';
 import Pager from '../components/ui/Pager';
 import Select from '../components/ui/Select';
-import Skeleton from '../components/ui/Skeleton';
+import SortableHeaderCell from '../components/ui/SortableHeaderCell';
 import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
+import Timestamp from '../components/ui/Timestamp';
 import { shortId } from '../lib/identifiers';
+import { useUrlState } from '../lib/use-url-state';
 
 const PAGE_SIZE = 25;
 
@@ -28,20 +33,6 @@ const ENTITY_ROUTE_BASE: Partial<Record<string, string>> = {
   Source: '/sources',
   WorkflowRun: '/workflow-runs',
 };
-
-function AuditSubject({ subject }: { subject: AuditEventSubject }) {
-  const base = ENTITY_ROUTE_BASE[subject.entityType];
-  const label = `${subject.entityType} ${shortId(subject.entityId)}`;
-  return base ? (
-    <Link to={`${base}/${subject.entityId}`} className="cell-truncate" title={subject.entityId}>
-      {label}
-    </Link>
-  ) : (
-    <span className="cell-truncate" title={subject.entityId}>
-      {label}
-    </span>
-  );
-}
 
 // `subject.entityType` carries no schema-level enum — every audit-emitting service call site
 // (api-keys, approvals, audit-events, conflicts, documents, qa, retrieval, sources,
@@ -82,41 +73,83 @@ const REFUSAL_REASON_OPTIONS = [
   { value: 'invalid-arguments', label: 'invalid-arguments' },
 ];
 
+// Declared at module scope: `useUrlState` adopts `defaults` once on mount and keeps that
+// identity, but only needs it stable in value — a module-level object satisfies both.
+const URL_DEFAULTS: Record<
+  'action' | 'entityType' | 'entityId' | 'origin' | 'refusalReason' | 'sort' | 'sortDir' | 'skip',
+  string
+> = {
+  action: '',
+  entityType: '',
+  entityId: '',
+  origin: '',
+  refusalReason: '',
+  sort: 'createdAt',
+  sortDir: 'desc',
+  skip: '0',
+};
+
+function AuditSubject({
+  subject,
+  onFilterToEntity,
+}: {
+  subject: AuditEventSubject;
+  onFilterToEntity: (subject: AuditEventSubject) => void;
+}) {
+  const base = ENTITY_ROUTE_BASE[subject.entityType];
+  const label = `${subject.entityType} ${shortId(subject.entityId)}`;
+  return (
+    <>
+      {base ? (
+        <Link to={`${base}/${subject.entityId}`} className="cell-truncate" title={subject.entityId}>
+          {label}
+        </Link>
+      ) : (
+        <span className="cell-truncate" title={subject.entityId}>
+          {label}
+        </span>
+      )}
+      <IconButton
+        icon={<IconSearch size={14} />}
+        aria-label={`Filter to ${label}`}
+        variant="ghost"
+        size="sm"
+        onClick={() => onFilterToEntity(subject)}
+      />
+    </>
+  );
+}
+
 export default function AuditEventsPage() {
+  const [urlState, setUrlState] = useUrlState(URL_DEFAULTS);
+  const appliedOrigin = urlState.origin as AuditEventOrigin | '';
+  const sort = urlState.sort as AuditEventSortField;
+  const sortDir = urlState.sortDir as SortDirection;
+  const skip = Number(urlState.skip);
+
+  // Only these, not the controls' own values, drive the fetch — filters apply on submit, not on
+  // every keystroke or selection change.
+  const [draftAction, setDraftAction] = useState(urlState.action);
+  const [draftEntityType, setDraftEntityType] = useState(urlState.entityType);
+  const [draftEntityId, setDraftEntityId] = useState(urlState.entityId);
+  const [draftOrigin, setDraftOrigin] = useState(appliedOrigin);
+  const [draftRefusalReason, setDraftRefusalReason] = useState(urlState.refusalReason);
+
   const [events, setEvents] = useState<AuditEventView[] | null>(null);
   const [count, setCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [skip, setSkip] = useState(0);
-  const [action, setAction] = useState('');
-  const [entityType, setEntityType] = useState('');
-  const [entityId, setEntityId] = useState('');
-  const [origin, setOrigin] = useState<AuditEventOrigin | ''>('');
-  const [refusalReason, setRefusalReason] = useState('');
-  // Committed filter values — only these, not the input state, drive the fetch. Otherwise every
-  // keystroke would refire the request instead of waiting for the filter form to be submitted.
-  const [appliedFilters, setAppliedFilters] = useState<{
-    action: string;
-    entityType: string;
-    entityId: string;
-    origin: AuditEventOrigin | '';
-    refusalReason: string;
-  }>({
-    action: '',
-    entityType: '',
-    entityId: '',
-    origin: '',
-    refusalReason: '',
-  });
 
   useEffect(() => {
     listAuditEvents({
       skip,
       limit: PAGE_SIZE,
-      action: appliedFilters.action || undefined,
-      entityType: appliedFilters.entityType || undefined,
-      entityId: appliedFilters.entityId || undefined,
-      origin: appliedFilters.origin === '' ? undefined : appliedFilters.origin,
-      refusalReason: appliedFilters.refusalReason || undefined,
+      action: urlState.action || undefined,
+      entityType: urlState.entityType || undefined,
+      entityId: urlState.entityId || undefined,
+      origin: appliedOrigin === '' ? undefined : appliedOrigin,
+      refusalReason: urlState.refusalReason || undefined,
+      sort,
+      sortDir,
     })
       .then(({ docs, count: total }) => {
         setEvents(docs);
@@ -126,112 +159,171 @@ export default function AuditEventsPage() {
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'Failed to load audit events');
       });
-  }, [skip, appliedFilters]);
+  }, [
+    skip,
+    urlState.action,
+    urlState.entityType,
+    urlState.entityId,
+    appliedOrigin,
+    urlState.refusalReason,
+    sort,
+    sortDir,
+  ]);
 
-  function handleFilter(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setSkip(0);
-    setAppliedFilters({
-      action: action.trim(),
-      entityType: entityType.trim(),
-      entityId: entityId.trim(),
-      origin,
-      refusalReason,
+  function handleApply() {
+    setUrlState({
+      action: draftAction,
+      entityType: draftEntityType,
+      entityId: draftEntityId,
+      origin: draftOrigin,
+      refusalReason: draftRefusalReason,
+      skip: URL_DEFAULTS.skip,
     });
   }
 
-  return (
-    <div className="view">
-      <div className="page-head">
-        <div>
-          <span className="eyebrow">Admin</span>
-          <h1 className="page-title">Audit Log</h1>
-          <p className="page-sub">
-            Every recorded action, filterable by action, entity type, id, origin or refusal reason.
-          </p>
-        </div>
-      </div>
+  function handleClear() {
+    setDraftAction('');
+    setDraftEntityType('');
+    setDraftEntityId('');
+    setDraftOrigin('');
+    setDraftRefusalReason('');
+    setUrlState({
+      action: '',
+      entityType: '',
+      entityId: '',
+      origin: '',
+      refusalReason: '',
+      skip: URL_DEFAULTS.skip,
+    });
+  }
 
-      <section className="card">
-        <div className="card-head">
-          <h2 className="card-title">Filters</h2>
-        </div>
-        <form onSubmit={handleFilter} className="form">
-          <Field label="Action">
-            {(inputProps) => (
-              <input
-                type="text"
-                value={action}
-                onChange={(e) => setAction(e.target.value)}
-                placeholder="document.deleted"
-                {...inputProps}
-              />
-            )}
-          </Field>
+  // The only no-paste route to a specific entity id: a reader has no ObjectId to hand, but every
+  // subject already on screen has one. Updates the drafts too, so the filter form reflects what
+  // just got applied rather than reading stale.
+  function handleFilterToEntity(subject: AuditEventSubject) {
+    setDraftEntityType(subject.entityType);
+    setDraftEntityId(subject.entityId);
+    setUrlState({
+      entityType: subject.entityType,
+      entityId: subject.entityId,
+      skip: URL_DEFAULTS.skip,
+    });
+  }
+
+  function handleSort(field: AuditEventSortField) {
+    // Switching to a different column always starts it at `desc`; clicking the active column
+    // toggles direction. A per-field default direction would make a URL written by one column
+    // read back with the wrong direction once shared or reloaded, since `useUrlState` carries
+    // exactly one default `sortDir` for every field.
+    const nextDir: SortDirection = field === sort && sortDir === 'desc' ? 'asc' : 'desc';
+    setUrlState({ sort: field, sortDir: nextDir, skip: URL_DEFAULTS.skip });
+  }
+
+  const hasFilter =
+    urlState.action !== '' ||
+    urlState.entityType !== '' ||
+    urlState.entityId !== '' ||
+    appliedOrigin !== '' ||
+    urlState.refusalReason !== '';
+
+  let status: RecordListStatus;
+  if (events === null) {
+    status = error ? { kind: 'blank' } : { kind: 'loading', label: 'Loading audit events…' };
+  } else if (events.length === 0) {
+    status = {
+      kind: 'empty',
+      icon: <IconClipboard size={24} />,
+      title: 'No matching audit events',
+      description: hasFilter
+        ? 'Clear or adjust the filters above.'
+        : 'Actions recorded by the API and MCP surfaces appear here.',
+    };
+  } else {
+    status = { kind: 'ready' };
+  }
+
+  return (
+    <RecordListPage
+      eyebrow="Admin"
+      title="Audit Log"
+      description="Every recorded action, filterable by action, entity type, id, origin or refusal reason."
+      filters={
+        <FilterBar onApply={handleApply} onClear={handleClear} hasFilter={hasFilter}>
+          <Input
+            label="Action"
+            value={draftAction}
+            onChange={setDraftAction}
+            placeholder="document.deleted"
+          />
           <Select
             label="Entity type"
             options={ENTITY_TYPE_OPTIONS}
-            value={entityType}
-            onChange={setEntityType}
+            value={draftEntityType}
+            onChange={setDraftEntityType}
           />
-          <Field label="Entity id">
-            {(inputProps) => (
-              <input
-                type="text"
-                value={entityId}
-                onChange={(e) => setEntityId(e.target.value)}
-                placeholder="65f1c2e4a1b2c3d4e5f6a7b8"
-                {...inputProps}
-              />
-            )}
-          </Field>
+          <Input
+            label="Entity id"
+            value={draftEntityId}
+            onChange={setDraftEntityId}
+            placeholder="65f1c2e4a1b2c3d4e5f6a7b8"
+            hint="Or click the search icon beside a subject below to filter to it directly."
+          />
           <Select
             label="Origin"
             options={ORIGIN_OPTIONS}
-            value={origin}
-            onChange={(value) => setOrigin(value as AuditEventOrigin | '')}
+            value={draftOrigin}
+            onChange={(value) => setDraftOrigin(value as AuditEventOrigin | '')}
           />
           <Select
             label="Refusal reason"
             options={REFUSAL_REASON_OPTIONS}
-            value={refusalReason}
-            onChange={setRefusalReason}
+            value={draftRefusalReason}
+            onChange={setDraftRefusalReason}
           />
-          <div className="form-actions">
-            <Button type="submit" variant="primary">
-              Apply filters
-            </Button>
-          </div>
-        </form>
-      </section>
-
-      {error && (
-        <p className="error error--page" role="alert">
-          {error}
-        </p>
-      )}
-
-      {!events && !error && <Skeleton label="Loading audit events…" />}
-
-      {events && events.length === 0 && (
-        <EmptyState
-          icon={<IconClipboard size={24} />}
-          title="No matching audit events"
-          description="Clear or adjust the filters above."
-        />
-      )}
-
+        </FilterBar>
+      }
+      error={error ?? undefined}
+      status={status}
+      footer={
+        events && (
+          <Pager
+            count={count}
+            skip={skip}
+            pageSize={PAGE_SIZE}
+            onSkipChange={(next) => setUrlState({ skip: String(next) })}
+          />
+        )
+      }
+    >
       {events && events.length > 0 && (
         <section className="panel">
           <Table caption="Audit events matching the current filters">
             <thead>
               <tr>
                 <TableHeaderCell>Actor</TableHeaderCell>
-                <TableHeaderCell>Action</TableHeaderCell>
+                <SortableHeaderCell<AuditEventSortField>
+                  field="action"
+                  label="Action"
+                  sort={sort}
+                  direction={sortDir}
+                  onSort={handleSort}
+                />
                 <TableHeaderCell>Subject</TableHeaderCell>
                 <TableHeaderCell>Correlation</TableHeaderCell>
-                <TableHeaderCell>Timestamp</TableHeaderCell>
-                <TableHeaderCell>Origin</TableHeaderCell>
+                <SortableHeaderCell<AuditEventSortField>
+                  field="createdAt"
+                  label="Recorded"
+                  sort={sort}
+                  direction={sortDir}
+                  onSort={handleSort}
+                />
+                <SortableHeaderCell<AuditEventSortField>
+                  field="origin"
+                  label="Origin"
+                  sort={sort}
+                  direction={sortDir}
+                  onSort={handleSort}
+                />
               </tr>
             </thead>
             <tbody>
@@ -254,7 +346,7 @@ export default function AuditEventsPage() {
                     )}
                   </TableCell>
                   <TableCell label="Subject" className="cell-sub">
-                    <AuditSubject subject={event.subject} />
+                    <AuditSubject subject={event.subject} onFilterToEntity={handleFilterToEntity} />
                   </TableCell>
                   <TableCell
                     label="Correlation"
@@ -263,8 +355,13 @@ export default function AuditEventsPage() {
                   >
                     {shortId(event.correlationId)}
                   </TableCell>
-                  <TableCell label="Timestamp" className="cell-sub">
-                    {new Date(event.timestamp).toLocaleString()}
+                  <TableCell label="Recorded" className="cell-sub">
+                    <Timestamp value={event.createdAt} />
+                    {event.timestamp !== event.createdAt && (
+                      <div className="cell-sub">
+                        Occurred <Timestamp value={event.timestamp} />
+                      </div>
+                    )}
                   </TableCell>
                   <TableCell label="Origin">
                     {event.origin === 'mcp' ? (
@@ -282,8 +379,6 @@ export default function AuditEventsPage() {
           </Table>
         </section>
       )}
-
-      {events && <Pager count={count} skip={skip} pageSize={PAGE_SIZE} onSkipChange={setSkip} />}
-    </div>
+    </RecordListPage>
   );
 }

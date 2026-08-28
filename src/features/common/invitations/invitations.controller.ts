@@ -14,7 +14,9 @@ import {
 } from '@nestjs/common';
 import { ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { CredentialThrottleGuard } from '../auth/guards/credential-throttle.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { PublicRoute } from '../../../shared/decorators/public-route.decorator';
 import { RequireRole } from '../../../shared/decorators/require-role.decorator';
 import type { WithCountResponseDto } from '../../../shared/dtos/response/with-count.response.dto';
 import { UserRole } from '../../../shared/enums/user-role.enum';
@@ -23,14 +25,39 @@ import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import { invitationsApiExamples } from './api-examples/invitations.api-examples';
 import { CreateInvitationRequestDto } from './dtos/request/create-invitation.request.dto';
 import { ListInvitationsRequestDto } from './dtos/request/list-invitations.request.dto';
+import { PreviewInvitationRequestDto } from './dtos/request/preview-invitation.request.dto';
+import { InvitationPreviewResponseDto } from './dtos/response/invitation-preview.response.dto';
 import { InvitationResponseDto } from './dtos/response/invitation.response.dto';
 import { MintedInvitationResponseDto } from './dtos/response/minted-invitation.response.dto';
+import { InvitationInvalidException } from './exceptions/invitations.exception';
 import { InvitationsService } from './invitations.service';
 
 @Controller('invitations')
 @ApiTags('invitations')
 export class InvitationsController {
   constructor(private readonly invitationsService: InvitationsService) {}
+
+  @Post('preview')
+  @Version('1')
+  @HttpCode(HttpStatus.OK)
+  // The one deliberately unauthenticated route on this controller — an invite-page visitor has no
+  // session yet. `CredentialThrottleGuard` bounds it the same way it bounds login and registration:
+  // unauthenticated, takes a credential, costs a database read.
+  @PublicRoute()
+  @UseGuards(CredentialThrottleGuard)
+  @ApiResponse(invitationsApiExamples.preview)
+  @ApiResponse(invitationsApiExamples.previewInvalid)
+  async preview(@Body() dto: PreviewInvitationRequestDto): Promise<InvitationPreviewResponseDto> {
+    const preview = await this.invitationsService.preview(dto.token);
+    if (!preview) {
+      // Deliberately the same exception, message and status `AuthService` raises for an unknown,
+      // expired, revoked, or already-accepted token — this endpoint's whole point is to precede
+      // that redemption without becoming an oracle for which of the four cases applied.
+      throw new InvitationInvalidException('Invitation is invalid, expired, or already used');
+    }
+
+    return toResponseDto(InvitationPreviewResponseDto, preview);
+  }
 
   @Post()
   @Version('1')

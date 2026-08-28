@@ -232,6 +232,64 @@
         ]
       }
     },
+    "/invitations/preview": {
+      "post": {
+        "operationId": "InvitationsController_preview",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewInvitationRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Who the token invites and what role it grants — enough for an anonymous visitor to judge whether the invitation is one they recognize before they set a password.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationPreviewResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Invitation preview",
+                    "value": {
+                      "email": "colleague@example.com",
+                      "role": "member",
+                      "invitedBy": "admin@example.com"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The token is unknown, expired, revoked, or already accepted — the four cases are indistinguishable on purpose.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Invalid invitation",
+                    "value": {
+                      "statusCode": 400,
+                      "message": "Invitation is invalid, expired, or already used",
+                      "error": "Bad Request"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "invitations"
+        ]
+      }
+    },
     "/invitations": {
       "post": {
         "operationId": "InvitationsController_mint",
@@ -4556,6 +4614,47 @@
         },
         "required": [
           "user"
+        ]
+      },
+      "PreviewInvitationRequestDto": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "example": "eo_inv_9f8c12ab34cd56ef",
+            "description": "Single-use invitation token, read from the invite link."
+          }
+        },
+        "required": [
+          "token"
+        ]
+      },
+      "InvitationPreviewResponseDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "example": "colleague@example.com",
+            "description": "Email address invited."
+          },
+          "role": {
+            "type": "string",
+            "example": "member",
+            "enum": [
+              "admin",
+              "member"
+            ],
+            "description": "Role the invitee joins the tenant with."
+          },
+          "invitedBy": {
+            "type": "string",
+            "example": "admin@example.com",
+            "description": "The inviting admin's email, when that user still exists. Absent for an invitation whose inviter has since been removed."
+          }
+        },
+        "required": [
+          "email",
+          "role"
         ]
       },
       "CreateInvitationRequestDto": {

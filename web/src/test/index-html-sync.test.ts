@@ -42,6 +42,14 @@ describe('index.html ↔ nginx.conf', () => {
 
     expect(nginxConf).toContain(`'sha256-${base64}'`);
   });
+
+  /** Fails CLOSED. `default-src 'self'` gives `frame-src` no fallback of its own, so a CSP tidy-up
+   * that drops this directive — or narrows it back to 'self' alone — blocks the document
+   * workbench's `blob:` PDF pane in production only, the one environment Vite's no-CSP dev server
+   * never exercises. */
+  it('pins the widened frame-src the document workbench PDF pane needs', () => {
+    expect(nginxConf).toContain("frame-src 'self' blob:");
+  });
 });
 
 describe('index.html ↔ ThemeToggle', () => {

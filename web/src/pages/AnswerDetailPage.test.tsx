@@ -1,6 +1,8 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { clearSession } from '../lib/auth';
+import { FakeEventSource } from '../test/fake-event-source';
 import AnswerDetailPage from './AnswerDetailPage';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -31,11 +33,11 @@ const completedAnswer = {
   createdAt: new Date().toISOString(),
 };
 
-function renderAt(id: string) {
+function renderAt(id: string, pollIntervalMs?: number) {
   render(
     <MemoryRouter initialEntries={[`/answers/${id}`]}>
       <Routes>
-        <Route path="/answers/:id" element={<AnswerDetailPage />} />
+        <Route path="/answers/:id" element={<AnswerDetailPage pollIntervalMs={pollIntervalMs} />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -45,6 +47,7 @@ describe('AnswerDetailPage', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    clearSession();
   });
 
   it('shows a loading state before the answer arrives', async () => {
@@ -161,5 +164,85 @@ describe('AnswerDetailPage', () => {
 
     expect(screen.queryByRole('heading', { name: 'First question' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Second question' })).toBeInTheDocument();
+  });
+
+  it('streams a still-running answer to completion over SSE, closing the source on the terminal event', async () => {
+    FakeEventSource.reset();
+    vi.stubGlobal('EventSource', FakeEventSource);
+
+    const runningAnswer = {
+      id: 'answer-3',
+      questionText: 'What is the vacancy rate?',
+      runStatus: 'running',
+      citations: [],
+      conflictIds: [],
+      createdAt: new Date().toISOString(),
+    };
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/answers/answer-3') return Promise.resolve(jsonResponse(runningAnswer));
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderAt('answer-3');
+
+    expect(await screen.findByText('running')).toBeInTheDocument();
+
+    // The stream is opened by a passive effect that flushes after the commit — waiting for the
+    // instance is what makes this deterministic (see use-event-stream.ts's own doc comment).
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const [source] = FakeEventSource.instances;
+    expect(source.url).toBe('/api/v1/answers/answer-3/events');
+
+    act(() => {
+      source.emit('answer', {
+        ...runningAnswer,
+        runStatus: 'completed',
+        outcome: {
+          kind: 'insufficient_evidence',
+          reason: 'No document mentions the vacancy rate.',
+        },
+      });
+    });
+
+    expect(await screen.findByText('No document mentions the vacancy rate.')).toBeInTheDocument();
+    expect(source.closed).toBe(true);
+  });
+
+  it('keeps carrying a run to its terminal state by polling once the stream falls back', async () => {
+    FakeEventSource.reset();
+    vi.stubGlobal('EventSource', FakeEventSource);
+
+    const runningAnswer = {
+      id: 'answer-3',
+      questionText: 'What is the vacancy rate?',
+      runStatus: 'running',
+      citations: [],
+      conflictIds: [],
+      createdAt: new Date().toISOString(),
+    };
+    const completedAnswer = {
+      ...runningAnswer,
+      runStatus: 'completed',
+      outcome: { kind: 'insufficient_evidence', reason: 'No document mentions the vacancy rate.' },
+    };
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/answers/answer-3') return Promise.resolve(jsonResponse(completedAnswer));
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderAt('answer-3', 5);
+
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const [source] = FakeEventSource.instances;
+
+    // The API's own 30-minute stream ceiling ends the connection the same way a hard transport
+    // failure does from this hook's point of view — readyState CLOSED before `error` fires.
+    act(() => {
+      source.failConnection();
+    });
+
+    expect(await screen.findByText('No document mentions the vacancy rate.')).toBeInTheDocument();
   });
 });

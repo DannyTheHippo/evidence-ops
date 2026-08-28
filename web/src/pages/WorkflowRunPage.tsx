@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
+  ApiError,
   decideApproval,
   getWorkflowRunById,
   listApprovals,
@@ -11,14 +12,14 @@ import {
   type WorkflowRun,
   type WorkflowRunStatus,
 } from '../api/client';
+import ApprovalDecisionDialog from '../components/ApprovalDecisionDialog';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
-import Dialog from '../components/ui/Dialog';
-import Field from '../components/ui/Field';
 import Skeleton from '../components/ui/Skeleton';
+import Timestamp from '../components/ui/Timestamp';
 import { notify } from '../components/ui/toast';
 import { useEventStream } from '../lib/use-event-stream';
-import { workflowTypeLabel } from '../lib/identifiers';
+import { shortId, workflowTypeLabel } from '../lib/identifiers';
 import { useSession } from '../lib/use-session';
 import { isTerminalRun } from '../lib/workflow-runs';
 
@@ -46,6 +47,14 @@ function stepClassName(active: boolean, done: boolean): string {
     .join(' ');
 }
 
+// Renders a step's real timestamp when one is known, or says plainly that none is — never a
+// guessed or interpolated time. `resumedAt` in particular is only ever known when this browser
+// tab is the one that decided the approval; a run resumed from another tab or by a timeout has no
+// timestamp this page can show.
+function TimelineWhen({ value }: { value: string | null }) {
+  return value ? <Timestamp value={value} /> : <span className="cell-sub">Time not recorded</span>;
+}
+
 export default function WorkflowRunPage({
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
 }: WorkflowRunPageProps) {
@@ -54,16 +63,23 @@ export default function WorkflowRunPage({
   const [approvalDocs, setApprovalDocs] = useState<Approval[]>([]);
   // Sticky once set: the approval that paused this run disappears from the approvals list the
   // moment it's decided, but the timeline still needs to say the run *was* paused, not just
-  // that no approval is pending right now.
+  // that no approval is pending right now. `pausedAt` is the pending approval's own `createdAt`,
+  // captured the same way for the same reason — it stops existing on the fetched object once
+  // the approval is decided.
   const [everPaused, setEverPaused] = useState(false);
+  const [pausedAt, setPausedAt] = useState<string | null>(null);
+  // Set only from this tab's own decide response (`decideApproval` returns the decided
+  // approval's `decidedAt`). A run resumed by a decision made elsewhere, or by the approval's own
+  // timeout, never populates this — `listApprovals()` defaults to `state: 'pending'`, so a
+  // decided approval never comes back through a poll or the SSE stream for this page to read.
+  const [resumedAt, setResumedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notFound, setNotFound] = useState(false);
   const mountedRef = useRef(true);
   // The dialog's own open/decision-direction state, set only from the admin-gated buttons below —
-  // matching ApprovalsPage's ApprovalRow, the sibling implementation this mirrors.
+  // `ApprovalDecisionDialog` owns everything past that: the reason input, in-flight state, and
+  // error display.
   const [pendingDecision, setPendingDecision] = useState<ApprovalDecision | null>(null);
-  const [reason, setReason] = useState('');
-  const [deciding, setDeciding] = useState(false);
-  const [decideError, setDecideError] = useState<string | null>(null);
   const session = useSession();
   const canDecide = session.status === 'authed' && session.me.role === 'admin';
   const sessionResolved = session.status !== 'loading';
@@ -91,38 +107,24 @@ export default function WorkflowRunPage({
   // "flip a flag the first time a derived value becomes truthy" (react.dev/learn/you-might-not-need-an-effect).
   if (pendingApproval && !everPaused) {
     setEverPaused(true);
+    setPausedAt(pendingApproval.createdAt);
   }
 
-  function closeDecideDialog() {
-    setPendingDecision(null);
-    setReason('');
-    setDecideError(null);
-  }
-
-  async function decide(decision: ApprovalDecision) {
+  async function handleConfirm(decision: ApprovalDecision, reason: string | undefined) {
     if (!pendingApproval) return;
-    setDeciding(true);
-    setDecideError(null);
-    try {
-      await decideApproval(pendingApproval.id, decision, reason.trim() || undefined);
-      notify(
-        'success',
-        decision === 'approved'
-          ? 'Approved — the workflow resumes.'
-          : 'Rejected — the workflow resumes.',
-      );
-      // `decide()` (`approvals.service.ts`) only ever accepts a pending approval, so a success
-      // response means it has left the pending inbox `listApprovals()` returns — matching
-      // ApprovalsPage's own `handleDecided`.
-      setApprovalDocs((current) =>
-        current.filter((approval) => approval.id !== pendingApproval.id),
-      );
-      closeDecideDialog();
-    } catch (err: unknown) {
-      setDecideError(err instanceof Error ? err.message : 'Failed to record decision');
-    } finally {
-      setDeciding(false);
-    }
+    const decided = await decideApproval(pendingApproval.id, decision, reason);
+    setResumedAt(decided.decidedAt ?? null);
+    notify(
+      'success',
+      decision === 'approved'
+        ? 'Approved — the workflow resumes.'
+        : 'Rejected — the workflow resumes.',
+    );
+    // `decide()` (`approvals.service.ts`) only ever accepts a pending approval, so a success
+    // response means it has left the pending inbox `listApprovals()` returns — matching
+    // ApprovalsPage's own `handleDecided`.
+    setApprovalDocs((current) => current.filter((approval) => approval.id !== pendingApproval.id));
+    setPendingDecision(null);
   }
 
   // `isCurrent` returns false once the caller's effect has been torn down, so a response that
@@ -137,9 +139,14 @@ export default function WorkflowRunPage({
           setRun(runResult);
           setApprovalDocs(docs);
           setError(null);
+          setNotFound(false);
         })
         .catch((err: unknown) => {
           if (!isCurrent()) return;
+          if (err instanceof ApiError && err.status === 404) {
+            setNotFound(true);
+            return;
+          }
           setError(err instanceof Error ? err.message : 'Failed to load workflow run');
         });
     },
@@ -220,17 +227,27 @@ export default function WorkflowRunPage({
         </p>
       )}
 
-      {!run && !error && id && <Skeleton label="Loading run timeline…" />}
+      {notFound && <p className="notice notice--info">Workflow run not found.</p>}
+
+      {!run && !error && !notFound && id && <Skeleton label="Loading run timeline…" />}
 
       {run && (
         <section className="card">
           <div className="card-head">
             <div>
               <h2 className="card-title">{workflowTypeLabel(run.workflowType)}</h2>
-              <p className="cell-sub mono">{run.workflowId}</p>
+              <p className="cell-sub mono" title={run.workflowId}>
+                {shortId(run.workflowId)}
+              </p>
             </div>
             <Badge tone={STATUS_TONE[run.status]}>{run.status}</Badge>
           </div>
+
+          {/* This page refreshes status over a 1.5s SSE stream that falls back to polling, but
+              the API's own status read is cached up to 15s and, on an engine failure, falls
+              back further to the last durable value — so status here can lag the live run by
+              several seconds even while the connection itself reads as live. */}
+          <p className="cell-sub">Status refreshes periodically and may lag the live run.</p>
 
           {run.status === 'failed' && run.errorMessage && (
             <p className="cell-sub">{run.errorMessage}</p>
@@ -246,12 +263,15 @@ export default function WorkflowRunPage({
             <ol className="timeline">
               <li className={stepClassName(!isTerminal, true)}>
                 <span className="timeline-step-label">Started</span>
-                <span className="cell-sub">{new Date(run.createdAt).toLocaleString()}</span>
+                <Timestamp value={run.createdAt} />
               </li>
               <li className={stepClassName(false, isTerminal)}>
                 <span className="timeline-step-label">
                   {isTerminal ? `Finished — ${run.status}` : 'Syncing'}
                 </span>
+                {/* `WorkflowRun` carries no completion timestamp — only `createdAt` — so a
+                    finished sync-source run can say what it ended in but not exactly when. */}
+                {isTerminal && <TimelineWhen value={null} />}
                 {run.errorMessage && <p className="cell-sub">{run.errorMessage}</p>}
               </li>
             </ol>
@@ -259,13 +279,14 @@ export default function WorkflowRunPage({
             <ol className="timeline">
               <li className={stepClassName(!isPaused && !isTerminal, true)}>
                 <span className="timeline-step-label">Started</span>
-                <span className="cell-sub">{new Date(run.createdAt).toLocaleString()}</span>
+                <Timestamp value={run.createdAt} />
               </li>
 
               <li className={stepClassName(isPaused, everPaused)}>
                 <span className="timeline-step-label">
                   {isPaused ? 'Paused — awaiting approval' : 'Awaiting approval'}
                 </span>
+                {everPaused && <TimelineWhen value={pausedAt} />}
                 {pendingApproval && (
                   <div className="notice notice--info">
                     <p>{pendingApproval.summary}</p>
@@ -309,52 +330,19 @@ export default function WorkflowRunPage({
                 <span className="timeline-step-label">
                   {isTerminal ? `Resumed — ${run.status}` : 'Not yet resumed'}
                 </span>
+                {isTerminal && <TimelineWhen value={resumedAt} />}
                 {run.errorMessage && <p className="cell-sub">{run.errorMessage}</p>}
               </li>
             </ol>
           )}
 
-          <Dialog
-            open={pendingDecision !== null}
-            onClose={closeDecideDialog}
-            title={
-              pendingDecision === 'rejected' ? 'Reject this approval' : 'Approve this approval'
-            }
-          >
-            <div className="form">
-              {pendingApproval && <p>{pendingApproval.summary}</p>}
-              <p className="cell-sub">This decision resumes the parked workflow run.</p>
-              <Field label="Reason (optional)">
-                {(inputProps) => (
-                  <input
-                    type="text"
-                    value={reason}
-                    onChange={(e) => setReason(e.target.value)}
-                    placeholder="Evidence checks out."
-                    disabled={deciding}
-                    {...inputProps}
-                  />
-                )}
-              </Field>
-              {decideError && (
-                <p className="error" role="alert">
-                  {decideError}
-                </p>
-              )}
-              <div className="form-actions">
-                <Button
-                  variant={pendingDecision === 'rejected' ? 'danger' : 'primary'}
-                  disabled={deciding}
-                  onClick={() => pendingDecision && void decide(pendingDecision)}
-                >
-                  {pendingDecision === 'rejected' ? 'Reject' : 'Approve'}
-                </Button>
-                <Button variant="ghost" disabled={deciding} onClick={closeDecideDialog}>
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          </Dialog>
+          <ApprovalDecisionDialog
+            decision={pendingDecision}
+            summary={pendingApproval?.summary ?? ''}
+            resumesWorkflow
+            onClose={() => setPendingDecision(null)}
+            onConfirm={handleConfirm}
+          />
         </section>
       )}
     </div>

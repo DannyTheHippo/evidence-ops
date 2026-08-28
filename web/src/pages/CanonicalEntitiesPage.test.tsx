@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RequireAdmin } from '../AuthenticatedRoutes';
 import { clearSession } from '../lib/auth';
@@ -52,6 +52,23 @@ function stubFetch(routes: Record<string, (init?: RequestInit) => Response>): vo
   vi.stubGlobal('fetch', fetchMock);
 }
 
+// Exposes the current query string as accessible text, since `MemoryRouter` gives a test no other
+// way to read it — proves the URL round-trip without reaching into router internals, matching
+// AnswersPage.test.tsx.
+function LocationProbe() {
+  const location = useLocation();
+  return <output aria-label="current search">{location.search}</output>;
+}
+
+function renderPage(initialEntries: string[] = ['/canonical-entities']) {
+  render(
+    <MemoryRouter initialEntries={initialEntries}>
+      <CanonicalEntitiesPage />
+      <LocationProbe />
+    </MemoryRouter>,
+  );
+}
+
 describe('CanonicalEntitiesPage', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -61,11 +78,11 @@ describe('CanonicalEntitiesPage', () => {
 
   it('lists registered entities with their aliases, and "No aliases" for one with none', async () => {
     stubFetch({
-      '/api/v1/canonical-entities?skip=0&limit=25': () =>
+      '/api/v1/canonical-entities?skip=0&limit=25&sort=canonicalNameNormalized&sortDir=asc': () =>
         jsonResponse({ docs: [northgate, southpark], count: 2 }),
     });
 
-    render(<CanonicalEntitiesPage />);
+    renderPage();
 
     expect(await screen.findByText('Northgate Plaza')).toBeInTheDocument();
     expect(screen.getByText('Northgate, Northgate Shopping Center')).toBeInTheDocument();
@@ -75,25 +92,64 @@ describe('CanonicalEntitiesPage', () => {
 
   it('renders an empty state when nothing is registered', async () => {
     stubFetch({
-      '/api/v1/canonical-entities?skip=0&limit=25': () => jsonResponse({ docs: [], count: 0 }),
+      '/api/v1/canonical-entities?skip=0&limit=25&sort=canonicalNameNormalized&sortDir=asc': () =>
+        jsonResponse({ docs: [], count: 0 }),
     });
 
-    render(<CanonicalEntitiesPage />);
+    renderPage();
 
     expect(await screen.findByText('No canonical entities registered yet')).toBeInTheDocument();
   });
 
-  it('shows a load error verbatim', async () => {
-    stubFetch({
-      '/api/v1/canonical-entities?skip=0&limit=25': () =>
-        jsonResponse({ message: 'Canonical entity registry unavailable' }, 500),
+  it('shows a load error verbatim, but leaves an already-loaded row on screen on a later refresh failure', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (
+        url ===
+        '/api/v1/canonical-entities?skip=0&limit=25&sort=canonicalNameNormalized&sortDir=asc'
+      ) {
+        return Promise.resolve(jsonResponse({ docs: [northgate], count: 1 }));
+      }
+      if (
+        url ===
+        '/api/v1/canonical-entities?skip=0&limit=25&sort=canonicalNameNormalized&sortDir=desc'
+      ) {
+        return Promise.resolve(
+          jsonResponse({ message: 'Canonical entity registry unavailable' }, 500),
+        );
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
     });
+    vi.stubGlobal('fetch', fetchMock);
 
-    render(<CanonicalEntitiesPage />);
+    renderPage();
+    await screen.findByText('Northgate Plaza');
+
+    // Already the active, ascending column — one click toggles it to descending, which is the
+    // request that fails.
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Sort by Canonical name, sorted ascending' }),
+    );
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Canonical entity registry unavailable',
     );
+    // `RecordListPage` takes `error` separately from `status` — a failed refresh leaves the rows
+    // already on screen rather than blanking them.
+    expect(screen.getByText('Northgate Plaza')).toBeInTheDocument();
+  });
+
+  it('shows a blank error state, with no rows, on a first-load failure', async () => {
+    stubFetch({
+      '/api/v1/canonical-entities?skip=0&limit=25&sort=canonicalNameNormalized&sortDir=asc': () =>
+        jsonResponse({ message: 'Canonical entity registry unavailable' }, 500),
+    });
+
+    renderPage();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Canonical entity registry unavailable',
+    );
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
   it('creates a new entity from the Add entity dialog', async () => {
@@ -105,7 +161,10 @@ describe('CanonicalEntitiesPage', () => {
       createdAt: '2026-08-01T00:00:00.000Z',
     };
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-      if (url === '/api/v1/canonical-entities?skip=0&limit=25') {
+      if (
+        url ===
+        '/api/v1/canonical-entities?skip=0&limit=25&sort=canonicalNameNormalized&sortDir=asc'
+      ) {
         return Promise.resolve(jsonResponse({ docs: [northgate], count: 1 }));
       }
       if (url === '/api/v1/canonical-entities' && init?.method === 'POST') {
@@ -115,7 +174,7 @@ describe('CanonicalEntitiesPage', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<CanonicalEntitiesPage />);
+    renderPage();
     await screen.findByText('Northgate Plaza');
 
     fireEvent.click(screen.getByRole('button', { name: 'Add entity' }));
@@ -134,7 +193,10 @@ describe('CanonicalEntitiesPage', () => {
   it('edits an existing entity from its row', async () => {
     const updated = { ...northgate, canonicalName: 'Northgate Plaza II' };
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-      if (url === '/api/v1/canonical-entities?skip=0&limit=25') {
+      if (
+        url ===
+        '/api/v1/canonical-entities?skip=0&limit=25&sort=canonicalNameNormalized&sortDir=asc'
+      ) {
         return Promise.resolve(jsonResponse({ docs: [northgate], count: 1 }));
       }
       if (url === '/api/v1/canonical-entities/entity-1' && init?.method === 'PATCH') {
@@ -144,7 +206,7 @@ describe('CanonicalEntitiesPage', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<CanonicalEntitiesPage />);
+    renderPage();
     await screen.findByText('Northgate Plaza');
 
     const row = screen.getByText('Northgate Plaza').closest('tr')!;
@@ -162,7 +224,10 @@ describe('CanonicalEntitiesPage', () => {
 
   it('renders a duplicate-name 409 verbatim and leaves the list unchanged', async () => {
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-      if (url === '/api/v1/canonical-entities?skip=0&limit=25') {
+      if (
+        url ===
+        '/api/v1/canonical-entities?skip=0&limit=25&sort=canonicalNameNormalized&sortDir=asc'
+      ) {
         return Promise.resolve(jsonResponse({ docs: [northgate], count: 1 }));
       }
       if (url === '/api/v1/canonical-entities' && init?.method === 'POST') {
@@ -177,7 +242,7 @@ describe('CanonicalEntitiesPage', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<CanonicalEntitiesPage />);
+    renderPage();
     await screen.findByText('Northgate Plaza');
 
     fireEvent.click(screen.getByRole('button', { name: 'Add entity' }));
@@ -195,9 +260,12 @@ describe('CanonicalEntitiesPage', () => {
     expect(screen.getAllByRole('row')).toHaveLength(2); // header row + the one seeded entity
   });
 
-  it('confirms before deleting, then removes the row', async () => {
+  it('confirms before deleting through ConfirmDialog, then removes the row', async () => {
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-      if (url === '/api/v1/canonical-entities?skip=0&limit=25') {
+      if (
+        url ===
+        '/api/v1/canonical-entities?skip=0&limit=25&sort=canonicalNameNormalized&sortDir=asc'
+      ) {
         return Promise.resolve(jsonResponse({ docs: [northgate, southpark], count: 2 }));
       }
       if (url === '/api/v1/canonical-entities/entity-1' && init?.method === 'DELETE') {
@@ -207,7 +275,7 @@ describe('CanonicalEntitiesPage', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<CanonicalEntitiesPage />);
+    renderPage();
     await screen.findByText('Northgate Plaza');
 
     const row = screen.getByText('Northgate Plaza').closest('tr')!;
@@ -216,14 +284,117 @@ describe('CanonicalEntitiesPage', () => {
     expect(screen.getByRole('dialog', { name: 'Delete "Northgate Plaza"?' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Delete entity' }));
 
-    await vi.waitFor(() => expect(screen.queryByText('Northgate Plaza')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('Northgate Plaza')).not.toBeInTheDocument());
     expect(screen.getByText('Southpark Commons')).toBeInTheDocument();
+  });
+
+  it('disables the confirm button once the delete is in flight, so a double click fires only one request', async () => {
+    let resolveDelete: (() => void) | undefined;
+    const deletePending = new Promise<void>((resolve) => {
+      resolveDelete = resolve;
+    });
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (
+        url ===
+        '/api/v1/canonical-entities?skip=0&limit=25&sort=canonicalNameNormalized&sortDir=asc'
+      ) {
+        return Promise.resolve(jsonResponse({ docs: [northgate], count: 1 }));
+      }
+      if (url === '/api/v1/canonical-entities/entity-1' && init?.method === 'DELETE') {
+        return deletePending.then(() => new Response(null, { status: 204 }));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+    await screen.findByText('Northgate Plaza');
+
+    const row = screen.getByText('Northgate Plaza').closest('tr')!;
+    fireEvent.click(within(row).getByRole('button', { name: 'Delete' }));
+    const confirmButton = screen.getByRole('button', { name: 'Delete entity' });
+
+    fireEvent.click(confirmButton);
+    // Reflects `busy` immediately, before the pending request settles.
+    expect(screen.getByRole('button', { name: 'Delete entity…' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete entity…' }));
+
+    resolveDelete?.();
+    await waitFor(() => expect(screen.queryByText('Northgate Plaza')).not.toBeInTheDocument());
+
+    expect(
+      fetchMock.mock.calls.filter(
+        ([url, init]: [string, RequestInit?]) =>
+          url === '/api/v1/canonical-entities/entity-1' && init?.method === 'DELETE',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('toggles the active, ascending-by-default sort column on click, reading the normalised field', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (
+        url ===
+          '/api/v1/canonical-entities?skip=0&limit=25&sort=canonicalNameNormalized&sortDir=asc' ||
+        url ===
+          '/api/v1/canonical-entities?skip=0&limit=25&sort=canonicalNameNormalized&sortDir=desc'
+      ) {
+        return Promise.resolve(jsonResponse({ docs: [northgate], count: 1 }));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+    await screen.findByText('Northgate Plaza');
+
+    // Already the active, ascending column — a click toggles direction rather than restarting at
+    // descending, since it is also the default.
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Sort by Canonical name, sorted ascending' }),
+    );
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url]) =>
+            url ===
+            '/api/v1/canonical-entities?skip=0&limit=25&sort=canonicalNameNormalized&sortDir=desc',
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it('reproduces a sorted, paged view from a deep link, and reload preserves it with a clean address bar at defaults', async () => {
+    stubFetch({
+      '/api/v1/canonical-entities?skip=25&limit=25&sort=createdAt&sortDir=desc': () =>
+        jsonResponse({ docs: [southpark], count: 30 }),
+    });
+
+    renderPage(['/canonical-entities?sort=createdAt&sortDir=desc&skip=25']);
+
+    await screen.findByText('Southpark Commons');
+    expect(screen.getByRole('status', { name: 'current search' })).toHaveTextContent(
+      'sort=createdAt',
+    );
+    expect(screen.getByRole('status', { name: 'current search' })).toHaveTextContent('skip=25');
+  });
+
+  it('keeps the URL clean when sort and paging sit at their defaults', async () => {
+    stubFetch({
+      '/api/v1/canonical-entities?skip=0&limit=25&sort=canonicalNameNormalized&sortDir=asc': () =>
+        jsonResponse({ docs: [northgate], count: 1 }),
+    });
+
+    renderPage();
+
+    await screen.findByText('Northgate Plaza');
+    expect(screen.getByRole('status', { name: 'current search' })).toBeEmptyDOMElement();
   });
 
   it('admits an admin to the route wrapped in RequireAdmin', async () => {
     stubFetch({
       '/api/v1/auth/me': () => jsonResponse(admin),
-      '/api/v1/canonical-entities?skip=0&limit=25': () => jsonResponse({ docs: [], count: 0 }),
+      '/api/v1/canonical-entities?skip=0&limit=25&sort=canonicalNameNormalized&sortDir=asc': () =>
+        jsonResponse({ docs: [], count: 0 }),
     });
 
     render(

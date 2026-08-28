@@ -68,35 +68,31 @@ async function readErrorMessage(res: Response): Promise<string> {
   return res.statusText || `HTTP ${res.status}`;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const isFormData = init?.body instanceof FormData;
-  const headers: Record<string, string> = {
-    // A FormData body needs the browser to set its own multipart boundary; a fixed
-    // 'application/json' header here would make the server unable to parse the upload.
-    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
-    ...(init?.headers as Record<string, string> | undefined),
-  };
-
+/** Shared behind `request<T>()` and `requestBlob()`: the timeout/abort signal, the same-origin
+ * credential, the 401-redirect rule, and turning a non-2xx response into `ApiError`. `parseBody`
+ * runs inside the same try/finally as the fetch itself, so the timeout still covers a response
+ * that sends headers and then stalls mid-body — whether that body is read as JSON text or as a
+ * `Blob` — not just the initial `fetch` call, which settles as soon as headers arrive.
+ */
+async function fetchGuarded<T>(
+  path: string,
+  init: RequestInit | undefined,
+  timeoutMs: number,
+  parseBody: (res: Response) => Promise<T>,
+): Promise<T> {
   const timeoutController = new AbortController();
-  const timeoutId = setTimeout(
-    () => timeoutController.abort(),
-    isFormData ? UPLOAD_TIMEOUT_MS : DEFAULT_TIMEOUT_MS,
-  );
+  const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs);
   // No caller passes its own signal today; composing rather than overwriting keeps that case
   // correct if one ever does.
   const signal = init?.signal
     ? AbortSignal.any([init.signal, timeoutController.signal])
     : timeoutController.signal;
 
-  // The timer spans the body read as well as the response, not just `fetch`: `fetch` settles as
-  // soon as the headers arrive, so a server that sends headers and then stalls mid-body would hold
-  // the request open indefinitely if the timeout were cleared at that point.
   try {
     // The credential is an HttpOnly cookie the SPA never handles itself; 'same-origin' is what
     // makes the browser attach it.
     const res = await fetch(`${API}${path}`, {
       ...init,
-      headers,
       credentials: 'same-origin',
       signal,
     });
@@ -110,22 +106,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       throw new ApiError(res.status, await readErrorMessage(res));
     }
 
-    if (res.status === 204) {
-      return undefined as T;
-    }
-
-    const text = await res.text();
-    if (!text) return undefined as T;
-
-    try {
-      return JSON.parse(text) as T;
-    } catch {
-      // A 2xx whose body is not JSON means something answered in the API's place — a proxy landing
-      // on the wrong upstream, or a captive portal. Raising `ApiError` holds the guarantee every
-      // call site relies on, that this module throws `ApiError` and nothing else; the raw
-      // `SyntaxError` would put "Unexpected token '<'" in front of the user instead.
-      throw new ApiError(res.status, 'The server sent a response this app could not read.');
-    }
+    return await parseBody(res);
   } catch (err) {
     // Recognized as "no complete response arrived": this helper's own timeout, whether it fired
     // against the connection or against a stalled body, or the TypeError a browser throws for a
@@ -140,6 +121,47 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const isFormData = init?.body instanceof FormData;
+  const headers: Record<string, string> = {
+    // A FormData body needs the browser to set its own multipart boundary; a fixed
+    // 'application/json' header here would make the server unable to parse the upload.
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+    ...(init?.headers as Record<string, string> | undefined),
+  };
+
+  return fetchGuarded(
+    path,
+    { ...init, headers },
+    isFormData ? UPLOAD_TIMEOUT_MS : DEFAULT_TIMEOUT_MS,
+    async (res) => {
+      if (res.status === 204) {
+        return undefined as T;
+      }
+
+      const text = await res.text();
+      if (!text) return undefined as T;
+
+      try {
+        return JSON.parse(text) as T;
+      } catch {
+        // A 2xx whose body is not JSON means something answered in the API's place — a proxy landing
+        // on the wrong upstream, or a captive portal. Raising `ApiError` holds the guarantee every
+        // call site relies on, that this module throws `ApiError` and nothing else; the raw
+        // `SyntaxError` would put "Unexpected token '<'" in front of the user instead.
+        throw new ApiError(res.status, 'The server sent a response this app could not read.');
+      }
+    },
+  );
+}
+
+/** Everything `request<T>()` shares (401-redirect, timeout, `ApiError`) with none of its JSON
+ * assumptions — for the one response shape that is not JSON: a document version's stored bytes,
+ * which the PDF pane needs as a `blob:` object URL rather than a direct-download href. */
+async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
+  return fetchGuarded(path, init, DEFAULT_TIMEOUT_MS, (res) => res.blob());
 }
 
 function jsonBody(data: unknown): RequestInit {
@@ -261,6 +283,14 @@ export async function deleteDocument(id: string): Promise<void> {
 // drive a file download, so there is no JSON body for `request<T>()` to parse.
 export function documentVersionContentUrl(versionId: string): string {
   return `${API}/documents/versions/${versionId}/content`;
+}
+
+/** The version's stored bytes as a `Blob`, not a followed download — the route sets
+ * `Content-Disposition: attachment`, so an `<iframe src>` pointed at `documentVersionContentUrl()`
+ * directly downloads the file instead of rendering it. This is the fetch behind the document
+ * workbench's PDF pane, which turns the blob into an object URL itself. */
+export function fetchDocumentVersionContent(versionId: string): Promise<Blob> {
+  return requestBlob(`/documents/versions/${versionId}/content`);
 }
 
 // A plain URL builder, not a `request<T>()` call — a browser-native EventSource consumes this
@@ -527,6 +557,13 @@ export interface Conflict {
   // then: no survivorship policy runs over a fact set already known to be incomplete.
   unscorable: boolean;
   unscorableReason?: string;
+  // True when the row's pack stamp no longer matches the deployed active pack — it was detected
+  // under an ontology the deployment has since superseded, so what it says may not be what the
+  // current ontology would compute. Always present, and unrelated to `unscorable`: a row can carry
+  // either, both, or neither. A stale row is shown and labelled, never dropped from the list.
+  stale: boolean;
+  // Present only when `stale` is true: which pack detected the row against which is active now.
+  staleReason?: string;
   proposedWinnerFactId?: string;
   ruleFired?: ConflictRuleFired;
   explanation?: string;
@@ -955,6 +992,20 @@ export async function revokeInvitation(id: string): Promise<void> {
 // link stops working the moment this call succeeds — there is no way to recover or reactivate it.
 export function resendInvitation(id: string): Promise<MintedInvitation> {
   return request<MintedInvitation>(`/invitations/${id}/resend`, { method: 'POST' });
+}
+
+// What InvitePage may learn about a token before it commits to a password: who is inviting and to
+// what role, never whether the invited email already has an account.
+export type InvitationPreview = Schemas['InvitationPreviewResponseDto'];
+
+// Unauthenticated, called before InvitePage renders its form. The token goes in the POST body,
+// matching InvitePage's own fragment-only handling of it — a query string would land it in a proxy
+// or access log.
+export function previewInvitation(token: string): Promise<InvitationPreview> {
+  return request<InvitationPreview>('/invitations/preview', {
+    method: 'POST',
+    ...jsonBody({ token }),
+  });
 }
 
 // ── Users ────────────────────────────────────────────────────────────────

@@ -1,47 +1,16 @@
-import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ApiError, getAnswerById, type Answer } from '../api/client';
-import AnswerView from '../components/AnswerView';
-import Badge from '../components/ui/Badge';
+import AnswerWorkspace from '../components/AnswerWorkspace';
 import Skeleton from '../components/ui/Skeleton';
-import { RUN_STATUS_TONE } from '../lib/answer-status';
-import { useAnswerEnrichment } from '../lib/use-answer-enrichment';
+import { useAnswerRun } from '../lib/use-answer-run';
 
-export default function AnswerDetailPage() {
+interface AnswerDetailPageProps {
+  // Overridable so tests can poll on a short interval instead of stubbing timers.
+  pollIntervalMs?: number;
+}
+
+export default function AnswerDetailPage({ pollIntervalMs }: AnswerDetailPageProps) {
   const { id } = useParams<{ id: string }>();
-  const [answer, setAnswer] = useState<Answer | null>(null);
-  const [notFound, setNotFound] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // `cancelled` (matching ConflictsPage.tsx's own document-index effect) stops a response for a
-  // stale `id` from landing after navigation moves to a different answer — without it, `/answers/A`
-  // → `/answers/B` can render A's claims under B's url if A's fetch resolves after B's.
-  useEffect(() => {
-    if (!id) return;
-    let cancelled = false;
-
-    getAnswerById(id)
-      .then((result) => {
-        if (cancelled) return;
-        setAnswer(result);
-        setNotFound(false);
-        setError(null);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        if (err instanceof ApiError && err.status === 404) {
-          setNotFound(true);
-          return;
-        }
-        setError(err instanceof Error ? err.message : 'Failed to load answer');
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [id]);
-
-  const { documentIndex, conflictChunkIndex } = useAnswerEnrichment(answer);
+  const { answer, error, notFound } = useAnswerRun({ answerId: id ?? null, pollIntervalMs });
 
   return (
     <div className="view view--roomy">
@@ -72,33 +41,7 @@ export default function AnswerDetailPage() {
 
       {!answer && !error && !notFound && id && <Skeleton label="Loading answer…" />}
 
-      {answer && (
-        <section className="card">
-          {answer.runStatus !== 'completed' && (
-            <div className="card-head">
-              <Badge tone={RUN_STATUS_TONE[answer.runStatus]}>{answer.runStatus}</Badge>
-            </div>
-          )}
-
-          {answer.runStatus === 'failed' && (
-            <p className="error" role="alert">
-              The question run failed.
-            </p>
-          )}
-
-          {(answer.runStatus === 'queued' || answer.runStatus === 'running') && (
-            <p className="notice notice--info">
-              <span className="live-dot" /> Still answering — check back once this run completes.
-            </p>
-          )}
-
-          <AnswerView
-            answer={answer}
-            documentIndex={documentIndex}
-            conflictChunkIndex={conflictChunkIndex}
-          />
-        </section>
-      )}
+      {answer && <AnswerWorkspace answer={answer} variant="detail" />}
     </div>
   );
 }

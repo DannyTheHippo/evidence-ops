@@ -1,8 +1,10 @@
 import { Link } from 'react-router-dom';
 import type { AnswerOutcome, Citation } from '../api/client';
+import { workbenchHref } from '../lib/citation-link';
 import { truncateSha256 } from '../lib/identifiers';
 import { formatLocator } from '../lib/locator';
 import type { ResolvedVersion } from '../lib/document-index';
+import { metricLabel, useMetricLabels } from '../lib/metric-labels';
 import Badge from './ui/Badge';
 
 export type RailNodeState = 'verified' | 'degraded' | 'neutral';
@@ -26,7 +28,7 @@ const STATE_LABEL: Record<RailNodeState, string> = {
 // One rail node per unit of provenance the outcome carries: a claim for `answered`, or the
 // outcome itself for `insufficient_evidence`/`conflicting_evidence`, neither of which has claims
 // to walk. State mirrors ProvenanceRail's own doc comment table exactly.
-function buildRailNodes(outcome: AnswerOutcome): RailNode[] {
+function buildRailNodes(outcome: AnswerOutcome, metricLabels: Record<string, string>): RailNode[] {
   switch (outcome.kind) {
     case 'answered':
       return outcome.claims.map((claim, index) => ({
@@ -51,7 +53,7 @@ function buildRailNodes(outcome: AnswerOutcome): RailNode[] {
         {
           key: 'outcome',
           state: 'neutral',
-          statement: `Conflicting values for ${outcome.factKey.entity} — ${outcome.factKey.metric} (${outcome.factKey.period})`,
+          statement: `Conflicting values for ${outcome.factKey.entity} — ${metricLabel(outcome.factKey.metric, metricLabels)} (${outcome.factKey.period})`,
           citations: [],
         },
       ];
@@ -68,13 +70,23 @@ interface TraceChipProps {
 // chunk id here is literally a hash of the verified bytes, not a database surrogate key. The chip
 // states that plainly: a truncated hash plus the id it produced, full values on hover. Both halves
 // are truncated — a chunk id is itself 64 hex characters, and printing one in full turns every
-// chip into a wall of hex that reads the same as its neighbours.
+// chip into a wall of hex that reads the same as its neighbours. Linking requires a resolved
+// document id, which `documentIndex` does not always carry — an unresolved version renders the
+// same label as a plain, non-interactive `<span>` rather than a guessed or dead link.
 function TraceChip({ citation, resolved }: TraceChipProps) {
   const label = `${truncateSha256(citation.sha256)} · ${truncateSha256(citation.chunkId)}`;
   const title = `sha256 ${citation.sha256} · chunk ${citation.chunkId}`;
   if (resolved) {
     return (
-      <Link to={`/documents/${resolved.documentId}`} className="trace-chip mono" title={title}>
+      <Link
+        to={workbenchHref({
+          documentId: resolved.documentId,
+          versionId: citation.docVersionId,
+          chunkId: citation.chunkId,
+        })}
+        className="trace-chip mono"
+        title={title}
+      >
         {label}
       </Link>
     );
@@ -117,15 +129,17 @@ interface ProvenanceRailProps {
  * itself is still genuine and still checkable against the retained bytes — a corpus gap to flag,
  * not the verification-grade failure a `rejected` tone would signal.
  *
- * Purely presentational: no fetching, no effects. The caller owns data loading and passes the
- * `documentIndex` resolved by `buildDocumentVersionIndex()`.
+ * The caller owns data loading and passes the `documentIndex` resolved by
+ * `buildDocumentVersionIndex()`; the only fetch this component triggers itself is
+ * `useMetricLabels()`'s ontology lookup, cached module-wide and at most once per browser session.
  */
 export default function ProvenanceRail({
   outcome,
   documentIndex,
   withdrawnDocVersionIds = NO_WITHDRAWN_DOC_VERSION_IDS,
 }: ProvenanceRailProps) {
-  const nodes = buildRailNodes(outcome);
+  const metricLabels = useMetricLabels();
+  const nodes = buildRailNodes(outcome, metricLabels);
 
   return (
     <ul className="rail" role="list">
@@ -137,7 +151,10 @@ export default function ProvenanceRail({
             <ul className="apparatus-citations" role="list">
               {node.citations.map((citation, index) => (
                 <li key={index} className="apparatus-citation">
-                  <blockquote className="apparatus-quote">{citation.quote}</blockquote>
+                  <details className="apparatus-quote-disclosure">
+                    <summary>Show quoted passage</summary>
+                    <blockquote className="apparatus-quote">{citation.quote}</blockquote>
+                  </details>
                   <div className="apparatus-meta">
                     <p className="apparatus-locator mono">{formatLocator(citation.locator)}</p>
                     <TraceChip

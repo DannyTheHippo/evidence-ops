@@ -96,6 +96,7 @@ describe('useAnswerEnrichment', () => {
         documentId: 'doc-1',
         documentTitle: 'Rent Roll Q1',
         withdrawn: false,
+        sourceKind: 'pdf',
       });
     });
   });

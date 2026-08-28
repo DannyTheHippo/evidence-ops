@@ -100,10 +100,12 @@ describe('DocumentList', () => {
         screen.getByText('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
       ).toBeInTheDocument();
       expect(screen.getAllByText('application/pdf')).toHaveLength(2);
-      // The row is reachable as a real link, not just a click handler on the <tr>.
+      // The row is reachable as a real link, not just a click handler on the <tr> — and it leads
+      // straight into the workbench reader for the document's current version, not a metadata
+      // page.
       expect(screen.getByRole('link', { name: 'Q3 Rent Roll' })).toHaveAttribute(
         'href',
-        '/documents/doc-1',
+        '/documents/doc-1/versions/v-1',
       );
     });
 
@@ -161,7 +163,7 @@ describe('DocumentList', () => {
       });
 
       const fetchMock = vi.fn((url: string) => {
-        if (url === '/api/v1/documents?skip=20&limit=20') {
+        if (url === '/api/v1/documents?skip=20&limit=20&sort=createdAt&sortDir=desc') {
           return Promise.resolve(jsonResponse(pageOf('doc-page-2', 25)));
         }
         return Promise.resolve(jsonResponse(pageOf('doc-page-1', 25)));
@@ -177,7 +179,8 @@ describe('DocumentList', () => {
       expect(await screen.findByText('doc-page-2')).toBeInTheDocument();
       expect(
         fetchMock.mock.calls.some(
-          ([calledUrl]) => calledUrl === '/api/v1/documents?skip=20&limit=20',
+          ([calledUrl]) =>
+            calledUrl === '/api/v1/documents?skip=20&limit=20&sort=createdAt&sortDir=desc',
         ),
       ).toBe(true);
       expect(screen.getByRole('button', { name: 'Previous' })).toBeEnabled();
@@ -385,6 +388,55 @@ describe('DocumentList', () => {
       });
     });
 
+    it('accepts an .eml file end to end, alongside the other eight upload kinds', async () => {
+      const uploaded = {
+        id: 'doc-6',
+        title: 'thread.eml',
+        sourceKind: 'eml',
+        mimeType: 'message/rfc822',
+        currentVersion: {
+          id: 'v-6',
+          versionNumber: 1,
+          sha256: 'f'.repeat(64),
+          sizeBytes: 50,
+          ingestionStatus: 'pending',
+          createdAt: new Date().toISOString(),
+        },
+        createdAt: new Date().toISOString(),
+      };
+
+      const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          return Promise.resolve(jsonResponse(uploaded));
+        }
+        return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      renderList();
+      await screen.findByText('No documents yet');
+
+      const fileInput = screen.getByLabelText('File', { exact: false });
+      expect(fileInput).toHaveAttribute('accept', '.pdf,.docx,.xlsx,.pptx,.csv,.tsv,.txt,.md,.eml');
+
+      fireEvent.change(fileInput, {
+        target: { files: [new File(['a'], 'thread.eml', { type: 'message/rfc822' })] },
+      });
+      const form = screen.getByRole('button', { name: 'Upload' }).closest('form');
+      if (!form) throw new Error('Upload form not found');
+      fireEvent.submit(form);
+
+      await waitFor(() => {
+        const uploadCall = fetchMock.mock.calls.find(
+          ([, init]) => init?.method === 'POST' && init.body instanceof FormData,
+        );
+        if (!uploadCall) throw new Error('No upload call found');
+        const body = uploadCall[1]?.body;
+        if (!(body instanceof FormData)) throw new Error('Upload body was not FormData');
+        expect(body.get('title')).toBe('thread.eml');
+      });
+    });
+
     it('shows a filter-specific empty state when the ingestion status filter matches nothing', async () => {
       const completedDoc = {
         id: 'doc-1',
@@ -403,10 +455,13 @@ describe('DocumentList', () => {
       };
 
       const fetchMock = vi.fn((url: string) => {
-        if (url === '/api/v1/documents?skip=0&limit=20') {
+        if (url === '/api/v1/documents?skip=0&limit=20&sort=createdAt&sortDir=desc') {
           return Promise.resolve(jsonResponse({ docs: [completedDoc], count: 1 }));
         }
-        if (url === '/api/v1/documents?skip=0&limit=20&ingestionStatus=needs-ocr') {
+        if (
+          url ===
+          '/api/v1/documents?skip=0&limit=20&ingestionStatus=needs-ocr&sort=createdAt&sortDir=desc'
+        ) {
           return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
         }
         return Promise.reject(new Error(`Unhandled fetch: ${url}`));
@@ -461,13 +516,16 @@ describe('DocumentList', () => {
       };
 
       const fetchMock = vi.fn((url: string) => {
-        if (url === '/api/v1/documents?skip=0&limit=20') {
+        if (url === '/api/v1/documents?skip=0&limit=20&sort=createdAt&sortDir=desc') {
           return Promise.resolve(jsonResponse({ docs: [pageOneDoc], count: 25 }));
         }
-        if (url === '/api/v1/documents?skip=20&limit=20') {
+        if (url === '/api/v1/documents?skip=20&limit=20&sort=createdAt&sortDir=desc') {
           return Promise.resolve(jsonResponse({ docs: [pageOneDoc], count: 25 }));
         }
-        if (url === '/api/v1/documents?skip=0&limit=20&ingestionStatus=needs-ocr') {
+        if (
+          url ===
+          '/api/v1/documents?skip=0&limit=20&ingestionStatus=needs-ocr&sort=createdAt&sortDir=desc'
+        ) {
           return Promise.resolve(jsonResponse({ docs: [needsOcrDoc], count: 1 }));
         }
         return Promise.reject(new Error(`Unhandled fetch: ${url}`));
@@ -483,7 +541,8 @@ describe('DocumentList', () => {
       await vi.waitFor(() =>
         expect(
           fetchMock.mock.calls.some(
-            ([calledUrl]) => calledUrl === '/api/v1/documents?skip=20&limit=20',
+            ([calledUrl]) =>
+              calledUrl === '/api/v1/documents?skip=20&limit=20&sort=createdAt&sortDir=desc',
           ),
         ).toBe(true),
       );
@@ -498,7 +557,8 @@ describe('DocumentList', () => {
       expect(
         fetchMock.mock.calls.some(
           ([calledUrl]) =>
-            calledUrl === '/api/v1/documents?skip=0&limit=20&ingestionStatus=needs-ocr',
+            calledUrl ===
+            '/api/v1/documents?skip=0&limit=20&ingestionStatus=needs-ocr&sort=createdAt&sortDir=desc',
         ),
       ).toBe(true);
     });
@@ -523,10 +583,13 @@ describe('DocumentList', () => {
       };
 
       const fetchMock = vi.fn((url: string) => {
-        if (url === '/api/v1/documents?skip=0&limit=20') {
+        if (url === '/api/v1/documents?skip=0&limit=20&sort=createdAt&sortDir=desc') {
           return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
         }
-        if (url === '/api/v1/documents?skip=0&limit=20&ingestionStatus=facts-failed') {
+        if (
+          url ===
+          '/api/v1/documents?skip=0&limit=20&ingestionStatus=facts-failed&sort=createdAt&sortDir=desc'
+        ) {
           return Promise.resolve(jsonResponse({ docs: [factsFailedDoc], count: 1 }));
         }
         return Promise.reject(new Error(`Unhandled fetch: ${url}`));
@@ -738,6 +801,79 @@ describe('DocumentList', () => {
       });
 
       expect(await screen.findByText('Page Two Doc')).toBeInTheDocument();
+    });
+
+    it('closes the live stream and switches to fetch when a column is sorted, so a late stream frame cannot clobber it', async () => {
+      const sortedDoc = {
+        id: 'doc-2',
+        title: 'Alpha Doc',
+        sourceKind: 'pdf',
+        mimeType: 'application/pdf',
+        currentVersion: {
+          id: 'v-2',
+          versionNumber: 1,
+          sha256: 'b'.repeat(64),
+          sizeBytes: 100,
+          ingestionStatus: 'completed',
+          createdAt: new Date().toISOString(),
+        },
+        createdAt: new Date().toISOString(),
+      };
+      const unsortedFrame = {
+        docs: [
+          {
+            id: 'doc-1',
+            title: 'Q3 Rent Roll',
+            sourceKind: 'xlsx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            currentVersion: {
+              id: 'v-1',
+              versionNumber: 1,
+              sha256: 'a'.repeat(64),
+              sizeBytes: 100,
+              ingestionStatus: 'completed',
+              createdAt: new Date().toISOString(),
+            },
+            createdAt: new Date().toISOString(),
+          },
+        ],
+        count: 1,
+      };
+
+      const fetchMock = vi.fn((url: string) => {
+        // Switching to a different column always starts it at 'desc', matching AnswersPage.tsx
+        // and PeoplePage.tsx.
+        if (url === '/api/v1/documents?skip=0&limit=20&sort=title&sortDir=desc') {
+          return Promise.resolve(jsonResponse({ docs: [sortedDoc], count: 1 }));
+        }
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      renderList();
+
+      const [source] = FakeEventSource.instances;
+      act(() => {
+        source.emit('documents', unsortedFrame);
+      });
+      expect(await screen.findByText('Q3 Rent Roll')).toBeInTheDocument();
+      expect(source.closed).toBe(false);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Sort by Title' }));
+
+      expect(await screen.findByText('Alpha Doc')).toBeInTheDocument();
+      // Sorting disables the stream the same way a filter does — no new stream opens for a
+      // sorted view, and the one that was live for the default view closes.
+      expect(source.closed).toBe(true);
+      expect(FakeEventSource.instances).toHaveLength(1);
+
+      // A frame on the now-closed stream must not resurrect the unsorted list: its listeners
+      // were torn down when the sort disabled the stream.
+      act(() => {
+        source.emit('documents', unsortedFrame);
+      });
+      expect(screen.queryByText('Q3 Rent Roll')).not.toBeInTheDocument();
+      expect(screen.getByText('Alpha Doc')).toBeInTheDocument();
     });
   });
 });

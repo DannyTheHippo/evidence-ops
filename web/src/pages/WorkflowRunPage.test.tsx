@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clearSession } from '../lib/auth';
+import { formatRelativeTimestamp } from '../lib/format-timestamp';
 import { FakeEventSource } from '../test/fake-event-source';
 import WorkflowRunPage from './WorkflowRunPage';
 
@@ -136,12 +137,30 @@ describe('WorkflowRunPage', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('Not yet resumed')).toBeInTheDocument();
 
+    // The id stays on screen shortened, with the full value recoverable on hover.
+    expect(screen.getByTitle('wf-1')).toHaveTextContent('wf-1');
+    // No claim of live-to-the-second status, given the API's own 15s cache on this field.
+    expect(
+      screen.getByText('Status refreshes periodically and may lag the live run.'),
+    ).toBeInTheDocument();
+
+    const [startedStep, pausedStep, resumedStep] = screen.getAllByRole('listitem');
+    expect(
+      within(startedStep).getByText(formatRelativeTimestamp(runningRun.createdAt)),
+    ).toBeInTheDocument();
+    expect(
+      within(pausedStep).getByText(formatRelativeTimestamp(pendingApproval.createdAt)),
+    ).toBeInTheDocument();
+
     currentRun = completedRun;
     currentApprovals = [];
 
     expect(await screen.findByText('Resumed — completed')).toBeInTheDocument();
     expect(screen.getByText('completed')).toBeInTheDocument();
     expect(screen.queryByText('Not yet resumed')).not.toBeInTheDocument();
+    // This run resumed by a decision made outside this browser tab — `listApprovals()` never
+    // hands back a decided approval, so there is no `decidedAt` this page could show.
+    expect(within(resumedStep).getByText('Time not recorded')).toBeInTheDocument();
   });
 
   it('stops polling once the run reaches a terminal status', async () => {
@@ -338,6 +357,93 @@ describe('WorkflowRunPage', () => {
     });
   });
 
+  it('shows the real decision time once the run resumes, when this tab decided it', async () => {
+    let currentRun: typeof runningRun | typeof completedRun = runningRun;
+    let currentApprovals: (typeof pendingApproval)[] = [pendingApproval];
+    const decidedApproval = {
+      ...pendingApproval,
+      state: 'approved' as const,
+      decidedBy: admin.email,
+      decidedAt: new Date().toISOString(),
+    };
+    const me = meRoute(admin);
+    const fetchMock = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
+      const meResponse = me(input);
+      if (meResponse) return meResponse;
+      const url = typeof input === 'string' ? input : '';
+      if (isRunRequest(input)) return Promise.resolve(jsonResponse(currentRun));
+      if (url === '/api/v1/approvals') {
+        return Promise.resolve(
+          jsonResponse({ docs: currentApprovals, count: currentApprovals.length }),
+        );
+      }
+      if (url === '/api/v1/approvals/approval-1/decision') {
+        currentApprovals = [];
+        // The workflow resumes off the approval signal; the next poll picks up the terminal run.
+        currentRun = completedRun;
+        return Promise.resolve(jsonResponse(decidedApproval));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderAt('run-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+    const dialog = screen.getByRole('dialog', { name: 'Approve this approval' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    expect(await screen.findByText('Resumed — completed')).toBeInTheDocument();
+    const [, , resumedStep] = screen.getAllByRole('listitem');
+    expect(
+      within(resumedStep).getByText(formatRelativeTimestamp(decidedApproval.decidedAt)),
+    ).toBeInTheDocument();
+  });
+
+  it('guards the extracted dialog against a double submit on this page too', async () => {
+    let currentApprovals: (typeof pendingApproval)[] = [pendingApproval];
+    const me = meRoute(admin);
+    const fetchMock = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
+      const meResponse = me(input);
+      if (meResponse) return meResponse;
+      const url = typeof input === 'string' ? input : '';
+      if (isRunRequest(input)) return Promise.resolve(jsonResponse(runningRun));
+      if (url === '/api/v1/approvals') {
+        return Promise.resolve(
+          jsonResponse({ docs: currentApprovals, count: currentApprovals.length }),
+        );
+      }
+      if (url === '/api/v1/approvals/approval-1/decision') {
+        currentApprovals = [];
+        return Promise.resolve(
+          jsonResponse({ ...pendingApproval, state: 'approved', decidedBy: admin.email }),
+        );
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderAt('run-1');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+    const dialog = screen.getByRole('dialog', { name: 'Approve this approval' });
+    const confirmButton = within(dialog).getByRole('button', { name: 'Approve' });
+    fireEvent.click(confirmButton);
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    expect(
+      fetchMock.mock.calls.filter(([url]) => url === '/api/v1/approvals/approval-1/decision'),
+    ).toHaveLength(1);
+  });
+
   it('shows why deciding is unavailable to a non-admin, with no decide controls reachable', async () => {
     const me = meRoute(member);
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
@@ -357,5 +463,23 @@ describe('WorkflowRunPage', () => {
     expect(await screen.findByText('Deciding approvals requires an admin.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument();
+  });
+
+  it('shows "Workflow run not found" for a 404, not the generic error', async () => {
+    const me = meRoute(admin);
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const meResponse = me(input);
+      if (meResponse) return meResponse;
+      if (isRunRequest(input)) {
+        return Promise.resolve(jsonResponse({ message: "Workflow run 'run-1' not found" }, 404));
+      }
+      return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderAt('run-1');
+
+    expect(await screen.findByText('Workflow run not found.')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

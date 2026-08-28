@@ -7,7 +7,7 @@ import {
   type DocumentWithVersions,
 } from '../../api/client';
 import Button from '../../components/ui/Button';
-import Dialog from '../../components/ui/Dialog';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import Skeleton from '../../components/ui/Skeleton';
 import Table, { TableHeaderCell } from '../../components/ui/Table';
 import { notify } from '../../components/ui/toast';
@@ -105,7 +105,7 @@ export default function DocumentDetail({ id }: { id: string }) {
               </thead>
               <tbody>
                 {doc.versions.map((version) => (
-                  <VersionRow key={version.id} version={version} />
+                  <VersionRow key={version.id} version={version} documentId={doc.id} />
                 ))}
               </tbody>
             </Table>
@@ -126,30 +126,17 @@ export default function DocumentDetail({ id }: { id: string }) {
               </div>
             )}
             {canDelete && (
-              <Dialog
+              <ConfirmDialog
                 open={confirmOpen}
                 onClose={() => setConfirmOpen(false)}
                 title={`Delete "${doc.title}"?`}
-              >
-                <p>
-                  Deleting cascades to all of this document&apos;s versions, chunks, extracted facts
-                  and stored bytes. Answers that already cited it keep their citations. This cannot
-                  be undone.
-                </p>
-                <div className="form-actions">
-                  <Button variant="ghost" onClick={() => setConfirmOpen(false)}>
-                    Cancel
-                  </Button>
-                  <Button variant="danger" disabled={deleting} onClick={() => void handleDelete()}>
-                    {deleting ? 'Deleting…' : 'Delete document'}
-                  </Button>
-                </div>
-                {deleteError && (
-                  <p className="error" role="alert">
-                    {deleteError}
-                  </p>
-                )}
-              </Dialog>
+                body="Deleting cascades to all of this document's versions, chunks, extracted facts and stored bytes. Answers that already cited it keep their citations. This cannot be undone."
+                confirmLabel="Delete document"
+                destructive
+                busy={deleting}
+                error={deleteError ?? undefined}
+                onConfirm={() => void handleDelete()}
+              />
             )}
           </section>
         </>

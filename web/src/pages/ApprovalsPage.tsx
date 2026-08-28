@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   decideApproval,
@@ -7,21 +7,26 @@ import {
   listWorkflowRuns,
   type Approval,
   type ApprovalDecision,
+  type ApprovalSortField,
   type ApprovalState,
   type Conflict,
+  type SortDirection,
 } from '../api/client';
+import ApprovalDecisionDialog from '../components/ApprovalDecisionDialog';
 import { IconCheck } from '../components/icons';
+import RecordListPage, { type RecordListStatus } from '../components/RecordListPage';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
-import Dialog from '../components/ui/Dialog';
-import EmptyState from '../components/ui/EmptyState';
-import Field from '../components/ui/Field';
+import FilterBar from '../components/ui/FilterBar';
 import Pager from '../components/ui/Pager';
 import Select from '../components/ui/Select';
-import Skeleton from '../components/ui/Skeleton';
+import SplitView from '../components/ui/SplitView';
+import Timestamp from '../components/ui/Timestamp';
 import { notify } from '../components/ui/toast';
-import { useSession } from '../lib/use-session';
 import { shortId } from '../lib/identifiers';
+import { metricLabel, useMetricLabels } from '../lib/metric-labels';
+import { useSession } from '../lib/use-session';
+import { useUrlState } from '../lib/use-url-state';
 
 const PAGE_SIZE = 20;
 
@@ -34,11 +39,31 @@ const STATE_OPTIONS: { value: ApprovalState; label: string }[] = [
   { value: 'timed_out', label: 'Timed out' },
 ];
 
+const SORT_OPTIONS: { value: ApprovalSortField; label: string }[] = [
+  { value: 'createdAt', label: 'Requested' },
+  { value: 'state', label: 'State' },
+  { value: 'decidedAt', label: 'Decided' },
+];
+
+const DIRECTION_OPTIONS: { value: SortDirection; label: string }[] = [
+  { value: 'desc', label: 'Descending' },
+  { value: 'asc', label: 'Ascending' },
+];
+
 const stateTone: Record<ApprovalState, 'caution' | 'verified' | 'rejected' | 'neutral'> = {
   pending: 'caution',
   approved: 'verified',
   rejected: 'rejected',
   timed_out: 'neutral',
+};
+
+// Declared at module scope, matching AnswersPage.tsx's own `URL_DEFAULTS` — `useUrlState` adopts
+// this once on mount and keeps that identity for the hook's lifetime.
+const URL_DEFAULTS: Record<'state' | 'sort' | 'sortDir' | 'skip', string> = {
+  state: 'pending',
+  sort: 'createdAt',
+  sortDir: 'desc',
+  skip: '0',
 };
 
 /** The value `conflict.proposedWinnerFactId` points at, formatted for display — undefined when
@@ -48,66 +73,26 @@ function conflictWinnerLabel(conflict: Conflict): string | undefined {
   return winner ? `${winner.value} ${winner.unit}` : undefined;
 }
 
-function ApprovalRow({
+function ApprovalDetail({
   approval,
   canDecide,
   sessionResolved,
   conflict,
+  metricLabels,
   onDecided,
 }: {
   approval: Approval;
   canDecide: boolean;
   sessionResolved: boolean;
   conflict?: Conflict;
+  metricLabels: Record<string, string>;
   onDecided: (id: string) => void;
 }) {
   const navigate = useNavigate();
-  const [reason, setReason] = useState('');
-  const [deciding, setDeciding] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // The dialog's own open/decision-direction state — set only from the admin-gated row buttons
-  // below, so a non-admin never has a path to open it.
   const [pendingDecision, setPendingDecision] = useState<ApprovalDecision | null>(null);
   const [viewingRun, setViewingRun] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const winnerLabel = conflict ? conflictWinnerLabel(conflict) : undefined;
-  // Blocks a double submit between the click and the re-render that disables the dialog's own
-  // buttons — `disabled={deciding}` alone only takes effect once React has committed it, the same
-  // reasoning `AskPage.tsx`'s `submitInFlightRef` documents. A stale `pending` row rendered after
-  // another tab already decided it is a live Approve/Reject button aimed at a decided approval;
-  // the server's own `state: 'pending'` guard (`ApprovalsService.decide`) still rejects the second
-  // write, but this stops the SPA from firing it at all.
-  const submitInFlightRef = useRef(false);
-
-  function closeDialog() {
-    setPendingDecision(null);
-    setReason('');
-    setError(null);
-  }
-
-  async function decide(decision: ApprovalDecision) {
-    if (submitInFlightRef.current) return;
-    submitInFlightRef.current = true;
-    setDeciding(true);
-    setError(null);
-    try {
-      await decideApproval(approval.id, decision, reason.trim() || undefined);
-      notify(
-        'success',
-        decision === 'approved'
-          ? 'Approved — the workflow resumes.'
-          : 'Rejected — the workflow resumes.',
-      );
-      setPendingDecision(null);
-      setReason('');
-      onDecided(approval.id);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to record decision');
-    } finally {
-      setDeciding(false);
-      submitInFlightRef.current = false;
-    }
-  }
 
   async function viewRun() {
     const workflowId = approval.workflowId;
@@ -129,8 +114,20 @@ function ApprovalRow({
     }
   }
 
+  async function handleConfirm(decision: ApprovalDecision, reason: string | undefined) {
+    await decideApproval(approval.id, decision, reason);
+    notify(
+      'success',
+      decision === 'approved'
+        ? 'Approved — the workflow resumes.'
+        : 'Rejected — the workflow resumes.',
+    );
+    setPendingDecision(null);
+    onDecided(approval.id);
+  }
+
   return (
-    <li className="card">
+    <div className="card">
       <div className="card-head">
         <h2 className="card-title">{approval.summary}</h2>
         <Badge tone={stateTone[approval.state]}>{approval.state}</Badge>
@@ -145,29 +142,38 @@ function ApprovalRow({
           {shortId(approval.subject.entityId)}
         </span>
       </p>
-      <p className="cell-sub">Requested {new Date(approval.createdAt).toLocaleString()}</p>
+      <p className="cell-sub">
+        Requested <Timestamp value={approval.createdAt} />
+      </p>
       {approval.state !== 'pending' && approval.decidedAt && (
         <p className="cell-sub">
-          Decided {new Date(approval.decidedAt).toLocaleString()}
+          Decided <Timestamp value={approval.decidedAt} />
           {approval.decidedBy ? ` by ${approval.decidedBy}` : ''}
         </p>
       )}
       {approval.decisionReason && <p className="cell-sub">Reason: {approval.decisionReason}</p>}
 
-      {conflict &&
-        (conflict.ruleFired === 'none' ? (
+      {conflict && (
+        <>
           <p className="cell-sub">
-            Policy has no recommendation for this conflict — {conflict.explanation}
+            {conflict.factKey.entity} · {metricLabel(conflict.factKey.metric, metricLabels)} ·{' '}
+            {conflict.factKey.period}
           </p>
-        ) : (
-          <>
-            <Badge tone="info">recommended · {conflict.ruleFired}</Badge>
+          {conflict.ruleFired === 'none' ? (
             <p className="cell-sub">
-              {winnerLabel ? `${winnerLabel} — ` : ''}
-              {conflict.explanation}
+              Policy has no recommendation for this conflict — {conflict.explanation}
             </p>
-          </>
-        ))}
+          ) : (
+            <>
+              <Badge tone="info">recommended · {conflict.ruleFired}</Badge>
+              <p className="cell-sub">
+                {winnerLabel ? `${winnerLabel} — ` : ''}
+                {conflict.explanation}
+              </p>
+            </>
+          )}
+        </>
+      )}
 
       <div className="form-actions">
         {/* `decide()` (`approvals.service.ts`) rejects a non-pending approval outright, so the
@@ -202,65 +208,34 @@ function ApprovalRow({
         </p>
       )}
 
-      <Dialog
-        open={pendingDecision !== null}
-        onClose={closeDialog}
-        title={pendingDecision === 'rejected' ? 'Reject this approval' : 'Approve this approval'}
-      >
-        <div className="form">
-          <p>{approval.summary}</p>
-          <p className="cell-sub">
-            {approval.workflowId
-              ? 'This decision resumes the parked workflow run.'
-              : 'This decision will be recorded.'}
-          </p>
-          <Field label="Reason (optional)">
-            {(inputProps) => (
-              <input
-                type="text"
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder="Evidence checks out."
-                disabled={deciding}
-                {...inputProps}
-              />
-            )}
-          </Field>
-          {error && (
-            <p className="error" role="alert">
-              {error}
-            </p>
-          )}
-          <div className="form-actions">
-            <Button
-              variant={pendingDecision === 'rejected' ? 'danger' : 'primary'}
-              disabled={deciding}
-              onClick={() => pendingDecision && void decide(pendingDecision)}
-            >
-              {pendingDecision === 'rejected' ? 'Reject' : 'Approve'}
-            </Button>
-            <Button variant="ghost" disabled={deciding} onClick={closeDialog}>
-              Cancel
-            </Button>
-          </div>
-        </div>
-      </Dialog>
-    </li>
+      <ApprovalDecisionDialog
+        decision={pendingDecision}
+        summary={approval.summary}
+        resumesWorkflow={!!approval.workflowId}
+        onClose={() => setPendingDecision(null)}
+        onConfirm={handleConfirm}
+      />
+    </div>
   );
 }
 
 export default function ApprovalsPage() {
+  const [urlState, setUrlState] = useUrlState(URL_DEFAULTS);
+  const appliedState = urlState.state as ApprovalState;
+  const sort = urlState.sort as ApprovalSortField;
+  const sortDir = urlState.sortDir as SortDirection;
+  const skip = Number(urlState.skip);
+
+  // Only this, not the state Select's own value, drives the fetch — the filter applies on
+  // submit, not on every selection change (AnswersPage.tsx follows the same split).
+  const [draftState, setDraftState] = useState(appliedState);
   const [approvals, setApprovals] = useState<Approval[] | null>(null);
   const [count, setCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [conflictsById, setConflictsById] = useState<Map<string, Conflict>>(new Map());
-  const [skip, setSkip] = useState(0);
-  const [state, setState] = useState<ApprovalState>('pending');
-  // Only this, not `state` itself, drives the fetch — the filter applies on submit, not on every
-  // selection change (AnswersPage.tsx follows the same split). There is no "unset" value to fall
-  // back to — every option is a concrete state, matching what the server actually filters on.
-  const [appliedState, setAppliedState] = useState<ApprovalState>('pending');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const session = useSession();
+  const metricLabels = useMetricLabels();
   // Fails CLOSED on the still-loading probe too, not just anon/error — a member (or a session
   // that hasn't resolved yet) never sees the decide controls flash in before the check lands.
   const canDecide = session.status === 'authed' && session.me.role === 'admin';
@@ -269,7 +244,7 @@ export default function ApprovalsPage() {
   useEffect(() => {
     let cancelled = false;
 
-    listApprovals({ skip, limit: PAGE_SIZE, state: appliedState })
+    listApprovals({ skip, limit: PAGE_SIZE, state: appliedState, sort, sortDir })
       .then(({ docs, count: total }) => {
         if (cancelled) return;
         setApprovals(docs);
@@ -284,23 +259,21 @@ export default function ApprovalsPage() {
     return () => {
       cancelled = true;
     };
-  }, [skip, appliedState]);
-
-  function handleFilter(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setSkip(0);
-    setAppliedState(state);
-  }
+  }, [skip, appliedState, sort, sortDir]);
 
   // A conflict-resolution approval carries no proposal of its own — `subject.entityId` is the
-  // conflict id, and the proposal (winner, rule, explanation) lives on the conflict. Fetched only
-  // once there is a conflict-backed approval to annotate; failure here must not affect the
-  // approvals list, same reasoning as the document-index fetch on ConflictsPage.
+  // conflict id, and the proposal (winner, rule, explanation) lives on the conflict. Bounded to
+  // the number of Conflict-subject approvals actually rendered this page, never to the tenant's
+  // whole conflict set: `/conflicts` has no id filter, so a referenced conflict outside this
+  // recency-sorted window still goes unannotated — the row renders without the recommendation
+  // rather than blocking the page (see the `.catch(() => {})` below).
   useEffect(() => {
-    if (!approvals?.some((approval) => approval.subject.entityType === 'Conflict')) return;
+    const subjectCount =
+      approvals?.filter((approval) => approval.subject.entityType === 'Conflict').length ?? 0;
+    if (subjectCount === 0) return;
     let cancelled = false;
 
-    listConflicts()
+    listConflicts({ limit: subjectCount })
       .then(({ docs }) => {
         if (!cancelled) setConflictsById(new Map(docs.map((conflict) => [conflict.id, conflict])));
       })
@@ -311,6 +284,15 @@ export default function ApprovalsPage() {
     };
   }, [approvals]);
 
+  function handleApplyFilter() {
+    setUrlState({ state: draftState, skip: URL_DEFAULTS.skip });
+  }
+
+  function handleClearFilter() {
+    setDraftState(URL_DEFAULTS.state as ApprovalState);
+    setUrlState({ state: URL_DEFAULTS.state, skip: URL_DEFAULTS.skip });
+  }
+
   // A decided approval leaves the pending inbox — decide controls only render on a pending-state
   // row (`decide()` in `approvals.service.ts` rejects anything else), so removing it locally on
   // success matches what a re-fetch of the pending filter would show anyway.
@@ -319,70 +301,132 @@ export default function ApprovalsPage() {
     setCount((current) => Math.max(0, current - 1));
   }
 
+  const hasFilter = appliedState !== URL_DEFAULTS.state;
+  // Falls back to the first row once the previous selection leaves the current page (paging,
+  // filtering, or its own decision) — a render-time derivation rather than an effect syncing
+  // selection to a prop/state change.
+  const selectedApproval =
+    approvals?.find((approval) => approval.id === selectedId) ?? approvals?.[0] ?? null;
+  const selectedConflict =
+    selectedApproval?.subject.entityType === 'Conflict'
+      ? conflictsById.get(selectedApproval.subject.entityId)
+      : undefined;
+
+  let status: RecordListStatus;
+  if (approvals === null) {
+    status = error ? { kind: 'blank' } : { kind: 'loading', label: 'Loading approvals…' };
+  } else if (approvals.length === 0) {
+    status =
+      appliedState === 'pending'
+        ? {
+            kind: 'empty',
+            icon: <IconCheck size={24} />,
+            title: 'Nothing waiting on you',
+            description:
+              'Every approval has been decided. New requests appear here as workflows park on them.',
+          }
+        : {
+            kind: 'empty',
+            icon: <IconCheck size={24} />,
+            title: 'No approvals match this filter',
+            description: 'Clear or adjust the state filter above.',
+          };
+  } else {
+    status = { kind: 'ready' };
+  }
+
   return (
-    <div className="view">
-      <div className="page-head">
-        <div>
-          <span className="eyebrow">Review</span>
-          <h1 className="page-title">Approvals</h1>
-          <p className="page-sub">Pending human decisions gating a workflow run.</p>
-        </div>
-      </div>
-
-      <form onSubmit={handleFilter} className="control-row">
-        <Select
-          label="State"
-          options={STATE_OPTIONS}
-          value={state}
-          onChange={(value) => setState(value as ApprovalState)}
-        />
-        <Button type="submit" variant="primary">
-          Apply filters
-        </Button>
-      </form>
-
-      {error && (
-        <p className="error error--page" role="alert">
-          {error}
-        </p>
-      )}
-
-      {!approvals && !error && <Skeleton label="Loading approvals…" />}
-
-      {approvals && approvals.length === 0 && appliedState === 'pending' && (
-        <EmptyState
-          icon={<IconCheck size={24} />}
-          title="Nothing waiting on you"
-          description="Every approval has been decided. New requests appear here as workflows park on them."
-        />
-      )}
-
-      {approvals && approvals.length === 0 && appliedState !== 'pending' && (
-        <EmptyState
-          icon={<IconCheck size={24} />}
-          title="No approvals match this filter"
-          description="Clear or adjust the state filter above."
-        />
-      )}
-
-      <ul className="approval-list">
-        {approvals?.map((approval) => (
-          <ApprovalRow
-            key={approval.id}
-            approval={approval}
-            canDecide={canDecide}
-            sessionResolved={sessionResolved}
-            conflict={
-              approval.subject.entityType === 'Conflict'
-                ? conflictsById.get(approval.subject.entityId)
-                : undefined
-            }
-            onDecided={handleDecided}
+    <RecordListPage
+      eyebrow="Review"
+      title="Approvals"
+      description="Pending human decisions gating a workflow run."
+      filters={
+        <>
+          <FilterBar onApply={handleApplyFilter} onClear={handleClearFilter} hasFilter={hasFilter}>
+            <Select
+              label="State"
+              options={STATE_OPTIONS}
+              value={draftState}
+              onChange={(value) => setDraftState(value as ApprovalState)}
+            />
+          </FilterBar>
+          <div className="control-row">
+            <div className="sort-select">
+              <Select
+                label="Sort by"
+                options={SORT_OPTIONS}
+                value={sort}
+                onChange={(value) => setUrlState({ sort: value, skip: URL_DEFAULTS.skip })}
+              />
+            </div>
+            <div className="sort-select">
+              <Select
+                label="Direction"
+                options={DIRECTION_OPTIONS}
+                value={sortDir}
+                onChange={(value) => setUrlState({ sortDir: value, skip: URL_DEFAULTS.skip })}
+              />
+            </div>
+          </div>
+        </>
+      }
+      error={error ?? undefined}
+      status={status}
+      footer={
+        approvals && (
+          <Pager
+            count={count}
+            skip={skip}
+            pageSize={PAGE_SIZE}
+            onSkipChange={(next) => setUrlState({ skip: String(next) })}
           />
-        ))}
-      </ul>
-
-      {approvals && <Pager count={count} skip={skip} pageSize={PAGE_SIZE} onSkipChange={setSkip} />}
-    </div>
+        )
+      }
+    >
+      {approvals && approvals.length > 0 && (
+        <SplitView
+          ratio="queue"
+          primaryLabel="Approvals queue"
+          secondaryLabel="Approval details"
+          primary={
+            <ul className="approval-list" aria-label="Approvals awaiting review">
+              {approvals.map((approval) => {
+                const isSelected = approval.id === selectedApproval?.id;
+                return (
+                  <li key={approval.id}>
+                    <button
+                      type="button"
+                      className={`card queue-item${isSelected ? ' is-active' : ''}`}
+                      aria-current={isSelected ? 'true' : undefined}
+                      onClick={() => setSelectedId(approval.id)}
+                    >
+                      <div className="card-head">
+                        <h2 className="card-title cell-truncate">{approval.summary}</h2>
+                        <Badge tone={stateTone[approval.state]}>{approval.state}</Badge>
+                      </div>
+                      <p className="cell-sub">
+                        Requested <Timestamp value={approval.createdAt} />
+                      </p>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          }
+          secondary={
+            selectedApproval ? (
+              <ApprovalDetail
+                approval={selectedApproval}
+                canDecide={canDecide}
+                sessionResolved={sessionResolved}
+                conflict={selectedConflict}
+                metricLabels={metricLabels}
+                onDecided={handleDecided}
+              />
+            ) : null
+          }
+        />
+      )}
+    </RecordListPage>
   );
 }

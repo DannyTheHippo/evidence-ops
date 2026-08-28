@@ -1,12 +1,13 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clearSession } from '../lib/auth';
+import { formatRelativeTimestamp } from '../lib/format-timestamp';
 import type { Source, WorkflowRun } from '../api/client';
 import SourcesPage from './SourcesPage';
 
-const TRACKED_URL = '/api/v1/sources?skip=0&limit=20&tracked=true';
-const INVENTORY_URL = '/api/v1/sources?skip=0&limit=20&tracked=false';
+const TRACKED_URL = '/api/v1/sources?skip=0&limit=20&tracked=true&sort=name&sortDir=asc';
+const INVENTORY_URL = '/api/v1/sources?skip=0&limit=20&tracked=false&sort=name&sortDir=asc';
 const ME_URL = '/api/v1/auth/me';
 
 const admin = {
@@ -30,10 +31,9 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-// Dispatches by URL and method, matching ApprovalsPage.test.tsx's stubFetch shape. Stubbing fetch
-// keeps client.ts in the path under test — URL construction, credentials, status handling and
-// error-message extraction all stay exercised. Every route not given here 404s the empty pager
-// stub for the two list URLs, so a test only has to override what it cares about.
+// Dispatches by URL and method, matching ApprovalsPage.test.tsx's stubFetch shape. Both list URLs
+// default to an empty page so a test only has to override what it cares about — both fetches fire
+// on every render regardless of which view is on screen, so both need a default.
 type RouteHandler = (init?: RequestInit) => Response | Promise<Response>;
 
 function stubFetch(
@@ -55,26 +55,6 @@ function stubFetch(
   return fetchMock;
 }
 
-// A fetch response the test releases by hand, so an in-flight poll can be made to land after a
-// later one — the ordering a wall-clock delay can only approximate.
-function deferredResponse(body: unknown): { response: Promise<Response>; release: () => void } {
-  let release!: () => void;
-  const response = new Promise<Response>((resolve) => {
-    release = () => resolve(jsonResponse(body));
-  });
-  return { response, release };
-}
-
-// Drives the fake clock and lets each fetch settle through its response-parsing promise chain,
-// so assertions read committed state instead of racing it. Testing Library cannot detect a fake
-// clock without vitest globals, so `waitFor`/`findBy*` hang here — advance the clock instead.
-async function tick(ms = 0): Promise<void> {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(ms);
-    await vi.advanceTimersByTimeAsync(0);
-  });
-}
-
 function makeSource(overrides: Partial<Source> = {}): Source {
   return {
     id: 'source-1',
@@ -88,7 +68,7 @@ function makeSource(overrides: Partial<Source> = {}): Source {
     owner: 'Jane Doe, IT',
     tracked: true,
     sourceClass: 'unclassified',
-    createdAt: new Date().toISOString(),
+    createdAt: '2026-08-01T00:00:00.000Z',
     ...overrides,
   };
 }
@@ -103,11 +83,26 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   };
 }
 
-function renderPage(pollIntervalMs = 5) {
+// Exposes the current query string as accessible text, matching AnswersPage.test.tsx's probe —
+// proves the URL round-trip without reaching into router internals.
+function LocationProbe() {
+  const location = useLocation();
+  return <output aria-label="current search">{location.search}</output>;
+}
+
+function renderPage(initialEntries: string[] = ['/sources'], pollIntervalMs = 5) {
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <Routes>
-        <Route path="/" element={<SourcesPage pollIntervalMs={pollIntervalMs} />} />
+        <Route
+          path="/sources"
+          element={
+            <>
+              <SourcesPage pollIntervalMs={pollIntervalMs} />
+              <LocationProbe />
+            </>
+          }
+        />
         {/* Static, not :id — pins the sync link assertion to the run's own id, not anything
             else on the source, so a regression to the wrong field fails the test. */}
         <Route path="/workflow-runs/run-1" element={<p>run page probe</p>} />
@@ -126,29 +121,45 @@ describe('SourcesPage', () => {
     clearSession();
   });
 
-  it('shows a status region for each list while both are loading', () => {
+  it('shows a status region for the active (tracked) list while it loads', () => {
     stubFetch({
       [TRACKED_URL]: () => new Promise<Response>(() => {}),
-      [INVENTORY_URL]: () => new Promise<Response>(() => {}),
     });
 
     renderPage();
 
     expect(screen.getByText('Loading sources…')).toBeInTheDocument();
-    expect(screen.getByText('Loading inventory…')).toBeInTheDocument();
   });
 
-  it('reads as "nothing here yet" on an empty source list, for both lists independently', async () => {
+  it('reads as "nothing here yet" on an empty tracked list, the default view', async () => {
     stubFetch();
 
     renderPage();
 
     expect(await screen.findByText('No sources yet')).toBeInTheDocument();
-    expect(screen.getByText('No inventory-only repositories yet')).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
-  it('shows an error when the synced list fails to load, without blocking the inventory list', async () => {
+  it('switches to the repository inventory view, updating aria-pressed and showing its own empty state', async () => {
+    stubFetch();
+
+    renderPage();
+    await screen.findByText('No sources yet');
+
+    const trackedButton = screen.getByRole('button', { name: 'Tracked sources' });
+    const inventoryButton = screen.getByRole('button', { name: 'Repository inventory' });
+    expect(trackedButton).toHaveAttribute('aria-pressed', 'true');
+    expect(inventoryButton).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(inventoryButton);
+
+    expect(await screen.findByText('No inventory-only repositories yet')).toBeInTheDocument();
+    expect(screen.queryByText('No sources yet')).not.toBeInTheDocument();
+    expect(trackedButton).toHaveAttribute('aria-pressed', 'false');
+    expect(inventoryButton).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('shows an error when the active (tracked) list fails to load', async () => {
     stubFetch({
       [TRACKED_URL]: () => jsonResponse({ message: 'Failed to load sources' }, 500),
     });
@@ -156,10 +167,9 @@ describe('SourcesPage', () => {
     renderPage();
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load sources');
-    expect(await screen.findByText('No inventory-only repositories yet')).toBeInTheDocument();
   });
 
-  it('lists a populated source with its status, interval, owner, reach, class, last sync, and file count', async () => {
+  it('lists a populated source with its status, interval, owner, reach, class, last sync, and created date', async () => {
     const source = makeSource({
       enabled: false,
       intervalMs: 300_000,
@@ -171,6 +181,7 @@ describe('SourcesPage', () => {
       connectivity: 'export-only',
       reachability: 'possible',
       sourceClass: 'crm-export',
+      createdAt: '2026-07-01T00:00:00.000Z',
     });
     stubFetch({
       [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
@@ -187,8 +198,9 @@ describe('SourcesPage', () => {
     expect(screen.getByText('Every 5 minutes')).toBeInTheDocument();
     expect(screen.getByText('disabled')).toBeInTheDocument();
     expect(
-      screen.getByText(new Date(source.lastSyncAt as string).toLocaleString()),
+      screen.getByText(formatRelativeTimestamp(source.lastSyncAt as string)),
     ).toBeInTheDocument();
+    expect(screen.getByText(formatRelativeTimestamp(source.createdAt))).toBeInTheDocument();
     expect(screen.getByText('failed')).toBeInTheDocument();
     expect(screen.getByText('ENOENT: no such directory')).toBeInTheDocument();
     expect(screen.getByText('7')).toBeInTheDocument();
@@ -264,35 +276,34 @@ describe('SourcesPage', () => {
     expect(link).toHaveAttribute('href', '/sources/source-1');
   });
 
-  it('shows the synced list total alongside Previous/Next, disabled at the ends', async () => {
+  it('shows the tracked list total alongside Previous/Next, disabled at the ends', async () => {
     const first = makeSource({ id: 'source-1', name: 'Deal Room Inbox' });
     const second = makeSource({ id: 'source-2', name: 'Diligence Drive' });
     const fetchMock = stubFetch({
       [TRACKED_URL]: () => jsonResponse({ docs: [first], count: 25 }),
-      '/api/v1/sources?skip=20&limit=20&tracked=true': () =>
+      '/api/v1/sources?skip=20&limit=20&tracked=true&sort=name&sortDir=asc': () =>
         jsonResponse({ docs: [second], count: 25 }),
     });
 
     renderPage();
 
-    // Both lists render their own Pager, so both carry a "Previous"/"Next" pair — the tracked
-    // list's pager is the first of each in DOM order, since its section renders before Inventory.
     expect(await screen.findByText('25 total')).toBeInTheDocument();
-    const [trackedPrev] = screen.getAllByRole('button', { name: 'Previous' });
-    const [trackedNext] = screen.getAllByRole('button', { name: 'Next' });
-    expect(trackedPrev).toBeDisabled();
-    expect(trackedNext).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+    const next = screen.getByRole('button', { name: 'Next' });
+    expect(next).not.toBeDisabled();
 
-    fireEvent.click(trackedNext);
+    fireEvent.click(next);
 
     expect(await screen.findByText('Diligence Drive')).toBeInTheDocument();
     expect(
-      fetchMock.mock.calls.some(([url]) => url === '/api/v1/sources?skip=20&limit=20&tracked=true'),
+      fetchMock.mock.calls.some(
+        ([url]) => url === '/api/v1/sources?skip=20&limit=20&tracked=true&sort=name&sortDir=asc',
+      ),
     ).toBe(true);
-    expect(screen.getAllByRole('button', { name: 'Previous' })[0]).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Previous' })).not.toBeDisabled();
   });
 
-  it('shows inventory-only sources in their own table with Owner/Reach/Class columns only', async () => {
+  it('shows inventory-only sources with Owner/Reach/Class/Created columns only, no sync state', async () => {
     const inventorySource = makeSource({
       id: 'source-3',
       name: 'Export Drop',
@@ -307,6 +318,7 @@ describe('SourcesPage', () => {
     });
 
     renderPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Repository inventory' }));
 
     expect(
       await screen.findByRole('table', {
@@ -323,30 +335,26 @@ describe('SourcesPage', () => {
     expect(screen.queryByRole('button', { name: 'Sync now' })).not.toBeInTheDocument();
   });
 
-  it('shows the inventory list total alongside its own Previous/Next, independent of the synced pager', async () => {
+  it('shows the inventory list total alongside its own Previous/Next, independent of the tracked pager', async () => {
     const first = makeSource({ id: 'source-3', name: 'Export Drop', tracked: false });
     const second = makeSource({ id: 'source-4', name: 'Legacy Share', tracked: false });
     stubFetch({
       [INVENTORY_URL]: () => jsonResponse({ docs: [first], count: 25 }),
-      '/api/v1/sources?skip=20&limit=20&tracked=false': () =>
+      '/api/v1/sources?skip=20&limit=20&tracked=false&sort=name&sortDir=asc': () =>
         jsonResponse({ docs: [second], count: 25 }),
     });
 
     renderPage();
-
+    fireEvent.click(screen.getByRole('button', { name: 'Repository inventory' }));
     await screen.findByText('Export Drop');
-    const pagers = screen.getAllByText('25 total');
-    expect(pagers).toHaveLength(1);
 
-    // The inventory list's pager is the second "Next" in DOM order — the tracked (empty, default)
-    // list's pager is first and stays disabled throughout this test.
-    const nextButtons = screen.getAllByRole('button', { name: 'Next' });
-    fireEvent.click(nextButtons[1]);
+    const next = screen.getByRole('button', { name: 'Next' });
+    fireEvent.click(next);
 
     expect(await screen.findByText('Legacy Share')).toBeInTheDocument();
   });
 
-  it('an admin creates a synced source, which reloads and appears in the synced list', async () => {
+  it('an admin creates a tracked source, which reloads and appears in the (already active) tracked view', async () => {
     const created = makeSource({
       id: 'source-2',
       name: 'New Source',
@@ -395,7 +403,7 @@ describe('SourcesPage', () => {
     expect(trackedCall).toBe(2);
   });
 
-  it('an admin creates an inventory-only source, which reloads the inventory list, not the synced one', async () => {
+  it('an admin creates an inventory-only source from the tracked view, which switches to and reloads the inventory view', async () => {
     const created = makeSource({
       id: 'source-3',
       name: 'Export Drop',
@@ -418,8 +426,7 @@ describe('SourcesPage', () => {
     });
 
     renderPage();
-
-    await screen.findByText('No inventory-only repositories yet');
+    await screen.findByText('No sources yet');
 
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Export Drop' } });
     fireEvent.change(screen.getByLabelText('Owner'), { target: { value: 'Ops Team' } });
@@ -427,7 +434,13 @@ describe('SourcesPage', () => {
     fireEvent.change(screen.getByLabelText('Tracked'), { target: { value: 'false' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
 
+    // The page switched itself to the inventory view — the created source is visible without a
+    // manual click on "Repository inventory".
     expect(await screen.findByText('Export Drop')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Repository inventory' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
     expect(inventoryCall).toBe(2);
   });
 
@@ -574,102 +587,6 @@ describe('SourcesPage', () => {
     expect(await screen.findByText('run page probe')).toBeInTheDocument();
   });
 
-  it('stops polling the sync run once it reaches a terminal state', async () => {
-    const source = makeSource();
-    const runningRun = makeRun({ status: 'running' });
-    const completedRun = makeRun({ status: 'completed' });
-
-    const fetchMock = stubFetch({
-      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
-      '/api/v1/sources/source-1/sync': () => jsonResponse(runningRun, 201),
-      '/api/v1/workflow-runs/run-1': () => jsonResponse(completedRun),
-    });
-
-    renderPage();
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Sync now' }));
-
-    await screen.findByRole('link', { name: 'Synced' });
-
-    // Assert the poll count stops growing rather than that a poisoned response fails to render:
-    // with a short interval several polls are in flight before React re-renders, so a
-    // render-based assertion races the teardown and fails intermittently. Call count is the
-    // property actually under test — "the interval was cleared" — and it is deterministic.
-    const pollCalls = () =>
-      fetchMock.mock.calls.filter(([url]) => url === '/api/v1/workflow-runs/run-1').length;
-    const callsAtCompletion = pollCalls();
-    await new Promise((resolve) => setTimeout(resolve, 60));
-
-    expect(pollCalls()).toBe(callsAtCompletion);
-    expect(screen.getByRole('link', { name: 'Synced' })).toBeInTheDocument();
-  });
-
-  it('keeps a single polling interval across sync-run ticks that repeat the same status', async () => {
-    vi.useFakeTimers();
-    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
-    const source = makeSource();
-    const runningRun = makeRun({ status: 'running' });
-    // Each poll deserialises into a fresh object, so an effect keyed on the run object rather than
-    // its id and status would tear the interval down and rebuild it on every tick.
-    const fetchMock = stubFetch({
-      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
-      '/api/v1/sources/source-1/sync': () => jsonResponse(runningRun, 201),
-      '/api/v1/workflow-runs/run-1': () => jsonResponse(runningRun),
-    });
-
-    renderPage(1000);
-    await tick();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Sync now' }));
-    await tick();
-
-    expect(setIntervalSpy).toHaveBeenCalledTimes(1);
-
-    await tick(1000);
-    await tick(1000);
-    await tick(1000);
-
-    expect(
-      fetchMock.mock.calls.filter(([url]) => url === '/api/v1/workflow-runs/run-1').length,
-    ).toBe(3);
-    expect(setIntervalSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it('drops a sync-run poll response that lands after a later one already completed the run', async () => {
-    const source = makeSource();
-    const runningRun = makeRun({ status: 'running' });
-    const completedRun = makeRun({ status: 'completed' });
-    // The first poll's own response, held back until after a later poll reported completion.
-    // Applying it would walk the row backwards from a finished sync to a running one.
-    const stale = deferredResponse(runningRun);
-
-    let pollCall = 0;
-    stubFetch({
-      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
-      '/api/v1/sources/source-1/sync': () => jsonResponse(runningRun, 201),
-      '/api/v1/workflow-runs/run-1': () => {
-        pollCall += 1;
-        return pollCall === 1 ? stale.response : jsonResponse(completedRun);
-      },
-    });
-
-    renderPage();
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Sync now' }));
-
-    await screen.findByRole('link', { name: 'Synced' });
-
-    // act's async exit crosses a macrotask boundary, which drains the released response's whole
-    // promise chain — no timer, so no wall-clock race.
-    await act(async () => {
-      stale.release();
-      await stale.response;
-    });
-
-    expect(screen.getByRole('link', { name: 'Synced' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Syncing…' })).not.toBeInTheDocument();
-  });
-
   it('shows an error when the sync request fails, without blocking further attempts', async () => {
     const source = makeSource();
     stubFetch({
@@ -684,6 +601,152 @@ describe('SourcesPage', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Sync already in progress');
     expect(screen.getByRole('button', { name: 'Sync now' })).not.toBeDisabled();
+  });
+
+  it('filters the tracked list by name, path or owner on the currently loaded page', async () => {
+    const first = makeSource({ id: 'source-1', name: 'Deal Room Inbox', path: 'deal-room' });
+    const second = makeSource({ id: 'source-2', name: 'Diligence Drive', path: 'diligence' });
+    stubFetch({
+      [TRACKED_URL]: () => jsonResponse({ docs: [first, second], count: 2 }),
+    });
+
+    renderPage();
+    await screen.findByText('Deal Room Inbox');
+
+    fireEvent.change(screen.getByLabelText('Search'), { target: { value: 'diligence' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+
+    expect(await screen.findByText('Diligence Drive')).toBeInTheDocument();
+    expect(screen.queryByText('Deal Room Inbox')).not.toBeInTheDocument();
+    // The Pager keeps reporting the server's total — the filter only hides rows already on screen.
+    expect(screen.getByText('2 total')).toBeInTheDocument();
+  });
+
+  it('shows a search-specific empty state distinct from "no sources yet", and clears back to the full list', async () => {
+    const source = makeSource();
+    stubFetch({
+      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+    });
+
+    renderPage();
+    await screen.findByText('Deal Room Inbox');
+
+    fireEvent.change(screen.getByLabelText('Search'), { target: { value: 'nonexistent' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+
+    expect(await screen.findByText('No sources match your search')).toBeInTheDocument();
+    expect(screen.queryByText('No sources yet')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+
+    expect(await screen.findByText('Deal Room Inbox')).toBeInTheDocument();
+  });
+
+  it('sorts the tracked list by a column on click, defaulting to descending, and resets to the first page', async () => {
+    const source = makeSource();
+    const fetchMock = stubFetch({
+      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 30 }),
+      '/api/v1/sources?skip=0&limit=20&tracked=true&sort=owner&sortDir=desc': () =>
+        jsonResponse({ docs: [source], count: 30 }),
+    });
+
+    renderPage();
+    await screen.findByText('Deal Room Inbox');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText('30 total');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sort by Owner' }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url]) => url === '/api/v1/sources?skip=0&limit=20&tracked=true&sort=owner&sortDir=desc',
+        ),
+      ).toBe(true);
+    });
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+  });
+
+  it('has no sortable header for Files — fileCount is computed, not stored, so the server ignores that query', async () => {
+    const source = makeSource();
+    stubFetch({
+      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+    });
+
+    renderPage();
+    await screen.findByText('Deal Room Inbox');
+
+    expect(screen.queryByRole('button', { name: /Sort by Files/ })).not.toBeInTheDocument();
+  });
+
+  it('resets an active lastSyncAt sort to the default when switching to the inventory view', async () => {
+    const source = makeSource();
+    const fetchMock = stubFetch({
+      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+      [INVENTORY_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+    });
+
+    renderPage();
+    await screen.findByText('Deal Room Inbox');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sort by Last sync' }));
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url]) =>
+            url === '/api/v1/sources?skip=0&limit=20&tracked=true&sort=lastSyncAt&sortDir=desc',
+        ),
+      ).toBe(true);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Repository inventory' }));
+
+    // Landing on the inventory view re-fetches it under the default sort, not the carried
+    // `lastSyncAt` — that column has no header there.
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url]) => url === INVENTORY_URL)).toBe(true);
+    });
+    expect(screen.queryByRole('button', { name: /Sort by Last sync/ })).not.toBeInTheDocument();
+  });
+
+  it('reproduces a deep-linked view, search, sort and page, and keeps the URL clean at defaults', async () => {
+    const source = makeSource({ id: 'source-3', name: 'Export Drop', tracked: false });
+    stubFetch({
+      '/api/v1/sources?skip=20&limit=20&tracked=false&sort=owner&sortDir=asc': () =>
+        jsonResponse({ docs: [source], count: 30 }),
+    });
+
+    renderPage(['/sources?view=inventory&q=export&sort=owner&sortDir=asc&skip=0&invSkip=20']);
+
+    // The deep link carries a `q` the URL round-trip preserves, but the fetch itself never sends
+    // `q` — the filter is client-side, so only skip/tracked/sort/sortDir reach the server.
+    await screen.findByText('Export Drop');
+    expect(screen.getByLabelText('Search')).toHaveValue('export');
+    expect(screen.getByRole('button', { name: 'Repository inventory' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.getByRole('button', { name: 'Previous' })).not.toBeDisabled();
+  });
+
+  it('keeps the address bar clean at every default, and reflects the tracked skip after paging', async () => {
+    const source = makeSource();
+    stubFetch({
+      [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 30 }),
+      '/api/v1/sources?skip=20&limit=20&tracked=true&sort=name&sortDir=asc': () =>
+        jsonResponse({ docs: [source], count: 30 }),
+    });
+
+    renderPage();
+    await screen.findByText('Deal Room Inbox');
+
+    expect(screen.getByRole('status', { name: 'current search' })).toBeEmptyDOMElement();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => {
+      expect(screen.getByRole('status', { name: 'current search' })).toHaveTextContent('?skip=20');
+    });
   });
 
   it('a member sees why they cannot add or manage sources, and cannot reach the create form', async () => {

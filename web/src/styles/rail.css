@@ -105,8 +105,16 @@
 .apparatus-citation:only-child {
   grid-column: 1 / -1;
 }
+.apparatus-quote-disclosure {
+  margin-bottom: var(--space-2);
+}
+.apparatus-quote-disclosure summary {
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
 .apparatus-quote {
-  margin: 0 0 var(--space-2);
+  margin: var(--space-2) 0 0;
   max-width: var(--measure-reading);
 }
 .apparatus-meta {

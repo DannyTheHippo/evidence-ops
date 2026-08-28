@@ -102,7 +102,7 @@ describe('ProposalsQueue', () => {
     await vi.waitFor(() => expect(onEntityChanged).toHaveBeenCalledWith(applied));
   });
 
-  it('rejects a proposal through the revoke endpoint', async () => {
+  it('rejects a proposal through the revoke endpoint, behind a confirm dialog', async () => {
     const revoked: CanonicalEntity = {
       ...entityWithProposal,
       harvestedAliases: [{ ...proposedAlias, status: 'revoked' }],
@@ -126,11 +126,48 @@ describe('ProposalsQueue', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+    expect(screen.getByRole('dialog', { name: 'Reject "Acme Tower, LLC"?' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Reject alias' }));
 
     await vi.waitFor(() => expect(onEntityChanged).toHaveBeenCalledWith(revoked));
   });
 
-  it('shows a decision error verbatim and leaves the row for a retry', async () => {
+  it('disables both reject-dialog buttons while the request is in flight, blocking a second click', async () => {
+    let resolveReject: (response: Response) => void = () => {};
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/canonical-entities/entity-1/harvested-aliases/revoke') {
+        return new Promise<Response>((resolve) => {
+          resolveReject = resolve;
+        });
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <ProposalsQueue
+        entities={[entityWithProposal]}
+        onEntityChanged={() => {}}
+        onScanned={() => Promise.resolve()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reject alias' }));
+
+    expect(screen.getByRole('button', { name: 'Reject alias…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+
+    resolveReject(
+      jsonResponse({
+        ...entityWithProposal,
+        harvestedAliases: [{ ...proposedAlias, status: 'revoked' }],
+      }),
+    );
+    await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('shows a confirm decision error on the shared error surface, not inside the row, and leaves the row for a retry', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(() => Promise.resolve(jsonResponse({ message: 'Row changed underneath it' }, 409))),
@@ -146,7 +183,9 @@ describe('ProposalsQueue', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Row changed underneath it');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Row changed underneath it');
+    expect(alert.closest('tr')).toBeNull();
     expect(screen.getByRole('button', { name: 'Confirm' })).toBeInTheDocument();
   });
 

@@ -1,7 +1,8 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 import type { AnswerOutcome, Citation } from '../api/client';
+import { workbenchHref } from '../lib/citation-link';
 import type { ResolvedVersion } from '../lib/document-index';
 import ProvenanceRail from './ProvenanceRail';
 
@@ -115,7 +116,10 @@ describe('ProvenanceRail', () => {
     );
 
     const chip = screen.getByRole('link', { name: 'a1b2c3d4…789a · c6d1cd73…c3db' });
-    expect(chip).toHaveAttribute('href', '/documents/doc-1');
+    expect(chip).toHaveAttribute(
+      'href',
+      workbenchHref({ documentId: 'doc-1', versionId: c.docVersionId, chunkId: c.chunkId }),
+    );
     // Neither identifier is shown in full, and both stay recoverable from the tooltip.
     expect(chip.textContent).not.toContain(c.chunkId);
     expect(chip).toHaveAttribute('title', expect.stringContaining(c.sha256));
@@ -150,5 +154,28 @@ describe('ProvenanceRail', () => {
     );
 
     expect(screen.queryByText('source withdrawn')).not.toBeInTheDocument();
+  });
+
+  it('reveals the quoted passage behind its own disclosure, in place', () => {
+    const c = citation();
+    renderRail({ kind: 'answered', claims: [{ statement: 'Statement.', citations: [c] }] });
+
+    // jsdom keeps a closed <details>'s content in the DOM; only visibility reflects `open`.
+    expect(screen.getByText(c.quote)).not.toBeVisible();
+
+    fireEvent.click(screen.getByText('Show quoted passage'));
+
+    expect(screen.getByText(c.quote)).toBeVisible();
+  });
+
+  it('keeps the withdrawn badge visible independently of the quote disclosure', () => {
+    const c = citation();
+    renderRail(
+      { kind: 'answered', claims: [{ statement: 'Statement.', citations: [c] }] },
+      new Map(),
+      new Set([c.docVersionId]),
+    );
+
+    expect(screen.getByText('source withdrawn')).toBeVisible();
   });
 });

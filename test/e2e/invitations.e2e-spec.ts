@@ -1,5 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
+import { createHash, randomBytes } from 'node:crypto';
 import type { Model } from 'mongoose';
 import request from 'supertest';
 import {
@@ -30,8 +31,19 @@ interface InvitationBody {
   createdAt: string;
 }
 
+interface InvitationPreviewBody {
+  email: string;
+  role: UserRole;
+  invitedBy?: string;
+}
+
 const MINTED_INVITATION_KEYS = ['id', 'email', 'role', 'token', 'expiresAt', 'createdAt'].sort();
 const LIST_INVITATION_KEYS = ['id', 'email', 'role', 'expiresAt', 'createdAt'].sort();
+
+// Mirrors InvitationsService's own token shape and hashing, so a row inserted directly through
+// invitationModel here presents to the preview endpoint exactly as a minted one would.
+const buildRawToken = (): string => `eo_inv_${randomBytes(32).toString('base64url')}`;
+const hashToken = (token: string): string => createHash('sha256').update(token).digest('hex');
 
 describe('Invitations (e2e)', () => {
   let app: INestApplication;
@@ -292,6 +304,116 @@ describe('Invitations (e2e)', () => {
 
       expect(response.status).toBe(200);
       expect(body.docs.map((doc) => doc.id)).toEqual([alphaId, zetaId]);
+    });
+  });
+
+  describe('POST /invitations/preview', () => {
+    it('previews a live invitation with the inviting admin’s email and the invited role', async () => {
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/invitations')
+        .set('Cookie', adminCookie)
+        .send({ email: 'colleague-preview@example.com', role: UserRole.Member });
+      const mintedBody = minted.body as MintedInvitationBody;
+
+      const response = await request(getTestServer(app))
+        .post('/api/v1/invitations/preview')
+        .send({ token: mintedBody.token });
+      const body = response.body as InvitationPreviewBody;
+
+      expect(response.status).toBe(200);
+      expect(body).toEqual({
+        email: 'colleague-preview@example.com',
+        role: UserRole.Member,
+        invitedBy: 'invitations-admin-e2e@example.com',
+      });
+    });
+
+    it('rejects an unauthenticated request without a session — the whole point of the route', async () => {
+      // No `.set('Cookie', ...)` — this route is reached anonymously by design; the assertion is
+      // that a garbage token still gets a normal 400, never a 401.
+      const response = await request(getTestServer(app))
+        .post('/api/v1/invitations/preview')
+        .send({ token: 'eo_inv_never-minted-fixture' });
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns identical responses for an expired token and an unknown token', async () => {
+      const expiredToken = buildRawToken();
+      await invitationModel.create({
+        tenantId,
+        email: 'colleague-expired-preview@example.com',
+        role: UserRole.Member,
+        tokenHash: hashToken(expiredToken),
+        expiresAt: new Date('2020-01-01T00:00:00.000Z'),
+      });
+
+      const expiredResponse = await request(getTestServer(app))
+        .post('/api/v1/invitations/preview')
+        .send({ token: expiredToken });
+      const unknownResponse = await request(getTestServer(app))
+        .post('/api/v1/invitations/preview')
+        .send({ token: buildRawToken() });
+
+      expect(expiredResponse.status).toBe(400);
+      expect(expiredResponse.status).toBe(unknownResponse.status);
+      expect(expiredResponse.body).toEqual(unknownResponse.body);
+    });
+
+    it('returns the same response for a revoked and an already-accepted token too', async () => {
+      const revokedToken = buildRawToken();
+      await invitationModel.create({
+        tenantId,
+        email: 'colleague-revoked-preview@example.com',
+        role: UserRole.Member,
+        tokenHash: hashToken(revokedToken),
+        expiresAt: new Date(Date.now() + 60_000),
+        revokedAt: new Date(),
+      });
+      const acceptedToken = buildRawToken();
+      await invitationModel.create({
+        tenantId,
+        email: 'colleague-accepted-preview@example.com',
+        role: UserRole.Member,
+        tokenHash: hashToken(acceptedToken),
+        expiresAt: new Date(Date.now() + 60_000),
+        acceptedAt: new Date(),
+      });
+
+      const revokedResponse = await request(getTestServer(app))
+        .post('/api/v1/invitations/preview')
+        .send({ token: revokedToken });
+      const acceptedResponse = await request(getTestServer(app))
+        .post('/api/v1/invitations/preview')
+        .send({ token: acceptedToken });
+      const unknownResponse = await request(getTestServer(app))
+        .post('/api/v1/invitations/preview')
+        .send({ token: buildRawToken() });
+
+      expect(revokedResponse.body).toEqual(unknownResponse.body);
+      expect(acceptedResponse.body).toEqual(unknownResponse.body);
+    });
+
+    it('never reveals whether the invited email already has an account', async () => {
+      const token = buildRawToken();
+      // Inserted directly through the model — `POST /invitations` itself refuses to mint against a
+      // registered email, so this is the only way to produce the row this test needs.
+      await invitationModel.create({
+        tenantId,
+        email: 'invitations-member-e2e@example.com',
+        role: UserRole.Member,
+        tokenHash: hashToken(token),
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+
+      const response = await request(getTestServer(app))
+        .post('/api/v1/invitations/preview')
+        .send({ token });
+      const body = response.body as InvitationPreviewBody;
+
+      expect(response.status).toBe(200);
+      expect(Object.keys(body).sort()).toEqual(['email', 'role'].sort());
+      expect(body.email).toBe('invitations-member-e2e@example.com');
     });
   });
 

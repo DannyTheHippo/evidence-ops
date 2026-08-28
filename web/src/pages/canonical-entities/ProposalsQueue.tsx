@@ -8,6 +8,7 @@ import {
 } from '../../api/client';
 import { IconClipboard } from '../../components/icons';
 import Button from '../../components/ui/Button';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import EmptyState from '../../components/ui/EmptyState';
 import Table, { TableCell, TableHeaderCell } from '../../components/ui/Table';
 import { notify } from '../../components/ui/toast';
@@ -21,32 +22,46 @@ interface Proposal {
 function ProposalRow({
   proposal,
   onDecided,
+  onConfirmError,
 }: {
   proposal: Proposal;
   onDecided: (updated: CanonicalEntity) => void;
+  onConfirmError: (message: string) => void;
 }) {
-  const [deciding, setDeciding] = useState<'confirm' | 'reject' | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const { entity, alias } = proposal;
+  const [confirming, setConfirming] = useState(false);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const [rejectError, setRejectError] = useState<string | null>(null);
 
-  async function decide(action: 'confirm' | 'reject') {
-    setDeciding(action);
-    setError(null);
+  // Confirming only moves the alias into `entity.aliases`, which the entity editor can still
+  // remove — reversible enough that a plain button, not a confirmation dialog, is the right
+  // weight.
+  async function handleConfirm() {
+    setConfirming(true);
     try {
-      const updated =
-        action === 'confirm'
-          ? await applyHarvestedAlias(entity.id, alias.alias)
-          : await revokeHarvestedAlias(entity.id, alias.alias);
-      notify(
-        'success',
-        action === 'confirm'
-          ? `Confirmed "${alias.alias}" as an alias of "${entity.canonicalName}".`
-          : `Rejected "${alias.alias}" for "${entity.canonicalName}".`,
-      );
+      const updated = await applyHarvestedAlias(entity.id, alias.alias);
+      notify('success', `Confirmed "${alias.alias}" as an alias of "${entity.canonicalName}".`);
       onDecided(updated);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to record the decision');
-      setDeciding(null);
+      onConfirmError(err instanceof Error ? err.message : 'Failed to record the decision');
+    } finally {
+      setConfirming(false);
+    }
+  }
+
+  async function handleReject() {
+    setRejecting(true);
+    setRejectError(null);
+    try {
+      const updated = await revokeHarvestedAlias(entity.id, alias.alias);
+      notify('success', `Rejected "${alias.alias}" for "${entity.canonicalName}".`);
+      setRejectOpen(false);
+      onDecided(updated);
+    } catch (err: unknown) {
+      setRejectError(err instanceof Error ? err.message : 'Failed to record the decision');
+    } finally {
+      setRejecting(false);
     }
   }
 
@@ -54,6 +69,9 @@ function ProposalRow({
     <tr>
       <TableCell label="Canonical name">{entity.canonicalName}</TableCell>
       <TableCell label="Proposed alias">{alias.alias}</TableCell>
+      {/* The locator and quote are this proposal's evidence; once the document workbench route
+          exists, this is where its link belongs, built from `alias.documentVersionId` and
+          `alias.locator` to open straight to the passage. */}
       <TableCell label="Evidence" className="cell-sub">
         <span className="mono">{formatLocator(alias.locator)}</span> — &ldquo;{alias.quote}&rdquo;
       </TableCell>
@@ -61,24 +79,30 @@ function ProposalRow({
         <Button
           variant="primary"
           size="sm"
-          disabled={deciding !== null}
-          onClick={() => void decide('confirm')}
+          disabled={confirming || rejecting}
+          onClick={() => void handleConfirm()}
         >
-          {deciding === 'confirm' ? 'Confirming…' : 'Confirm'}
+          {confirming ? 'Confirming…' : 'Confirm'}
         </Button>
         <Button
           variant="secondary"
           size="sm"
-          disabled={deciding !== null}
-          onClick={() => void decide('reject')}
+          disabled={confirming || rejecting}
+          onClick={() => setRejectOpen(true)}
         >
-          {deciding === 'reject' ? 'Rejecting…' : 'Reject'}
+          Reject
         </Button>
-        {error && (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        )}
+        <ConfirmDialog
+          open={rejectOpen}
+          onClose={() => setRejectOpen(false)}
+          title={`Reject "${alias.alias}"?`}
+          body={`Rejecting marks this proposed alias of "${entity.canonicalName}" as revoked. It will not be re-proposed from the same evidence and cannot be undone.`}
+          confirmLabel="Reject alias"
+          destructive
+          busy={rejecting}
+          error={rejectError ?? undefined}
+          onConfirm={() => void handleReject()}
+        />
       </TableCell>
     </tr>
   );
@@ -106,6 +130,11 @@ export default function ProposalsQueue({
 }: ProposalsQueueProps) {
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
+  // One surface for every confirm failure across the queue, rather than an error string living
+  // inside the row that failed — `handleDecided` clears it so a stale failure never outlives the
+  // decision that superseded it. Reject failures render through `ConfirmDialog`'s own `error`
+  // prop instead, the same convention every other destructive row action in this app uses.
+  const [confirmError, setConfirmError] = useState<string | null>(null);
 
   const proposals = useMemo<Proposal[]>(
     () =>
@@ -116,6 +145,11 @@ export default function ProposalsQueue({
       ),
     [entities],
   );
+
+  function handleDecided(updated: CanonicalEntity) {
+    setConfirmError(null);
+    onEntityChanged(updated);
+  }
 
   async function handleScan() {
     setScanning(true);
@@ -143,53 +177,63 @@ export default function ProposalsQueue({
   );
 
   return (
-    <section className="panel">
-      <div className="card-head">
-        <h2 className="card-title">Review queue</h2>
-        {proposals.length > 0 && scanButton}
-      </div>
-      <p className="page-sub">
-        Suffix-only and punctuation-only spelling variants, and aliases read out of documents,
-        proposed for confirmation. Nothing here resolves until you confirm it.
-      </p>
-
-      {scanError && (
-        <p className="error" role="alert">
-          {scanError}
+    <>
+      <section className="card">
+        <div className="card-head">
+          <h2 className="card-title">Review queue</h2>
+          {proposals.length > 0 && scanButton}
+        </div>
+        <p className="page-sub">
+          Suffix-only and punctuation-only spelling variants, and aliases read out of documents,
+          proposed for confirmation. Nothing here resolves until you confirm it.
         </p>
-      )}
 
-      {proposals.length === 0 && (
-        <EmptyState
-          className="empty-state--inline"
-          icon={<IconClipboard size={24} />}
-          title="No proposals to review"
-          description="Scan for near matches to find suffix-only or punctuation-only spelling variants worth confirming, or wait for the next document that defines one."
-          action={scanButton}
-        />
-      )}
+        {scanError && (
+          <p className="error" role="alert">
+            {scanError}
+          </p>
+        )}
+        {confirmError && (
+          <p className="error" role="alert">
+            {confirmError}
+          </p>
+        )}
+
+        {proposals.length === 0 && (
+          <EmptyState
+            className="empty-state--inline"
+            icon={<IconClipboard size={24} />}
+            title="No proposals to review"
+            description="Scan for near matches to find suffix-only or punctuation-only spelling variants worth confirming, or wait for the next document that defines one."
+            action={scanButton}
+          />
+        )}
+      </section>
 
       {proposals.length > 0 && (
-        <Table caption="Proposed aliases awaiting confirmation.">
-          <thead>
-            <tr>
-              <TableHeaderCell>Canonical name</TableHeaderCell>
-              <TableHeaderCell>Proposed alias</TableHeaderCell>
-              <TableHeaderCell>Evidence</TableHeaderCell>
-              <TableHeaderCell>Actions</TableHeaderCell>
-            </tr>
-          </thead>
-          <tbody>
-            {proposals.map((proposal) => (
-              <ProposalRow
-                key={`${proposal.entity.id}::${proposal.alias.alias}`}
-                proposal={proposal}
-                onDecided={onEntityChanged}
-              />
-            ))}
-          </tbody>
-        </Table>
+        <section className="panel">
+          <Table caption="Proposed aliases awaiting confirmation.">
+            <thead>
+              <tr>
+                <TableHeaderCell>Canonical name</TableHeaderCell>
+                <TableHeaderCell>Proposed alias</TableHeaderCell>
+                <TableHeaderCell>Evidence</TableHeaderCell>
+                <TableHeaderCell>Actions</TableHeaderCell>
+              </tr>
+            </thead>
+            <tbody>
+              {proposals.map((proposal) => (
+                <ProposalRow
+                  key={`${proposal.entity.id}::${proposal.alias.alias}`}
+                  proposal={proposal}
+                  onDecided={handleDecided}
+                  onConfirmError={setConfirmError}
+                />
+              ))}
+            </tbody>
+          </Table>
+        </section>
       )}
-    </section>
+    </>
   );
 }

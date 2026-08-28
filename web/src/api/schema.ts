@@ -68,6 +68,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/invitations/preview': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations['InvitationsController_preview'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/invitations': {
     parameters: {
       query?: never;
@@ -799,6 +815,31 @@ export interface components {
     };
     AuthTokenResponseDto: {
       user: components['schemas']['MeResponseDto'];
+    };
+    PreviewInvitationRequestDto: {
+      /**
+       * @description Single-use invitation token, read from the invite link.
+       * @example eo_inv_9f8c12ab34cd56ef
+       */
+      token: string;
+    };
+    InvitationPreviewResponseDto: {
+      /**
+       * @description Email address invited.
+       * @example colleague@example.com
+       */
+      email: string;
+      /**
+       * @description Role the invitee joins the tenant with.
+       * @example member
+       * @enum {string}
+       */
+      role: 'admin' | 'member';
+      /**
+       * @description The inviting admin's email, when that user still exists. Absent for an invitation whose inviter has since been removed.
+       * @example admin@example.com
+       */
+      invitedBy?: string;
     };
     CreateInvitationRequestDto: {
       /**
@@ -1851,6 +1892,39 @@ export interface operations {
       };
       /** @description No or invalid token provided. */
       401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  InvitationsController_preview: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PreviewInvitationRequestDto'];
+      };
+    };
+    responses: {
+      /** @description Who the token invites and what role it grants — enough for an anonymous visitor to judge whether the invitation is one they recognize before they set a password. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['InvitationPreviewResponseDto'];
+        };
+      };
+      /** @description The token is unknown, expired, revoked, or already accepted — the four cases are indistinguishable on purpose. */
+      400: {
         headers: {
           [name: string]: unknown;
         };

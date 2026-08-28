@@ -1,6 +1,7 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { clearSession, ensureSession } from '../lib/auth';
 import HomePage from './HomePage';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -129,6 +130,7 @@ const approvalPending = {
   subject: { entityType: 'Conflict', entityId: 'conflict-9' },
   action: 'resolve-conflict',
   summary: 'Approve resolving the occupancy rate conflict',
+  workflowId: 'wf-1',
   state: 'pending',
   createdAt: new Date().toISOString(),
 };
@@ -145,7 +147,44 @@ const conflictOpen = {
   explanation: 'No policy rule fired for this fact.',
 };
 
+// Carries a recommended winner, unlike conflictOpen above — this is the shape the work queue's
+// inline "Request resolution" control needs; conflictOpen's ruleFired: 'none' has no winner to
+// request, which is why that row surfaces no inline control of its own.
+const conflictWithRecommendation = {
+  ...conflictOpen,
+  id: 'conflict-2',
+  values: [
+    {
+      factId: 'fact-3',
+      value: 92,
+      unit: 'percent',
+      sourceChunkId: 'chunk-a',
+      documentVersionId: 'docver-1',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+      withdrawn: false,
+    },
+  ],
+  proposedWinnerFactId: 'fact-3',
+  ruleFired: 'authority',
+  explanation: "Source 'chunk-a' outranks the other value's source under the authority policy.",
+};
+
+const admin = {
+  id: 'user-1',
+  email: 'admin@example.com',
+  role: 'admin' as const,
+  createdAt: new Date().toISOString(),
+};
+
+const member = {
+  id: 'user-2',
+  email: 'member@example.com',
+  role: 'member' as const,
+  createdAt: new Date().toISOString(),
+};
+
 interface RouteOverrides {
+  me?: () => Response;
   approvals?: () => Response;
   conflicts?: () => Response;
   documents?: () => Response;
@@ -155,15 +194,21 @@ interface RouteOverrides {
   needsOcrDocuments?: () => Response;
   factsFailedDocuments?: () => Response;
   answers?: () => Response;
+  extraRoutes?: Record<string, () => Response>;
 }
 
 // Every list route is keyed by its exact URL, query string included — a stub that only
 // matched by path would silently accept a response from the wrong call. `documents`/`sources`
 // feed only the first-run checklist and empty-tenant check; `failedDocuments`/`failedSources`/
 // `needsOcrDocuments`/`factsFailedDocuments` feed corpus health, through the server's own
-// status-filtered queries rather than a client-side scan of the unfiltered page.
+// status-filtered queries rather than a client-side scan of the unfiltered page. `me` defaults to
+// `admin` — most tests below exercise content rendering, not the approve/reject role gate, so
+// admin is the shape that keeps every inline control visible unless a test overrides it.
+// `extraRoutes` covers the one-off action endpoints (decide, resolution-request, sync, upload)
+// an individual test needs, so `RouteOverrides` above stays free of a field per action.
 function stubFetch(overrides: RouteOverrides = {}): ReturnType<typeof vi.fn> {
   const routes: Record<string, () => Response> = {
+    '/api/v1/auth/me': overrides.me ?? (() => jsonResponse(admin)),
     '/api/v1/approvals?limit=5&state=pending':
       overrides.approvals ?? (() => jsonResponse({ docs: [], count: 0 })),
     '/api/v1/conflicts?limit=5&status=open':
@@ -182,6 +227,7 @@ function stubFetch(overrides: RouteOverrides = {}): ReturnType<typeof vi.fn> {
       overrides.factsFailedDocuments ?? (() => jsonResponse({ docs: [], count: 0 })),
     '/api/v1/answers?limit=5':
       overrides.answers ?? (() => jsonResponse({ docs: [answered], count: 1 })),
+    ...overrides.extraRoutes,
   };
   const fetchMock = vi.fn((url: string) => {
     const handler = routes[url];
@@ -204,6 +250,9 @@ describe('HomePage', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    // useSession() shares auth.ts's module-level session cache; without this, whichever role
+    // the first test in this file probes for would leak into every later test.
+    clearSession();
   });
 
   it('names a specific pending approval and open conflict in the work queue, each linking to where it is decided', async () => {
@@ -430,5 +479,288 @@ describe('HomePage', () => {
     expect(screen.getByRole('heading', { name: 'Corpus health' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Recent answers' })).toBeInTheDocument();
     expect(screen.getAllByRole('alert')).toHaveLength(1);
+  });
+
+  it('reports both errors without an empty-state claim when every work-queue fetch fails', async () => {
+    stubFetch({
+      approvals: () => jsonResponse({ message: 'Approvals service unavailable' }, 500),
+      conflicts: () => jsonResponse({ message: 'Conflicts service unavailable' }, 500),
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('Approvals service unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Conflicts service unavailable')).toBeInTheDocument();
+    // Neither fetch resolved any data, so there is nothing to call empty — a false "nothing needs
+    // your attention" claim would misreport a data-loading failure as a healthy, empty queue.
+    expect(screen.queryByText('Nothing needs your attention')).not.toBeInTheDocument();
+  });
+
+  it('shows exactly one loading region while every fetch is in flight, rather than a skeleton per section', () => {
+    stubFetch();
+
+    renderPage();
+
+    // The three sections share one loading gate, so exactly one status region exists while data
+    // is in flight — a skeleton per section would number three.
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expect(screen.queryByRole('heading', { name: 'Work queue' })).not.toBeInTheDocument();
+  });
+
+  it('renders every section together once the coordinated load resolves, not one at a time', async () => {
+    stubFetch();
+
+    renderPage();
+
+    expect(await screen.findByRole('heading', { name: 'Work queue' })).toBeInTheDocument();
+    // All three sections come from the same coordinated load, so the instant one has mounted the
+    // others are already on screen too, rather than each popping in as its own fetch resolves.
+    expect(screen.getByRole('heading', { name: 'Corpus health' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Recent answers' })).toBeInTheDocument();
+    expect(screen.queryAllByRole('status')).toHaveLength(0);
+  });
+
+  it('reloads every section from the refresh control, keeping existing content on screen and blocking a second click while busy', async () => {
+    let mountResolved = false;
+    let resolveApprovalsRefresh: (response: Response) => void = () => {};
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/approvals?limit=5&state=pending') {
+        if (!mountResolved) {
+          mountResolved = true;
+          return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+        }
+        return new Promise<Response>((resolve) => {
+          resolveApprovalsRefresh = resolve;
+        });
+      }
+      const routes: Record<string, () => Response> = {
+        '/api/v1/auth/me': () => jsonResponse(admin),
+        '/api/v1/conflicts?limit=5&status=open': () => jsonResponse({ docs: [], count: 0 }),
+        '/api/v1/documents?limit=100': () => jsonResponse({ docs: [documentOk], count: 1 }),
+        '/api/v1/sources?limit=100': () => jsonResponse({ docs: [sourceOk], count: 1 }),
+        '/api/v1/documents?limit=100&ingestionStatus=failed': () =>
+          jsonResponse({ docs: [], count: 0 }),
+        '/api/v1/sources?limit=100&lastSyncStatus=failed': () =>
+          jsonResponse({ docs: [], count: 0 }),
+        '/api/v1/documents?limit=100&ingestionStatus=needs-ocr': () =>
+          jsonResponse({ docs: [], count: 0 }),
+        '/api/v1/documents?limit=100&ingestionStatus=facts-failed': () =>
+          jsonResponse({ docs: [], count: 0 }),
+        '/api/v1/answers?limit=5': () => jsonResponse({ docs: [answered], count: 1 }),
+      };
+      const handler = routes[url];
+      if (!handler) return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      return Promise.resolve(handler());
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+    await screen.findByRole('heading', { name: 'Work queue' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    const busyButton = await screen.findByRole('button', { name: 'Refreshing…' });
+    expect(busyButton).toBeDisabled();
+    // Already-rendered content stays on screen while the refresh runs rather than the page
+    // dropping back behind a skeleton — only the initial load holds that gate.
+    expect(screen.getByRole('heading', { name: 'Work queue' })).toBeInTheDocument();
+
+    fireEvent.click(busyButton);
+
+    resolveApprovalsRefresh(jsonResponse({ docs: [approvalPending], count: 1 }));
+
+    expect(
+      await screen.findByText('Approve resolving the occupancy rate conflict'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh' })).not.toBeDisabled();
+
+    const refreshCalls = fetchMock.mock.calls.filter(
+      ([url]) => url === '/api/v1/approvals?limit=5&state=pending',
+    );
+    // One call on mount, one for the refresh — the click while busy fires no extra request.
+    expect(refreshCalls).toHaveLength(2);
+  });
+
+  it('completes an approval decision inline from the work queue, without navigating away', async () => {
+    let currentApprovals = [approvalPending];
+    stubFetch({
+      approvals: () => jsonResponse({ docs: currentApprovals, count: currentApprovals.length }),
+      extraRoutes: {
+        '/api/v1/approvals/approval-1/decision': () => {
+          currentApprovals = [];
+          return jsonResponse({ ...approvalPending, state: 'approved', decidedBy: admin.email });
+        },
+      },
+    });
+
+    renderPage();
+
+    const row = (await screen.findByText('Approve resolving the occupancy rate conflict')).closest(
+      'li',
+    );
+    expect(row).not.toBeNull();
+    // The approve/reject controls mount only once `useSession()`'s probe resolves to an admin, and
+    // that is a passive effect flushing after the commit that renders the row — so the row being
+    // on screen is not evidence the button exists yet.
+    fireEvent.click(await within(row as HTMLElement).findByRole('button', { name: 'Approve' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Approve this approval' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    // Still on Home — the row's own dialog decided the approval, no route change was needed.
+    expect(screen.getByRole('heading', { name: 'Home' })).toBeInTheDocument();
+    expect(
+      screen.queryByText('Approve resolving the occupancy rate conflict'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('hides the approve/reject controls in the work queue for a non-admin', async () => {
+    stubFetch({
+      me: () => jsonResponse(member),
+      approvals: () => jsonResponse({ docs: [approvalPending], count: 1 }),
+    });
+
+    renderPage();
+
+    const row = (await screen.findByText('Approve resolving the occupancy rate conflict')).closest(
+      'li',
+    );
+    expect(row).not.toBeNull();
+    // Await the session probe before asserting the controls are absent. Taken any earlier, this
+    // assertion passes for an admin too — the row renders before the probe resolves, so "not yet
+    // mounted" and "gated off" are indistinguishable and the gate could break without failing.
+    await ensureSession();
+    await waitFor(() =>
+      expect(screen.getByText('Approve resolving the occupancy rate conflict')).toBeInTheDocument(),
+    );
+    expect(
+      within(row as HTMLElement).queryByRole('button', { name: 'Approve' }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(row as HTMLElement).queryByRole('button', { name: 'Reject' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('requests resolution on a recommended conflict inline from the work queue', async () => {
+    let currentConflicts = [conflictWithRecommendation];
+    const fetchMock = stubFetch({
+      conflicts: () => jsonResponse({ docs: currentConflicts, count: currentConflicts.length }),
+      extraRoutes: {
+        '/api/v1/conflicts/conflict-2/resolution-requests': () => {
+          currentConflicts = [];
+          return jsonResponse({
+            id: 'run-1',
+            workflowId: 'wf-2',
+            status: 'running',
+            createdAt: new Date().toISOString(),
+          });
+        },
+      },
+    });
+
+    renderPage();
+
+    const row = (await screen.findByText('Northgate — occupancy (2025-03)')).closest('li');
+    expect(row).not.toBeNull();
+    fireEvent.click(within(row as HTMLElement).getByRole('button', { name: 'Request resolution' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Request resolution' });
+    expect(within(dialog).getByText(/92 percent as the winning value/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Request resolution' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText('Northgate — occupancy (2025-03)')).not.toBeInTheDocument();
+
+    const call = fetchMock.mock.calls.find(
+      ([url]) => url === '/api/v1/conflicts/conflict-2/resolution-requests',
+    );
+    expect(call).toBeDefined();
+    expect(JSON.parse((call?.[1] as RequestInit).body as string)).toEqual({
+      winningFactId: 'fact-3',
+    });
+  });
+
+  it('leaves no inline resolve control on a conflict with no policy recommendation', async () => {
+    stubFetch({
+      conflicts: () => jsonResponse({ docs: [conflictOpen], count: 1 }),
+    });
+
+    renderPage();
+
+    const row = (await screen.findByText('Northgate — occupancy (2025-03)')).closest('li');
+    expect(row).not.toBeNull();
+    expect(
+      within(row as HTMLElement).queryByRole('button', { name: 'Request resolution' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('starts a sync inline from corpus health for a failed source', async () => {
+    const fetchMock = stubFetch({
+      failedSources: () => jsonResponse({ docs: [failingSource], count: 1 }),
+      extraRoutes: {
+        '/api/v1/sources/source-2/sync': () =>
+          jsonResponse({
+            id: 'run-3',
+            workflowId: 'wf-3',
+            status: 'running',
+            createdAt: new Date().toISOString(),
+          }),
+      },
+    });
+
+    renderPage();
+
+    const row = (await screen.findByText('Second Source')).closest('li');
+    expect(row).not.toBeNull();
+    fireEvent.click(within(row as HTMLElement).getByRole('button', { name: 'Sync now' }));
+
+    expect(await within(row as HTMLElement).findByText('Syncing…')).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.find(([url]) => url === '/api/v1/sources/source-2/sync'),
+    ).toBeDefined();
+  });
+
+  it("replaces a failed document's version inline from corpus health", async () => {
+    let currentFailedDocuments = [documentFailed];
+    const fetchMock = stubFetch({
+      failedDocuments: () =>
+        jsonResponse({ docs: currentFailedDocuments, count: currentFailedDocuments.length }),
+      extraRoutes: {
+        '/api/v1/documents': () => {
+          currentFailedDocuments = [];
+          return jsonResponse({
+            ...documentFailed,
+            currentVersion: {
+              ...documentFailed.currentVersion,
+              versionNumber: 2,
+              ingestionStatus: 'pending',
+            },
+          });
+        },
+      },
+    });
+
+    renderPage();
+
+    const row = (await screen.findByText('Q3 Financials.xlsx')).closest('li');
+    expect(row).not.toBeNull();
+    fireEvent.click(within(row as HTMLElement).getByRole('button', { name: 'Replace version' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Replace document version' });
+    const file = new File(['updated content'], 'Q3 Financials v2.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    fireEvent.change(within(dialog).getByLabelText('File'), { target: { files: [file] } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Upload' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('Q3 Financials.xlsx')).not.toBeInTheDocument();
+    });
+    expect(fetchMock.mock.calls.find(([url]) => url === '/api/v1/documents')).toBeDefined();
   });
 });

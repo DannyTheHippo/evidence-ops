@@ -64,6 +64,18 @@
   background: var(--signal-soft);
 }
 
+/* ── Conflict queue ──────────────────────────────────────────────────────── */
+
+/* Stacks the rows of the primary pane of a SplitView `ratio="queue"` master-detail. Each row is a
+   full-width `<button>` carrying `card queue-item`, not a `<li>` click handler, so it is a real
+   keyboard- and screen-reader-reachable control; the row's own box and selected state live on
+   `.queue-item` in primitives.css, beside `.card` which supplies its border and padding. */
+.queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
 /* ── Timeline ────────────────────────────────────────────────────────────── */
 
 /* Base list reset lives in primitives.css's shared .chunk-list/.sidebar-list/.citations/
@@ -251,17 +263,23 @@
   border-left-color: var(--rail-line-degraded);
 }
 
-/* Container for the answer's verification content, below the apparatus. Spacing only — its own
-   visual treatment belongs to whatever renders inside it. */
-.verification {
-  margin-top: var(--space-5);
-}
-
 /* ── Dropped claims band ─────────────────────────────────────────────────── */
-/* Subordinate to the apparatus: count and server-authored reason are always visible; the raw
-   model statement — free text that failed verification — sits behind a per-item disclosure. */
+/* A dedicated section below the apparatus, not a trailing footnote — a caution-bordered card in
+   the same border-left idiom `.ledger-outcome`/`.timeline-step` use for state, so a dropped claim
+   reads as its own integrity signal rather than a generic notice. Count and server-authored
+   reason are always visible; the raw model statement — free text that failed verification — sits
+   behind a per-item disclosure. */
+.verification-integrity {
+  margin-top: var(--space-5);
+  padding: var(--space-4);
+  border: 1px solid var(--status-caution-line);
+  border-left: 3px solid var(--status-caution-ink);
+  border-radius: var(--radius-sm);
+  background: var(--status-caution-bg);
+}
 .dropped-claims-headline {
   margin: 0 0 var(--space-2);
+  font-size: var(--text-md);
   font-weight: 600;
 }
 .dropped-claims-list {
@@ -293,4 +311,80 @@
 .dropped-claim-statement {
   margin: var(--space-1) 0 0;
   font-style: italic;
+}
+
+/* ── Search results ──────────────────────────────────────────────────────── */
+
+/* One block per matched document inside the results card; .citations already carries its own
+   gap, so this only needs the spacing between one document's block and the next. */
+.search-result-group + .search-result-group {
+  margin-top: var(--space-5);
+}
+.search-result-group-title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.search-highlight {
+  background: var(--signal-soft);
+  color: inherit;
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+}
+
+/* ── Document workbench ──────────────────────────────────────────────────── */
+
+/* The PDF pane's `<iframe>`, sized to fill the reading column `SplitView`'s 'reader' ratio gives
+   it rather than the pane's natural content height. */
+.workbench-frame {
+  width: 100%;
+  height: 80vh;
+  min-height: 480px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+/* The evidence chunk reader: a collapsible outline of a version's stored chunks, grouped by
+   page/sheet/heading/slide. */
+.evidence-reader {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.evidence-group summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.evidence-group + .evidence-group {
+  margin-top: var(--space-3);
+}
+.evidence-chunk-list {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.evidence-chunk {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+}
+/* Programmatic focus (the `?chunk=` deep link landing here) draws no ring; genuine keyboard
+   traversal still does — the same split #main-content uses in base.css. */
+.evidence-chunk:focus {
+  outline: none;
+}
+.evidence-chunk:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+.evidence-chunk[aria-current='location'] {
+  border-color: var(--signal-line);
+  background: var(--signal-soft);
+}
+.evidence-chunk-text {
+  margin: var(--space-1) 0;
 }

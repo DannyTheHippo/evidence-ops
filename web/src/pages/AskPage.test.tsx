@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { clearSession } from '../lib/auth';
 import { FakeEventSource } from '../test/fake-event-source';
 import AskPage from './AskPage';
 
@@ -30,6 +31,7 @@ describe('AskPage', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    clearSession();
   });
 
   it('renders insufficient_evidence as a valid answer, not an error', async () => {
@@ -332,9 +334,7 @@ describe('AskPage', () => {
     await screen.findByText('1 of 2 claims verified against the source');
 
     expect(
-      screen.getByText(
-        'No claim could be verified against the source — this is why the model abstained.',
-      ),
+      screen.getByText('No claim passed the grounding check — this is why the model abstained.'),
     ).toBeInTheDocument();
     expect(screen.getByText('No retrieved chunk supports this figure.')).toBeInTheDocument();
 

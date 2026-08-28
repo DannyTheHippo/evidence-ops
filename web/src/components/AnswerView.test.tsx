@@ -77,6 +77,53 @@ describe('AnswerView', () => {
     expect(screen.getByText('p.2')).toBeInTheDocument();
   });
 
+  it('forwards documentIndex into the ledger so a verified claim citing a csv document is marked, even though its locator is text-block', () => {
+    renderView(
+      baseAnswer({
+        outcome: {
+          kind: 'answered',
+          claims: [
+            {
+              statement: 'Occupancy is 95%.',
+              citations: [
+                {
+                  docVersionId: 'docver-2',
+                  sha256: 'b'.repeat(64),
+                  chunkId: 'chunk-b',
+                  locator: {
+                    kind: 'text-block',
+                    extractorVersion: 'v1',
+                    blockIndex: 0,
+                    headingPath: [],
+                  },
+                  quote: '95%',
+                },
+              ],
+            },
+          ],
+        },
+        verificationReport: { verifiedClaimCount: 1, totalClaimCount: 1, droppedClaims: [] },
+      }),
+      new Map([
+        [
+          'docver-2',
+          {
+            documentId: 'doc-2',
+            documentTitle: 'noi-summary.csv',
+            withdrawn: false,
+            sourceKind: 'csv' as const,
+          },
+        ],
+      ]),
+    );
+
+    expect(
+      screen.getByText(
+        '1 verified claim sourced from a spreadsheet or CSV — not verified against the source table',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('marks a citation whose docVersionId is withdrawn, resolved from the answer envelope', () => {
     renderView(
       baseAnswer({
@@ -149,6 +196,15 @@ describe('AnswerView', () => {
     expect(screen.getByText('6.4 percent')).toBeInTheDocument();
     expect(screen.getByText('Rent Roll Q1 — p.2')).toBeInTheDocument();
     expect(screen.getByText('chunk-c')).toBeInTheDocument();
+    expect(
+      screen.getByRole('list', { name: 'Competing values for this conflict' }),
+    ).toBeInTheDocument();
+    // The resolved value links into the workbench at its source chunk; the unresolved one has no
+    // document version to link to, so 'chunk-c' above renders as plain text, not a link.
+    expect(screen.getByRole('link', { name: 'chunk-a' })).toHaveAttribute(
+      'href',
+      '/documents/doc-1/versions/docver-1?chunk=chunk-a',
+    );
   });
 
   it('shows the reason for a dropped claim always, and the raw statement only behind its own disclosure', () => {
@@ -187,7 +243,10 @@ describe('AnswerView', () => {
     );
 
     expect(
-      screen.getByText('1 claim dropped — not verified against the source'),
+      screen.getByRole('heading', {
+        level: 3,
+        name: '1 claim dropped by the grounding check',
+      }),
     ).toBeInTheDocument();
     expect(screen.getByText('No retrieved chunk supports this figure.')).toBeInTheDocument();
     // jsdom keeps a closed <details>'s content in the DOM; only visibility reflects `open`.
@@ -216,13 +275,9 @@ describe('AnswerView', () => {
     );
 
     expect(
-      screen.getByText(
-        'No claim could be verified against the source — this is why the model abstained.',
-      ),
+      screen.getByText('No claim passed the grounding check — this is why the model abstained.'),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByText(/claim dropped — not verified against the source/),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/claim dropped by the grounding check/)).not.toBeInTheDocument();
   });
 
   it('states a fully-verified answer once, with no dropped-claims band', () => {

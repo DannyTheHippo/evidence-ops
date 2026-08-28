@@ -50,7 +50,7 @@ export const NAV_LABELS: { to: string; label: string }[] = [
   { to: '/conflicts', label: 'Conflicts' },
   { to: '/approvals', label: 'Approvals' },
   { to: '/workflow-runs', label: 'Runs' },
-  { to: '/invitations', label: 'Invitations' },
+  { to: '/people', label: 'People' },
   { to: '/canonical-entities', label: 'Canonical Entities' },
   { to: '/audit-events', label: 'Audit Log' },
   { to: '/api-keys', label: 'API Keys' },
@@ -100,7 +100,7 @@ function buildNavGroups(isAdmin: boolean, counts: PendingCounts): NavGroup[] {
     groups.push({
       heading: 'Organisation',
       items: [
-        { to: '/invitations', label: 'Invitations', icon: <IconUsers /> },
+        { to: '/people', label: 'People', icon: <IconUsers /> },
         // No badge: no endpoint exposes a count of pending harvested-alias proposals without
         // fetching every canonical entity's alias list, which the badge contract forbids.
         { to: '/canonical-entities', label: 'Canonical Entities', icon: <IconTag /> },
