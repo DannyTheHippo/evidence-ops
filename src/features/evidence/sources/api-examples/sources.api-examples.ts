@@ -1,5 +1,9 @@
 import { HttpStatus } from '@nestjs/common';
 import type { ApiResponseOptions } from '@nestjs/swagger';
+import { WorkflowRunResponseDto } from '../../workflow-runs/dtos/response/workflow-run.response.dto';
+import { ApplySourceClassDriftResponseDto } from '../dtos/response/apply-source-class-drift.response.dto';
+import { SourceClassDriftResponseDto } from '../dtos/response/source-class-drift.response.dto';
+import { SourceResponseDto } from '../dtos/response/source.response.dto';
 import { SourceWithFileStatesResponseDto } from '../dtos/response/source-with-file-states.response.dto';
 
 const exampleSource = {
@@ -38,6 +42,7 @@ export const sourcesApiExamples: Record<string, ApiResponseOptions> = {
   created: {
     status: HttpStatus.CREATED,
     description: 'The newly created source.',
+    type: SourceResponseDto,
     examples: {
       example: {
         summary: 'Created source',
@@ -58,6 +63,7 @@ export const sourcesApiExamples: Record<string, ApiResponseOptions> = {
   found: {
     status: HttpStatus.OK,
     description: 'The requested source.',
+    type: SourceResponseDto,
     examples: {
       example: {
         summary: 'Existing source',
@@ -109,6 +115,7 @@ export const sourcesApiExamples: Record<string, ApiResponseOptions> = {
     description:
       'The sync workflow run for this source — newly started, or the already-running one this ' +
       'request deduplicated against.',
+    type: WorkflowRunResponseDto,
     examples: {
       example: {
         summary: 'Sync accepted',
@@ -133,6 +140,7 @@ export const sourcesApiExamples: Record<string, ApiResponseOptions> = {
   classDrift: {
     status: HttpStatus.OK,
     description: 'How many documents from this source still carry a superseded sourceClass.',
+    type: SourceClassDriftResponseDto,
     examples: {
       drifted: {
         summary: 'Documents still carry the previous class',
@@ -149,6 +157,7 @@ export const sourcesApiExamples: Record<string, ApiResponseOptions> = {
     description:
       "The result of applying this source's current sourceClass to every document that still " +
       'carried the previous one.',
+    type: ApplySourceClassDriftResponseDto,
     examples: {
       example: {
         summary: 'Applied to 12 documents',

@@ -2,9 +2,10 @@
 /* Deliberately last in the cascade: every rule below overrides an unconditional rule from an
    earlier stylesheet (base, primitives, shell, rail, views, features), and @media print carries no
    specificity of its own — the tie is broken by source order alone, so this block only works
-   sitting after all seven imports. No selector here needed raised specificity or !important; each
-   one either ties and wins on file order, or sets a property (print-color-adjust) nothing else
-   declares. */
+   sitting after all seven imports. No `!important` anywhere here: each selector either ties an
+   earlier rule's specificity and wins on file order, sets a property (print-color-adjust) nothing
+   else declares, or — the SegmentedControl override below — earns genuinely higher specificity to
+   peel `.btn` chrome off the one label that survives. */
 @media print {
   /* body/#root/.shell/.shell-main/.container/.panel form a fixed-height, scroll-clipped chain
      built for an on-screen viewport (base.css's `body { overflow: hidden }` and
@@ -35,14 +36,35 @@
 
   /* Meaning carried purely by `background` is dropped by default printing (the browser's own
      "background graphics" option, off by default) unless told to render exactly as authored.
-     Scoped to the three places state or proportion is encoded that way — the funnel bar, the
-     rail's filled-vs-outline node marker, the badge's status silhouette — rather than applied
-     globally, which would also print every card and surface tint. */
+     Scoped to the places state or proportion is encoded that way — the funnel bar, the coverage
+     meter's fill, the rail's and run-rail's filled-vs-outline node markers, the badge's status
+     silhouette — rather than applied globally, which would also print every card and surface tint. */
   .ledger-bar,
+  .coverage-meter-fill,
   .rail-node::before,
+  .run-step::before,
   .badge::before {
     print-color-adjust: exact;
     -webkit-print-color-adjust: exact;
+  }
+
+  /* A SegmentedControl (`.control-row[role='group']`) is an on-screen switch between views; on
+     paper only the option actually chosen is a fact worth keeping. Every other option is dropped,
+     and the selected button sheds its `.btn` chrome — height, minimum width, border, and the
+     `--signal` background whose `--signal-ink` text would otherwise print as invisible
+     white-on-white — to read as a plain label instead. */
+  .control-row[role='group'] .btn:not([aria-pressed='true']) {
+    display: none;
+  }
+  .control-row[role='group'] .btn[aria-pressed='true'] {
+    display: inline;
+    min-width: 0;
+    height: auto;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--ink);
+    font-weight: 600;
   }
 
   /* The 2-up citation grid is sized for an 880px-plus screen container; a printed page's content

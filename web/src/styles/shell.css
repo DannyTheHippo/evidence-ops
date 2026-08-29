@@ -65,7 +65,7 @@
   font-family: inherit;
 }
 /* Base list reset (list-style, margin, padding, flex-column) lives in primitives.css's shared
-   .chunk-list/.sidebar-list/.citations/.approval-list/.timeline/.dashboard-answers rule. */
+   .sidebar-list/.citations/.dashboard-answers/.fidelity-list/.actionable-list rule. */
 .sidebar-list {
   gap: var(--space-1);
 }

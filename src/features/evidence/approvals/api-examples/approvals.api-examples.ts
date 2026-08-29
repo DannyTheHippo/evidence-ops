@@ -1,5 +1,6 @@
 import { HttpStatus } from '@nestjs/common';
 import type { ApiResponseOptions } from '@nestjs/swagger';
+import { ApprovalResponseDto } from '../dtos/response/approval.response.dto';
 
 const examplePendingApproval = {
   id: '65f1c2e4a1b2c3d4e5f6a7b8',
@@ -34,6 +35,7 @@ export const approvalsApiExamples: Record<string, ApiResponseOptions> = {
   decided: {
     status: HttpStatus.OK,
     description: 'The approval after recording the decision.',
+    type: ApprovalResponseDto,
     examples: {
       example: {
         summary: 'Approved',

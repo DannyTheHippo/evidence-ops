@@ -1,6 +1,7 @@
 import { HttpStatus } from '@nestjs/common';
 import type { ApiResponseOptions } from '@nestjs/swagger';
 import { UserRole } from '../../../../shared/enums/user-role.enum';
+import { UserResponseDto } from '../dtos/response/user.response.dto';
 
 const exampleUser = {
   id: '65f1c2e4a1b2c3d4e5f6a7b8',
@@ -23,6 +24,7 @@ export const usersApiExamples: Record<string, ApiResponseOptions> = {
   roleChanged: {
     status: HttpStatus.OK,
     description: "The member's updated role.",
+    type: UserResponseDto,
     examples: {
       example: {
         summary: 'Role changed',
@@ -40,6 +42,7 @@ export const usersApiExamples: Record<string, ApiResponseOptions> = {
       'Signs the member out of every browser session and disables every API key they hold — ' +
       'raising their session epoch invalidates both, since API keys are checked against the same ' +
       'epoch as session cookies.',
+    type: UserResponseDto,
     examples: {
       example: {
         summary: 'Sessions revoked',

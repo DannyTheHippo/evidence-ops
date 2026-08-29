@@ -870,6 +870,41 @@ export interface components {
        */
       role: 'admin' | 'member';
     };
+    MintedInvitationResponseDto: {
+      /**
+       * @description Invitation identifier.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      id: string;
+      /**
+       * @description Email address invited.
+       * @example colleague@example.com
+       */
+      email: string;
+      /**
+       * @description Role the invitee joins the tenant with.
+       * @example member
+       * @enum {string}
+       */
+      role: 'admin' | 'member';
+      /**
+       * @description The plaintext token. Shown exactly once — it cannot be retrieved again after this response.
+       * @example eo_inv_9f8c12ab34cd56ef
+       */
+      token: string;
+      /**
+       * Format: date-time
+       * @description When this invitation stops working.
+       * @example 2026-07-08T00:00:00.000Z
+       */
+      expiresAt: string;
+      /**
+       * Format: date-time
+       * @description Invitation creation timestamp.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      createdAt: string;
+    };
     HealthResponseDto: {
       /**
        * @description Overall health status.
@@ -898,6 +933,30 @@ export interface components {
        * @enum {string}
        */
       role: 'admin' | 'member';
+    };
+    UserResponseDto: {
+      /**
+       * @description User identifier.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      id: string;
+      /**
+       * @description Email address.
+       * @example colleague@example.com
+       */
+      email: string;
+      /**
+       * @description Role within the tenant.
+       * @example member
+       * @enum {string}
+       */
+      role: 'admin' | 'member';
+      /**
+       * Format: date-time
+       * @description Account creation timestamp.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      createdAt: string;
     };
     DocumentVersionResponseDto: {
       /**
@@ -1376,6 +1435,69 @@ export interface components {
        */
       reason?: string;
     };
+    ApprovalResponseDto: {
+      /**
+       * @description Approval identifier.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      id: string;
+      /**
+       * @description The entity this approval gates.
+       * @example {
+       *       "entityType": "Conflict",
+       *       "entityId": "65f1c2e4a1b2c3d4e5f6a7b9"
+       *     }
+       */
+      subject: Record<string, never>;
+      /**
+       * @description The action being approved.
+       * @example resolve_conflict
+       */
+      action: string;
+      /**
+       * @description Human-readable summary of the requested action.
+       * @example Resolve Northgate Business Park cap_rate (2025-03) in favor of 5.25% over 6.10%.
+       */
+      summary: string;
+      /**
+       * @description Who or what requested the approval.
+       * @example reviewer@example.com
+       */
+      requestedBy?: string;
+      /**
+       * @description Underlying Temporal workflow id this approval gates, present when requested via a workflow (matches WorkflowRun.workflowId) — absent for an approval created outside one.
+       * @example a3f1b2c4-5678-4d9e-9abc-1234567890ab
+       */
+      workflowId?: string;
+      /**
+       * @description Approval state.
+       * @example pending
+       * @enum {string}
+       */
+      state: 'pending' | 'approved' | 'rejected' | 'timed_out';
+      /**
+       * @description Who decided the approval.
+       * @example reviewer@example.com
+       */
+      decidedBy?: string;
+      /**
+       * Format: date-time
+       * @description When the decision was made.
+       * @example 2026-07-02T00:00:00.000Z
+       */
+      decidedAt?: string;
+      /**
+       * @description Optional rationale for the decision.
+       * @example Evidence checks out.
+       */
+      decisionReason?: string;
+      /**
+       * Format: date-time
+       * @description Approval creation timestamp.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      createdAt: string;
+    };
     StartQuestionRequestDto: {
       /**
        * @description Natural-language question to answer from the evidence corpus.
@@ -1615,6 +1737,94 @@ export interface components {
        */
       sourceClass: 'crm-export' | 'pm-export' | 'spreadsheet' | 'memo' | 'report' | 'unclassified';
     };
+    SourceResponseDto: {
+      /**
+       * @description Source identifier.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      id: string;
+      /**
+       * @description Human-readable name for this source.
+       * @example Deal Room Inbox
+       */
+      name: string;
+      /**
+       * @description Which connector syncs this source.
+       * @example local-folder
+       * @enum {string}
+       */
+      kind: 'local-folder';
+      /**
+       * @description The connector's location for this source — a folder path for 'local-folder'.
+       * @example deal-room
+       */
+      path: string;
+      /**
+       * @description Whether the sync loop is allowed to run for this source.
+       * @example true
+       */
+      enabled: boolean;
+      /**
+       * @description Per-source override of the global sync interval, in milliseconds. Absent means the configured default applies.
+       * @example 60000
+       */
+      intervalMs?: number;
+      /**
+       * Format: date-time
+       * @description When the most recent sync attempt finished.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      lastSyncAt?: string;
+      /**
+       * @description Outcome of the most recent sync attempt — 'ok' or 'failed'.
+       * @example ok
+       */
+      lastSyncStatus?: string;
+      /**
+       * @description Error detail, present only when lastSyncStatus is failed.
+       * @example ENOENT: no such file or directory
+       */
+      lastSyncError?: string;
+      /**
+       * @description Number of files this source has synced state for.
+       * @example 42
+       */
+      fileCount: number;
+      /**
+       * @description How this source's bytes get into the corpus.
+       * @example connector
+       * @enum {string}
+       */
+      connectivity: 'connector' | 'export-only' | 'manual';
+      /**
+       * @description Whether the estate's own access posture lets this system reach this source at all.
+       * @example live
+       * @enum {string}
+       */
+      reachability: 'live' | 'possible' | 'prohibited';
+      /**
+       * @description Person or team accountable for this source. Absent means nobody has said yet.
+       * @example Jane Doe, IT
+       */
+      owner?: string;
+      /**
+       * @description Whether the sync loop may ever run for this source. 'false' marks an inventory-only row.
+       * @example true
+       */
+      tracked: boolean;
+      /**
+       * @description Default document classification a document created from this source's sync pass inherits.
+       * @example unclassified
+       * @enum {string}
+       */
+      sourceClass: 'crm-export' | 'pm-export' | 'spreadsheet' | 'memo' | 'report' | 'unclassified';
+      /**
+       * Format: date-time
+       * @description Source creation timestamp.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      createdAt: string;
+    };
     SourceFileStateResponseDto: {
       /**
        * @description The file's path relative to the source's root.
@@ -1763,6 +1973,40 @@ export interface components {
        */
       sourceClass?: 'crm-export' | 'pm-export' | 'spreadsheet' | 'memo' | 'report' | 'unclassified';
     };
+    SourceClassDriftResponseDto: {
+      /**
+       * @description The class documents were ingested under before sourceClass last changed. Absent means sourceClass has never changed for this source.
+       * @example memo
+       * @enum {string}
+       */
+      previousClass?:
+        'crm-export' | 'pm-export' | 'spreadsheet' | 'memo' | 'report' | 'unclassified';
+      /**
+       * @description How many documents still carry previousClass rather than the source's current sourceClass.
+       * @example 12
+       */
+      count: number;
+    };
+    ApplySourceClassDriftResponseDto: {
+      /**
+       * @description How many documents this apply actually rewrote — recomputed at apply time, so it can differ from a count read earlier.
+       * @example 12
+       */
+      modifiedCount: number;
+      /**
+       * @description The class this apply reconciled from. Absent when there was nothing to reconcile.
+       * @example memo
+       * @enum {string}
+       */
+      previousClass?:
+        'crm-export' | 'pm-export' | 'spreadsheet' | 'memo' | 'report' | 'unclassified';
+      /**
+       * @description The class this apply reconciled to — the source's current sourceClass.
+       * @example crm-export
+       * @enum {string}
+       */
+      sourceClass: 'crm-export' | 'pm-export' | 'spreadsheet' | 'memo' | 'report' | 'unclassified';
+    };
     CreateApiKeyRequestDto: {
       /**
        * @description Human-readable name for this key.
@@ -1775,6 +2019,40 @@ export interface components {
        * @example 2026-12-31T00:00:00.000Z
        */
       expiresAt?: string;
+    };
+    MintedApiKeyResponseDto: {
+      /**
+       * @description API key identifier.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      id: string;
+      /**
+       * @description Human-readable name for this key.
+       * @example CI integration
+       */
+      name: string;
+      /**
+       * @description The plaintext token. Shown exactly once — it cannot be retrieved again after this response.
+       * @example eo_pat_9f8c12ab34cd56ef
+       */
+      token: string;
+      /**
+       * @description Display prefix for identifying this key in a list.
+       * @example eo_pat_9f8c12
+       */
+      tokenPrefix: string;
+      /**
+       * Format: date-time
+       * @description When this key stops working. Set to the request value if given, otherwise the default TTL (`apiKeys.defaultTtlDays` from config).
+       * @example 2026-12-31T00:00:00.000Z
+       */
+      expiresAt?: string;
+      /**
+       * Format: date-time
+       * @description Key creation timestamp.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      createdAt: string;
     };
     DashboardSummaryResponseDto: {
       /**
@@ -2104,7 +2382,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['MintedInvitationResponseDto'];
         };
       };
       /** @description Only an admin may mint, list, revoke or resend invitations. */
@@ -2182,7 +2460,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['MintedInvitationResponseDto'];
         };
       };
       /** @description Only an admin may mint, list, revoke or resend invitations. */
@@ -2306,7 +2584,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['UserResponseDto'];
         };
       };
       /** @description Only an admin may manage tenant members. */
@@ -2402,7 +2680,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['UserResponseDto'];
         };
       };
       /** @description Only an admin may manage tenant members. */
@@ -3067,7 +3345,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['WorkflowRunResponseDto'];
         };
       };
       /** @description Conflict does not exist. */
@@ -3173,7 +3451,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['WorkflowRunResponseDto'];
         };
       };
       /** @description WorkflowRun does not exist. */
@@ -3241,7 +3519,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['ApprovalResponseDto'];
         };
       };
       /** @description Caller does not hold the admin role required to decide an approval. */
@@ -3497,7 +3775,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['SourceResponseDto'];
         };
       };
       /** @description Caller does not hold the admin role required to create or reconfigure a source. */
@@ -3572,7 +3850,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['SourceResponseDto'];
         };
       };
       /** @description Caller does not hold the admin role required to create or reconfigure a source. */
@@ -3612,7 +3890,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['WorkflowRunResponseDto'];
         };
       };
       /** @description Source does not exist for this tenant. */
@@ -3643,7 +3921,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['SourceClassDriftResponseDto'];
         };
       };
       /** @description Source does not exist for this tenant. */
@@ -3674,7 +3952,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['ApplySourceClassDriftResponseDto'];
         };
       };
       /** @description Caller does not hold the admin role required to create or reconfigure a source. */
@@ -3797,7 +4075,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['MintedApiKeyResponseDto'];
         };
       };
       /** @description The caller already has the maximum number of active API keys. */
@@ -3857,7 +4135,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['MintedApiKeyResponseDto'];
         };
       };
       /** @description API key does not exist for this user. */

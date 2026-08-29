@@ -128,11 +128,8 @@
 /* Un-styled list turned into a vertical flex stack. The shared reset lives in one place so every
    list using it carries identical base behaviour; each site below layers only the margin or gap
    that differs from it. */
-.chunk-list,
 .sidebar-list,
 .citations,
-.approval-list,
-.timeline,
 .dashboard-answers,
 .fidelity-list,
 .actionable-list {
@@ -142,7 +139,6 @@
   display: flex;
   flex-direction: column;
 }
-.chunk-list,
 .citations {
   gap: var(--space-3);
 }
@@ -155,9 +151,6 @@
   border-radius: var(--radius);
   padding: var(--space-5) var(--space-6);
   margin: var(--space-4) 0;
-}
-.card--narrow {
-  max-width: 420px;
 }
 /* Title row for a section header, with or without a card border: title (plus an optional
    .eyebrow above it) on the start edge, an optional trailing action on the end edge. Both sides can
@@ -190,12 +183,18 @@
   font-size: var(--text-xs);
   color: var(--muted);
 }
-/* Pushes a mono meta slug to the end of its flex row instead of reading inline after the text
-   before it — the right-aligned counterpart to .cell-sub inside a table cell. */
-.card-meta--end {
-  margin-left: auto;
-  text-align: right;
-  white-space: nowrap;
+
+/* A wrapping row of muted meta content — an id, a copy action, a status-linked action — sitting
+   directly under a `PageHeader`, outside any card. Shared by `AnswerDetailPage` and
+   `WorkflowRunPage`'s own detail header. */
+.answer-detail-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  margin: var(--space-2) 0 0;
 }
 
 /* ── Table / data grid ───────────────────────────────────────────────────── */
@@ -405,6 +404,31 @@
 .badge--info::before {
   border-radius: 2px;
   transform: rotate(45deg);
+}
+
+/* ── Live indicator ──────────────────────────────────────────────────────── */
+
+/* A small pulsing dot marking content that is still updating — an in-flight answer, a syncing
+   source. Shared by every page carrying that state. */
+.live-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--status-caution-ink);
+  box-shadow: 0 0 0 0 var(--status-caution-line);
+  animation: pulse var(--motion-pulse) ease-out infinite;
+}
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--status-caution-line);
+  }
+  70% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
 }
 
 /* ── Chips ───────────────────────────────────────────────────────────────── */
@@ -801,6 +825,17 @@
   outline: none;
   box-shadow: var(--ring);
   border-radius: var(--radius-xs);
+}
+
+/* ── Highlight ───────────────────────────────────────────────────────────── */
+
+/* A matched search term inside a `<mark>`. Shared by the search results list and the evidence
+   reader's own in-passage highlighting. */
+.search-highlight {
+  background: var(--signal-soft);
+  color: inherit;
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
 }
 
 /* ── Notices / errors ────────────────────────────────────────────────────── */

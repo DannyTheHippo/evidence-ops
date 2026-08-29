@@ -289,9 +289,9 @@ export type EvidenceDocument = Schemas['DocumentResponseDto'];
 export type DocumentSourceKind = EvidenceDocument['sourceKind'];
 export type DocumentWithVersions = Schemas['DocumentWithVersionsResponseDto'];
 
-/** The envelope every paginated endpoint returns. Hand-written: the API declares these responses
- * with an example rather than a response type, so the OpenAPI document names no schema for the
- * envelope or for its element types. */
+/** The envelope every paginated endpoint returns. Hand-written: `@ApiResponse` has no way to name
+ * a generic wrapper, so the OpenAPI document never carries a schema for the envelope itself, even
+ * on a route whose row type it does name. */
 export interface WithCount<T> {
   docs: T[];
   count: number;
@@ -395,16 +395,8 @@ export function listVersionChunks(versionId: string): Promise<WithCount<Evidence
  * cannot make on its own, since it carries no `documentId`. An id that does not resolve (unknown,
  * cross-tenant, or malformed) is silently absent from `docs`, never a 404 — a caller must index
  * the result by `versionId` rather than assume one row per requested id, or it will index out of
- * bounds. Hand-written rather than read from `Schemas`: the `{ docs, count }` envelope is never
- * named in the OpenAPI document, the same gap `WithCount<T>` itself documents above. */
-export interface DocumentVersionLookup {
-  versionId: string;
-  documentId: string;
-  documentTitle: string;
-  versionNumber: number;
-  sourceKind: DocumentSourceKind;
-  withdrawn: boolean;
-}
+ * bounds. */
+export type DocumentVersionLookup = Schemas['DocumentVersionLookupResponseDto'];
 
 export function lookupDocumentVersions(
   versionIds: string[],
@@ -674,21 +666,10 @@ export interface ApprovalSubject {
   entityId: string;
 }
 
-export interface Approval {
-  id: string;
+export type Approval = StrictOmit<Schemas['ApprovalResponseDto'], 'subject'> & {
+  // The document types `subject` as a bare object — no nested schema names its shape.
   subject: ApprovalSubject;
-  action: string;
-  summary: string;
-  requestedBy?: string;
-  // Underlying Temporal workflow id, present when this approval gates a workflow (matches
-  // WorkflowRun.workflowId) — absent for an approval created outside one.
-  workflowId?: string;
-  state: ApprovalState;
-  decidedBy?: string;
-  decidedAt?: string;
-  decisionReason?: string;
-  createdAt: string;
-}
+};
 
 export type ApprovalSortField = 'createdAt' | 'state' | 'decidedAt';
 
@@ -730,21 +711,7 @@ export type WorkflowRunStatus = 'queued' | 'running' | 'completed' | 'failed';
 // carry it, since no current code path writes it.
 export type WorkflowRunType = 'resolve-conflict' | 'sync-source' | 'rescan-conflicts';
 
-export interface WorkflowRun {
-  id: string;
-  workflowId: string;
-  workflowType?: WorkflowRunType;
-  status: WorkflowRunStatus;
-  errorMessage?: string;
-  /**
-   * What the run acted on, written at creation. A resolve-conflict run records the conflict it is
-   * resolving; a sync-source run records no subject and reads back empty. Both fields are written
-   * together or not at all, so render a link only when both are present.
-   */
-  subjectId?: string;
-  subjectType?: string;
-  createdAt: string;
-}
+export type WorkflowRun = Schemas['WorkflowRunResponseDto'];
 
 export function getWorkflowRunById(id: string): Promise<WorkflowRun> {
   return request<WorkflowRun>(`/workflow-runs/${id}`);
@@ -933,16 +900,9 @@ export function requestSourceSync(id: string): Promise<WorkflowRun> {
 // one — never rendered as an option an uploader can pick, only as the default state.
 export type DocumentSourceClass = EvidenceDocument['sourceClass'];
 
-export interface SourceClassDrift {
-  previousClass?: DocumentSourceClass;
-  count: number;
-}
+export type SourceClassDrift = Schemas['SourceClassDriftResponseDto'];
 
-export interface ApplySourceClassDrift {
-  modifiedCount: number;
-  previousClass?: DocumentSourceClass;
-  sourceClass: DocumentSourceClass;
-}
+export type ApplySourceClassDrift = Schemas['ApplySourceClassDriftResponseDto'];
 
 export function getSourceClassDrift(id: string): Promise<SourceClassDrift> {
   return request<SourceClassDrift>(`/sources/${id}/class-drift`);
@@ -1079,12 +1039,7 @@ export function previewInvitation(token: string): Promise<InvitationPreview> {
 
 // ── Users ────────────────────────────────────────────────────────────────
 
-export interface User {
-  id: string;
-  email: string;
-  role: UserRole;
-  createdAt: string;
-}
+export type User = Schemas['UserResponseDto'];
 
 export type UserSortField = 'createdAt' | 'email' | 'role';
 
@@ -1124,11 +1079,7 @@ export function revokeUserSessions(id: string): Promise<User> {
 
 /** One entry of the built-in metric ontology: the id facts and conflicts carry on the wire, the
  * label to show a reader instead of that id, and the unit the metric is normalised to. */
-export interface Metric {
-  id: string;
-  label: string;
-  canonicalUnit: string;
-}
+export type Metric = Schemas['MetricResponseDto'];
 
 /** The full ontology, a fixed set rather than a paginated collection. Read-only: metrics are part
  * of the deployed code, so there is no route that adds or edits one. */

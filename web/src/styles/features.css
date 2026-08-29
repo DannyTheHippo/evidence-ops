@@ -33,23 +33,22 @@
   color: var(--ink-dim);
   line-height: var(--leading-normal);
 }
-.citation-locator {
-  margin: 0;
-  font-size: var(--text-xs);
-  color: var(--muted);
-}
 .conflict-block {
   margin-top: var(--space-3);
 }
+/* A card grid keeps three or more competing values legible side by side, and 220px is the
+   narrowest a card goes before its figure and source line start colliding. */
 .value-compare {
   list-style: none;
   margin: var(--space-3) 0 0;
   padding: 0;
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  align-items: start;
   gap: var(--space-3);
 }
 .value-compare-item {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -57,7 +56,7 @@
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   padding: var(--space-3) var(--space-4);
-  min-width: 150px;
+  min-width: 0;
 }
 .value-compare-item--recommended {
   border-color: var(--signal-line);
@@ -76,69 +75,14 @@
   gap: var(--space-3);
 }
 
-/* ── Timeline ────────────────────────────────────────────────────────────── */
+/* ── Run step label ──────────────────────────────────────────────────────── */
 
-/* Base list reset lives in primitives.css's shared .chunk-list/.sidebar-list/.citations/
-   .approval-list/.timeline/.dashboard-answers rule; .approval-list needs no override. */
-.timeline {
-  margin: var(--space-4) 0 0;
-  gap: var(--space-3);
-}
-/* An un-reached step recedes through ink weight and a bare left edge, not
-   opacity: opacity would composite the label and its .cell-sub together with the
-   background and drop both far below AA. --ink-dim keeps the label readable
-   while the reached states step up to full --ink.
-
-   The left edge draws on ProvenanceRail's line-state tokens, so an unreached or
-   reached step reads as the same visual language as the citation rail's idle and
-   verified nodes. is-active keeps --signal, a state the rail has no equivalent for. */
-.timeline-step {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-3) var(--space-4);
-  background: var(--surface-2);
-  color: var(--ink-dim);
-  border: 1px solid var(--hairline);
-  border-left: 3px solid var(--rail-line-idle);
-  border-radius: var(--radius-sm);
-}
-.timeline-step.is-done {
-  color: var(--ink);
-  border-left-color: var(--rail-line-verified);
-}
-.timeline-step.is-active {
-  color: var(--ink);
-  border-color: var(--signal-line);
-  border-left-color: var(--signal);
-  background: var(--signal-soft);
-}
+/* The label text inside a `.run-step` (the run-rail instrument below) — bold and a step up from
+   that instrument's own inherited size, standing beside the step's `Timestamp`. Colour comes
+   entirely from `.run-step`'s own idle/done/active/rejected state, never set here. */
 .timeline-step-label {
   font-weight: 600;
   font-size: var(--text-sm);
-}
-
-/* ── Live indicator ──────────────────────────────────────────────────────── */
-
-.live-dot {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--status-caution-ink);
-  box-shadow: 0 0 0 0 var(--status-caution-line);
-  animation: pulse var(--motion-pulse) ease-out infinite;
-}
-@keyframes pulse {
-  0% {
-    box-shadow: 0 0 0 0 var(--status-caution-line);
-  }
-  70% {
-    box-shadow: 0 0 0 7px transparent;
-  }
-  100% {
-    box-shadow: 0 0 0 0 transparent;
-  }
 }
 
 /* ── Table content states ────────────────────────────────────────────────── */
@@ -245,9 +189,9 @@
 }
 
 /* The funnel's result group: the verified ratio and, when something was dropped, the
-   not-asserted caveat and warn notice. Borrows the run timeline's state-through-border-left
-   language (.timeline-step above) rather than opacity, on the same --rail-line-* tokens, so the
-   funnel's outcome reads as the same species of object as a reached timeline step. */
+   not-asserted caveat and warn notice. Borrows the run rail's state-through-border-left
+   language (`.run-step` below) rather than opacity, on the same --rail-line-* tokens, so the
+   funnel's outcome reads as the same species of object as a reached run step. */
 .ledger-outcome {
   /* .ledger's own flex gap already contributes --space-1 above every child; the remainder
      here lands the input-to-outcome transition at a full --space-3, wider than the --space-1
@@ -265,7 +209,7 @@
 
 /* ── Dropped claims band ─────────────────────────────────────────────────── */
 /* A dedicated section below the apparatus, not a trailing footnote — a caution-bordered card in
-   the same border-left idiom `.ledger-outcome`/`.timeline-step` use for state, so a dropped claim
+   the same border-left idiom `.ledger-outcome`/`.run-step` use for state, so a dropped claim
    reads as its own integrity signal rather than a generic notice. Count and server-authored
    reason are always visible; the raw model statement — free text that failed verification — sits
    behind a per-item disclosure. */
@@ -324,12 +268,6 @@
   margin: 0 0 var(--space-3);
   font-size: var(--text-md);
   font-weight: 600;
-}
-.search-highlight {
-  background: var(--signal-soft);
-  color: inherit;
-  border-radius: var(--radius-sm);
-  padding: 0 var(--space-1);
 }
 
 /* ── Document workbench ──────────────────────────────────────────────────── */
@@ -603,9 +541,9 @@
   flex-direction: column;
   gap: var(--space-2);
 }
-/* Same border-left-carries-state language as `.timeline-step`/`.ledger-outcome` above, on the
+/* Same border-left-carries-state language as `.run-step`/`.ledger-outcome`, on the
    same `--rail-line-*` tokens, so a done step reads as the same species of signal as a reached
-   timeline step or a verified ledger outcome. */
+   run step or a verified ledger outcome. */
 .stepper-step {
   display: flex;
   align-items: center;
@@ -708,15 +646,6 @@
 .answer-detail .page-title {
   max-width: var(--measure-reading);
 }
-.answer-detail-meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  color: var(--muted);
-  font-size: var(--text-sm);
-  margin: var(--space-2) 0 0;
-}
 
 /* One next step for an insufficient-evidence outcome with no menu of options — `AnswerView`
    resolves `reasonCode` to exactly one action before rendering this wrapper. */
@@ -746,7 +675,7 @@
 /* ── W7a: document detail & fidelity notice ─────────────────────────────── */
 
 /* A version's or document's fidelity gaps, set off from the ingestion badge above it by a
-   hairline rather than the thicker state-carrying rail `.ledger-outcome`/`.timeline-step` use —
+   hairline rather than the thicker state-carrying rail `.ledger-outcome`/`.run-step` use —
    this is a footnote alongside a status, not the status itself. */
 .fidelity-notice {
   margin-top: var(--space-2);
@@ -998,25 +927,9 @@
 
 /* ── W8c: conflicts queue & value comparison ─────────────────────────────── */
 
-/* Overrides the flex-wrap layout declared at the top of this file: a card grid keeps three or
-   more competing values legible side by side, and 220px is the narrowest a card goes before its
-   figure and source line start colliding. */
-.value-compare {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  align-items: start;
-}
-.value-compare-item {
-  position: relative;
-  min-width: 0;
-}
 .value-compare-figure {
   font-size: var(--text-xl);
   font-weight: 600;
-}
-.value-compare-item--recommended {
-  border-color: var(--signal-line);
-  background: var(--signal-soft);
 }
 /* Cancels the card's own padding on two sides and the top so the band reads as a ribbon flush
    with the card's edges, then restores clearance below it so the figure lines up with a

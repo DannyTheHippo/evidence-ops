@@ -309,6 +309,9 @@
             "description": "The newly minted invitation, including its plaintext token — shown exactly once.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MintedInvitationResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "Minted invitation",
@@ -556,6 +559,9 @@
             "description": "The newly minted invitation, including its plaintext token — shown exactly once.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MintedInvitationResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "Minted invitation",
@@ -815,6 +821,9 @@
             "description": "The member's updated role.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "Role changed",
@@ -978,6 +987,9 @@
             "description": "Signs the member out of every browser session and disables every API key they hold — raising their session epoch invalidates both, since API keys are checked against the same epoch as session cookies.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "Sessions revoked",
@@ -2503,6 +2515,9 @@
             "description": "A resolveConflict workflow was started to gate the proposed winner behind a human.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "Resolution requested",
@@ -2761,6 +2776,9 @@
             "description": "The run's current status, best-effort refreshed from the live workflow engine.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "Running resolveConflict run",
@@ -2951,6 +2969,9 @@
             "description": "The approval after recording the decision.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "Approved",
@@ -3539,6 +3560,9 @@
             "description": "The newly created source.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "Created source",
@@ -3846,6 +3870,9 @@
             "description": "The requested source.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "Existing source",
@@ -3929,6 +3956,9 @@
             "description": "The sync workflow run for this source — newly started, or the already-running one this request deduplicated against.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "Sync accepted",
@@ -3984,6 +4014,9 @@
             "description": "How many documents from this source still carry a superseded sourceClass.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceClassDriftResponseDto"
+                },
                 "examples": {
                   "drifted": {
                     "summary": "Documents still carry the previous class",
@@ -4043,6 +4076,9 @@
             "description": "The result of applying this source's current sourceClass to every document that still carried the previous one.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplySourceClassDriftResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "Applied to 12 documents",
@@ -4307,6 +4343,9 @@
             "description": "The newly minted key, including its plaintext token — shown exactly once.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MintedApiKeyResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "Minted API key",
@@ -4504,6 +4543,9 @@
             "description": "The key rotated onto a fresh token — same id, name and creation date, new plaintext token shown exactly once. The previous token stops working immediately.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MintedApiKeyResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "Rotated API key",
@@ -4745,6 +4787,55 @@
           "role"
         ]
       },
+      "MintedInvitationResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Invitation identifier."
+          },
+          "email": {
+            "type": "string",
+            "example": "colleague@example.com",
+            "description": "Email address invited."
+          },
+          "role": {
+            "type": "string",
+            "example": "member",
+            "enum": [
+              "admin",
+              "member"
+            ],
+            "description": "Role the invitee joins the tenant with."
+          },
+          "token": {
+            "type": "string",
+            "example": "eo_inv_9f8c12ab34cd56ef",
+            "description": "The plaintext token. Shown exactly once — it cannot be retrieved again after this response."
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-08T00:00:00.000Z",
+            "description": "When this invitation stops working."
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "Invitation creation timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "role",
+          "token",
+          "expiresAt",
+          "createdAt"
+        ]
+      },
       "HealthResponseDto": {
         "type": "object",
         "properties": {
@@ -4800,6 +4891,42 @@
         },
         "required": [
           "role"
+        ]
+      },
+      "UserResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "User identifier."
+          },
+          "email": {
+            "type": "string",
+            "example": "colleague@example.com",
+            "description": "Email address."
+          },
+          "role": {
+            "type": "string",
+            "example": "member",
+            "enum": [
+              "admin",
+              "member"
+            ],
+            "description": "Role within the tenant."
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "Account creation timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "role",
+          "createdAt"
         ]
       },
       "DocumentVersionResponseDto": {
@@ -5530,6 +5657,85 @@
           "decision"
         ]
       },
+      "ApprovalResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Approval identifier."
+          },
+          "subject": {
+            "type": "object",
+            "example": {
+              "entityType": "Conflict",
+              "entityId": "65f1c2e4a1b2c3d4e5f6a7b9"
+            },
+            "description": "The entity this approval gates."
+          },
+          "action": {
+            "type": "string",
+            "example": "resolve_conflict",
+            "description": "The action being approved."
+          },
+          "summary": {
+            "type": "string",
+            "example": "Resolve Northgate Business Park cap_rate (2025-03) in favor of 5.25% over 6.10%.",
+            "description": "Human-readable summary of the requested action."
+          },
+          "requestedBy": {
+            "type": "string",
+            "example": "reviewer@example.com",
+            "description": "Who or what requested the approval."
+          },
+          "workflowId": {
+            "type": "string",
+            "example": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
+            "description": "Underlying Temporal workflow id this approval gates, present when requested via a workflow (matches WorkflowRun.workflowId) — absent for an approval created outside one."
+          },
+          "state": {
+            "type": "string",
+            "example": "pending",
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "timed_out"
+            ],
+            "description": "Approval state."
+          },
+          "decidedBy": {
+            "type": "string",
+            "example": "reviewer@example.com",
+            "description": "Who decided the approval."
+          },
+          "decidedAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-02T00:00:00.000Z",
+            "description": "When the decision was made."
+          },
+          "decisionReason": {
+            "type": "string",
+            "example": "Evidence checks out.",
+            "description": "Optional rationale for the decision."
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "Approval creation timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "subject",
+          "action",
+          "summary",
+          "state",
+          "createdAt"
+        ]
+      },
       "StartQuestionRequestDto": {
         "type": "object",
         "properties": {
@@ -5907,6 +6113,127 @@
           "owner"
         ]
       },
+      "SourceResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Source identifier."
+          },
+          "name": {
+            "type": "string",
+            "example": "Deal Room Inbox",
+            "description": "Human-readable name for this source."
+          },
+          "kind": {
+            "type": "string",
+            "example": "local-folder",
+            "enum": [
+              "local-folder"
+            ],
+            "description": "Which connector syncs this source."
+          },
+          "path": {
+            "type": "string",
+            "example": "deal-room",
+            "description": "The connector's location for this source — a folder path for 'local-folder'."
+          },
+          "enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "Whether the sync loop is allowed to run for this source."
+          },
+          "intervalMs": {
+            "type": "number",
+            "example": 60000,
+            "description": "Per-source override of the global sync interval, in milliseconds. Absent means the configured default applies."
+          },
+          "lastSyncAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "When the most recent sync attempt finished."
+          },
+          "lastSyncStatus": {
+            "type": "string",
+            "example": "ok",
+            "description": "Outcome of the most recent sync attempt — 'ok' or 'failed'."
+          },
+          "lastSyncError": {
+            "type": "string",
+            "example": "ENOENT: no such file or directory",
+            "description": "Error detail, present only when lastSyncStatus is failed."
+          },
+          "fileCount": {
+            "type": "number",
+            "example": 42,
+            "description": "Number of files this source has synced state for."
+          },
+          "connectivity": {
+            "type": "string",
+            "example": "connector",
+            "enum": [
+              "connector",
+              "export-only",
+              "manual"
+            ],
+            "description": "How this source's bytes get into the corpus."
+          },
+          "reachability": {
+            "type": "string",
+            "example": "live",
+            "enum": [
+              "live",
+              "possible",
+              "prohibited"
+            ],
+            "description": "Whether the estate's own access posture lets this system reach this source at all."
+          },
+          "owner": {
+            "type": "string",
+            "example": "Jane Doe, IT",
+            "description": "Person or team accountable for this source. Absent means nobody has said yet."
+          },
+          "tracked": {
+            "type": "boolean",
+            "example": true,
+            "description": "Whether the sync loop may ever run for this source. 'false' marks an inventory-only row."
+          },
+          "sourceClass": {
+            "type": "string",
+            "example": "unclassified",
+            "enum": [
+              "crm-export",
+              "pm-export",
+              "spreadsheet",
+              "memo",
+              "report",
+              "unclassified"
+            ],
+            "description": "Default document classification a document created from this source's sync pass inherits."
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "Source creation timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "path",
+          "enabled",
+          "fileCount",
+          "connectivity",
+          "reachability",
+          "tracked",
+          "sourceClass",
+          "createdAt"
+        ]
+      },
       "SourceFileStateResponseDto": {
         "type": "object",
         "properties": {
@@ -6123,6 +6450,72 @@
           }
         }
       },
+      "SourceClassDriftResponseDto": {
+        "type": "object",
+        "properties": {
+          "previousClass": {
+            "type": "string",
+            "example": "memo",
+            "enum": [
+              "crm-export",
+              "pm-export",
+              "spreadsheet",
+              "memo",
+              "report",
+              "unclassified"
+            ],
+            "description": "The class documents were ingested under before sourceClass last changed. Absent means sourceClass has never changed for this source."
+          },
+          "count": {
+            "type": "number",
+            "example": 12,
+            "description": "How many documents still carry previousClass rather than the source's current sourceClass."
+          }
+        },
+        "required": [
+          "count"
+        ]
+      },
+      "ApplySourceClassDriftResponseDto": {
+        "type": "object",
+        "properties": {
+          "modifiedCount": {
+            "type": "number",
+            "example": 12,
+            "description": "How many documents this apply actually rewrote — recomputed at apply time, so it can differ from a count read earlier."
+          },
+          "previousClass": {
+            "type": "string",
+            "example": "memo",
+            "enum": [
+              "crm-export",
+              "pm-export",
+              "spreadsheet",
+              "memo",
+              "report",
+              "unclassified"
+            ],
+            "description": "The class this apply reconciled from. Absent when there was nothing to reconcile."
+          },
+          "sourceClass": {
+            "type": "string",
+            "example": "crm-export",
+            "enum": [
+              "crm-export",
+              "pm-export",
+              "spreadsheet",
+              "memo",
+              "report",
+              "unclassified"
+            ],
+            "description": "The class this apply reconciled to — the source's current sourceClass."
+          }
+        },
+        "required": [
+          "modifiedCount",
+          "sourceClass"
+        ]
+      },
       "CreateApiKeyRequestDto": {
         "type": "object",
         "properties": {
@@ -6140,6 +6533,50 @@
         },
         "required": [
           "name"
+        ]
+      },
+      "MintedApiKeyResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "API key identifier."
+          },
+          "name": {
+            "type": "string",
+            "example": "CI integration",
+            "description": "Human-readable name for this key."
+          },
+          "token": {
+            "type": "string",
+            "example": "eo_pat_9f8c12ab34cd56ef",
+            "description": "The plaintext token. Shown exactly once — it cannot be retrieved again after this response."
+          },
+          "tokenPrefix": {
+            "type": "string",
+            "example": "eo_pat_9f8c12",
+            "description": "Display prefix for identifying this key in a list."
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-12-31T00:00:00.000Z",
+            "description": "When this key stops working. Set to the request value if given, otherwise the default TTL (`apiKeys.defaultTtlDays` from config)."
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "Key creation timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "token",
+          "tokenPrefix",
+          "createdAt"
         ]
       },
       "DashboardSummaryResponseDto": {

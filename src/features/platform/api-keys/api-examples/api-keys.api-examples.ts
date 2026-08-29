@@ -1,5 +1,6 @@
 import { HttpStatus } from '@nestjs/common';
 import type { ApiResponseOptions } from '@nestjs/swagger';
+import { MintedApiKeyResponseDto } from '../dtos/response/minted-api-key.response.dto';
 
 const exampleMintedKey = {
   id: '65f1c2e4a1b2c3d4e5f6a7b8',
@@ -23,6 +24,7 @@ export const apiKeysApiExamples: Record<string, ApiResponseOptions> = {
   minted: {
     status: HttpStatus.CREATED,
     description: 'The newly minted key, including its plaintext token — shown exactly once.',
+    type: MintedApiKeyResponseDto,
     examples: {
       example: {
         summary: 'Minted API key',
@@ -64,6 +66,7 @@ export const apiKeysApiExamples: Record<string, ApiResponseOptions> = {
     description:
       'The key rotated onto a fresh token — same id, name and creation date, new plaintext token ' +
       'shown exactly once. The previous token stops working immediately.',
+    type: MintedApiKeyResponseDto,
     examples: {
       example: {
         summary: 'Rotated API key',

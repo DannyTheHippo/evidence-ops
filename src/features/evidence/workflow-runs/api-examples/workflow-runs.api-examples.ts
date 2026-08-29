@@ -31,6 +31,7 @@ export const workflowRunsApiExamples: Record<string, ApiResponseOptions> = {
   detail: {
     status: HttpStatus.OK,
     description: "The run's current status, best-effort refreshed from the live workflow engine.",
+    type: WorkflowRunResponseDto,
     examples: {
       example: {
         summary: 'Running resolveConflict run',

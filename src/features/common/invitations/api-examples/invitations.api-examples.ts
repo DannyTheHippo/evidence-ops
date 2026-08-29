@@ -2,6 +2,7 @@ import { HttpStatus } from '@nestjs/common';
 import type { ApiResponseOptions } from '@nestjs/swagger';
 import { UserRole } from '../../../../shared/enums/user-role.enum';
 import { InvitationPreviewResponseDto } from '../dtos/response/invitation-preview.response.dto';
+import { MintedInvitationResponseDto } from '../dtos/response/minted-invitation.response.dto';
 
 const exampleMintedInvitation = {
   id: '65f1c2e4a1b2c3d4e5f6a7b8',
@@ -57,6 +58,7 @@ export const invitationsApiExamples: Record<string, ApiResponseOptions> = {
   minted: {
     status: HttpStatus.CREATED,
     description: 'The newly minted invitation, including its plaintext token — shown exactly once.',
+    type: MintedInvitationResponseDto,
     examples: {
       example: {
         summary: 'Minted invitation',

@@ -27,14 +27,13 @@ import mainTsx from '../main.tsx?raw';
  * Bare pixel sizing (`height`/`padding`/`font-size` outside `tokens.css`) is resolved two ways,
  * chosen per declaration: a genuine control dimension is tokenized (`.topbar`'s height moved to
  * `--topbar-height`, alongside `--ledger-bar-height`'s existing precedent for a one-off pixel
- * constant with no better home), while five decorative marker/utility sizes are left as bare
- * pixels and carried in the explicit, selector-scoped `BARE_HEIGHT_EXEMPTIONS` list below instead —
+ * constant with no better home), while four decorative marker sizes are left as bare pixels and
+ * carried in the explicit, selector-scoped `BARE_HEIGHT_EXEMPTIONS` list below instead —
  * tokenizing a "7px dot" buys nothing when the number is never reused or reasoned about elsewhere.
- * Two of the five (`.sr-only`, `.badge::before`) were already bare before this change; the other
- * three (`.brand-mark`, `.theme-toggle > span`, `.live-dot`) are the same species of decorative
- * marker but were not caught by the F0b pass — this test is what now holds all five in place, and
- * a sixth marker joining them must earn its own line in the list rather than being caught by a
- * loose value match.
+ * `.sr-only` and `.badge::before` live in `primitives.css`; `.brand-mark` lives in `shell.css`;
+ * `.live-dot` lives in `primitives.css` beside a generic marker's other consumers rather than a
+ * single feature. A fifth marker joining them must earn its own line in the list rather than being
+ * caught by a loose value match.
  */
 
 interface Stylesheet {
@@ -68,12 +67,12 @@ interface BareSizeExemption {
 }
 
 /** Selector-scoped, not value-scoped: a new selector reusing e.g. "7px" for something that is not
- * one of these five markers is still caught. */
+ * one of these four markers is still caught. */
 const BARE_HEIGHT_EXEMPTIONS: readonly BareSizeExemption[] = [
   { file: 'primitives.css', selector: '.sr-only', property: 'height' },
   { file: 'primitives.css', selector: '.badge::before', property: 'height' },
   { file: 'shell.css', selector: '.brand-mark', property: 'height' },
-  { file: 'features.css', selector: '.live-dot', property: 'height' },
+  { file: 'primitives.css', selector: '.live-dot', property: 'height' },
 ];
 
 /** Comments can mention "@media", a property name, or a px value in prose (e.g. primitives.css's

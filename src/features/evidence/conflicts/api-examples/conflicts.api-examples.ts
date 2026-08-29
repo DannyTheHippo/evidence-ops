@@ -1,6 +1,7 @@
 import { HttpStatus } from '@nestjs/common';
 import type { ApiResponseOptions } from '@nestjs/swagger';
 import { ConflictResponseDto } from '../dtos/response/conflict.response.dto';
+import { WorkflowRunResponseDto } from '../../workflow-runs/dtos/response/workflow-run.response.dto';
 
 const exampleConflict = {
   id: '65f1c2e4a1b2c3d4e5f6a7b8',
@@ -57,6 +58,7 @@ export const conflictsApiExamples: Record<string, ApiResponseOptions> = {
     status: HttpStatus.CREATED,
     description:
       'A resolveConflict workflow was started to gate the proposed winner behind a human.',
+    type: WorkflowRunResponseDto,
     examples: {
       example: {
         summary: 'Resolution requested',
