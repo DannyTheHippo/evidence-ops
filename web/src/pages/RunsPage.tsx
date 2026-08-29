@@ -187,7 +187,12 @@ export default function RunsPage() {
       }
     >
       {runs && runs.length > 0 && (
-        <section className="panel">
+        <section
+          className="panel"
+          tabIndex={0}
+          role="region"
+          aria-label="Workflow runs, most recent first"
+        >
           <Table caption="Workflow runs, most recent first">
             <thead>
               <tr>

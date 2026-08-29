@@ -89,6 +89,10 @@ describe('PeoplePage', () => {
 
     expect(await screen.findByText('admin@example.com')).toBeInTheDocument();
     expect(screen.getByText('member@example.com')).toBeInTheDocument();
+
+    expect(
+      screen.getByRole('region', { name: 'Members of this tenant and their roles' }),
+    ).toHaveAttribute('tabindex', '0');
   });
 
   it('lists pending invitations with email, role, status and expiry', async () => {
@@ -101,6 +105,10 @@ describe('PeoplePage', () => {
 
     expect(await screen.findByText('colleague@example.com')).toBeInTheDocument();
     expect(screen.getByText('pending')).toBeInTheDocument();
+
+    expect(
+      screen.getByRole('region', { name: 'Invitations minted for this tenant' }),
+    ).toHaveAttribute('tabindex', '0');
   });
 
   it('reads as empty when there are no members or invitations', async () => {

@@ -46,14 +46,13 @@ export class Invitation extends AuditableDocument {
 export const InvitationSchema = SchemaFactory.createForClass(Invitation);
 
 /**
- * Declared here as well as in `migrations/0022-invitations.ts` and
- * `migrations/0025-invitations-ttl-index.ts`, with the same keys, options and names — the
- * migrations build them in a deployed database, this declaration is what `Model.syncIndexes()`
- * builds for a test lane that never runs migrations. The unique `{ tokenHash: 1 }` index is
- * `InvitationsService`'s redemption lookup path; `{ tenantId: 1, createdAt: -1 }` backs "this
- * tenant's invitations, newest first", the listing query an admin panel runs; the TTL index expires
- * a row once its own `expiresAt` passes, redeemed or not — `migrations/0025-invitations-ttl-index.ts`
- * carries the reasoning for keying it directly on `expiresAt`.
+ * Declared here as well as in `migrations/0001-baseline.ts`, with the same keys, options and
+ * names — the migration builds them in a deployed database, this declaration is what
+ * `Model.syncIndexes()` builds for a test lane that never runs migrations. The unique
+ * `{ tokenHash: 1 }` index is `InvitationsService`'s redemption lookup path; `{ tenantId: 1,
+ * createdAt: -1 }` backs "this tenant's invitations, newest first", the listing query an admin
+ * panel runs; the TTL index expires a row once its own `expiresAt` passes, redeemed or not —
+ * `migrations/0001-baseline.ts` carries the reasoning for keying it directly on `expiresAt`.
  */
 InvitationSchema.index({ tokenHash: 1 }, { unique: true, name: 'invitations_tokenHash_unique' });
 InvitationSchema.index({ tenantId: 1, createdAt: -1 }, { name: 'invitations_tenantId_createdAt' });

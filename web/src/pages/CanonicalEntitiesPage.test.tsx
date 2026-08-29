@@ -88,6 +88,10 @@ describe('CanonicalEntitiesPage', () => {
     expect(screen.getByText('Northgate, Northgate Shopping Center')).toBeInTheDocument();
     expect(screen.getByText('Southpark Commons')).toBeInTheDocument();
     expect(screen.getByText('No aliases')).toBeInTheDocument();
+
+    expect(
+      screen.getByRole('region', { name: 'Registered canonical entities and their aliases' }),
+    ).toHaveAttribute('tabindex', '0');
   });
 
   it('renders an empty state when nothing is registered', async () => {

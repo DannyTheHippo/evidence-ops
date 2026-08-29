@@ -193,6 +193,9 @@ describe('SourcesPage', () => {
     expect(
       screen.getByRole('table', { name: 'Sources syncing documents into this data room' }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole('region', { name: 'Sources syncing documents into this data room' }),
+    ).toHaveAttribute('tabindex', '0');
     expect(screen.getByText('deal-room')).toBeInTheDocument();
     expect(screen.getByText('Jane Doe, IT')).toBeInTheDocument();
     expect(screen.getByText('Every 5 minutes')).toBeInTheDocument();
@@ -325,6 +328,11 @@ describe('SourcesPage', () => {
         name: 'Repositories catalogued for the estate but never synced',
       }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole('region', {
+        name: 'Repositories catalogued for the estate but never synced',
+      }),
+    ).toHaveAttribute('tabindex', '0');
     expect(screen.getByText('Export Drop')).toBeInTheDocument();
     expect(screen.getByText('Ops Team')).toBeInTheDocument();
     expect(screen.getByText('prohibited')).toBeInTheDocument();

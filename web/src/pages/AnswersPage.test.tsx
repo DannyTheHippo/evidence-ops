@@ -118,6 +118,10 @@ describe('AnswersPage', () => {
       screen.getByRole('table', { name: 'Answered questions and their grounding' }),
     ).toBeInTheDocument();
 
+    expect(
+      screen.getByRole('region', { name: 'Answered questions and their grounding' }),
+    ).toHaveAttribute('tabindex', '0');
+
     expect(screen.getByRole('link', { name: answered.questionText })).toHaveAttribute(
       'href',
       '/answers/answer-1',

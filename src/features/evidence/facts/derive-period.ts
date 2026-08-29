@@ -51,7 +51,7 @@ export const UNDATED_PERIOD = 'undated';
 export const UNPARSEABLE_PERIOD_PREFIX = 'undated:';
 
 /** Bound on the readable portion of an {@link unparseablePeriodKey}. `groupKeyNormalized` is a
- * MongoDB index key (`migrations/0013-fact-group-key-normalized.ts`), so an unbounded copy of
+ * MongoDB index key (`migrations/0001-baseline.ts`), so an unbounded copy of
  * source text inside it could exceed the index key limit and fail the write. */
 const UNPARSEABLE_TEXT_BUDGET = 64;
 

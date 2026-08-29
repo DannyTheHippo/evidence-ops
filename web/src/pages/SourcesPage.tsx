@@ -576,7 +576,12 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
       )}
 
       {status.kind === 'ready' && filteredSources && view === 'tracked' && (
-        <section className="panel">
+        <section
+          className="panel"
+          tabIndex={0}
+          role="region"
+          aria-label="Sources syncing documents into this data room"
+        >
           <Table caption="Sources syncing documents into this data room">
             <thead>
               <tr>
@@ -633,7 +638,12 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
       )}
 
       {status.kind === 'ready' && filteredSources && view === 'inventory' && (
-        <section className="panel">
+        <section
+          className="panel"
+          tabIndex={0}
+          role="region"
+          aria-label="Repositories catalogued for the estate but never synced"
+        >
           <Table caption="Repositories catalogued for the estate but never synced">
             <thead>
               <tr>

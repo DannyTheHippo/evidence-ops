@@ -169,7 +169,7 @@ CanonicalEntitySchema.pre('validate', function (this: CanonicalEntityDocument): 
 });
 
 /**
- * Declared here as well as in `migrations/0018-canonical-entities.ts`, with the same keys, options
+ * Declared here as well as in `migrations/0001-baseline.ts`, with the same keys, options
  * and names — see `source.schema.ts`'s identical pair for why: the migration builds them in a
  * deployed database, these declarations are what `Model.syncIndexes()` builds, which is how a test
  * lane that never runs migrations still enforces the uniqueness this registry relies on.

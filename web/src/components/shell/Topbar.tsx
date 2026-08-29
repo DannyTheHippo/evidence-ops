@@ -6,6 +6,7 @@ import { useSession } from '../../lib/use-session';
 import Badge from '../ui/Badge';
 import IconButton from '../ui/IconButton';
 import Menu from '../ui/Menu';
+import Timestamp from '../ui/Timestamp';
 import ConnectionStatus from './ConnectionStatus';
 import { ThemeToggle } from './ThemeToggle';
 
@@ -78,7 +79,13 @@ export default function Topbar({ breadcrumbFallback, onOpenMenu, onLogout }: Top
     ? [
         { label: me.email },
         { label: roleLabel as string },
-        { label: `Member since ${new Date(me.createdAt).toLocaleDateString()}` },
+        {
+          label: (
+            <>
+              Member since <Timestamp value={me.createdAt} />
+            </>
+          ),
+        },
         { label: 'Logout', onSelect: onLogout },
       ]
     : [{ label: 'Logout', onSelect: onLogout }];

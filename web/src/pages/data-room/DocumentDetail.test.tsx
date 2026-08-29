@@ -102,6 +102,10 @@ describe('DocumentDetail', () => {
     expect(
       screen.getByText('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
     ).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Versions of Q3 Rent Roll' })).toHaveAttribute(
+      'tabindex',
+      '0',
+    );
   });
 
   it('shows a calm not-found notice for a missing or already-deleted document', async () => {

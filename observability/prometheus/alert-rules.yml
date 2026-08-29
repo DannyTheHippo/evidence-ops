@@ -55,7 +55,7 @@ groups:
           severity: critical
         annotations:
           summary: "Retrieval is returning zero chunks more often than isolated no-evidence questions explain."
-          description: "More than 3 empty retrievals in 15 minutes across the whole deployment points at a broken index, a corpus that stopped ingesting, or tenant scoping excluding everything — not at a handful of genuinely unanswerable questions. First step: confirm the $search/$vectorSearch indexes report READY (migration 0003-search-indexes.ts), then check whether the most recent ingestion runs actually completed."
+          description: "More than 3 empty retrievals in 15 minutes across the whole deployment points at a broken index, a corpus that stopped ingesting, or tenant scoping excluding everything — not at a handful of genuinely unanswerable questions. First step: confirm the $search/$vectorSearch indexes report READY (0001-baseline.ts), then check whether the most recent ingestion runs actually completed."
 
       - alert: ApprovalTimeouts
         expr: increase(evidence_ops_approval_timeout_total[1h]) > 0

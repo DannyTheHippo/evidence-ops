@@ -115,6 +115,10 @@ describe('ApiKeysPage', () => {
     // reads as an explicit absence, not a blank cell.
     expect(screen.getByText('Never expires')).toBeInTheDocument();
     expect(screen.getByText('Never used')).toBeInTheDocument();
+
+    expect(
+      screen.getByRole('region', { name: 'API keys that authenticate an MCP client as you' }),
+    ).toHaveAttribute('tabindex', '0');
   });
 
   it('drops the "Never used" absence text once a key has authenticated a request', async () => {

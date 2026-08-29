@@ -386,7 +386,7 @@ services:
         condition: service_healthy
       temporal:
         condition: service_healthy
-      # `0003-search-indexes.ts` blocks until `$search`/`$vectorSearch` report READY (tens of
+      # `0001-baseline.ts` blocks until `$search`/`$vectorSearch` report READY (tens of
       # seconds on a fresh volume) — without this, api/worker would go healthy and accept traffic
       # against a store with no indexes yet, the exact "silently matches nothing" failure the
       # migration was written to prevent.

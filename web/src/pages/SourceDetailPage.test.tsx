@@ -155,6 +155,9 @@ describe('SourceDetailPage', () => {
     expect(
       screen.getByRole('table', { name: 'Per-file sync status for this source' }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole('region', { name: 'Per-file sync status for this source' }),
+    ).toHaveAttribute('tabindex', '0');
   });
 
   it('shows "Source not found" for a 404, not the generic error', async () => {

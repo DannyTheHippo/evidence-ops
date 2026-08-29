@@ -54,7 +54,7 @@ export class ExtractedFact extends AuditableDocument {
   // `ConflictsService`/`FactsService`'s `groupKey(factKey)` (`detect-conflicts.ts`) computed at
   // write time, not read on demand: grouping is case-insensitive on `entity`, and no MongoDB
   // collation index can serve a case-insensitive compound index the way a plain field can — see
-  // `migrations/0013-fact-group-key-normalized.ts`'s own doc comment for the index this field
+  // `migrations/0001-baseline.ts`'s own doc comment for the index this field
   // exists to support (incremental conflict scans scoped to `{tenantId, groupKeyNormalized}`).
   @Prop({ type: String, required: true })
   groupKeyNormalized: string;

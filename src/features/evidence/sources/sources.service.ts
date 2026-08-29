@@ -182,7 +182,7 @@ export class SourcesService {
     this.logger.init(SourcesService.name);
   }
 
-  /** Maps the unique `{tenantId, name}` index (`migrations/0014-sources-indexes.ts`) onto a 409 —
+  /** Maps the unique `{tenantId, name}` index (`migrations/0001-baseline.ts`) onto a 409 —
    *  the application-layer surface for a race the index itself already prevents at the driver
    *  level. */
   async create(input: CreateSourceInput): Promise<SourceResult> {

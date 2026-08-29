@@ -458,7 +458,12 @@ export default function PeoplePage() {
       )}
 
       {members && members.length > 0 && (
-        <section className="panel">
+        <section
+          className="panel"
+          tabIndex={0}
+          role="region"
+          aria-label="Members of this tenant and their roles"
+        >
           <Table caption="Members of this tenant and their roles.">
             <thead>
               <tr>
@@ -599,7 +604,12 @@ export default function PeoplePage() {
       )}
 
       {invitations && invitations.length > 0 && (
-        <section className="panel">
+        <section
+          className="panel"
+          tabIndex={0}
+          role="region"
+          aria-label="Invitations minted for this tenant"
+        >
           <Table caption="Invitations minted for this tenant.">
             <thead>
               <tr>

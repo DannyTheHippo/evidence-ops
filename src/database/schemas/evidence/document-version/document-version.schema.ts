@@ -124,7 +124,7 @@ export class DocumentVersion extends AuditableDocument {
 export const DocumentVersionSchema = SchemaFactory.createForClass(DocumentVersion);
 
 /**
- * Declared here as well as in `migrations/0023-source-inventory-fields.ts`, with the same key
+ * Declared here as well as in `migrations/0001-baseline.ts`, with the same key
  * pattern, options and name — MongoDB refuses a second index on a key pattern it already carries
  * under a different name, and which side loses depends on boot order. Backs
  * `DocumentsService.list`'s `ingestionStatus` filter: resolving "which versions have this status"
@@ -136,7 +136,7 @@ DocumentVersionSchema.index(
 );
 
 /**
- * Declared here as well as in `migrations/0029-document-version-withdrawal.ts`, with the same
+ * Declared here as well as in `migrations/0001-baseline.ts`, with the same
  * keys, name and options — same reasoning as the index above. Partial: `withdrawnAt` is absent on
  * the overwhelming majority of versions (every one never withdrawn), so an unfiltered index would
  * carry every row for a predicate that only ever matches a small minority.
@@ -150,7 +150,7 @@ DocumentVersionSchema.index(
 );
 
 /**
- * Declared here as well as in `migrations/0035-document-version-stale-attempt-index.ts`, with the
+ * Declared here as well as in `migrations/0001-baseline.ts`, with the
  * same keys, name and options — same reasoning as the indexes above. Backs
  * `IngestionService.reconcileStaleAttempts`, which sweeps every tenant at once and so cannot use
  * the `tenantId`-leading index. Partial: only `'pending'` versions are ever swept, which is a

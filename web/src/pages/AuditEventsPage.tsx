@@ -296,7 +296,12 @@ export default function AuditEventsPage() {
       }
     >
       {events && events.length > 0 && (
-        <section className="panel">
+        <section
+          className="panel"
+          tabIndex={0}
+          role="region"
+          aria-label="Audit events matching the current filters"
+        >
           <Table caption="Audit events matching the current filters">
             <thead>
               <tr>

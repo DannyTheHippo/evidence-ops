@@ -143,6 +143,10 @@ describe('AuditEventsPage', () => {
     // these strings, so an unscoped query matches the filter as well as the cell.
     expect(within(table).getByText('api')).toBeInTheDocument();
     expect(within(table).queryByText('MCP')).not.toBeInTheDocument();
+
+    expect(
+      screen.getByRole('region', { name: 'Audit events matching the current filters' }),
+    ).toHaveAttribute('tabindex', '0');
   });
 
   it('shows when a record was recorded versus when the underlying action occurred, only if they differ', async () => {

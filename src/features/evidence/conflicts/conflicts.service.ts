@@ -294,9 +294,8 @@ export class ConflictsService {
    *
    * - **Incremental** (`factKeys` given): a document re-ingest re-scans only the groups its own
    *   facts belong to — via `groupKeyNormalized`, the denormalized case-insensitive grouping key
-   *   `migrations/0013-fact-group-key-normalized.ts` backfilled and indexed alongside
-   *   `{tenantId, status, groupKeyNormalized}` for the idempotency check below. This is the path
-   *   `ingest-document-version.workflow.ts` calls on every ingest.
+   *   indexed alongside `{tenantId, status, groupKeyNormalized}` for the idempotency check below.
+   *   This is the path `ingest-document-version.workflow.ts` calls on every ingest.
    * - **Full scan** (`factKeys` omitted): every `ExtractedFact` for the tenant, streamed via a
    *   Mongoose cursor rather than one `find()` materializing the whole collection — the
    *   maintenance/eval path (`npm run eval`, an admin re-scan), not the per-ingest hot path.

@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as auth from '../../lib/auth';
 import { useBreadcrumbs } from '../../lib/breadcrumbs';
+import { formatRelativeTimestamp } from '../../lib/format-timestamp';
 import Topbar from './Topbar';
 
 /** Publishes a fixed three-level trail for the duration it is mounted — stands in for a page that
@@ -62,7 +63,7 @@ describe('Topbar', () => {
     const emailItem = screen.getByRole('menuitem', { name: 'user@example.com' });
     const roleItem = screen.getByRole('menuitem', { name: 'Member' });
     const memberSinceItem = screen.getByRole('menuitem', {
-      name: `Member since ${new Date(ME.createdAt).toLocaleDateString()}`,
+      name: `Member since ${formatRelativeTimestamp(ME.createdAt)}`,
     });
     expect(emailItem).toHaveAttribute('aria-disabled', 'true');
     expect(roleItem).toHaveAttribute('aria-disabled', 'true');

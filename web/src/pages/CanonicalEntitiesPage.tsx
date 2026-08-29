@@ -191,7 +191,12 @@ export default function CanonicalEntitiesPage() {
       }
     >
       {entities && entities.length > 0 && (
-        <section className="panel">
+        <section
+          className="panel"
+          tabIndex={0}
+          role="region"
+          aria-label="Registered canonical entities and their aliases"
+        >
           <Table caption="Registered canonical entities and their aliases.">
             <thead>
               <tr>

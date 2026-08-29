@@ -493,8 +493,7 @@ describe('Documents (e2e)', () => {
 
     // The guard this closes: `resolveConflictPolicy` refuses to rank a fact whose document is
     // 'unclassified' because that means no authority information was recorded, not the lowest
-    // rank — accepting the word here as an explicit value would be a second way to say nothing,
-    // the same reasoning `UpsertMetricPolicyRequestDto.authorityOrder` already applies.
+    // rank — accepting the word here as an explicit value would be a second way to say nothing.
     it('refuses an explicit sourceClass of unclassified', async () => {
       const response = await upload(comps, 'comps.xlsx', XLSX_MIME, {
         title: 'Explicit Unclassified',

@@ -9,7 +9,7 @@ export class SourceNotFoundException extends BaseException {
 
 /**
  * Raised when `SourcesService.create` hits the unique `{tenantId, name}` index
- * (`migrations/0014-sources-indexes.ts`) — the application-layer surface for the same
+ * (`migrations/0001-baseline.ts`) — the application-layer surface for the same
  * content-addressing-style race `DocumentVersion`'s unique index backstops.
  */
 export class SourceNameConflictException extends BaseException {

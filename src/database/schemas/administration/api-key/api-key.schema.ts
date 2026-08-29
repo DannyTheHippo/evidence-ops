@@ -56,8 +56,8 @@ export class ApiKey extends AuditableDocument {
 export const ApiKeySchema = SchemaFactory.createForClass(ApiKey);
 
 /**
- * Declared here as well as in `migrations/0019-api-keys.ts` and `migrations/0021-api-key-expiry-and-usage.ts`,
- * with the same keys, options and names — the migrations build them in a deployed database, this
+ * Declared here as well as in `migrations/0001-baseline.ts`, with the same keys, options and
+ * names — the migration builds them in a deployed database, this
  * declaration is what `Model.syncIndexes()` builds for a test lane that never runs migrations. The
  * unique `{ tokenHash: 1 }` index is `ApiKeysService.verify`'s lookup path; `{ tenantId, userId, createdAt }`
  * backs the "this user's keys, newest first" listing query; `{ tenantId, userId, revokedAt }` backs

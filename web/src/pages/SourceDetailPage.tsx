@@ -438,7 +438,12 @@ export default function SourceDetailPage({ pollIntervalMs }: SourceDetailPagePro
             </section>
           )}
 
-          <section className="panel">
+          <section
+            className="panel"
+            tabIndex={0}
+            role="region"
+            aria-label="Per-file sync status for this source"
+          >
             {source.fileStates.length === 0 ? (
               <EmptyState
                 icon={<IconDatabase size={24} />}

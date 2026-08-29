@@ -66,6 +66,9 @@ describe('ProposalsQueue', () => {
     expect(
       screen.getByRole('table', { name: 'Proposed aliases awaiting confirmation.' }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole('region', { name: 'Proposed aliases awaiting confirmation' }),
+    ).toHaveAttribute('tabindex', '0');
     expect(screen.getByText('Acme Tower')).toBeInTheDocument();
     expect(screen.getByText('Acme Tower, LLC')).toBeInTheDocument();
     expect(screen.getByText('p.2')).toBeInTheDocument();

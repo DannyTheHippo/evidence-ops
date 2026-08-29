@@ -7,11 +7,10 @@ import {
 } from '../../../../../database/schemas/evidence/document/document.schema';
 
 /**
- * The classes an uploader may declare for a browser upload. `'unclassified'` is excluded the same
- * way `UpsertMetricPolicyRequestDto`'s `RANKABLE_SOURCE_CLASSES` excludes it: it means no
- * authority information was recorded, not a rank a caller can assert — a document this DTO never
- * touches is already `'unclassified'` by the schema's own default, so accepting the word here
- * would just be a second way to say nothing.
+ * The classes an uploader may declare for a browser upload. `'unclassified'` is excluded: it
+ * means no authority information was recorded, not a rank a caller can assert — a document this
+ * DTO never touches is already `'unclassified'` by the schema's own default, so accepting the
+ * word here would just be a second way to say nothing.
  */
 const UPLOAD_SOURCE_CLASSES: readonly DocumentSourceClass[] = DOCUMENT_SOURCE_CLASSES.filter(
   (sourceClass) => sourceClass !== 'unclassified',
@@ -64,9 +63,9 @@ export class UploadDocumentRequestDto {
       'Authority classification for a newly created document — the survivorship policy weighs ' +
       "this against every other document's class the next time this metric conflicts. Omit to " +
       "leave the document 'unclassified' (no authority information, not the lowest rank). " +
-      "Rejects 'unclassified' as an explicit value for the same reason " +
-      "UpsertMetricPolicyRequestDto's authorityOrder does. Ignored when documentId is set — a new " +
-      "version never changes its document's class.",
+      "Rejects 'unclassified' as an explicit value for the same reason: it is not a rank a " +
+      'caller can assert. Ignored when documentId is set — a new version never changes its ' +
+      "document's class.",
     required: false,
   })
   @IsOptional()

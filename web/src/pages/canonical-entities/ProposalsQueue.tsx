@@ -211,7 +211,12 @@ export default function ProposalsQueue({
       </section>
 
       {proposals.length > 0 && (
-        <section className="panel">
+        <section
+          className="panel"
+          tabIndex={0}
+          role="region"
+          aria-label="Proposed aliases awaiting confirmation"
+        >
           <Table caption="Proposed aliases awaiting confirmation.">
             <thead>
               <tr>

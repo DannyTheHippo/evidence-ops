@@ -92,6 +92,10 @@ describe('RunsPage', () => {
     expect(screen.getByText('failed')).toBeInTheDocument();
     expect(screen.getByText('Model timeout')).toBeInTheDocument();
 
+    expect(
+      screen.getByRole('region', { name: 'Workflow runs, most recent first' }),
+    ).toHaveAttribute('tabindex', '0');
+
     expect(screen.getByRole('link', { name: 'Workflow run' })).toHaveAttribute(
       'href',
       '/workflow-runs/run-3',

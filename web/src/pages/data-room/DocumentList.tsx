@@ -310,7 +310,12 @@ export default function DocumentList() {
       )}
 
       {documents && documents.length > 0 && (
-        <section className="panel">
+        <section
+          className="panel"
+          tabIndex={0}
+          role="region"
+          aria-label="Documents uploaded to the data room, with their ingestion status"
+        >
           <Table caption="Documents uploaded to the data room, with their ingestion status.">
             <thead>
               <tr>

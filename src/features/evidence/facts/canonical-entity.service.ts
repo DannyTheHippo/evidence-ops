@@ -122,7 +122,7 @@ function toCanonicalEntityResult(row: CanonicalEntityDocument): CanonicalEntityR
  * guessing at a match: a fuzzy matcher here would fabricate an agreement (or a conflict) between
  * two entities that were never actually the same, which is the one failure mode this registry
  * exists to prevent. The same reasoning covers an *ambiguous* match: `aliasesNormalized` carries a
- * non-unique index by design (0018-canonical-entities.ts), so a normalised name can legitimately
+ * non-unique index by design (`migrations/0001-baseline.ts`), so a normalised name can legitimately
  * resolve to two different registry rows. When it does, both `resolve` and `resolveMany` return
  * the input unchanged with `matched: false` rather than picking either row — the same silent
  * guess this service exists to refuse, just arriving from the registry side instead of a fuzzy
@@ -164,7 +164,7 @@ export class CanonicalEntityService {
     }
 
     if (canonicalNames.size > 1) {
-      // Fails CLOSED: `aliasesNormalized` is deliberately non-unique (0018-canonical-entities.ts),
+      // Fails CLOSED: `aliasesNormalized` is deliberately non-unique (`migrations/0001-baseline.ts`),
       // so the same normalized text can legitimately be registered under two different canonical
       // rows. Picking either one here would fabricate an agreement (or a conflict) between two
       // entities the registry never actually said were the same — exactly what this service's own
@@ -207,7 +207,7 @@ export class CanonicalEntityService {
 
     // Set per normalized key, not a single last-write-wins map: the same normalized text can
     // legitimately resolve to more than one canonical row (`aliasesNormalized` is deliberately
-    // non-unique — 0018-canonical-entities.ts), and collapsing that to whichever match the cursor
+    // non-unique — `migrations/0001-baseline.ts`), and collapsing that to whichever match the cursor
     // returned last would fabricate a resolution the registry never actually agreed on.
     const canonicalNamesByNormalized = new Map<string, Set<string>>();
     for (const match of matches) {

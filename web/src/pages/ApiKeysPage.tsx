@@ -354,7 +354,12 @@ export default function ApiKeysPage() {
       }
     >
       {keys && keys.length > 0 && (
-        <section className="panel">
+        <section
+          className="panel"
+          tabIndex={0}
+          role="region"
+          aria-label="API keys that authenticate an MCP client as you"
+        >
           <Table caption="API keys that authenticate an MCP client as you.">
             <thead>
               <tr>

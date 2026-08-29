@@ -135,7 +135,7 @@ export class Document extends AuditableDocument {
 export const DocumentSchema = SchemaFactory.createForClass(Document);
 
 /**
- * Declared here as well as in `migrations/0026-document-source-backlink.ts`, with the same key
+ * Declared here as well as in `migrations/0001-baseline.ts`, with the same key
  * pattern, options and name — MongoDB refuses a second index on a key pattern it already carries
  * under a different name, and which side loses depends on boot order. Backs a future "documents
  * from this source" lookup without a collection scan.
@@ -143,7 +143,7 @@ export const DocumentSchema = SchemaFactory.createForClass(Document);
 DocumentSchema.index({ tenantId: 1, sourceId: 1 }, { name: 'documents_tenantId_sourceId' });
 
 /**
- * Declared here as well as in `migrations/0038-document-email-origin-index.ts`, with the same key
+ * Declared here as well as in `migrations/0001-baseline.ts`, with the same key
  * pattern, options and name, for the same reason as the index above.
  *
  * Unique, and partial on `emailOrigin.parentVersionId` existing: it is what makes email-attachment

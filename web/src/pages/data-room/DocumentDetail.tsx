@@ -92,7 +92,12 @@ export default function DocumentDetail({ id }: { id: string }) {
           </div>
           <p className="cell-sub mono">{doc.mimeType}</p>
 
-          <section className="panel">
+          <section
+            className="panel"
+            tabIndex={0}
+            role="region"
+            aria-label={`Versions of ${doc.title}`}
+          >
             <Table caption={`Versions of ${doc.title}.`}>
               <thead>
                 <tr>

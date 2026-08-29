@@ -147,7 +147,12 @@ export default function AnswersPage() {
       }
     >
       {answers && answers.length > 0 && (
-        <section className="panel">
+        <section
+          className="panel"
+          tabIndex={0}
+          role="region"
+          aria-label="Answered questions and their grounding"
+        >
           <Table caption="Answered questions and their grounding">
             <thead>
               <tr>

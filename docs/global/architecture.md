@@ -346,8 +346,7 @@ enforced — over-fetching past the store, then filtering out any hit whose owni
 `tenantId` alone), or a post-fusion `$match` can express "join to `document_versions` and drop
 these" without a candidate pool made entirely of withdrawn hits coming back as zero results with no
 signal why. Withdrawal is retrieval exclusion, not deletion: a withdrawn version's chunks and facts
-stay retained so a past `Answer` can still be explained and `ResolutionBacktestService` can still
-replay a resolution that cited them. The separate, admin-gated hard-delete path
+stay retained so a past `Answer` can still be explained. The separate, admin-gated hard-delete path
 (`DocumentsController.remove`) exists for an operator who wants the bytes actually gone. See
 [`0021-evidence-lifecycle-and-withdrawal.md`](../adr/0021-evidence-lifecycle-and-withdrawal.md) for
 the full design, including the guard thresholds and the accepted costs.

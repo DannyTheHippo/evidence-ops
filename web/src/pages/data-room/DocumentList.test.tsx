@@ -107,6 +107,11 @@ describe('DocumentList', () => {
         'href',
         '/documents/doc-1/versions/v-1',
       );
+      expect(
+        screen.getByRole('region', {
+          name: 'Documents uploaded to the data room, with their ingestion status',
+        }),
+      ).toHaveAttribute('tabindex', '0');
     });
 
     it('shows the pager total and disables Previous on the first page when the list is truncated', async () => {

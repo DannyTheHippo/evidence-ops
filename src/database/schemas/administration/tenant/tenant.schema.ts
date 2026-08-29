@@ -40,7 +40,7 @@ export class Tenant extends AuditableDocument {
 export const TenantSchema = SchemaFactory.createForClass(Tenant);
 
 /**
- * Declared with the same name `migrations/0015-tenants-registry.ts` creates it under, and that
+ * Declared with the same name `migrations/0001-baseline.ts` creates it under, and that
  * agreement is load-bearing rather than tidy. MongoDB refuses a second index on a key pattern it
  * already indexes under a different name, so two authorities naming the same index differently
  * fail whichever runs second: a `@Prop({ unique: true })` shorthand yields Mongoose's default

@@ -59,7 +59,7 @@ jobs:
         run: docker compose up -d --wait mongo
 
       # The compose healthcheck proves mongod is a writable primary, not that mongot (the
-      # $search/$vectorSearch process) has finished starting — and `migrations/0003-search-indexes.ts`
+      # $search/$vectorSearch process) has finished starting — and `migrations/0001-baseline.ts`
       # calls `createSearchIndexes` with no retry of its own. Retrying at the workflow level rather
       # than patching the migration keeps that behavior identical to a local `migrate:up`.
       - name: Run migrations
@@ -124,7 +124,7 @@ jobs:
 
       # The same retry the integration job carries, and for the same measured reason: the compose
       # healthcheck proves mongod is a writable primary, not that mongot has finished starting, and
-      # `0003-search-indexes.ts` calls `createSearchIndexes` with no retry of its own. A fresh-volume
+      # `0001-baseline.ts` calls `createSearchIndexes` with no retry of its own. A fresh-volume
       # rehearsal of this exact sequence failed on the first attempt for precisely that reason.
       - name: Run migrations
         run: |
