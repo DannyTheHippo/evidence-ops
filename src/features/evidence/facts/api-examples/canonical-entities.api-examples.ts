@@ -1,5 +1,6 @@
 import { HttpStatus } from '@nestjs/common';
 import type { ApiResponseOptions } from '@nestjs/swagger';
+import { CanonicalEntityListResponseDto } from '../dtos/response/canonical-entity-list.response.dto';
 import { CanonicalEntityResponseDto } from '../dtos/response/canonical-entity.response.dto';
 import { ScanNearMatchesResponseDto } from '../dtos/response/scan-near-matches.response.dto';
 
@@ -24,6 +25,7 @@ export const canonicalEntitiesApiExamples: Record<string, ApiResponseOptions> = 
   list: {
     status: HttpStatus.OK,
     description: "The tenant's registered canonical entities.",
+    type: CanonicalEntityListResponseDto,
     examples: {
       example: {
         summary: 'One registered entity',

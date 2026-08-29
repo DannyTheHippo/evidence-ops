@@ -1,6 +1,7 @@
 import { HttpStatus } from '@nestjs/common';
 import type { ApiResponseOptions } from '@nestjs/swagger';
 import { UserRole } from '../../../../shared/enums/user-role.enum';
+import { InvitationListResponseDto } from '../dtos/response/invitation-list.response.dto';
 import { InvitationPreviewResponseDto } from '../dtos/response/invitation-preview.response.dto';
 import { MintedInvitationResponseDto } from '../dtos/response/minted-invitation.response.dto';
 
@@ -83,6 +84,7 @@ export const invitationsApiExamples: Record<string, ApiResponseOptions> = {
   list: {
     status: HttpStatus.OK,
     description: "The tenant's invitations.",
+    type: InvitationListResponseDto,
     examples: {
       example: {
         summary: 'One invitation',

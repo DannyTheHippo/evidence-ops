@@ -3,6 +3,7 @@ import type { ApiResponseOptions } from '@nestjs/swagger';
 import { WorkflowRunResponseDto } from '../../workflow-runs/dtos/response/workflow-run.response.dto';
 import { ApplySourceClassDriftResponseDto } from '../dtos/response/apply-source-class-drift.response.dto';
 import { SourceClassDriftResponseDto } from '../dtos/response/source-class-drift.response.dto';
+import { SourceListResponseDto } from '../dtos/response/source-list.response.dto';
 import { SourceResponseDto } from '../dtos/response/source.response.dto';
 import { SourceWithFileStatesResponseDto } from '../dtos/response/source-with-file-states.response.dto';
 
@@ -53,6 +54,7 @@ export const sourcesApiExamples: Record<string, ApiResponseOptions> = {
   list: {
     status: HttpStatus.OK,
     description: 'Paginated sources for the tenant.',
+    type: SourceListResponseDto,
     examples: {
       example: {
         summary: 'One source',

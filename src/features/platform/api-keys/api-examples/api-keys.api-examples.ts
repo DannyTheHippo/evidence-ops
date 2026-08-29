@@ -1,5 +1,6 @@
 import { HttpStatus } from '@nestjs/common';
 import type { ApiResponseOptions } from '@nestjs/swagger';
+import { ApiKeyListResponseDto } from '../dtos/response/api-key-list.response.dto';
 import { MintedApiKeyResponseDto } from '../dtos/response/minted-api-key.response.dto';
 
 const exampleMintedKey = {
@@ -35,6 +36,7 @@ export const apiKeysApiExamples: Record<string, ApiResponseOptions> = {
   list: {
     status: HttpStatus.OK,
     description: "The caller's own API keys.",
+    type: ApiKeyListResponseDto,
     examples: {
       example: {
         summary: 'One key',

@@ -441,6 +441,9 @@
             "description": "The tenant's invitations.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationListResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "One invitation",
@@ -751,6 +754,9 @@
             "description": "The tenant's members.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserListResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "One member",
@@ -1704,6 +1710,9 @@
             "description": "The tenant's registered canonical entities.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanonicalEntityListResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "One registered entity",
@@ -2909,6 +2918,9 @@
             "description": "Paginated pending-approval inbox.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalListResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "One pending approval",
@@ -3731,6 +3743,9 @@
             "description": "Paginated sources for the tenant.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceListResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "One source",
@@ -4260,6 +4275,9 @@
             "description": "Paginated audit log, most recent first, optionally filtered.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditEventListResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "One API-origin row, one MCP-origin refusal",
@@ -4458,6 +4476,9 @@
             "description": "The caller's own API keys.",
             "content": {
               "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyListResponseDto"
+                },
                 "examples": {
                   "example": {
                     "summary": "One key",
@@ -4836,6 +4857,82 @@
           "createdAt"
         ]
       },
+      "InvitationResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Invitation identifier."
+          },
+          "email": {
+            "type": "string",
+            "example": "colleague@example.com",
+            "description": "Email address invited."
+          },
+          "role": {
+            "type": "string",
+            "example": "member",
+            "enum": [
+              "admin",
+              "member"
+            ],
+            "description": "Role the invitee joins the tenant with."
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-08T00:00:00.000Z",
+            "description": "When this invitation stops working."
+          },
+          "acceptedAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-02T00:00:00.000Z",
+            "description": "When this invitation was redeemed. Absent means it is still pending."
+          },
+          "revokedAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-03T00:00:00.000Z",
+            "description": "When this invitation was revoked. Absent means it is still live. A revoked invitation stays in this list — it is not deleted or filtered out — so its token stopping working is visible rather than silent."
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "Invitation creation timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "role",
+          "expiresAt",
+          "createdAt"
+        ]
+      },
+      "InvitationListResponseDto": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number",
+            "example": 2,
+            "description": "Total number of documents returned."
+          },
+          "docs": {
+            "description": "The tenant's invitations.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvitationResponseDto"
+            }
+          }
+        },
+        "required": [
+          "count",
+          "docs"
+        ]
+      },
       "HealthResponseDto": {
         "type": "object",
         "properties": {
@@ -4876,23 +4973,6 @@
           "version"
         ]
       },
-      "ChangeRoleRequestDto": {
-        "type": "object",
-        "properties": {
-          "role": {
-            "type": "string",
-            "example": "admin",
-            "enum": [
-              "admin",
-              "member"
-            ],
-            "description": "Role to assign to this member."
-          }
-        },
-        "required": [
-          "role"
-        ]
-      },
       "UserResponseDto": {
         "type": "object",
         "properties": {
@@ -4927,6 +5007,44 @@
           "email",
           "role",
           "createdAt"
+        ]
+      },
+      "UserListResponseDto": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number",
+            "example": 2,
+            "description": "Total number of documents returned."
+          },
+          "docs": {
+            "description": "The tenant's members.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserResponseDto"
+            }
+          }
+        },
+        "required": [
+          "count",
+          "docs"
+        ]
+      },
+      "ChangeRoleRequestDto": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "example": "admin",
+            "enum": [
+              "admin",
+              "member"
+            ],
+            "description": "Role to assign to this member."
+          }
+        },
+        "required": [
+          "role"
         ]
       },
       "DocumentVersionResponseDto": {
@@ -5227,42 +5345,6 @@
           "locator"
         ]
       },
-      "ScanNearMatchesResponseDto": {
-        "type": "object",
-        "properties": {
-          "proposed": {
-            "type": "number",
-            "example": 3,
-            "description": "Number of near-match proposals recorded by this scan. Each lands as a proposed harvestedAliases entry on the row it was attributed to, resolving nothing until confirmed."
-          }
-        },
-        "required": [
-          "proposed"
-        ]
-      },
-      "CreateCanonicalEntityRequestDto": {
-        "type": "object",
-        "properties": {
-          "canonicalName": {
-            "type": "string",
-            "example": "Northgate Business Park",
-            "description": "Canonical display name this row registers alternate spellings against."
-          },
-          "aliases": {
-            "example": [
-              "Northgate Bus. Park"
-            ],
-            "description": "Alternate spellings that should resolve to canonicalName.",
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "required": [
-          "canonicalName"
-        ]
-      },
       "HarvestedAliasResponseDto": {
         "type": "object",
         "properties": {
@@ -5359,6 +5441,63 @@
           "aliases",
           "harvestedAliases",
           "createdAt"
+        ]
+      },
+      "CanonicalEntityListResponseDto": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number",
+            "example": 2,
+            "description": "Total number of documents returned."
+          },
+          "docs": {
+            "description": "The tenant's registered canonical entities.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CanonicalEntityResponseDto"
+            }
+          }
+        },
+        "required": [
+          "count",
+          "docs"
+        ]
+      },
+      "ScanNearMatchesResponseDto": {
+        "type": "object",
+        "properties": {
+          "proposed": {
+            "type": "number",
+            "example": 3,
+            "description": "Number of near-match proposals recorded by this scan. Each lands as a proposed harvestedAliases entry on the row it was attributed to, resolving nothing until confirmed."
+          }
+        },
+        "required": [
+          "proposed"
+        ]
+      },
+      "CreateCanonicalEntityRequestDto": {
+        "type": "object",
+        "properties": {
+          "canonicalName": {
+            "type": "string",
+            "example": "Northgate Business Park",
+            "description": "Canonical display name this row registers alternate spellings against."
+          },
+          "aliases": {
+            "example": [
+              "Northgate Bus. Park"
+            ],
+            "description": "Alternate spellings that should resolve to canonicalName.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "canonicalName"
         ]
       },
       "UpdateCanonicalEntityRequestDto": {
@@ -5635,28 +5774,6 @@
           "createdAt"
         ]
       },
-      "DecideApprovalRequestDto": {
-        "type": "object",
-        "properties": {
-          "decision": {
-            "type": "string",
-            "example": "approved",
-            "enum": [
-              "approved",
-              "rejected"
-            ],
-            "description": "Human decision on the pending approval request."
-          },
-          "reason": {
-            "type": "string",
-            "example": "Evidence checks out; the spreadsheet figure is the current underwriting value.",
-            "description": "Optional rationale for the decision."
-          }
-        },
-        "required": [
-          "decision"
-        ]
-      },
       "ApprovalResponseDto": {
         "type": "object",
         "properties": {
@@ -5734,6 +5851,49 @@
           "summary",
           "state",
           "createdAt"
+        ]
+      },
+      "ApprovalListResponseDto": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number",
+            "example": 2,
+            "description": "Total number of documents returned."
+          },
+          "docs": {
+            "description": "Pending approvals awaiting a decision.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApprovalResponseDto"
+            }
+          }
+        },
+        "required": [
+          "count",
+          "docs"
+        ]
+      },
+      "DecideApprovalRequestDto": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "string",
+            "example": "approved",
+            "enum": [
+              "approved",
+              "rejected"
+            ],
+            "description": "Human decision on the pending approval request."
+          },
+          "reason": {
+            "type": "string",
+            "example": "Evidence checks out; the spreadsheet figure is the current underwriting value.",
+            "description": "Optional rationale for the decision."
+          }
+        },
+        "required": [
+          "decision"
         ]
       },
       "StartQuestionRequestDto": {
@@ -6234,6 +6394,27 @@
           "createdAt"
         ]
       },
+      "SourceListResponseDto": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number",
+            "example": 2,
+            "description": "Total number of documents returned."
+          },
+          "docs": {
+            "description": "The tenant's sources.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceResponseDto"
+            }
+          }
+        },
+        "required": [
+          "count",
+          "docs"
+        ]
+      },
       "SourceFileStateResponseDto": {
         "type": "object",
         "properties": {
@@ -6516,6 +6697,120 @@
           "sourceClass"
         ]
       },
+      "AuditEventSubjectResponseDto": {
+        "type": "object",
+        "properties": {
+          "entityType": {
+            "type": "string",
+            "example": "Approval",
+            "description": "The audited entity type."
+          },
+          "entityId": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b9",
+            "description": "The audited entity id."
+          }
+        },
+        "required": [
+          "entityType",
+          "entityId"
+        ]
+      },
+      "AuditEventResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "AuditEvent identifier."
+          },
+          "actor": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7c0",
+            "description": "Id of the account that performed the audited action."
+          },
+          "action": {
+            "type": "string",
+            "example": "approvals.decided",
+            "description": "The audited action."
+          },
+          "subject": {
+            "$ref": "#/components/schemas/AuditEventSubjectResponseDto"
+          },
+          "timestamp": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-02T00:00:00.000Z",
+            "description": "When the audited action occurred."
+          },
+          "correlationId": {
+            "type": "string",
+            "example": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
+            "description": "The originating request's correlation id."
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-02T00:00:00.000Z",
+            "description": "Row creation timestamp."
+          },
+          "origin": {
+            "type": "string",
+            "example": "api",
+            "enum": [
+              "api",
+              "mcp"
+            ],
+            "description": "Which surface the audited action reached the system through: 'mcp' for an AI client holding a PAT, 'api' for everything else."
+          },
+          "toolName": {
+            "type": "string",
+            "example": "search_evidence",
+            "description": "The MCP tool name a tools/call action was made against. Present only on rows written at the MCP boundary."
+          },
+          "refusalReason": {
+            "type": "string",
+            "example": "authz-denied",
+            "description": "Why an mcp.tool_call.refused row was refused. Present only on that action's rows."
+          },
+          "modifiedCount": {
+            "type": "number",
+            "example": 400,
+            "description": "How many rows a bulk write action actually touched. Present only on rows recording that class of action."
+          }
+        },
+        "required": [
+          "id",
+          "actor",
+          "action",
+          "subject",
+          "timestamp",
+          "correlationId",
+          "createdAt",
+          "origin"
+        ]
+      },
+      "AuditEventListResponseDto": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number",
+            "example": 2,
+            "description": "Total number of documents returned."
+          },
+          "docs": {
+            "description": "Audit log entries, most recent first.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditEventResponseDto"
+            }
+          }
+        },
+        "required": [
+          "count",
+          "docs"
+        ]
+      },
       "CreateApiKeyRequestDto": {
         "type": "object",
         "properties": {
@@ -6577,6 +6872,77 @@
           "token",
           "tokenPrefix",
           "createdAt"
+        ]
+      },
+      "ApiKeyResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "API key identifier."
+          },
+          "name": {
+            "type": "string",
+            "example": "CI integration",
+            "description": "Human-readable name for this key."
+          },
+          "tokenPrefix": {
+            "type": "string",
+            "example": "eo_pat_9f8c12",
+            "description": "Display prefix for identifying this key in a list."
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-12-31T00:00:00.000Z",
+            "description": "When this key stops working. Always set on a key minted after the default TTL shipped; absent only on a key minted before then, which never expires."
+          },
+          "revokedAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "When this key was revoked. Absent means the key is still active."
+          },
+          "lastUsedAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-08-01T00:00:00.000Z",
+            "description": "When this key last authenticated a request. Absent means it has never been used."
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "Key creation timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "tokenPrefix",
+          "createdAt"
+        ]
+      },
+      "ApiKeyListResponseDto": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number",
+            "example": 2,
+            "description": "Total number of documents returned."
+          },
+          "docs": {
+            "description": "The caller's own API keys.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiKeyResponseDto"
+            }
+          }
+        },
+        "required": [
+          "count",
+          "docs"
         ]
       },
       "DashboardSummaryResponseDto": {

@@ -1,5 +1,6 @@
 import { HttpStatus } from '@nestjs/common';
 import type { ApiResponseOptions } from '@nestjs/swagger';
+import { ApprovalListResponseDto } from '../dtos/response/approval-list.response.dto';
 import { ApprovalResponseDto } from '../dtos/response/approval.response.dto';
 
 const examplePendingApproval = {
@@ -25,6 +26,7 @@ export const approvalsApiExamples: Record<string, ApiResponseOptions> = {
   list: {
     status: HttpStatus.OK,
     description: 'Paginated pending-approval inbox.',
+    type: ApprovalListResponseDto,
     examples: {
       example: {
         summary: 'One pending approval',

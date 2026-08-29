@@ -1,5 +1,6 @@
 import { HttpStatus } from '@nestjs/common';
 import type { ApiResponseOptions } from '@nestjs/swagger';
+import { AuditEventListResponseDto } from '../dtos/response/audit-event-list.response.dto';
 
 const exampleAuditEvent = {
   id: '65f1c2e4a1b2c3d4e5f6a7b8',
@@ -29,6 +30,7 @@ export const auditEventsApiExamples: Record<string, ApiResponseOptions> = {
   list: {
     status: HttpStatus.OK,
     description: 'Paginated audit log, most recent first, optionally filtered.',
+    type: AuditEventListResponseDto,
     examples: {
       example: {
         summary: 'One API-origin row, one MCP-origin refusal',

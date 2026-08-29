@@ -905,6 +905,57 @@ export interface components {
        */
       createdAt: string;
     };
+    InvitationResponseDto: {
+      /**
+       * @description Invitation identifier.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      id: string;
+      /**
+       * @description Email address invited.
+       * @example colleague@example.com
+       */
+      email: string;
+      /**
+       * @description Role the invitee joins the tenant with.
+       * @example member
+       * @enum {string}
+       */
+      role: 'admin' | 'member';
+      /**
+       * Format: date-time
+       * @description When this invitation stops working.
+       * @example 2026-07-08T00:00:00.000Z
+       */
+      expiresAt: string;
+      /**
+       * Format: date-time
+       * @description When this invitation was redeemed. Absent means it is still pending.
+       * @example 2026-07-02T00:00:00.000Z
+       */
+      acceptedAt?: string;
+      /**
+       * Format: date-time
+       * @description When this invitation was revoked. Absent means it is still live. A revoked invitation stays in this list — it is not deleted or filtered out — so its token stopping working is visible rather than silent.
+       * @example 2026-07-03T00:00:00.000Z
+       */
+      revokedAt?: string;
+      /**
+       * Format: date-time
+       * @description Invitation creation timestamp.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      createdAt: string;
+    };
+    InvitationListResponseDto: {
+      /**
+       * @description Total number of documents returned.
+       * @example 2
+       */
+      count: number;
+      /** @description The tenant's invitations. */
+      docs: components['schemas']['InvitationResponseDto'][];
+    };
     HealthResponseDto: {
       /**
        * @description Overall health status.
@@ -925,14 +976,6 @@ export interface components {
        * @example 1.0.0
        */
       version: string;
-    };
-    ChangeRoleRequestDto: {
-      /**
-       * @description Role to assign to this member.
-       * @example admin
-       * @enum {string}
-       */
-      role: 'admin' | 'member';
     };
     UserResponseDto: {
       /**
@@ -957,6 +1000,23 @@ export interface components {
        * @example 2026-07-01T00:00:00.000Z
        */
       createdAt: string;
+    };
+    UserListResponseDto: {
+      /**
+       * @description Total number of documents returned.
+       * @example 2
+       */
+      count: number;
+      /** @description The tenant's members. */
+      docs: components['schemas']['UserResponseDto'][];
+    };
+    ChangeRoleRequestDto: {
+      /**
+       * @description Role to assign to this member.
+       * @example admin
+       * @enum {string}
+       */
+      role: 'admin' | 'member';
     };
     DocumentVersionResponseDto: {
       /**
@@ -1137,27 +1197,6 @@ export interface components {
        */
       locator: Record<string, never>;
     };
-    ScanNearMatchesResponseDto: {
-      /**
-       * @description Number of near-match proposals recorded by this scan. Each lands as a proposed harvestedAliases entry on the row it was attributed to, resolving nothing until confirmed.
-       * @example 3
-       */
-      proposed: number;
-    };
-    CreateCanonicalEntityRequestDto: {
-      /**
-       * @description Canonical display name this row registers alternate spellings against.
-       * @example Northgate Business Park
-       */
-      canonicalName: string;
-      /**
-       * @description Alternate spellings that should resolve to canonicalName.
-       * @example [
-       *       "Northgate Bus. Park"
-       *     ]
-       */
-      aliases?: string[];
-    };
     HarvestedAliasResponseDto: {
       /**
        * @description Alias as the document wrote it.
@@ -1222,6 +1261,36 @@ export interface components {
        * @example 2026-07-01T00:00:00.000Z
        */
       createdAt: string;
+    };
+    CanonicalEntityListResponseDto: {
+      /**
+       * @description Total number of documents returned.
+       * @example 2
+       */
+      count: number;
+      /** @description The tenant's registered canonical entities. */
+      docs: components['schemas']['CanonicalEntityResponseDto'][];
+    };
+    ScanNearMatchesResponseDto: {
+      /**
+       * @description Number of near-match proposals recorded by this scan. Each lands as a proposed harvestedAliases entry on the row it was attributed to, resolving nothing until confirmed.
+       * @example 3
+       */
+      proposed: number;
+    };
+    CreateCanonicalEntityRequestDto: {
+      /**
+       * @description Canonical display name this row registers alternate spellings against.
+       * @example Northgate Business Park
+       */
+      canonicalName: string;
+      /**
+       * @description Alternate spellings that should resolve to canonicalName.
+       * @example [
+       *       "Northgate Bus. Park"
+       *     ]
+       */
+      aliases?: string[];
     };
     UpdateCanonicalEntityRequestDto: {
       /**
@@ -1422,19 +1491,6 @@ export interface components {
        */
       createdAt: string;
     };
-    DecideApprovalRequestDto: {
-      /**
-       * @description Human decision on the pending approval request.
-       * @example approved
-       * @enum {string}
-       */
-      decision: 'approved' | 'rejected';
-      /**
-       * @description Optional rationale for the decision.
-       * @example Evidence checks out; the spreadsheet figure is the current underwriting value.
-       */
-      reason?: string;
-    };
     ApprovalResponseDto: {
       /**
        * @description Approval identifier.
@@ -1497,6 +1553,28 @@ export interface components {
        * @example 2026-07-01T00:00:00.000Z
        */
       createdAt: string;
+    };
+    ApprovalListResponseDto: {
+      /**
+       * @description Total number of documents returned.
+       * @example 2
+       */
+      count: number;
+      /** @description Pending approvals awaiting a decision. */
+      docs: components['schemas']['ApprovalResponseDto'][];
+    };
+    DecideApprovalRequestDto: {
+      /**
+       * @description Human decision on the pending approval request.
+       * @example approved
+       * @enum {string}
+       */
+      decision: 'approved' | 'rejected';
+      /**
+       * @description Optional rationale for the decision.
+       * @example Evidence checks out; the spreadsheet figure is the current underwriting value.
+       */
+      reason?: string;
     };
     StartQuestionRequestDto: {
       /**
@@ -1825,6 +1903,15 @@ export interface components {
        */
       createdAt: string;
     };
+    SourceListResponseDto: {
+      /**
+       * @description Total number of documents returned.
+       * @example 2
+       */
+      count: number;
+      /** @description The tenant's sources. */
+      docs: components['schemas']['SourceResponseDto'][];
+    };
     SourceFileStateResponseDto: {
       /**
        * @description The file's path relative to the source's root.
@@ -2007,6 +2094,83 @@ export interface components {
        */
       sourceClass: 'crm-export' | 'pm-export' | 'spreadsheet' | 'memo' | 'report' | 'unclassified';
     };
+    AuditEventSubjectResponseDto: {
+      /**
+       * @description The audited entity type.
+       * @example Approval
+       */
+      entityType: string;
+      /**
+       * @description The audited entity id.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b9
+       */
+      entityId: string;
+    };
+    AuditEventResponseDto: {
+      /**
+       * @description AuditEvent identifier.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      id: string;
+      /**
+       * @description Id of the account that performed the audited action.
+       * @example 65f1c2e4a1b2c3d4e5f6a7c0
+       */
+      actor: string;
+      /**
+       * @description The audited action.
+       * @example approvals.decided
+       */
+      action: string;
+      subject: components['schemas']['AuditEventSubjectResponseDto'];
+      /**
+       * Format: date-time
+       * @description When the audited action occurred.
+       * @example 2026-07-02T00:00:00.000Z
+       */
+      timestamp: string;
+      /**
+       * @description The originating request's correlation id.
+       * @example a3f1b2c4-5678-4d9e-9abc-1234567890ab
+       */
+      correlationId: string;
+      /**
+       * Format: date-time
+       * @description Row creation timestamp.
+       * @example 2026-07-02T00:00:00.000Z
+       */
+      createdAt: string;
+      /**
+       * @description Which surface the audited action reached the system through: 'mcp' for an AI client holding a PAT, 'api' for everything else.
+       * @example api
+       * @enum {string}
+       */
+      origin: 'api' | 'mcp';
+      /**
+       * @description The MCP tool name a tools/call action was made against. Present only on rows written at the MCP boundary.
+       * @example search_evidence
+       */
+      toolName?: string;
+      /**
+       * @description Why an mcp.tool_call.refused row was refused. Present only on that action's rows.
+       * @example authz-denied
+       */
+      refusalReason?: string;
+      /**
+       * @description How many rows a bulk write action actually touched. Present only on rows recording that class of action.
+       * @example 400
+       */
+      modifiedCount?: number;
+    };
+    AuditEventListResponseDto: {
+      /**
+       * @description Total number of documents returned.
+       * @example 2
+       */
+      count: number;
+      /** @description Audit log entries, most recent first. */
+      docs: components['schemas']['AuditEventResponseDto'][];
+    };
     CreateApiKeyRequestDto: {
       /**
        * @description Human-readable name for this key.
@@ -2053,6 +2217,56 @@ export interface components {
        * @example 2026-07-01T00:00:00.000Z
        */
       createdAt: string;
+    };
+    ApiKeyResponseDto: {
+      /**
+       * @description API key identifier.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      id: string;
+      /**
+       * @description Human-readable name for this key.
+       * @example CI integration
+       */
+      name: string;
+      /**
+       * @description Display prefix for identifying this key in a list.
+       * @example eo_pat_9f8c12
+       */
+      tokenPrefix: string;
+      /**
+       * Format: date-time
+       * @description When this key stops working. Always set on a key minted after the default TTL shipped; absent only on a key minted before then, which never expires.
+       * @example 2026-12-31T00:00:00.000Z
+       */
+      expiresAt?: string;
+      /**
+       * Format: date-time
+       * @description When this key was revoked. Absent means the key is still active.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      revokedAt?: string;
+      /**
+       * Format: date-time
+       * @description When this key last authenticated a request. Absent means it has never been used.
+       * @example 2026-08-01T00:00:00.000Z
+       */
+      lastUsedAt?: string;
+      /**
+       * Format: date-time
+       * @description Key creation timestamp.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      createdAt: string;
+    };
+    ApiKeyListResponseDto: {
+      /**
+       * @description Total number of documents returned.
+       * @example 2
+       */
+      count: number;
+      /** @description The caller's own API keys. */
+      docs: components['schemas']['ApiKeyResponseDto'][];
     };
     DashboardSummaryResponseDto: {
       /**
@@ -2349,7 +2563,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['InvitationListResponseDto'];
         };
       };
       /** @description Only an admin may mint, list, revoke or resend invitations. */
@@ -2549,7 +2763,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['UserListResponseDto'];
         };
       };
       /** @description Only an admin may manage tenant members. */
@@ -2997,7 +3211,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['CanonicalEntityListResponseDto'];
         };
       };
     };
@@ -3493,7 +3707,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['ApprovalListResponseDto'];
         };
       };
     };
@@ -3751,7 +3965,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['SourceListResponseDto'];
         };
       };
     };
@@ -4011,7 +4225,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['AuditEventListResponseDto'];
         };
       };
       /** @description Caller does not hold the admin role required to read the audit log. */
@@ -4051,7 +4265,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': unknown;
+          'application/json': components['schemas']['ApiKeyListResponseDto'];
         };
       };
     };

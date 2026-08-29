@@ -1,6 +1,7 @@
 import { HttpStatus } from '@nestjs/common';
 import type { ApiResponseOptions } from '@nestjs/swagger';
 import { UserRole } from '../../../../shared/enums/user-role.enum';
+import { UserListResponseDto } from '../dtos/response/user-list.response.dto';
 import { UserResponseDto } from '../dtos/response/user.response.dto';
 
 const exampleUser = {
@@ -14,6 +15,7 @@ export const usersApiExamples: Record<string, ApiResponseOptions> = {
   list: {
     status: HttpStatus.OK,
     description: "The tenant's members.",
+    type: UserListResponseDto,
     examples: {
       example: {
         summary: 'One member',
