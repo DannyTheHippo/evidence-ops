@@ -3,7 +3,9 @@ import { answerBadge } from '../lib/answer-status';
 import { useAnswerEnrichment } from '../lib/use-answer-enrichment';
 import { useSession } from '../lib/use-session';
 import AnswerView from './AnswerView';
+import RunStageStrip from './RunStageStrip';
 import Badge from './ui/Badge';
+import DescriptionList from './ui/DescriptionList';
 import Skeleton from './ui/Skeleton';
 
 interface AnswerWorkspaceProps {
@@ -12,9 +14,9 @@ interface AnswerWorkspaceProps {
    * 'ask' repeats the question as the card's own heading, since AskPage's page title is the
    * static "Ask" rather than the question, and shows a full skeleton while in flight — there is
    * nothing else on the page yet for a reader to look at. 'detail' leaves the heading to the
-   * page's own title (already the question text, so a second copy here would duplicate it) and
-   * shows a lighter still-answering notice, for a reader who followed a link to a run they already
-   * know exists.
+   * page's own title (already the question text, so a second copy here would duplicate it). The
+   * two variants also carry different sr-only text for `RunStageStrip`, describing the same
+   * in-flight state each reader already sees visually.
    */
   variant: 'ask' | 'detail';
 }
@@ -42,21 +44,18 @@ export default function AnswerWorkspace({ answer, variant }: AnswerWorkspaceProp
         </Badge>
       </div>
 
-      {isInFlight && variant === 'ask' && (
-        <>
-          <p className="notice notice--info">
-            <span className="live-dot" /> Answering…
-          </p>
-          {/* The outcome arrives as one atomic snapshot, never incrementally, so this stands
-              in for the ledger and apparatus rows rather than filling progressively. */}
-          <Skeleton label="Answering…" lines={6} />
-        </>
-      )}
+      <RunStageStrip
+        runStatus={answer.runStatus}
+        startedAt={answer.createdAt}
+        description={
+          variant === 'ask' ? 'Answering…' : 'Still answering — check back once this run completes.'
+        }
+      />
 
-      {isInFlight && variant === 'detail' && (
-        <p className="notice notice--info">
-          <span className="live-dot" /> Still answering — check back once this run completes.
-        </p>
+      {isInFlight && variant === 'ask' && (
+        // The outcome arrives as one atomic snapshot, never incrementally, so this stands
+        // in for the ledger and apparatus rows rather than filling progressively.
+        <Skeleton label="Answering…" lines={6} />
       )}
 
       {answer.runStatus === 'failed' && (
@@ -72,7 +71,16 @@ export default function AnswerWorkspace({ answer, variant }: AnswerWorkspaceProp
       />
 
       {isAdmin && answer.usage && (
-        <p className="cell-sub">{`Cost: $${answer.usage.costUsd.toFixed(4)}`}</p>
+        <div className="run-cost-footer">
+          <DescriptionList
+            items={[
+              {
+                term: 'Run cost',
+                description: <span className="mono">{`$${answer.usage.costUsd.toFixed(4)}`}</span>,
+              },
+            ]}
+          />
+        </div>
       )}
     </section>
   );

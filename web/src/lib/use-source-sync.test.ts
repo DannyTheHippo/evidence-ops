@@ -235,4 +235,46 @@ describe('useSourceSync', () => {
     });
     expect(result.current.run).toEqual(runningRun);
   });
+
+  it('fires onSettled exactly once once a poll reaches a terminal state, never while polling continues', async () => {
+    const runningRun = makeRun({ status: 'running' });
+    const completedRun = makeRun({ status: 'completed' });
+    const onSettled = vi.fn();
+    stubFetch({
+      '/api/v1/sources/source-1/sync': () => jsonResponse(runningRun, 201),
+      '/api/v1/workflow-runs/run-1': () => jsonResponse(completedRun),
+    });
+
+    const { result } = renderHook(() => useSourceSync(5, onSettled));
+
+    await act(async () => {
+      await result.current.startSync('source-1', 'Deal Room Inbox');
+    });
+
+    // The start response itself is still 'running' — no terminal status to settle on yet.
+    expect(onSettled).not.toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(result.current.isPolling).toBe(false);
+    });
+
+    expect(onSettled).toHaveBeenCalledTimes(1);
+  });
+
+  it('fires onSettled once for a run that starts already terminal, with no poll involved', async () => {
+    const completedRun = makeRun({ status: 'completed' });
+    const onSettled = vi.fn();
+    stubFetch({
+      '/api/v1/sources/source-1/sync': () => jsonResponse(completedRun, 201),
+    });
+
+    const { result } = renderHook(() => useSourceSync(5, onSettled));
+
+    await act(async () => {
+      await result.current.startSync('source-1', 'Deal Room Inbox');
+    });
+
+    expect(onSettled).toHaveBeenCalledTimes(1);
+    expect(result.current.isPolling).toBe(false);
+  });
 });

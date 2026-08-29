@@ -977,6 +977,27 @@ describe('ConflictsService', () => {
       });
     });
 
+    it('should filter by ids and ignore skip/limit when ids is provided', async () => {
+      const actorId = new Types.ObjectId().toString();
+      const idA = new Types.ObjectId();
+      const idB = new Types.ObjectId();
+      mockConflictModel.find.mockResolvedValueOnce([]);
+      mockConflictModel.countDocuments.mockResolvedValueOnce(0);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      await service.list(
+        { skip: 5, limit: 10, ids: [idA.toString(), idB.toString()] },
+        actorId,
+        'tenant-a',
+      );
+
+      const expectedFilter = { tenantId: 'tenant-a', _id: { $in: [idA, idB] } };
+      expect(mockConflictModel.find).toHaveBeenCalledWith(expectedFilter, null, {
+        sort: { createdAt: -1 },
+      });
+      expect(mockConflictModel.countDocuments).toHaveBeenCalledWith(expectedFilter);
+    });
+
     it.each([
       ['createdAt', 'asc', { createdAt: 1 }],
       ['status', 'desc', { status: -1 }],
@@ -1588,6 +1609,8 @@ describe('ConflictsService', () => {
         workflowType: 'resolve-conflict',
         status: 'running',
         tenantId: 'tenant-a',
+        subjectId: conflictId,
+        subjectType: 'Conflict',
       });
       expect(mockAuditService.record).toHaveBeenCalledWith({
         action: 'conflicts.resolution_requested',

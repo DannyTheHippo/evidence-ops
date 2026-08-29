@@ -113,7 +113,11 @@ describe('RunsPage', () => {
 
     renderPage();
 
-    expect(await screen.findByText('No runs yet')).toBeInTheDocument();
+    const title = await screen.findByText('No runs yet');
+    expect(title).toBeInTheDocument();
+    // The earned-zero-inbox treatment distinguishes "nothing has ever run" from a filter that
+    // simply matches nothing, matching ApprovalsPage's identical split.
+    expect(title.closest('.empty-state--zero')).not.toBeNull();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Ask a question' })).toHaveAttribute('href', '/ask');
   });
@@ -138,7 +142,9 @@ describe('RunsPage', () => {
     fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'failed' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
 
-    expect(await screen.findByText('No runs match this filter')).toBeInTheDocument();
+    const title = await screen.findByText('No runs match this filter');
+    expect(title).toBeInTheDocument();
+    expect(title.closest('.empty-state--zero')).toBeNull();
     expect(screen.queryByRole('link', { name: 'Ask a question' })).not.toBeInTheDocument();
 
     const showAll = screen.getByRole('button', { name: 'Show all runs' });
@@ -211,12 +217,12 @@ describe('RunsPage', () => {
     expect(screen.getByRole('status', { name: 'current search' })).toBeEmptyDOMElement();
 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-    await screen.findByText('30 total');
+    await screen.findByText('26–30 of 30');
 
     fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'failed' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
 
-    await screen.findByText('1 total');
+    await screen.findByText('1–1 of 1');
 
     // The filter landed and paging reset to the first page in the same patch — the URL carries
     // only the non-default `status`, never a leftover `skip`.
@@ -293,7 +299,7 @@ describe('RunsPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 
-    await screen.findByText('30 total');
+    await screen.findByText('26–30 of 30');
     expect(
       fetchMock.mock.calls.some(
         ([url]) => url === '/api/v1/workflow-runs?skip=25&limit=25&sort=createdAt&sortDir=desc',

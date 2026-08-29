@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   changeUserRole,
   listInvitations,
@@ -15,37 +15,58 @@ import {
   type UserRole,
   type UserSortField,
 } from '../api/client';
+import SecretReveal from '../components/SecretReveal';
 import { IconUserPlus, IconUsers } from '../components/icons';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
+import Dialog from '../components/ui/Dialog';
 import EmptyState from '../components/ui/EmptyState';
-import Field from '../components/ui/Field';
+import Input from '../components/ui/Input';
+import LinkButton from '../components/ui/LinkButton';
+import Menu from '../components/ui/Menu';
 import Pager from '../components/ui/Pager';
-import Select from '../components/ui/Select';
+import PageHeader from '../components/ui/PageHeader';
+import RadioGroup, { type RadioOption } from '../components/ui/RadioGroup';
+import SegmentedControl from '../components/ui/SegmentedControl';
 import Skeleton from '../components/ui/Skeleton';
 import SortableHeaderCell from '../components/ui/SortableHeaderCell';
 import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
 import Timestamp from '../components/ui/Timestamp';
+import Toolbar from '../components/ui/Toolbar';
 import { notify } from '../components/ui/toast';
+import { useFormSubmit } from '../lib/use-form-submit';
+import { useSession } from '../lib/use-session';
 import { useUrlState } from '../lib/use-url-state';
 
 const MEMBERS_PAGE_SIZE = 25;
 const INVITATIONS_PAGE_SIZE = 25;
 
-const ROLE_OPTIONS = [
-  { value: 'member', label: 'Member' },
-  { value: 'admin', label: 'Admin' },
+type PeopleView = 'members' | 'invitations';
+
+const ROLE_OPTIONS: RadioOption[] = [
+  {
+    value: 'member',
+    label: 'Member',
+    hint: 'Search evidence, ask questions, and review conflicts.',
+  },
+  {
+    value: 'admin',
+    label: 'Admin',
+    hint: 'Everything a member can, plus manage sources, invite people, and change roles.',
+  },
 ];
 
 // Declared at module scope: `useUrlState` adopts `defaults` once on mount and keeps that identity,
-// but only needs it stable in value — a module-level object satisfies both. See AnswersPage.tsx
-// for the identity/value distinction. Members only — the invitations list below keeps the plain
-// `useState` paging InvitationsPage used, since it carries no sort.
-const URL_DEFAULTS: Record<'sort' | 'sortDir' | 'skip', string> = {
+// but only needs it stable in value — a module-level object satisfies both. Two skip keys, not
+// one, mirroring SourcesPage.tsx: members and invitations page independently, and each keeps its
+// own position while the other view is off screen.
+const URL_DEFAULTS: Record<'view' | 'sort' | 'sortDir' | 'skip' | 'invSkip', string> = {
+  view: 'members',
   sort: 'email',
   sortDir: 'asc',
   skip: '0',
+  invSkip: '0',
 };
 
 /** `acceptedAt` wins over `revokedAt`: an accepted invitation's token is already spent, so whether
@@ -64,10 +85,12 @@ function invitationStatus(invitation: Invitation): {
 
 function MemberRow({
   member,
+  isYou,
   onRoleChanged,
   onRemoved,
 }: {
   member: User;
+  isYou: boolean;
   onRoleChanged: (updated: User) => void;
   onRemoved: (id: string) => void;
 }) {
@@ -92,7 +115,8 @@ function MemberRow({
       onRoleChanged(updated);
     } catch (err: unknown) {
       // A tenant's last admin can be neither demoted nor removed — the API's 409 message already
-      // names the tenant and the user, so it is shown verbatim rather than a generic fallback.
+      // names the tenant and the user, so it is shown verbatim rather than a generic fallback. No
+      // client-side guess at that rule is made here; the server's refusal is the only source of it.
       setRoleError(err instanceof Error ? err.message : 'Failed to change role');
     } finally {
       setChangingRole(false);
@@ -130,7 +154,10 @@ function MemberRow({
 
   return (
     <tr>
-      <TableCell label="Email">{member.email}</TableCell>
+      <TableCell label="Email">
+        {member.email}
+        {isYou && <span className="cell-sub"> (you)</span>}
+      </TableCell>
       <TableCell label="Role" className="cell-sub">
         {member.role}
       </TableCell>
@@ -138,15 +165,22 @@ function MemberRow({
         <Timestamp value={member.createdAt} />
       </TableCell>
       <TableCell label="Actions" className="cell-actions">
-        <Button variant="secondary" size="sm" onClick={() => setRoleOpen(true)}>
-          {targetRole === 'admin' ? 'Make admin' : 'Make member'}
-        </Button>
-        <Button variant="secondary" size="sm" onClick={() => setRevokeOpen(true)}>
-          Revoke sessions
-        </Button>
-        <Button variant="secondary" size="sm" onClick={() => setRemoveOpen(true)}>
-          Remove
-        </Button>
+        <Menu
+          trigger={
+            <>
+              <span aria-hidden="true">⋮</span>
+              <span className="sr-only">{`Actions for ${member.email}`}</span>
+            </>
+          }
+          items={[
+            {
+              label: targetRole === 'admin' ? 'Make admin' : 'Make member',
+              onSelect: () => setRoleOpen(true),
+            },
+            { label: 'Revoke sessions', onSelect: () => setRevokeOpen(true) },
+            { label: 'Remove member', onSelect: () => setRemoveOpen(true), tone: 'danger' },
+          ]}
+        />
         <ConfirmDialog
           open={roleOpen}
           onClose={() => setRoleOpen(false)}
@@ -286,11 +320,94 @@ function InvitationRow({
   );
 }
 
+type InviteField = 'email' | 'role';
+
+interface InviteMemberDialogProps {
+  onClose: () => void;
+  // Runs once the invitation is minted, before the dialog closes — the caller lands the resulting
+  // one-time link into its own SecretReveal, which lives outside this dialog's own tree, so
+  // dismissing the dialog can never take that one copy of the link down with it.
+  onInvited: (invitation: MintedInvitation) => void;
+}
+
+/** Create-only authoring surface for one invitation, always open — its parent mounts it only
+ * while the dialog is open, so each open starts fresh rather than replaying a prior open's values
+ * or server error. */
+function InviteMemberDialog({ onClose, onInvited }: InviteMemberDialogProps) {
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState<UserRole>('member');
+
+  function validate(): Partial<Record<InviteField, string>> {
+    const errors: Partial<Record<InviteField, string>> = {};
+    const trimmed = email.trim();
+    if (!trimmed) errors.email = 'Email is required.';
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      errors.email = 'Enter a valid email address.';
+    }
+    return errors;
+  }
+
+  async function submit() {
+    const invitation = await mintInvitation(email.trim(), role);
+    onInvited(invitation);
+  }
+
+  const { pending, formError, onSubmit, fieldProps } = useFormSubmit<InviteField>({
+    validate,
+    submit,
+    onSuccess: onClose,
+  });
+
+  const emailField = fieldProps('email');
+  const roleField = fieldProps('role');
+
+  return (
+    <Dialog open onClose={onClose} title="Invite member" size="sm">
+      <form onSubmit={onSubmit} className="form" noValidate>
+        {formError && (
+          <p className="error" role="alert">
+            {formError}
+          </p>
+        )}
+        <Input
+          {...emailField}
+          label="Email"
+          type="email"
+          autoComplete="off"
+          value={email}
+          onChange={setEmail}
+          placeholder="colleague@example.com"
+        />
+        <RadioGroup
+          id={roleField.id}
+          legend="Role"
+          error={roleField.error}
+          onBlur={roleField.onBlur}
+          options={ROLE_OPTIONS}
+          value={role}
+          onChange={(value) => setRole(value as UserRole)}
+        />
+        <div className="form-actions">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={pending}>
+            {pending ? 'Inviting…' : 'Invite'}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
 export default function PeoplePage() {
+  const session = useSession();
   const [urlState, setUrlState] = useUrlState(URL_DEFAULTS);
+  const view = urlState.view as PeopleView;
   const sort = urlState.sort as UserSortField;
   const sortDir = urlState.sortDir as SortDirection;
   const skip = Number(urlState.skip);
+  const invitationSkip = Number(urlState.invSkip);
 
   const [members, setMembers] = useState<User[] | null>(null);
   const [memberCount, setMemberCount] = useState(0);
@@ -330,24 +447,32 @@ export default function PeoplePage() {
 
   const [invitations, setInvitations] = useState<Invitation[] | null>(null);
   const [invitationCount, setInvitationCount] = useState(0);
-  const [invitationSkip, setInvitationSkip] = useState(0);
   const [invitationError, setInvitationError] = useState<string | null>(null);
 
-  const [email, setEmail] = useState('');
-  const [role, setRole] = useState<UserRole>('member');
-  const [minting, setMinting] = useState(false);
-  const [mintError, setMintError] = useState<string | null>(null);
-  // The page's only copy of a plaintext invitation token, backing the one-time panel — mirrors
-  // ApiKeysPage's `oneTimeToken`. `action` only changes the panel's wording: mint and resend hand
-  // back the same shape, and both must replace whatever the panel was already showing.
-  const [linkPanel, setLinkPanel] = useState<{
+  const [inviteOpen, setInviteOpen] = useState(false);
+
+  // The page's only copy of a plaintext invitation token, backing `SecretReveal`. `action` only
+  // changes the panel's wording: mint and resend hand back the same shape, and both must replace
+  // whatever the panel was already showing.
+  const [secretPanel, setSecretPanel] = useState<{
     invitation: MintedInvitation;
     action: 'invited' | 'resent';
   } | null>(null);
-  const [copied, setCopied] = useState(false);
+  const secretRevealRef = useRef<HTMLElement>(null);
 
+  // Moves focus to the panel every time a mint or a resend replaces it. A mint also flips `view`
+  // to 'invitations' in the same call, but that change reaches this component through
+  // react-router's own state rather than a plain `useState`, so it can land one render behind —
+  // the deferred frame gives the section time to actually be in the tree before the panel is
+  // asked to focus it, matching `useFormSubmit`'s own deferred-focus pattern.
   useEffect(() => {
-    listInvitations({ skip: invitationSkip, limit: INVITATIONS_PAGE_SIZE })
+    if (!secretPanel) return;
+    const raf = requestAnimationFrame(() => secretRevealRef.current?.focus());
+    return () => cancelAnimationFrame(raf);
+  }, [secretPanel]);
+
+  const loadInvitations = useCallback(() => {
+    return listInvitations({ skip: invitationSkip, limit: INVITATIONS_PAGE_SIZE })
       .then(({ docs, count: total }) => {
         setInvitations(docs);
         setInvitationCount(total);
@@ -358,25 +483,16 @@ export default function PeoplePage() {
       });
   }, [invitationSkip]);
 
-  async function handleMint(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setMinting(true);
-    setMintError(null);
-    setCopied(false);
-    setLinkPanel(null);
-    try {
-      const invitation = await mintInvitation(email, role);
-      setLinkPanel({ invitation, action: 'invited' });
-      setInvitations((current) => [invitation, ...(current ?? [])]);
-      setInvitationCount((current) => current + 1);
-      setEmail('');
-      setRole('member');
-      notify('success', `Invited "${invitation.email}".`);
-    } catch (err: unknown) {
-      setMintError(err instanceof Error ? err.message : 'Failed to mint invitation');
-    } finally {
-      setMinting(false);
-    }
+  useEffect(() => {
+    void loadInvitations();
+  }, [loadInvitations]);
+
+  function handleInvited(invitation: MintedInvitation) {
+    setSecretPanel({ invitation, action: 'invited' });
+    setInvitations((current) => [invitation, ...(current ?? [])]);
+    setInvitationCount((current) => current + 1);
+    setUrlState({ view: 'invitations', invSkip: URL_DEFAULTS.invSkip });
+    notify('success', `Invited "${invitation.email}".`);
   }
 
   function handleInvitationRevoked(id: string) {
@@ -397,8 +513,7 @@ export default function PeoplePage() {
           invitation.id === resent.id ? { ...invitation, expiresAt: resent.expiresAt } : invitation,
         ) ?? current,
     );
-    setLinkPanel({ invitation: resent, action: 'resent' });
-    setCopied(false);
+    setSecretPanel({ invitation: resent, action: 'resent' });
   }
 
   // The fragment, not the query string, carries the token: a fragment is never sent in the request
@@ -418,229 +533,192 @@ export default function PeoplePage() {
     return `mailto:${invitation.email}?subject=${subject}&body=${body}`;
   }
 
-  async function handleCopy() {
-    if (!linkPanel) return;
-    // jsdom (and some browser contexts) has no Clipboard API — a missing `navigator.clipboard`
-    // must not throw, it just means the copy affordance silently does nothing.
-    if (!navigator.clipboard) return;
-    await navigator.clipboard.writeText(inviteLink(linkPanel.invitation));
-    setCopied(true);
-  }
-
   return (
     <div className="view">
-      <div className="page-head">
-        <div>
-          <span className="eyebrow">Admin</span>
-          <h1 className="page-title">People</h1>
-          <p className="page-sub">Manage this tenant's members and outstanding invitations.</p>
-        </div>
-      </div>
+      <PageHeader
+        eyebrow="Organisation"
+        title="People"
+        description="Manage this tenant's members and outstanding invitations."
+        actions={
+          <Button type="button" variant="primary" onClick={() => setInviteOpen(true)}>
+            Invite member
+          </Button>
+        }
+      />
 
-      <div className="section-head">
-        <h2 className="card-title">Members</h2>
-      </div>
-
-      {memberError && (
-        <p className="error error--page" role="alert">
-          {memberError}
-        </p>
+      {inviteOpen && (
+        <InviteMemberDialog onClose={() => setInviteOpen(false)} onInvited={handleInvited} />
       )}
 
-      {!members && !memberError && <Skeleton label="Loading members…" />}
-
-      {members && members.length === 0 && (
-        <EmptyState
-          icon={<IconUsers size={24} />}
-          title="No members yet"
-          description="Invite a colleague below to bring them into this tenant."
-        />
-      )}
-
-      {members && members.length > 0 && (
-        <section
-          className="panel"
-          tabIndex={0}
-          role="region"
-          aria-label="Members of this tenant and their roles"
-        >
-          <Table caption="Members of this tenant and their roles.">
-            <thead>
-              <tr>
-                <SortableHeaderCell<UserSortField>
-                  field="email"
-                  label="Email"
-                  sort={sort}
-                  direction={sortDir}
-                  onSort={handleSort}
-                />
-                <SortableHeaderCell<UserSortField>
-                  field="role"
-                  label="Role"
-                  sort={sort}
-                  direction={sortDir}
-                  onSort={handleSort}
-                />
-                <SortableHeaderCell<UserSortField>
-                  field="createdAt"
-                  label="Created"
-                  sort={sort}
-                  direction={sortDir}
-                  onSort={handleSort}
-                />
-                <TableHeaderCell>Actions</TableHeaderCell>
-              </tr>
-            </thead>
-            <tbody>
-              {members.map((member) => (
-                <MemberRow
-                  key={member.id}
-                  member={member}
-                  onRoleChanged={handleRoleChanged}
-                  onRemoved={handleRemoved}
-                />
-              ))}
-            </tbody>
-          </Table>
-        </section>
-      )}
-
-      {members && (
-        <Pager
-          count={memberCount}
-          skip={skip}
-          pageSize={MEMBERS_PAGE_SIZE}
-          onSkipChange={(next) => setUrlState({ skip: String(next) })}
-        />
-      )}
-
-      <div className="section-head">
-        <h2 className="card-title">Invitations</h2>
-      </div>
-
-      {linkPanel && (
-        <section className="card">
-          <div className="card-head">
-            <h2 className="card-title">{linkPanel.invitation.email}</h2>
-          </div>
-          <p className="notice notice--warn">
-            {linkPanel.action === 'resent'
-              ? 'This is the only time this new link is shown, and the previous link has already stopped working — copy it now and send it to ' +
-                `${linkPanel.invitation.email}.`
-              : `This is the only time this link is shown — copy it now and send it to ${linkPanel.invitation.email}. Evidence Ops sends no invitation email.`}
-          </p>
-          <p className="mono">{inviteLink(linkPanel.invitation)}</p>
-          <div className="form-actions">
-            <Button variant="secondary" size="sm" onClick={() => void handleCopy()}>
-              {copied ? 'Copied' : 'Copy'}
-            </Button>
-            <a className="btn btn--secondary btn--sm" href={mailtoLink(linkPanel.invitation)}>
-              Email invite
-            </a>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setLinkPanel(null);
-                setCopied(false);
-              }}
-            >
-              Dismiss
-            </Button>
-          </div>
-        </section>
-      )}
-
-      <section className="card">
-        <div className="card-head">
-          <h2 className="card-title">Invite a colleague</h2>
-        </div>
-        <form onSubmit={(e) => void handleMint(e)} className="form">
-          <Field label="Email">
-            {(inputProps) => (
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="colleague@example.com"
-                {...inputProps}
-              />
-            )}
-          </Field>
-          <Select
-            label="Role"
-            options={ROLE_OPTIONS}
-            value={role}
-            onChange={(value) => setRole(value as UserRole)}
+      <Toolbar
+        start={
+          <SegmentedControl<PeopleView>
+            aria-label="People view"
+            options={[
+              { value: 'members', label: 'Members', count: memberCount },
+              { value: 'invitations', label: 'Invitations', count: invitationCount },
+            ]}
+            value={view}
+            onChange={(next) => setUrlState({ view: next })}
           />
-          <div className="form-actions">
-            <Button type="submit" variant="primary" disabled={minting}>
-              {minting ? 'Inviting…' : 'Invite'}
-            </Button>
-          </div>
-        </form>
-        {mintError && (
-          <p className="error" role="alert">
-            {mintError}
-          </p>
-        )}
-      </section>
+        }
+      />
 
-      {invitationError && (
-        <p className="error error--page" role="alert">
-          {invitationError}
-        </p>
+      {view === 'members' && (
+        <>
+          {memberError && (
+            <p className="error error--page" role="alert">
+              {memberError}
+            </p>
+          )}
+
+          {!members && !memberError && <Skeleton label="Loading members…" />}
+
+          {members && members.length === 0 && (
+            <EmptyState
+              icon={<IconUsers size={24} />}
+              title="No members yet"
+              description="Invite a colleague to bring them into this tenant."
+            />
+          )}
+
+          {members && members.length > 0 && (
+            <section
+              className="panel"
+              tabIndex={0}
+              role="region"
+              aria-label="Members of this tenant and their roles"
+            >
+              <Table caption="Members of this tenant and their roles.">
+                <thead>
+                  <tr>
+                    <SortableHeaderCell<UserSortField>
+                      field="email"
+                      label="Email"
+                      sort={sort}
+                      direction={sortDir}
+                      onSort={handleSort}
+                    />
+                    <SortableHeaderCell<UserSortField>
+                      field="role"
+                      label="Role"
+                      sort={sort}
+                      direction={sortDir}
+                      onSort={handleSort}
+                    />
+                    <SortableHeaderCell<UserSortField>
+                      field="createdAt"
+                      label="Created"
+                      sort={sort}
+                      direction={sortDir}
+                      onSort={handleSort}
+                    />
+                    <TableHeaderCell>Actions</TableHeaderCell>
+                  </tr>
+                </thead>
+                <tbody>
+                  {members.map((member) => (
+                    <MemberRow
+                      key={member.id}
+                      member={member}
+                      isYou={session.status === 'authed' && session.me.id === member.id}
+                      onRoleChanged={handleRoleChanged}
+                      onRemoved={handleRemoved}
+                    />
+                  ))}
+                </tbody>
+              </Table>
+            </section>
+          )}
+
+          {members && (
+            <Pager
+              count={memberCount}
+              skip={skip}
+              pageSize={MEMBERS_PAGE_SIZE}
+              onSkipChange={(next) => setUrlState({ skip: String(next) })}
+            />
+          )}
+        </>
       )}
 
-      {!invitations && !invitationError && <Skeleton label="Loading invitations…" />}
+      {view === 'invitations' && (
+        <>
+          {secretPanel && (
+            <SecretReveal
+              ref={secretRevealRef}
+              secret={inviteLink(secretPanel.invitation)}
+              expiresAt={secretPanel.invitation.expiresAt}
+              notice={
+                secretPanel.action === 'resent'
+                  ? `This is the only time this new link is shown, and the previous link has already stopped working — copy it now and send it to ${secretPanel.invitation.email}.`
+                  : `This is the only time this link is shown — copy it now and send it to ${secretPanel.invitation.email}. Evidence Ops sends no invitation email.`
+              }
+              extraActions={
+                <LinkButton href={mailtoLink(secretPanel.invitation)} variant="secondary" size="sm">
+                  Email invite
+                </LinkButton>
+              }
+              onDismiss={() => setSecretPanel(null)}
+            />
+          )}
 
-      {invitations && invitations.length === 0 && (
-        <EmptyState
-          icon={<IconUserPlus size={24} />}
-          title="No invitations yet"
-          description="Invite a colleague above to bring them into this tenant."
-        />
-      )}
+          {invitationError && (
+            <p className="error error--page" role="alert">
+              {invitationError}
+            </p>
+          )}
 
-      {invitations && invitations.length > 0 && (
-        <section
-          className="panel"
-          tabIndex={0}
-          role="region"
-          aria-label="Invitations minted for this tenant"
-        >
-          <Table caption="Invitations minted for this tenant.">
-            <thead>
-              <tr>
-                <TableHeaderCell>Email</TableHeaderCell>
-                <TableHeaderCell>Role</TableHeaderCell>
-                <TableHeaderCell>Status</TableHeaderCell>
-                <TableHeaderCell>Expires</TableHeaderCell>
-                <TableHeaderCell>Actions</TableHeaderCell>
-              </tr>
-            </thead>
-            <tbody>
-              {invitations.map((invitation) => (
-                <InvitationRow
-                  key={invitation.id}
-                  invitation={invitation}
-                  onRevoked={handleInvitationRevoked}
-                  onResent={handleInvitationResent}
-                />
-              ))}
-            </tbody>
-          </Table>
-        </section>
-      )}
+          {!invitations && !invitationError && <Skeleton label="Loading invitations…" />}
 
-      {invitations && (
-        <Pager
-          count={invitationCount}
-          skip={invitationSkip}
-          pageSize={INVITATIONS_PAGE_SIZE}
-          onSkipChange={setInvitationSkip}
-        />
+          {invitations && invitations.length === 0 && (
+            <EmptyState
+              icon={<IconUserPlus size={24} />}
+              title="No invitations yet"
+              description="Invite a colleague above to bring them into this tenant."
+            />
+          )}
+
+          {invitations && invitations.length > 0 && (
+            <section
+              className="panel"
+              tabIndex={0}
+              role="region"
+              aria-label="Invitations minted for this tenant"
+            >
+              <Table caption="Invitations minted for this tenant.">
+                <thead>
+                  <tr>
+                    <TableHeaderCell>Email</TableHeaderCell>
+                    <TableHeaderCell>Role</TableHeaderCell>
+                    <TableHeaderCell>Status</TableHeaderCell>
+                    <TableHeaderCell>Expires</TableHeaderCell>
+                    <TableHeaderCell>Actions</TableHeaderCell>
+                  </tr>
+                </thead>
+                <tbody>
+                  {invitations.map((invitation) => (
+                    <InvitationRow
+                      key={invitation.id}
+                      invitation={invitation}
+                      onRevoked={handleInvitationRevoked}
+                      onResent={handleInvitationResent}
+                    />
+                  ))}
+                </tbody>
+              </Table>
+            </section>
+          )}
+
+          {invitations && (
+            <Pager
+              count={invitationCount}
+              skip={invitationSkip}
+              pageSize={INVITATIONS_PAGE_SIZE}
+              onSkipChange={(next) => setUrlState({ invSkip: String(next) })}
+            />
+          )}
+        </>
       )}
     </div>
   );

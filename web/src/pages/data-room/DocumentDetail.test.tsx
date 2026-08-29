@@ -106,6 +106,10 @@ describe('DocumentDetail', () => {
       'tabindex',
       '0',
     );
+    // The description list's own current-version summary, distinct from the version table's
+    // own "v1"/"completed" cell for the same version.
+    expect(screen.getByText('xlsx')).toBeInTheDocument();
+    expect(screen.getByText('Deleting a document cannot be undone.')).toBeInTheDocument();
   });
 
   it('shows a calm not-found notice for a missing or already-deleted document', async () => {
@@ -166,6 +170,20 @@ describe('DocumentDetail', () => {
     expect(getToasts()).toContainEqual(
       expect.objectContaining({ kind: 'success', message: 'Deleted "Q3 Rent Roll".' }),
     );
+  });
+
+  it('opens the destructive delete dialog focused on Cancel, not Delete document', async () => {
+    stubFetch({
+      '/api/v1/auth/me': () => jsonResponse(admin),
+      '/api/v1/documents/doc-1': () => jsonResponse(documentDetail),
+    });
+
+    renderDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Delete document' })).not.toHaveFocus();
   });
 
   it('cancelling the delete dialog closes it without deleting', async () => {

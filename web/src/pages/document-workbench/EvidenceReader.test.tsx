@@ -32,10 +32,10 @@ function stubFetch(routes: Record<string, (init?: RequestInit) => Response | Pro
   return fetchMock;
 }
 
-function renderReader(versionId: string, search = '') {
-  render(
+function renderReader(versionId: string, search = '', variant?: 'reading' | 'rail') {
+  return render(
     <MemoryRouter initialEntries={[`/documents/doc-1/versions/${versionId}${search}`]}>
-      <EvidenceReader versionId={versionId} />
+      <EvidenceReader versionId={versionId} variant={variant} />
     </MemoryRouter>,
   );
 }
@@ -147,5 +147,93 @@ describe('EvidenceReader', () => {
     expect(
       within(item as HTMLElement).getByRole('button', { name: 'Copy citation (display text)' }),
     ).toBeInTheDocument();
+  });
+
+  it('carries the reading-variant modifier class when asked for the primary reading surface', async () => {
+    stubFetch({
+      '/api/v1/documents/versions/version-1/chunks': () =>
+        jsonResponse({ docs: [evidenceChunk()], count: 1 }),
+    });
+
+    const { container } = renderReader('version-1', '', 'reading');
+
+    await screen.findByText(/cap rate/);
+    expect(container.querySelector('.evidence-reader')).toHaveClass('evidence-reader--reading');
+  });
+
+  it('defaults to the rail-variant modifier class when no variant is given', async () => {
+    stubFetch({
+      '/api/v1/documents/versions/version-1/chunks': () =>
+        jsonResponse({ docs: [evidenceChunk()], count: 1 }),
+    });
+
+    const { container } = renderReader('version-1');
+
+    await screen.findByText(/cap rate/);
+    expect(container.querySelector('.evidence-reader')).toHaveClass('evidence-reader--rail');
+  });
+
+  it("labels each group's summary with its own chunk count", async () => {
+    const pageThree = evidenceChunk({
+      id: 'chunk-1',
+      text: 'The cap rate is 6.10%.',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 3 },
+    });
+    const pageThreeAlso = evidenceChunk({
+      id: 'chunk-2',
+      text: 'Occupancy sits at 94%.',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 3 },
+    });
+    stubFetch({
+      '/api/v1/documents/versions/version-1/chunks': () =>
+        jsonResponse({ docs: [pageThree, pageThreeAlso], count: 2 }),
+    });
+
+    renderReader('version-1');
+
+    const group = (await screen.findByText('Page 3')).closest('details');
+    expect(within(group as HTMLElement).getByText('2 chunks')).toBeInTheDocument();
+  });
+
+  it('reports a match count when the search finds chunks, and nothing else', async () => {
+    const chunkA = evidenceChunk({
+      id: 'chunk-1',
+      text: 'The cap rate is 6.10%.',
+      locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
+    });
+    const chunkB = evidenceChunk({
+      id: 'chunk-2',
+      text: 'Occupancy sits at 94%.',
+      locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'A1' },
+    });
+    stubFetch({
+      '/api/v1/documents/versions/version-1/chunks': () =>
+        jsonResponse({ docs: [chunkA, chunkB], count: 2 }),
+    });
+
+    renderReader('version-1');
+
+    const search = await screen.findByLabelText('Search this document');
+    fireEvent.change(search, { target: { value: 'occupancy' } });
+
+    const status = await screen.findByText('1 chunk matches');
+    expect(status).toHaveAttribute('role', 'status');
+    expect(screen.queryByText(/No chunks match/)).not.toBeInTheDocument();
+  });
+
+  it('reports the no-match message when the search finds nothing, and no count', async () => {
+    stubFetch({
+      '/api/v1/documents/versions/version-1/chunks': () =>
+        jsonResponse({ docs: [evidenceChunk()], count: 1 }),
+    });
+
+    renderReader('version-1');
+
+    const search = await screen.findByLabelText('Search this document');
+    fireEvent.change(search, { target: { value: 'no such passage' } });
+
+    const status = await screen.findByText('No chunks match “no such passage”.');
+    expect(status).toHaveAttribute('role', 'status');
+    expect(screen.queryByText(/matches$/)).not.toBeInTheDocument();
   });
 });

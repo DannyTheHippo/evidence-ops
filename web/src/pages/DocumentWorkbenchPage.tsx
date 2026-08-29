@@ -1,39 +1,68 @@
-import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useEffect, useState, type ReactNode } from 'react';
+import { useParams } from 'react-router-dom';
 import {
   ApiError,
   documentVersionContentUrl,
   fetchDocumentVersionContent,
   getDocumentById,
   type DocumentVersion,
-  type DocumentVersionIngestionStatus,
   type DocumentWithVersions,
 } from '../api/client';
-import Badge, { type BadgeTone } from '../components/ui/Badge';
+import Badge from '../components/ui/Badge';
+import DescriptionList from '../components/ui/DescriptionList';
+import LinkButton from '../components/ui/LinkButton';
+import PageHeader from '../components/ui/PageHeader';
 import Skeleton from '../components/ui/Skeleton';
 import SplitView from '../components/ui/SplitView';
 import Timestamp from '../components/ui/Timestamp';
+import FidelityNotice from '../components/FidelityNotice';
 import { IconDownload } from '../components/icons';
+import { useBreadcrumbs } from '../lib/breadcrumbs';
+import { formatRelativeTimestamp } from '../lib/format-timestamp';
 import { truncateSha256 } from '../lib/identifiers';
 import { useObjectUrl } from '../lib/use-object-url';
 import { formatBytes } from './data-room/format-size';
+import { INGESTION_TONE } from './data-room/ingestion-status';
 import EvidenceReader from './document-workbench/EvidenceReader';
-
-// Mirrors VersionRow's own total map, for the same reason: a status the API union adds fails
-// typecheck here instead of silently falling through a default branch. 'needs-ocr' and
-// 'facts-failed' carry the same 'caution' tone as 'pending' — each still has real, citable
-// content and only a known gap, never the verification-grade failure 'rejected' signals
-// elsewhere in this app.
-const INGESTION_TONE: Record<DocumentVersionIngestionStatus, BadgeTone> = {
-  pending: 'caution',
-  completed: 'verified',
-  'facts-failed': 'caution',
-  failed: 'rejected',
-  'needs-ocr': 'caution',
-};
 
 function findVersion(doc: DocumentWithVersions, versionId: string): DocumentVersion | undefined {
   return doc.versions.find((version) => version.id === versionId);
+}
+
+/** The version-detail rows for the workbench's secondary pane. Failure reason and fidelity rows
+ * are omitted entirely rather than rendered empty — a version with neither has nothing to say
+ * about either, matching `VersionRow`'s own silence on an empty `reducedFidelityReasons`. */
+function versionDetailItems(version: DocumentVersion): { term: string; description: ReactNode }[] {
+  const items: { term: string; description: ReactNode }[] = [
+    {
+      term: 'Status',
+      description: (
+        <Badge tone={INGESTION_TONE[version.ingestionStatus]}>{version.ingestionStatus}</Badge>
+      ),
+    },
+  ];
+  if (version.ingestionFailureReason) {
+    items.push({ term: 'Failure reason', description: version.ingestionFailureReason });
+  }
+  if (version.reducedFidelityReasons.length > 0) {
+    items.push({
+      term: 'Fidelity',
+      description: <FidelityNotice reasons={version.reducedFidelityReasons} />,
+    });
+  }
+  items.push(
+    { term: 'Size', description: formatBytes(version.sizeBytes) },
+    {
+      term: 'sha256',
+      description: (
+        <span className="mono" title={version.sha256}>
+          {truncateSha256(version.sha256)}
+        </span>
+      ),
+    },
+    { term: 'Uploaded', description: <Timestamp value={version.createdAt} /> },
+  );
+  return items;
 }
 
 export default function DocumentWorkbenchPage() {
@@ -72,22 +101,40 @@ export default function DocumentWorkbenchPage() {
     fetchDocumentVersionContent,
   );
 
+  useBreadcrumbs([
+    { label: 'Data Room', to: '/documents' },
+    {
+      label: doc ? doc.title : 'Document',
+      to: documentId ? `/documents/${documentId}` : undefined,
+    },
+    { label: version ? `Version ${version.versionNumber}` : 'Version' },
+  ]);
+
   return (
     <div className="view">
-      <div className="page-head">
-        <div>
-          <span className="eyebrow">Evidence</span>
-          <h1 className="page-title">{doc ? doc.title : 'Document'}</h1>
-          <p className="page-sub">
-            {version ? `Version ${version.versionNumber}` : 'Document workbench'}
-          </p>
-        </div>
-        {documentId && (
-          <Link to={`/documents/${documentId}`} className="btn btn--secondary btn--sm">
-            Back to document
-          </Link>
-        )}
-      </div>
+      <PageHeader
+        eyebrow="Evidence"
+        title={doc ? doc.title : 'Document'}
+        description={
+          version
+            ? `Version ${version.versionNumber} · uploaded ${formatRelativeTimestamp(version.createdAt)}`
+            : 'Document workbench'
+        }
+        actions={
+          <>
+            {version && (
+              <Badge tone={INGESTION_TONE[version.ingestionStatus]}>
+                {version.ingestionStatus}
+              </Badge>
+            )}
+            {documentId && (
+              <LinkButton to={`/documents/${documentId}`} variant="secondary" size="sm">
+                Back to document
+              </LinkButton>
+            )}
+          </>
+        }
+      />
 
       {(!documentId || !versionId) && (
         <p className="error error--page" role="alert">
@@ -137,7 +184,7 @@ export default function DocumentWorkbenchPage() {
                 </p>
               </>
             ) : (
-              <EvidenceReader versionId={version.id} />
+              <EvidenceReader versionId={version.id} variant="reading" />
             )
           }
           secondary={
@@ -145,47 +192,25 @@ export default function DocumentWorkbenchPage() {
               <div className="card">
                 <div className="card-head">
                   <h2 className="card-title">v{version.versionNumber}</h2>
-                  <Badge tone={INGESTION_TONE[version.ingestionStatus]}>
-                    {version.ingestionStatus}
-                  </Badge>
                 </div>
-                {version.ingestionFailureReason && (
-                  <p className="cell-sub">{version.ingestionFailureReason}</p>
-                )}
-                {/* Silent on an empty array, matching VersionRow: a reader deciding whether to
-                    trust this version needs to know the text behind it is only part of what the
-                    source said, alongside 'completed' rather than instead of it. */}
-                {version.reducedFidelityReasons.length > 0 && (
-                  <>
-                    <Badge tone="caution">reduced fidelity</Badge>
-                    <ul className="fidelity-list">
-                      {version.reducedFidelityReasons.map((reason) => (
-                        <li key={reason} className="cell-sub">
-                          {reason}
-                        </li>
-                      ))}
-                    </ul>
-                  </>
-                )}
-                <p className="cell-sub">{formatBytes(version.sizeBytes)}</p>
-                <p className="cell-sub mono">
-                  <span title={version.sha256}>{truncateSha256(version.sha256)}</span>
-                </p>
-                <p className="cell-sub">
-                  Uploaded <Timestamp value={version.createdAt} />
-                </p>
+                <DescriptionList items={versionDetailItems(version)} />
                 <div className="form-actions">
-                  <a
-                    className="btn btn--secondary btn--sm"
+                  <LinkButton
                     href={documentVersionContentUrl(version.id)}
+                    variant="secondary"
+                    size="sm"
                   >
                     <IconDownload />
                     Download
-                  </a>
+                  </LinkButton>
                 </div>
               </div>
               {isPdf && (
-                <EvidenceReader versionId={version.id} onTargetPageChange={setResolvedPage} />
+                <EvidenceReader
+                  versionId={version.id}
+                  variant="rail"
+                  onTargetPageChange={setResolvedPage}
+                />
               )}
             </>
           }

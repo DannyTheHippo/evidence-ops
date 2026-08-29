@@ -5,6 +5,8 @@ import { RequireAdmin } from '../AuthenticatedRoutes';
 import { clearSession } from '../lib/auth';
 import PeoplePage from './PeoplePage';
 
+type RouteHandler = (init?: RequestInit) => Response | Promise<Response>;
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -12,32 +14,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-// Dispatches by URL, matching ApiKeysPage.test.tsx's stubFetch shape.
-function stubFetch(routes: Record<string, (init?: RequestInit) => Response>): void {
-  const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-    const handler = routes[url];
-    if (!handler) return Promise.reject(new Error(`Unhandled fetch: ${url}`));
-    return Promise.resolve(handler(init));
-  });
-  vi.stubGlobal('fetch', fetchMock);
-}
-
-// Exposes the current query string as accessible text, since `MemoryRouter` gives a test no other
-// way to read it — matches ApiKeysPage.test.tsx's LocationProbe.
-function LocationProbe() {
-  const location = useLocation();
-  return <output aria-label="current search">{location.search}</output>;
-}
-
-function renderPage(initialEntries: string[] = ['/people']) {
-  render(
-    <MemoryRouter initialEntries={initialEntries}>
-      <PeoplePage />
-      <LocationProbe />
-    </MemoryRouter>,
-  );
-}
-
+const ME_URL = '/api/v1/auth/me';
 const DEFAULT_MEMBERS_URL = '/api/v1/users?skip=0&limit=25&sort=email&sortDir=asc';
 const DEFAULT_INVITATIONS_URL = '/api/v1/invitations?skip=0&limit=25';
 
@@ -72,6 +49,48 @@ const mintedInvitation = {
   createdAt: '2026-08-01T00:00:00.000Z',
 };
 
+// Dispatches by URL, matching SourcesPage.test.tsx's stubFetch shape. `session` defaults to
+// signed-in-as-admin — every test fetches `/auth/me` for the "(you)" marker and the invite
+// action, whether or not the test cares about either.
+function stubFetch(
+  routes: Record<string, RouteHandler> = {},
+  session: RouteHandler = () => jsonResponse(admin),
+): ReturnType<typeof vi.fn> {
+  const defaults: Record<string, RouteHandler> = {
+    [ME_URL]: session,
+    [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [], count: 0 }),
+    [DEFAULT_INVITATIONS_URL]: () => jsonResponse({ docs: [], count: 0 }),
+    ...routes,
+  };
+  const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+    const handler = defaults[url];
+    if (!handler) return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    return Promise.resolve(handler(init));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+// Exposes the current query string as accessible text, since `MemoryRouter` gives a test no other
+// way to read it — matches ApiKeysPage.test.tsx's LocationProbe.
+function LocationProbe() {
+  const location = useLocation();
+  return <output aria-label="current search">{location.search}</output>;
+}
+
+function renderPage(initialEntries: string[] = ['/people']) {
+  render(
+    <MemoryRouter initialEntries={initialEntries}>
+      <PeoplePage />
+      <LocationProbe />
+    </MemoryRouter>,
+  );
+}
+
+function switchToInvitations() {
+  fireEvent.click(screen.getByRole('button', { name: 'Invitations' }));
+}
+
 describe('PeoplePage', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -79,10 +98,9 @@ describe('PeoplePage', () => {
     clearSession();
   });
 
-  it('lists members sorted by email ascending by default', async () => {
+  it('lists members sorted by email ascending by default, on the Members segment', async () => {
     stubFetch({
       [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin, member], count: 2 }),
-      [DEFAULT_INVITATIONS_URL]: () => jsonResponse({ docs: [], count: 0 }),
     });
 
     renderPage();
@@ -95,13 +113,15 @@ describe('PeoplePage', () => {
     ).toHaveAttribute('tabindex', '0');
   });
 
-  it('lists pending invitations with email, role, status and expiry', async () => {
+  it('lists pending invitations with email, role, status and expiry, on the Invitations segment', async () => {
     stubFetch({
       [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
       [DEFAULT_INVITATIONS_URL]: () => jsonResponse({ docs: [pendingInvitation], count: 1 }),
     });
 
     renderPage();
+    await screen.findByText('admin@example.com');
+    switchToInvitations();
 
     expect(await screen.findByText('colleague@example.com')).toBeInTheDocument();
     expect(screen.getByText('pending')).toBeInTheDocument();
@@ -111,68 +131,84 @@ describe('PeoplePage', () => {
     ).toHaveAttribute('tabindex', '0');
   });
 
-  it('reads as empty when there are no members or invitations', async () => {
-    stubFetch({
-      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [], count: 0 }),
-      [DEFAULT_INVITATIONS_URL]: () => jsonResponse({ docs: [], count: 0 }),
-    });
+  it('reads as empty when there are no members or invitations, on either segment', async () => {
+    stubFetch();
 
     renderPage();
 
     expect(await screen.findByText('No members yet')).toBeInTheDocument();
-    expect(screen.getByText('No invitations yet')).toBeInTheDocument();
+    switchToInvitations();
+    expect(await screen.findByText('No invitations yet')).toBeInTheDocument();
   });
 
-  it('changes a member to admin and updates the row in place', async () => {
-    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-      if (url === DEFAULT_MEMBERS_URL)
-        return Promise.resolve(jsonResponse({ docs: [member], count: 1 }));
-      if (url === DEFAULT_INVITATIONS_URL)
-        return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
-      if (url === '/api/v1/users/user-2/role' && init?.method === 'PATCH') {
-        return Promise.resolve(jsonResponse({ ...member, role: 'admin' }));
-      }
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+  it('marks the signed-in operator\'s own row as "(you)"', async () => {
+    stubFetch({
+      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin, member], count: 2 }),
     });
-    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+    await screen.findByText('admin@example.com');
+
+    const adminRow = screen.getByText('admin@example.com').closest('tr');
+    const memberRow = screen.getByText('member@example.com').closest('tr');
+    expect(adminRow).toHaveTextContent('(you)');
+    expect(memberRow).not.toHaveTextContent('(you)');
+  });
+
+  it('changes a member to admin via the kebab menu and updates the row in place', async () => {
+    const fetchMock = stubFetch({
+      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [member], count: 1 }),
+      '/api/v1/users/user-2/role': (init) =>
+        init?.method === 'PATCH'
+          ? jsonResponse({ ...member, role: 'admin' })
+          : Promise.reject(new Error('unexpected method')),
+    });
 
     renderPage();
     await screen.findByText('member@example.com');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Make admin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for member@example.com' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Make admin' }));
     const dialog = screen.getByRole('dialog', { name: 'Change "member@example.com" to admin?' });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Make admin' }));
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Make member' })).toBeInTheDocument();
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
-    expect(JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string)).toEqual({
-      role: 'admin',
-    });
+
+    // Reopening the menu shows the action flipped to the opposite direction, proving the row
+    // updated in place rather than only the server accepting the change.
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for member@example.com' }));
+    expect(screen.getByRole('menuitem', { name: 'Make member' })).toBeInTheDocument();
+
+    const roleCall = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        url === '/api/v1/users/user-2/role' && (init as RequestInit)?.method === 'PATCH',
+    );
+    expect(JSON.parse((roleCall?.[1] as RequestInit).body as string)).toEqual({ role: 'admin' });
   });
 
-  it('surfaces a legible reason when demoting the last admin is refused', async () => {
+  it('surfaces a legible reason when demoting the last admin is refused, guessing nothing client-side', async () => {
     const refusalMessage =
       "Tenant 'tenant-a' must always keep at least one admin; changing user 'user-1' to 'member' would leave none";
     stubFetch({
       [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
-      [DEFAULT_INVITATIONS_URL]: () => jsonResponse({ docs: [], count: 0 }),
       '/api/v1/users/user-1/role': () => jsonResponse({ message: refusalMessage }, 409),
     });
 
     renderPage();
     await screen.findByText('admin@example.com');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Make member' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for admin@example.com' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Make member' }));
     const dialog = screen.getByRole('dialog', {
       name: 'Change "admin@example.com" to member?',
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Make member' }));
 
+    // Nothing here refuses the action before the request goes out — the client never guesses at
+    // the last-admin rule, it only renders whatever the server's 409 says.
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(refusalMessage);
-    // The refusal leaves the role unchanged — the dialog stays open with its title unmoved, and
-    // the row still offers to make the same admin a member rather than reflecting a change that
-    // never took effect.
     expect(
       within(dialog).getByRole('heading', { name: 'Change "admin@example.com" to member?' }),
     ).toBeInTheDocument();
@@ -181,13 +217,13 @@ describe('PeoplePage', () => {
   it('revoking sessions states plainly that every device is signed out and every API key stops working', async () => {
     stubFetch({
       [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [member], count: 1 }),
-      [DEFAULT_INVITATIONS_URL]: () => jsonResponse({ docs: [], count: 0 }),
     });
 
     renderPage();
     await screen.findByText('member@example.com');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Revoke sessions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for member@example.com' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Revoke sessions' }));
 
     const dialog = screen.getByRole('dialog', {
       name: 'Revoke sessions for "member@example.com"?',
@@ -197,22 +233,19 @@ describe('PeoplePage', () => {
   });
 
   it('confirming a session revocation calls the API and closes the dialog', async () => {
-    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-      if (url === DEFAULT_MEMBERS_URL)
-        return Promise.resolve(jsonResponse({ docs: [member], count: 1 }));
-      if (url === DEFAULT_INVITATIONS_URL)
-        return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
-      if (url === '/api/v1/users/user-2/revoke-sessions' && init?.method === 'POST') {
-        return Promise.resolve(jsonResponse(member));
-      }
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    const fetchMock = stubFetch({
+      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [member], count: 1 }),
+      '/api/v1/users/user-2/revoke-sessions': (init) =>
+        init?.method === 'POST'
+          ? jsonResponse(member)
+          : Promise.reject(new Error('unexpected method')),
     });
-    vi.stubGlobal('fetch', fetchMock);
 
     renderPage();
     await screen.findByText('member@example.com');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Revoke sessions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for member@example.com' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Revoke sessions' }));
     const dialog = screen.getByRole('dialog', {
       name: 'Revoke sessions for "member@example.com"?',
     });
@@ -231,22 +264,19 @@ describe('PeoplePage', () => {
   });
 
   it('removes a member from the tenant on confirm', async () => {
-    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-      if (url === DEFAULT_MEMBERS_URL)
-        return Promise.resolve(jsonResponse({ docs: [member], count: 1 }));
-      if (url === DEFAULT_INVITATIONS_URL)
-        return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
-      if (url === '/api/v1/users/user-2' && init?.method === 'DELETE') {
-        return Promise.resolve(new Response(null, { status: 204 }));
-      }
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    stubFetch({
+      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [member], count: 1 }),
+      '/api/v1/users/user-2': (init) =>
+        init?.method === 'DELETE'
+          ? new Response(null, { status: 204 })
+          : Promise.reject(new Error('unexpected method')),
     });
-    vi.stubGlobal('fetch', fetchMock);
 
     renderPage();
     await screen.findByText('member@example.com');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for member@example.com' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Remove member' }));
     fireEvent.click(screen.getByRole('button', { name: 'Remove member' }));
 
     await waitFor(() => {
@@ -255,18 +285,11 @@ describe('PeoplePage', () => {
   });
 
   it('sorts members by a column, writing the new sort into the URL', async () => {
-    const fetchMock = vi.fn((url: string) => {
-      if (
-        url === DEFAULT_MEMBERS_URL ||
-        url === '/api/v1/users?skip=0&limit=25&sort=role&sortDir=desc'
-      ) {
-        return Promise.resolve(jsonResponse({ docs: [admin], count: 1 }));
-      }
-      if (url === DEFAULT_INVITATIONS_URL)
-        return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    const fetchMock = stubFetch({
+      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
+      '/api/v1/users?skip=0&limit=25&sort=role&sortDir=desc': () =>
+        jsonResponse({ docs: [admin], count: 1 }),
     });
-    vi.stubGlobal('fetch', fetchMock);
 
     renderPage();
     await screen.findByText('admin@example.com');
@@ -282,10 +305,9 @@ describe('PeoplePage', () => {
     });
   });
 
-  it('keeps the address bar clean at the default sort and page', async () => {
+  it('keeps the address bar clean at the default view, sort and page', async () => {
     stubFetch({
       [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
-      [DEFAULT_INVITATIONS_URL]: () => jsonResponse({ docs: [], count: 0 }),
     });
 
     renderPage();
@@ -298,7 +320,6 @@ describe('PeoplePage', () => {
     stubFetch({
       '/api/v1/users?skip=25&limit=25&sort=role&sortDir=desc': () =>
         jsonResponse({ docs: [member], count: 30 }),
-      [DEFAULT_INVITATIONS_URL]: () => jsonResponse({ docs: [], count: 0 }),
     });
 
     renderPage(['/people?sort=role&sortDir=desc&skip=25']);
@@ -306,26 +327,39 @@ describe('PeoplePage', () => {
     await screen.findByText('member@example.com');
   });
 
-  it('shows a fragment-carried invite link exactly once at mint, unmistakably marked as unrepeatable', async () => {
-    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-      if (url === DEFAULT_MEMBERS_URL)
-        return Promise.resolve(jsonResponse({ docs: [admin], count: 1 }));
-      if (url === '/api/v1/invitations' && init?.method === 'POST') {
-        return Promise.resolve(jsonResponse(mintedInvitation, 201));
-      }
-      if (url === DEFAULT_INVITATIONS_URL)
-        return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+  it('reproduces the Invitations segment, paged, from a deep link', async () => {
+    stubFetch({
+      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
+      '/api/v1/invitations?skip=25&limit=25': () =>
+        jsonResponse({ docs: [pendingInvitation], count: 30 }),
     });
-    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage(['/people?view=invitations&invSkip=25']);
+
+    expect(
+      await screen.findByRole('region', { name: 'Invitations minted for this tenant' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('colleague@example.com')).toBeInTheDocument();
+  });
+
+  it('shows a fragment-carried invite link exactly once at mint, switching to the Invitations segment', async () => {
+    const fetchMock = stubFetch({
+      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
+      '/api/v1/invitations': (init) =>
+        init?.method === 'POST'
+          ? jsonResponse(mintedInvitation, 201)
+          : Promise.reject(new Error('unexpected method')),
+    });
 
     renderPage();
-    await screen.findByText('No invitations yet');
+    await screen.findByText('admin@example.com');
 
-    fireEvent.change(screen.getByLabelText('Email'), {
+    fireEvent.click(screen.getByRole('button', { name: 'Invite member' }));
+    const dialog = screen.getByRole('dialog', { name: 'Invite member' });
+    fireEvent.change(within(dialog).getByLabelText('Email'), {
       target: { value: 'new-hire@example.com' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Invite' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Invite' }));
 
     const expectedLink = `${window.location.origin}/invite#token=${mintedInvitation.token}`;
     expect(await screen.findByText(expectedLink)).toBeInTheDocument();
@@ -333,6 +367,74 @@ describe('PeoplePage', () => {
       'href',
       expect.stringContaining(`mailto:${mintedInvitation.email}`),
     );
+    // The mint switches the page onto the Invitations segment and moves focus onto the panel
+    // holding the one copy of the link that will ever exist — deferred a frame, so this settles
+    // rather than asserting synchronously.
+    expect(screen.getByRole('button', { name: 'Invitations' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await waitFor(() => {
+      expect(document.activeElement).toHaveClass('secret-reveal');
+    });
+
+    const mintCall = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/v1/invitations' && (init as RequestInit)?.method === 'POST',
+    );
+    expect(JSON.parse((mintCall?.[1] as RequestInit).body as string)).toEqual({
+      email: 'new-hire@example.com',
+      role: 'member',
+    });
+  });
+
+  it('invites a colleague as admin when Admin is selected', async () => {
+    const fetchMock = stubFetch({
+      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
+      '/api/v1/invitations': (init) =>
+        init?.method === 'POST'
+          ? jsonResponse({ ...mintedInvitation, role: 'admin' }, 201)
+          : Promise.reject(new Error('unexpected method')),
+    });
+
+    renderPage();
+    await screen.findByText('admin@example.com');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Invite member' }));
+    const dialog = screen.getByRole('dialog', { name: 'Invite member' });
+    fireEvent.change(within(dialog).getByLabelText('Email'), {
+      target: { value: 'new-hire@example.com' },
+    });
+    fireEvent.click(within(dialog).getByRole('radio', { name: /^Admin/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Invite' }));
+
+    await waitFor(() => {
+      const mintCall = fetchMock.mock.calls.find(
+        ([url, init]) => url === '/api/v1/invitations' && (init as RequestInit)?.method === 'POST',
+      );
+      expect(mintCall).toBeDefined();
+      expect(JSON.parse((mintCall?.[1] as RequestInit).body as string)).toEqual({
+        email: 'new-hire@example.com',
+        role: 'admin',
+      });
+    });
+  });
+
+  it('refuses to submit the invite form without a plausible email shape', async () => {
+    stubFetch({
+      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
+    });
+
+    renderPage();
+    await screen.findByText('admin@example.com');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Invite member' }));
+    const dialog = screen.getByRole('dialog', { name: 'Invite member' });
+    fireEvent.change(within(dialog).getByLabelText('Email'), {
+      target: { value: 'not-an-email' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Invite' }));
+
+    expect(await within(dialog).findByText('Enter a valid email address.')).toBeInTheDocument();
   });
 
   it('states before resending that the previous link stops working, not only after', async () => {
@@ -342,6 +444,8 @@ describe('PeoplePage', () => {
     });
 
     renderPage();
+    await screen.findByText('admin@example.com');
+    switchToInvitations();
     await screen.findByText('colleague@example.com');
 
     fireEvent.click(screen.getByRole('button', { name: 'Resend' }));
@@ -356,20 +460,18 @@ describe('PeoplePage', () => {
 
   it('resending an invitation rotates its token and shows the new one-time link', async () => {
     const resent = { ...pendingInvitation, token: 'eo_inv_resenttoken456' };
-    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-      if (url === DEFAULT_MEMBERS_URL)
-        return Promise.resolve(jsonResponse({ docs: [admin], count: 1 }));
-      if (url === DEFAULT_INVITATIONS_URL) {
-        return Promise.resolve(jsonResponse({ docs: [pendingInvitation], count: 1 }));
-      }
-      if (url === '/api/v1/invitations/invitation-1/resend' && init?.method === 'POST') {
-        return Promise.resolve(jsonResponse(resent));
-      }
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    stubFetch({
+      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
+      [DEFAULT_INVITATIONS_URL]: () => jsonResponse({ docs: [pendingInvitation], count: 1 }),
+      '/api/v1/invitations/invitation-1/resend': (init) =>
+        init?.method === 'POST'
+          ? jsonResponse(resent)
+          : Promise.reject(new Error('unexpected method')),
     });
-    vi.stubGlobal('fetch', fetchMock);
 
     renderPage();
+    await screen.findByText('admin@example.com');
+    switchToInvitations();
     await screen.findByText('colleague@example.com');
 
     fireEvent.click(screen.getByRole('button', { name: 'Resend' }));
@@ -381,20 +483,18 @@ describe('PeoplePage', () => {
   });
 
   it('revoking an invitation marks it revoked and hides its actions', async () => {
-    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-      if (url === DEFAULT_MEMBERS_URL)
-        return Promise.resolve(jsonResponse({ docs: [admin], count: 1 }));
-      if (url === DEFAULT_INVITATIONS_URL) {
-        return Promise.resolve(jsonResponse({ docs: [pendingInvitation], count: 1 }));
-      }
-      if (url === '/api/v1/invitations/invitation-1' && init?.method === 'DELETE') {
-        return Promise.resolve(new Response(null, { status: 204 }));
-      }
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    stubFetch({
+      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
+      [DEFAULT_INVITATIONS_URL]: () => jsonResponse({ docs: [pendingInvitation], count: 1 }),
+      '/api/v1/invitations/invitation-1': (init) =>
+        init?.method === 'DELETE'
+          ? new Response(null, { status: 204 })
+          : Promise.reject(new Error('unexpected method')),
     });
-    vi.stubGlobal('fetch', fetchMock);
 
     renderPage();
+    await screen.findByText('admin@example.com');
+    switchToInvitations();
     await screen.findByText('colleague@example.com');
 
     fireEvent.click(screen.getByRole('button', { name: 'Revoke' }));
@@ -409,9 +509,7 @@ describe('PeoplePage', () => {
 
   it('admits an admin to the route wrapped in RequireAdmin', async () => {
     stubFetch({
-      '/api/v1/auth/me': () => jsonResponse(admin),
       [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
-      [DEFAULT_INVITATIONS_URL]: () => jsonResponse({ docs: [], count: 0 }),
     });
 
     render(
@@ -433,9 +531,7 @@ describe('PeoplePage', () => {
   });
 
   it('bounces a member away from the route wrapped in RequireAdmin', async () => {
-    stubFetch({
-      '/api/v1/auth/me': () => jsonResponse(member),
-    });
+    stubFetch({}, () => jsonResponse(member));
 
     render(
       <MemoryRouter initialEntries={['/people']}>

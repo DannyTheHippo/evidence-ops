@@ -60,20 +60,22 @@ describe('WorkflowRun schema', () => {
     });
 
     it('persists and rehydrates a running workflow projection', async () => {
-      const answerId = new mongoose.Types.ObjectId();
+      const subjectId = new mongoose.Types.ObjectId();
 
       const created = await WorkflowRunModel.create({
         workflowId: 'wf-1',
         tenantId: 'tenant-a',
         runId: 'run-1',
         status: 'running',
-        answerId,
+        subjectId,
+        subjectType: 'Conflict',
       });
 
       const found = await WorkflowRunModel.findById(created._id);
 
       expect(found?.status).toBe('running');
-      expect(found?.answerId?.equals(answerId)).toBe(true);
+      expect(found?.subjectId?.equals(subjectId)).toBe(true);
+      expect(found?.subjectType).toBe('Conflict');
       expect(found?.tenantId).toBe('tenant-a');
     });
   });

@@ -400,6 +400,175 @@ describe('Sources (e2e)', () => {
         bSource._id.toString(),
       ]);
     });
+
+    describe('q filter', () => {
+      const TOKEN = `Q${Date.now()}`;
+
+      let searchTenant: { cookie: string; tenantId: string };
+      let nameOnlySource: SourceDocument;
+      let pathOnlySource: SourceDocument;
+      let ownerOnlySource: SourceDocument;
+      let noMatchSource: SourceDocument;
+      let dotLiteralSource: SourceDocument;
+      let dotDistractorSource: SourceDocument;
+      let parenLiteralSource: SourceDocument;
+      let trackedComboSource: SourceDocument;
+      let untrackedComboSource: SourceDocument;
+
+      beforeAll(async () => {
+        searchTenant = await registerTestUser(app, {
+          email: 'sources-q-e2e@example.com',
+          password: 'correct-horse-battery',
+        });
+
+        const create = (overrides: Partial<SourceDocument>) =>
+          sourceModel.create({
+            kind: 'local-folder',
+            path: 'deal-room/generic',
+            owner: 'Generic Owner',
+            tenantId: searchTenant.tenantId,
+            ...overrides,
+          });
+
+        nameOnlySource = await create({ name: `${TOKEN}NameOnly Source` });
+        pathOnlySource = await create({
+          name: 'Generic Path Source',
+          path: `deal-room/${TOKEN}PathOnly`,
+        });
+        ownerOnlySource = await create({
+          name: 'Generic Owner Source',
+          owner: `${TOKEN}OwnerOnly Team`,
+        });
+        noMatchSource = await create({ name: 'Totally Unrelated Source' });
+        dotLiteralSource = await create({ name: `${TOKEN}Data.Room` });
+        dotDistractorSource = await create({ name: `${TOKEN}DataXRoom` });
+        parenLiteralSource = await create({ name: `${TOKEN}Vendor(Co)` });
+        trackedComboSource = await create({ name: `Combo ${TOKEN} Tracked`, tracked: true });
+        untrackedComboSource = await create({ name: `Combo ${TOKEN} Untracked`, tracked: false });
+
+        // Cross-tenant fixture, deliberately reusing the exact string every `nameOnlySource`
+        // query below searches for, so a leak would show up as a second doc / count: 2.
+        const crossTenant = await registerTestUser(app, {
+          email: 'sources-q-cross-tenant-e2e@example.com',
+          password: 'correct-horse-battery',
+        });
+        await sourceModel.create({
+          name: `${TOKEN}NameOnly Source`,
+          kind: 'local-folder',
+          path: 'deal-room/generic',
+          owner: 'Generic Owner',
+          tenantId: crossTenant.tenantId,
+        });
+      });
+
+      const listWithQ = (q: string, extra: Record<string, unknown> = {}) =>
+        request(getTestServer(app))
+          .get('/api/v1/sources')
+          .query({ q, ...extra })
+          .set('Cookie', searchTenant.cookie);
+
+      it('matches on name', async () => {
+        const response = await listWithQ(`${TOKEN}NameOnly`);
+        const body = response.body as { docs: SourceBody[]; count: number };
+
+        expect(response.status).toBe(200);
+        expect(body.count).toBe(1);
+        expect(body.docs.map((doc) => doc.id)).toEqual([nameOnlySource._id.toString()]);
+      });
+
+      it('matches on path', async () => {
+        const response = await listWithQ(`${TOKEN}PathOnly`);
+        const body = response.body as { docs: SourceBody[]; count: number };
+
+        expect(response.status).toBe(200);
+        expect(body.count).toBe(1);
+        expect(body.docs.map((doc) => doc.id)).toEqual([pathOnlySource._id.toString()]);
+      });
+
+      it('matches on owner', async () => {
+        const response = await listWithQ(`${TOKEN}OwnerOnly`);
+        const body = response.body as { docs: SourceBody[]; count: number };
+
+        expect(response.status).toBe(200);
+        expect(body.count).toBe(1);
+        expect(body.docs.map((doc) => doc.id)).toEqual([ownerOnlySource._id.toString()]);
+      });
+
+      it('matches case-insensitively', async () => {
+        const response = await listWithQ(`${TOKEN}nameonly`.toLowerCase());
+        const body = response.body as { docs: SourceBody[]; count: number };
+
+        expect(response.status).toBe(200);
+        expect(body.count).toBe(1);
+        expect(body.docs.map((doc) => doc.id)).toEqual([nameOnlySource._id.toString()]);
+      });
+
+      it('treats a `.` in q as a literal character, not a wildcard', async () => {
+        const response = await listWithQ(`${TOKEN}Data.Room`);
+        const body = response.body as { docs: SourceBody[]; count: number };
+
+        expect(response.status).toBe(200);
+        expect(body.count).toBe(1);
+        expect(body.docs.map((doc) => doc.id)).toEqual([dotLiteralSource._id.toString()]);
+        expect(body.docs.some((doc) => doc.id === dotDistractorSource._id.toString())).toBe(false);
+      });
+
+      it('treats a `(` in q as a literal character rather than an unterminated group', async () => {
+        const response = await listWithQ(`${TOKEN}Vendor(Co)`);
+        const body = response.body as { docs: SourceBody[]; count: number };
+
+        expect(response.status).toBe(200);
+        expect(body.count).toBe(1);
+        expect(body.docs.map((doc) => doc.id)).toEqual([parenLiteralSource._id.toString()]);
+      });
+
+      it('combines with tracked, narrowing within each of the two ADR-0019 lists independently', async () => {
+        const trackedResponse = await listWithQ(`Combo ${TOKEN}`, { tracked: true });
+        const trackedBody = trackedResponse.body as { docs: SourceBody[]; count: number };
+
+        expect(trackedResponse.status).toBe(200);
+        expect(trackedBody.count).toBe(1);
+        expect(trackedBody.docs.map((doc) => doc.id)).toEqual([trackedComboSource._id.toString()]);
+
+        const untrackedResponse = await listWithQ(`Combo ${TOKEN}`, { tracked: false });
+        const untrackedBody = untrackedResponse.body as { docs: SourceBody[]; count: number };
+
+        expect(untrackedResponse.status).toBe(200);
+        expect(untrackedBody.count).toBe(1);
+        expect(untrackedBody.docs.map((doc) => doc.id)).toEqual([
+          untrackedComboSource._id.toString(),
+        ]);
+      });
+
+      it('reports count as the filtered total, not the unfiltered tenant total', async () => {
+        const unfilteredResponse = await request(getTestServer(app))
+          .get('/api/v1/sources')
+          .set('Cookie', searchTenant.cookie);
+        const unfilteredBody = unfilteredResponse.body as { docs: SourceBody[]; count: number };
+
+        const filteredResponse = await listWithQ(`${TOKEN}NameOnly`);
+        const filteredBody = filteredResponse.body as { docs: SourceBody[]; count: number };
+
+        expect(filteredBody.count).toBe(1);
+        expect(unfilteredBody.count).toBeGreaterThan(filteredBody.count);
+      });
+
+      it('excludes a matching source from a different tenant', async () => {
+        const response = await listWithQ(`${TOKEN}NameOnly`);
+        const body = response.body as { docs: SourceBody[]; count: number };
+
+        expect(body.count).toBe(1);
+        expect(body.docs).toHaveLength(1);
+        expect(body.docs[0].id).toBe(nameOnlySource._id.toString());
+      });
+
+      it('excludes a source that matches on none of the three fields', async () => {
+        const response = await listWithQ(`${TOKEN}NameOnly`);
+        const body = response.body as { docs: SourceBody[]; count: number };
+
+        expect(body.docs.some((doc) => doc.id === noMatchSource._id.toString())).toBe(false);
+      });
+    });
   });
 
   describe('GET /sources/:id', () => {

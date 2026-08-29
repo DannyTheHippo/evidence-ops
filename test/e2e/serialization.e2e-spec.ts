@@ -373,13 +373,14 @@ describe('Serialization (e2e)', () => {
     });
 
     const workflowRunModel = app.get<Model<WorkflowRunDocument>>(getModelToken(WorkflowRun.name));
-    const answerId = new Types.ObjectId();
+    const subjectId = new Types.ObjectId();
     const matching = await workflowRunModel.create({
       tenantId,
       workflowId: 'wf-serialization-e2e-match',
       workflowType: 'resolve-conflict',
       status: 'failed',
-      answerId,
+      subjectId,
+      subjectType: 'Conflict',
     });
     await workflowRunModel.create({
       tenantId,
@@ -397,7 +398,7 @@ describe('Serialization (e2e)', () => {
     expect(response.status).toBe(200);
     expect(body.docs).toHaveLength(1);
     expect(body.docs[0].id).toBe(matching._id.toString());
-    expect(body.docs[0].subjectId).toBe(answerId.toString());
-    expect(body.docs[0].subjectType).toBe('Answer');
+    expect(body.docs[0].subjectId).toBe(subjectId.toString());
+    expect(body.docs[0].subjectType).toBe('Conflict');
   });
 });

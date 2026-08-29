@@ -51,7 +51,7 @@ function EntityRow({
       notify('success', `Deleted "${entity.canonicalName}".`);
       onDeleted(entity.id);
     } catch (err: unknown) {
-      setDeleteError(err instanceof Error ? err.message : 'Failed to delete canonical entity');
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete alias group');
       setDeleting(false);
     }
   }
@@ -105,7 +105,7 @@ export default function CanonicalEntitiesPage() {
         setError(null);
       })
       .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : 'Failed to load canonical entities');
+        setError(err instanceof Error ? err.message : 'Failed to load alias groups');
       });
   }, [skip, sort, sortDir]);
 
@@ -145,12 +145,12 @@ export default function CanonicalEntitiesPage() {
 
   let status: RecordListStatus;
   if (entities === null) {
-    status = error ? { kind: 'blank' } : { kind: 'loading', label: 'Loading canonical entities…' };
+    status = error ? { kind: 'blank' } : { kind: 'loading', label: 'Loading alias groups…' };
   } else if (entities.length === 0) {
     status = {
       kind: 'empty',
       icon: <IconTag size={24} />,
-      title: 'No canonical entities registered yet',
+      title: 'No alias groups registered yet',
       description:
         'Add one to start grouping alternate spellings of a property under a single canonical name.',
     };
@@ -161,7 +161,7 @@ export default function CanonicalEntitiesPage() {
   return (
     <RecordListPage
       eyebrow="Admin"
-      title="Canonical Entities"
+      title="Aliases"
       description="Confirm or reject proposed spellings below, or register one yourself — an unregistered property never has its conflicts surfaced, and renaming or deleting a row here does not retroactively regroup facts already extracted."
       actions={
         <Button variant="primary" onClick={() => setEditorTarget('new')}>
@@ -195,9 +195,9 @@ export default function CanonicalEntitiesPage() {
           className="panel"
           tabIndex={0}
           role="region"
-          aria-label="Registered canonical entities and their aliases"
+          aria-label="Alias groups and the names they resolve to"
         >
-          <Table caption="Registered canonical entities and their aliases.">
+          <Table caption="Alias groups and the names they resolve to.">
             <thead>
               <tr>
                 <SortableHeaderCell<CanonicalEntitySortField>

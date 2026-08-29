@@ -58,6 +58,9 @@ interface TableRowProps {
   to?: string;
   children: ReactNode;
   className?: string;
+  /** Marks the row as the current selection, e.g. the document workbench's active version — adds
+   * `row--selected` alongside whatever else the row's className resolves to. */
+  selected?: boolean;
 }
 
 /** `<tr>` that optionally carries a destination. With `to`, a plain left click anywhere in the
@@ -69,7 +72,7 @@ interface TableRowProps {
  * text selection — an unconditional row-covering overlay would paint above the row's own inline
  * text and block that selection outright, which is why this is a click listener and not a `<a>`
  * stretched across the row. Without `to`, this is an unmodified `<tr>`. */
-export function TableRow({ to, children, className }: TableRowProps) {
+export function TableRow({ to, children, className, selected }: TableRowProps) {
   const rowRef = useRef<HTMLTableRowElement | null>(null);
 
   const handleClick = (event: ReactMouseEvent<HTMLTableRowElement>) => {
@@ -84,12 +87,12 @@ export function TableRow({ to, children, className }: TableRowProps) {
     rowRef.current?.querySelector<HTMLAnchorElement>('a[data-row-link]')?.click();
   };
 
+  const classes = [to ? 'row--linked' : null, selected ? 'row--selected' : null, className]
+    .filter(Boolean)
+    .join(' ');
+
   return (
-    <tr
-      ref={rowRef}
-      className={to ? ['row--linked', className].filter(Boolean).join(' ') : className}
-      onClick={to ? handleClick : undefined}
-    >
+    <tr ref={rowRef} className={classes || undefined} onClick={to ? handleClick : undefined}>
       {children}
     </tr>
   );

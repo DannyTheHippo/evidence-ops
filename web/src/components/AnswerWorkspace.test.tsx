@@ -95,13 +95,14 @@ describe('AnswerWorkspace', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('The question run failed.');
   });
 
-  it("shows an admin the run's cost", async () => {
+  it("shows an admin the run's cost as a labelled mono value", async () => {
     stubSession(admin);
     renderWorkspace(
       baseAnswer({ usage: { promptTokens: 1240, completionTokens: 180, costUsd: 0.0042 } }),
     );
 
-    expect(await screen.findByText('Cost: $0.0042')).toBeInTheDocument();
+    expect(await screen.findByText('Run cost')).toBeInTheDocument();
+    expect(screen.getByText('$0.0042')).toBeInTheDocument();
   });
 
   it('never shows cost to a member', async () => {
@@ -111,6 +112,7 @@ describe('AnswerWorkspace', () => {
     );
 
     await screen.findByText('No document mentions the cap rate.');
-    expect(screen.queryByText(/Cost:/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Run cost')).not.toBeInTheDocument();
+    expect(screen.queryByText('$0.0042')).not.toBeInTheDocument();
   });
 });

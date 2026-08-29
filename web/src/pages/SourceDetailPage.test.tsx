@@ -196,6 +196,9 @@ describe('SourceDetailPage', () => {
     expect(
       screen.getByText('Last sync failed: connector refused an oversized file'),
     ).toBeInTheDocument();
+    expect(screen.getByText('Files').closest('.stat-row-item')).toHaveTextContent(
+      String(sourceWithFileStates.fileCount),
+    );
   });
 
   it('shows "Never synced" rather than a Timestamp when the source has never synced', async () => {
@@ -220,7 +223,7 @@ describe('SourceDetailPage', () => {
     expect(await screen.findByText('Default interval')).toBeInTheDocument();
   });
 
-  it('shows "No class drift." in the health card when the source carries none', async () => {
+  it('shows a neutral pending-drift stat when the source carries none', async () => {
     stubFetch({
       [GET_URL]: () => jsonResponse(sourceWithFileStates),
       [DRIFT_URL]: () => jsonResponse({ count: 0 }),
@@ -228,10 +231,16 @@ describe('SourceDetailPage', () => {
 
     renderAt('source-1');
 
-    expect(await screen.findByText('No class drift.')).toBeInTheDocument();
+    await screen.findByText('Deal Room Inbox');
+    const value = screen
+      .getByText('Pending drift')
+      .closest('.stat-row-item')
+      ?.querySelector('.stat-row-value');
+    expect(value).toHaveTextContent('0');
+    expect(value?.className).not.toContain('stat-row-value--caution');
   });
 
-  it('shows a drift count in the health card when the source carries some', async () => {
+  it('shows a caution pending-drift stat when the source carries some', async () => {
     stubFetch({
       [GET_URL]: () => jsonResponse(sourceWithFileStates),
       [DRIFT_URL]: () => jsonResponse({ previousClass: 'memo', count: 2 }),
@@ -239,7 +248,13 @@ describe('SourceDetailPage', () => {
 
     renderAt('source-1');
 
-    expect(await screen.findByText('2 documents pending class drift.')).toBeInTheDocument();
+    await screen.findByText('Deal Room Inbox');
+    const value = screen
+      .getByText('Pending drift')
+      .closest('.stat-row-item')
+      ?.querySelector('.stat-row-value');
+    expect(value).toHaveTextContent('2');
+    expect(value?.className).toContain('stat-row-value--caution');
   });
 
   it('enables and disables the source without leaving the page', async () => {
@@ -313,6 +328,59 @@ describe('SourceDetailPage', () => {
     );
   });
 
+  it('reloads the source and drift count once a sync reaches a terminal state, without a manual reload', async () => {
+    let sourceCall = 0;
+    let driftCall = 0;
+    const fetchMock = vi.fn((url: string) => {
+      if (url === ME_URL) return Promise.resolve(jsonResponse(admin));
+      if (url === GET_URL) {
+        sourceCall += 1;
+        return Promise.resolve(
+          jsonResponse(
+            sourceCall === 1
+              ? sourceWithFileStates
+              : { ...sourceWithFileStates, lastSyncError: undefined, lastSyncStatus: 'ok' },
+          ),
+        );
+      }
+      if (url === DRIFT_URL) {
+        driftCall += 1;
+        return Promise.resolve(jsonResponse({ count: 0 }));
+      }
+      if (url === '/api/v1/sources/source-1/sync') {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              id: 'run-1',
+              workflowId: 'wf-1',
+              status: 'completed',
+              createdAt: new Date().toISOString(),
+            },
+            201,
+          ),
+        );
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderAt('source-1');
+
+    expect(
+      await screen.findByText('Last sync failed: connector refused an oversized file'),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sync now' }));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByText('Last sync failed: connector refused an oversized file'),
+      ).not.toBeInTheDocument();
+    });
+    expect(sourceCall).toBeGreaterThanOrEqual(2);
+    expect(driftCall).toBeGreaterThanOrEqual(2);
+  });
+
   it('shows an error when the sync request fails, without blocking further attempts', async () => {
     stubFetch({
       [GET_URL]: () => jsonResponse(sourceWithFileStates),
@@ -365,6 +433,22 @@ describe('SourceDetailPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('opens the class drift dialog focused on Cancel, not Apply', async () => {
+    stubFetch({
+      [GET_URL]: () => jsonResponse(sourceWithFileStates),
+      [DRIFT_URL]: () => jsonResponse({ previousClass: 'memo', count: 2 }),
+    });
+
+    renderAt('source-1');
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Apply current class to 2 documents' }),
+    );
+
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Apply to 2 documents' })).not.toHaveFocus();
   });
 
   it('applies the drift, toasts the servers modifiedCount, and re-fetches so the card disappears', async () => {
@@ -454,13 +538,13 @@ describe('SourceDetailPage', () => {
     renderAt('source-1');
 
     expect(await screen.findByDisplayValue('Jane Doe, IT')).toBeInTheDocument();
-    expect(screen.getByLabelText('Connectivity')).toHaveValue('connector');
-    expect(screen.getByLabelText('Reachability')).toHaveValue('live');
+    expect(screen.getByRole('radio', { name: /^Connector/ })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /^Live/ })).toBeChecked();
     expect(screen.getByLabelText('Class')).toHaveValue('crm-export');
-    expect(screen.getByLabelText('Tracked')).toHaveValue('true');
+    expect(screen.getByRole('radio', { name: /^Synced by a connector/ })).toBeChecked();
 
-    fireEvent.change(screen.getByLabelText('Owner'), { target: { value: 'New Owner' } });
-    fireEvent.change(screen.getByLabelText('Reachability'), { target: { value: 'possible' } });
+    fireEvent.change(screen.getByLabelText(/^Owner/), { target: { value: 'New Owner' } });
+    fireEvent.click(screen.getByRole('radio', { name: /^Possible/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Save inventory details' }));
 
     await waitFor(() => {
@@ -519,7 +603,7 @@ describe('SourceDetailPage', () => {
     expect(
       await screen.findByText('Editing inventory details requires an admin.'),
     ).toBeInTheDocument();
-    expect(screen.queryByLabelText('Owner')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Owner/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Disable' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sync now' })).toBeInTheDocument();
   });
@@ -564,13 +648,13 @@ describe('SourceDetailPage', () => {
     expect(
       screen.queryByText('Editing inventory details requires an admin.'),
     ).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Owner')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Owner/)).not.toBeInTheDocument();
 
     act(() => {
       resolveMe!(jsonResponse(admin));
     });
 
-    expect(await screen.findByLabelText('Owner')).toBeInTheDocument();
+    expect(await screen.findByLabelText(/^Owner/)).toBeInTheDocument();
     expect(
       screen.queryByText('Editing inventory details requires an admin.'),
     ).not.toBeInTheDocument();

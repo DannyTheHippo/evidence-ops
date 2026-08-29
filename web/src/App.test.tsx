@@ -28,7 +28,7 @@ describe('App / RequireAuth', () => {
     );
 
     expect(screen.queryByRole('heading', { name: 'Home' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Evidence Ops' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Sign in' })).not.toBeInTheDocument();
   });
 
   it('renders the protected content once the probe resolves a user', async () => {
@@ -58,7 +58,7 @@ describe('App / RequireAuth', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Evidence Ops' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
   });
 
   it('redirects to /login when the probe rejects', async () => {
@@ -70,7 +70,7 @@ describe('App / RequireAuth', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Evidence Ops' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
   });
 
   // Regression: logout() used to await the POST and only then clear the local session and
@@ -110,7 +110,7 @@ describe('App / RequireAuth', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'user@example.com' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Logout' }));
 
-    expect(await screen.findByRole('heading', { name: 'Evidence Ops' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(clearSessionSpy).toHaveBeenCalled();
   });
 });
@@ -306,7 +306,7 @@ describe('App / shell', () => {
     // The account menu trigger, not a Logout button — Logout moved inside the menu, so querying
     // for it here would pass whether or not the chrome rendered.
     expect(screen.queryByRole('button', { name: 'Account' })).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Evidence Ops' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
   });
 
   it('hides the sidebar and topbar chrome on /invite', () => {

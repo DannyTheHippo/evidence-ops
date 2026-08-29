@@ -1,10 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, TransportError, getMe, listSources, uploadDocument } from './client';
+import {
+  ApiError,
+  TransportError,
+  getDashboardSummary,
+  getMe,
+  isFieldValidationError,
+  listSources,
+  uploadDocument,
+} from './client';
 
-function jsonResponse(body: unknown, status = 200): Response {
+function jsonResponse(body: unknown, status = 200, headers: HeadersInit = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...headers },
   });
 }
 
@@ -129,5 +137,229 @@ describe('client transport handling', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
 
     await expect(listSources()).resolves.toBeUndefined();
+  });
+
+  it('reads retryAfterSeconds from a 429 response’s Retry-After header', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ message: 'Too many requests' }, 429, { 'Retry-After': '42' }),
+        ),
+    );
+
+    const error = await listSources().catch((err: unknown) => err);
+
+    expect((error as ApiError).retryAfterSeconds).toBe(42);
+  });
+
+  it('leaves retryAfterSeconds undefined when the response carries no Retry-After header', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse({ message: 'Server error' }, 500)),
+    );
+
+    const error = await listSources().catch((err: unknown) => err);
+
+    expect((error as ApiError).retryAfterSeconds).toBeUndefined();
+  });
+
+  it('leaves retryAfterSeconds undefined for a non-numeric Retry-After header', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ message: 'Too many requests' }, 429, { 'Retry-After': 'not-a-number' }),
+        ),
+    );
+
+    const error = await listSources().catch((err: unknown) => err);
+
+    expect((error as ApiError).retryAfterSeconds).toBeUndefined();
+  });
+});
+
+describe('client error body parsing', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('uses a string message as-is', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse({ statusCode: 400, message: 'Bad request' }, 400)),
+    );
+
+    const error = await listSources().catch((err: unknown) => err);
+
+    expect((error as ApiError).message).toBe('Bad request');
+  });
+
+  it('joins a string[] message with "; "', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse(
+            { statusCode: 400, message: ['ownerEmail must be an email', 'unit is required'] },
+            400,
+          ),
+        ),
+    );
+
+    const error = await listSources().catch((err: unknown) => err);
+
+    expect((error as ApiError).message).toBe('ownerEmail must be an email; unit is required');
+  });
+
+  it('carries a well-formed errors array through to ApiError.fields', async () => {
+    const errors = [
+      { field: 'ownerEmail', message: 'ownerEmail must be an email' },
+      { field: 'values.0.unit', message: 'unit should not be empty' },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            statusCode: 400,
+            error: 'Bad Request',
+            message: 'ownerEmail must be an email; values.0.unit should not be empty',
+            errors,
+          },
+          400,
+        ),
+      ),
+    );
+
+    const error = await listSources().catch((err: unknown) => err);
+
+    expect((error as ApiError).fields).toEqual(errors);
+  });
+
+  it('leaves fields undefined for a domain 400 that carries no errors key', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ status: 400, message: 'Source already exists' }, 400)),
+    );
+
+    const error = await listSources().catch((err: unknown) => err);
+
+    expect((error as ApiError).fields).toBeUndefined();
+  });
+
+  it('drops a malformed errors payload that is not an array', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ statusCode: 400, message: 'Bad request', errors: 'not-an-array' }, 400),
+        ),
+    );
+
+    const error = await listSources().catch((err: unknown) => err);
+
+    expect((error as ApiError).fields).toBeUndefined();
+  });
+
+  it('drops an errors array of bare strings', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse(
+            { statusCode: 400, message: 'Bad request', errors: ['ownerEmail must be an email'] },
+            400,
+          ),
+        ),
+    );
+
+    const error = await listSources().catch((err: unknown) => err);
+
+    expect((error as ApiError).fields).toBeUndefined();
+  });
+
+  it('keeps only the well-formed entries of a partially malformed errors array', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            statusCode: 400,
+            message: 'Bad request',
+            errors: [
+              { field: 'ownerEmail', message: 'ownerEmail must be an email' },
+              { message: 'missing its field' },
+            ],
+          },
+          400,
+        ),
+      ),
+    );
+
+    const error = await listSources().catch((err: unknown) => err);
+
+    expect((error as ApiError).fields).toEqual([
+      { field: 'ownerEmail', message: 'ownerEmail must be an email' },
+    ]);
+  });
+});
+
+describe('isFieldValidationError', () => {
+  it('returns false for a plain Error', () => {
+    expect(isFieldValidationError(new Error('boom'))).toBe(false);
+  });
+
+  it('returns false for null', () => {
+    expect(isFieldValidationError(null)).toBe(false);
+  });
+
+  it('returns false for an ApiError with no fields', () => {
+    expect(isFieldValidationError(new ApiError(400, 'Bad request'))).toBe(false);
+  });
+
+  it('returns true for an ApiError carrying a non-empty fields array', () => {
+    const error = new ApiError(400, 'Bad request', [
+      { field: 'ownerEmail', message: 'ownerEmail must be an email' },
+    ]);
+
+    expect(isFieldValidationError(error)).toBe(true);
+  });
+});
+
+describe('getDashboardSummary', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('fetches the summary counts from /dashboard/summary', async () => {
+    const summary = {
+      pendingApprovalCount: 2,
+      openConflictCount: 1,
+      documentCount: 128,
+      sourceCount: 4,
+      ingestionFailedCount: 2,
+      syncFailedCount: 1,
+      needsOcrCount: 3,
+      factsFailedCount: 1,
+      answerCount: 12,
+      hasIngestedDocument: true,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(summary));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(getDashboardSummary()).resolves.toEqual(summary);
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/v1/dashboard/summary');
   });
 });

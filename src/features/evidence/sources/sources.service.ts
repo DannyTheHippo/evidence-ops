@@ -25,6 +25,7 @@ import {
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import { escapeRegex } from '../../../shared/utils/escape-regex.util';
 import { resolveSort } from '../../../shared/utils/resolve-sort.util';
 import type { SyncSourceWorkflowInput } from '../../../workflows/types';
 import { MAX_FILE_SIZE_BYTES, resolveUploadKind } from '../documents/documents.constant';
@@ -232,6 +233,7 @@ export class SourcesService {
       tenantId,
       ...(dto.lastSyncStatus !== undefined ? { lastSyncStatus: dto.lastSyncStatus } : {}),
       ...(dto.tracked !== undefined ? { tracked: dto.tracked } : {}),
+      ...(dto.q !== undefined ? { $or: this.buildSearchClauses(dto.q) } : {}),
     };
 
     const [sources, count] = await Promise.all([
@@ -766,6 +768,16 @@ export class SourcesService {
       withdrawnAt: state.withdrawnAt,
       ...overrides,
     };
+  }
+
+  /** Case-insensitive match over name, path and owner — the same three fields `SourcesPage`'s
+   *  search box checks — as `$or` clauses for `list`'s filter, computed here so `count` reflects
+   *  the filtered total rather than one fetched page. `q` is escaped before reaching `$regex`: an
+   *  unescaped caller string would let a regex metacharacter change what matches, or open a path
+   *  to a catastrophic-backtracking pattern built from hostile input. */
+  private buildSearchClauses(q: string): Array<Record<string, RegExp>> {
+    const pattern = new RegExp(escapeRegex(q), 'i');
+    return [{ name: pattern }, { path: pattern }, { owner: pattern }];
   }
 
   private async isWorkflowRunning(workflowId: string): Promise<boolean> {

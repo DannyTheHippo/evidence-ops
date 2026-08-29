@@ -100,6 +100,19 @@ const classDriftEvent = {
   modifiedCount: 400,
 };
 
+// A 24-character, ObjectId-shaped correlation id — long enough for `shortId` to actually truncate
+// it, which `corr-1`'s six characters never do.
+const longCorrelationEvent = {
+  id: 'event-6',
+  actor: 'admin@example.com',
+  action: 'document.deleted',
+  subject: { entityType: 'Document', entityId: 'doc-9' },
+  timestamp: '2026-08-01T16:00:00.000Z',
+  correlationId: '650a1f2e3b4c5d6e7f809123',
+  createdAt: '2026-08-01T16:00:00.000Z',
+  origin: 'api' as const,
+};
+
 const mcpRefusalEvent = {
   id: 'event-3',
   actor: 'mcp-pat-holder@example.com',
@@ -147,6 +160,9 @@ describe('AuditEventsPage', () => {
     expect(
       screen.getByRole('region', { name: 'Audit events matching the current filters' }),
     ).toHaveAttribute('tabindex', '0');
+
+    // No filter is applied, so no chip row renders at all.
+    expect(screen.queryByRole('list', { name: 'Applied filters' })).not.toBeInTheDocument();
   });
 
   it('shows when a record was recorded versus when the underlying action occurred, only if they differ', async () => {
@@ -168,7 +184,7 @@ describe('AuditEventsPage', () => {
     expect(within(divergedRow).getByText('Occurred', { exact: false })).toBeInTheDocument();
   });
 
-  it('renders an mcp-origin row with the MCP badge, its tool name, and the refusal reason', async () => {
+  it('renders an mcp-origin row with the MCP badge, its tool name, and the refusal reason, all in the Origin cell', async () => {
     stubFetch({
       '/api/v1/audit-events?skip=0&limit=25&sort=createdAt&sortDir=desc': () =>
         jsonResponse({ docs: [mcpRefusalEvent], count: 1 }),
@@ -182,9 +198,11 @@ describe('AuditEventsPage', () => {
     const table = screen.getByRole('table', {
       name: 'Audit events matching the current filters',
     });
-    expect(within(table).getByText('MCP')).toBeInTheDocument();
-    expect(within(table).getByText('get_answer')).toBeInTheDocument();
-    expect(within(table).getByText('authz-denied')).toBeInTheDocument();
+    const originCell = screen.getByText('get_answer').closest('td');
+    if (!originCell) throw new Error('origin cell not found');
+    expect(within(originCell).getByText('MCP')).toBeInTheDocument();
+    expect(within(originCell).getByText('get_answer')).toBeInTheDocument();
+    expect(within(originCell).getByText('authz-denied')).toBeInTheDocument();
     expect(within(table).queryByText('api')).not.toBeInTheDocument();
   });
 
@@ -217,7 +235,31 @@ describe('AuditEventsPage', () => {
     expect(screen.queryByRole('link', { name: 'ApiKey key-1' })).not.toBeInTheDocument();
   });
 
-  it('reads as empty when no events match', async () => {
+  it('shows a short correlation id in mono but copies the full value to the clipboard', async () => {
+    stubFetch({
+      '/api/v1/audit-events?skip=0&limit=25&sort=createdAt&sortDir=desc': () =>
+        jsonResponse({ docs: [longCorrelationEvent], count: 1 }),
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+
+    renderPage();
+    await screen.findByText('document.deleted');
+
+    const table = screen.getByRole('table', {
+      name: 'Audit events matching the current filters',
+    });
+    expect(within(table).getByText('650a1f2e…')).toBeInTheDocument();
+    expect(within(table).queryByText(longCorrelationEvent.correlationId)).not.toBeInTheDocument();
+
+    fireEvent.click(within(table).getByRole('button', { name: 'Copy correlation id' }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(longCorrelationEvent.correlationId);
+    });
+  });
+
+  it('reads as empty when no events match, with no filter to clear', async () => {
     stubFetch({
       '/api/v1/audit-events?skip=0&limit=25&sort=createdAt&sortDir=desc': () =>
         jsonResponse({ docs: [], count: 0 }),
@@ -227,6 +269,33 @@ describe('AuditEventsPage', () => {
 
     expect(await screen.findByText('No matching audit events')).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
+  });
+
+  it("offers Show all events from the empty state once a filter has narrowed the result to nothing, distinct from FilterBar's own Clear filters button", async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (
+        url ===
+        '/api/v1/audit-events?skip=0&limit=25&action=nothing.matches&sort=createdAt&sortDir=desc'
+      ) {
+        return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+      }
+      if (url === '/api/v1/audit-events?skip=0&limit=25&sort=createdAt&sortDir=desc') {
+        return Promise.resolve(jsonResponse({ docs: [event], count: 1 }));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage(['/audit-events?action=nothing.matches']);
+
+    expect(await screen.findByText('No matching audit events')).toBeInTheDocument();
+    // FilterBar's own "Clear filters" button is also on screen at this point — this asserts the
+    // empty state's distinct action specifically.
+    fireEvent.click(screen.getByRole('button', { name: 'Show all events' }));
+
+    await screen.findByText('document.deleted');
+    expect(screen.getByLabelText('Action')).toHaveValue('');
   });
 
   it('shows an error when the audit log fails to load', async () => {
@@ -261,7 +330,7 @@ describe('AuditEventsPage', () => {
     expect(screen.getByText('document.deleted')).toBeInTheDocument();
   });
 
-  it('applies the action, entity type and entity id filters as query parameters, not client-side', async () => {
+  it('applies the action, entity type and entity id filters as query parameters, echoed as chips', async () => {
     const fetchMock = vi.fn((url: string) => {
       if (url === '/api/v1/audit-events?skip=0&limit=25&sort=createdAt&sortDir=desc') {
         return Promise.resolve(jsonResponse({ docs: [event], count: 1 }));
@@ -293,9 +362,14 @@ describe('AuditEventsPage', () => {
           '/api/v1/audit-events?skip=0&limit=25&action=document.deleted&entityType=Document&entityId=doc-1&sort=createdAt&sortDir=desc',
       ),
     ).toBe(true);
+
+    const chipRow = screen.getByRole('list', { name: 'Applied filters' });
+    expect(within(chipRow).getByText('Action: document.deleted')).toBeInTheDocument();
+    expect(within(chipRow).getByText('Entity type: Document')).toBeInTheDocument();
+    expect(within(chipRow).getByText('Entity id: doc-1')).toBeInTheDocument();
   });
 
-  it('applies the origin and refusal reason filters as query parameters', async () => {
+  it('applies the origin and refusal reason filters as query parameters, echoed as chips', async () => {
     const fetchMock = vi.fn((url: string) => {
       if (url === '/api/v1/audit-events?skip=0&limit=25&sort=createdAt&sortDir=desc') {
         return Promise.resolve(jsonResponse({ docs: [mcpRefusalEvent], count: 1 }));
@@ -328,6 +402,46 @@ describe('AuditEventsPage', () => {
           '/api/v1/audit-events?skip=0&limit=25&origin=mcp&refusalReason=authz-denied&sort=createdAt&sortDir=desc',
       ),
     ).toBe(true);
+
+    const chipRow = screen.getByRole('list', { name: 'Applied filters' });
+    expect(within(chipRow).getByText('Origin: MCP')).toBeInTheDocument();
+    expect(within(chipRow).getByText('Refusal reason: authz-denied')).toBeInTheDocument();
+  });
+
+  it('removing a chip clears just that filter, resets the page, and keeps the form in sync', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (
+        url ===
+        '/api/v1/audit-events?skip=0&limit=25&action=document.deleted&origin=mcp&sort=createdAt&sortDir=desc'
+      ) {
+        return Promise.resolve(jsonResponse({ docs: [mcpRefusalEvent], count: 1 }));
+      }
+      if (url === '/api/v1/audit-events?skip=0&limit=25&origin=mcp&sort=createdAt&sortDir=desc') {
+        return Promise.resolve(jsonResponse({ docs: [mcpRefusalEvent], count: 1 }));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage(['/audit-events?action=document.deleted&origin=mcp']);
+    await screen.findByText('mcp.tool_call.refused');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Action filter' }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url]) =>
+            url === '/api/v1/audit-events?skip=0&limit=25&origin=mcp&sort=createdAt&sortDir=desc',
+        ),
+      ).toBe(true);
+    });
+
+    // The Action field itself cleared too — a later "Apply filters" cannot resurrect the removed
+    // value from a stale draft.
+    expect(screen.getByLabelText('Action')).toHaveValue('');
+    expect(screen.getByRole('list', { name: 'Applied filters' })).toHaveTextContent('Origin: MCP');
+    expect(screen.queryByText('Action: document.deleted')).not.toBeInTheDocument();
   });
 
   it('filters to a subject by clicking its row action, without pasting an id', async () => {
@@ -362,6 +476,9 @@ describe('AuditEventsPage', () => {
     // The filter form reflects what the click just applied, rather than reading stale.
     expect(screen.getByLabelText('Entity type')).toHaveValue('Document');
     expect(screen.getByLabelText('Entity id')).toHaveValue('doc-1');
+    expect(screen.getByRole('list', { name: 'Applied filters' })).toHaveTextContent(
+      'Entity id: doc-1',
+    );
   });
 
   it('resets paging to the first page in the same patch as applying a filter, and keeps the URL clean at defaults', async () => {
@@ -391,12 +508,12 @@ describe('AuditEventsPage', () => {
     expect(screen.getByRole('status', { name: 'current search' })).toBeEmptyDOMElement();
 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-    await screen.findByText('30 total');
+    await screen.findByText('26–30 of 30');
 
     fireEvent.change(screen.getByLabelText('Action'), { target: { value: 'document.deleted' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
 
-    await screen.findByText('1 total');
+    await screen.findByText('1–1 of 1');
 
     // The filter landed and paging reset to the first page in the same patch — the URL carries
     // only the non-default `action`, never a leftover `skip`.
@@ -478,7 +595,7 @@ describe('AuditEventsPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 
-    await screen.findByText('30 total');
+    await screen.findByText('26–30 of 30');
     expect(
       fetchMock.mock.calls.some(
         ([url]) => url === '/api/v1/audit-events?skip=25&limit=25&sort=createdAt&sortDir=desc',

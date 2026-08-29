@@ -224,14 +224,26 @@ export class ConflictsService {
   /**
    * Audit subject: a paginated list has no single conflict to attach the event to, so the
    * requesting user stands in as the subject rather than a fabricated ObjectId that would
-   * dangle with no referent.
+   * dangle with no referent — including when `dto.ids` narrows this to a specific batch.
+   *
+   * `dto.ids`, when present, ignores `skip`/`limit` entirely rather than folding them into the
+   * same `find()` call: a caller resolving a fixed batch (an answer's `conflictIds`, an approval's
+   * subject) needs every one of them back, and the default pagination limit is well under
+   * `ArrayMaxSize` on `ids` itself — applying it here would silently drop ids past the page size,
+   * the exact bounded-window loss this filter exists to close. An id in `dto.ids` that does not
+   * resolve — unknown, or scoped out by `tenantId` — is silently absent from the result, never a
+   * 404, matching `DocumentsService.lookupVersions`.
    */
   async list(
     dto: ListConflictsRequestDto,
     actorId: string,
     tenantId: string,
   ): Promise<DocumentResultWithCount<ConflictResponseDto>> {
-    const filter = { tenantId, ...(dto.status ? { status: dto.status } : {}) };
+    const filter = {
+      tenantId,
+      ...(dto.status ? { status: dto.status } : {}),
+      ...(dto.ids ? { _id: { $in: dto.ids.map((id) => new Types.ObjectId(id)) } } : {}),
+    };
 
     const [conflicts, count] = await Promise.all([
       this.conflictModel.find(filter, null, {
@@ -241,8 +253,7 @@ export class ConflictsService {
           DEFAULT_CONFLICT_SORT_FIELD,
           DEFAULT_CONFLICT_SORT_DIRECTION,
         ),
-        skip: dto.skip,
-        limit: dto.limit,
+        ...(dto.ids ? {} : { skip: dto.skip, limit: dto.limit }),
       }),
       this.conflictModel.countDocuments(filter),
     ]);
@@ -863,6 +874,9 @@ export class ConflictsService {
       workflowType: 'resolve-conflict',
       status: handle.status,
       tenantId,
+      // Lets `WorkflowRunPage` cross-link straight back to the conflict this run is gating.
+      subjectId: input.conflictId,
+      subjectType: 'Conflict',
     });
 
     await this.auditService.record({

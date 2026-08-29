@@ -1,17 +1,24 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import {
   ApiError,
   deleteDocument,
   getDocumentById,
   type DocumentWithVersions,
 } from '../../api/client';
+import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import DescriptionList from '../../components/ui/DescriptionList';
+import LinkButton from '../../components/ui/LinkButton';
+import PageHeader from '../../components/ui/PageHeader';
+import Panel from '../../components/ui/Panel';
 import Skeleton from '../../components/ui/Skeleton';
 import Table, { TableHeaderCell } from '../../components/ui/Table';
 import { notify } from '../../components/ui/toast';
+import { useBreadcrumbs } from '../../lib/breadcrumbs';
 import { useSession } from '../../lib/use-session';
+import { INGESTION_TONE } from './ingestion-status';
 import VersionRow from './VersionRow';
 
 export default function DocumentDetail({ id }: { id: string }) {
@@ -48,6 +55,11 @@ export default function DocumentDetail({ id }: { id: string }) {
       });
   }, [id]);
 
+  useBreadcrumbs([
+    { label: 'Data Room', to: '/documents' },
+    { label: doc ? doc.title : 'Document' },
+  ]);
+
   async function handleDelete() {
     if (!doc) return;
     setDeleting(true);
@@ -64,15 +76,15 @@ export default function DocumentDetail({ id }: { id: string }) {
 
   return (
     <div className="view">
-      <div className="page-head">
-        <div>
-          <span className="eyebrow">Evidence</span>
-          <h1 className="page-title">{doc?.title ?? 'Document'}</h1>
-        </div>
-        <Link to="/documents" className="btn btn--secondary btn--sm">
-          Back to data room
-        </Link>
-      </div>
+      <PageHeader
+        eyebrow="Evidence"
+        title={doc?.title ?? 'Document'}
+        actions={
+          <LinkButton to="/documents" variant="secondary" size="sm">
+            Back to data room
+          </LinkButton>
+        }
+      />
 
       {error && (
         <p className="error error--page" role="alert">
@@ -86,18 +98,31 @@ export default function DocumentDetail({ id }: { id: string }) {
 
       {doc && (
         <>
+          <DescriptionList
+            columns={2}
+            items={[
+              { term: 'Source kind', description: doc.sourceKind },
+              { term: 'MIME', description: <span className="mono">{doc.mimeType}</span> },
+              { term: 'Versions', description: doc.versions.length },
+              {
+                term: 'Current',
+                description: (
+                  <>
+                    {`v${doc.currentVersion.versionNumber} `}
+                    <Badge tone={INGESTION_TONE[doc.currentVersion.ingestionStatus]}>
+                      {doc.currentVersion.ingestionStatus}
+                    </Badge>
+                  </>
+                ),
+              },
+            ]}
+          />
+
           <div className="section-head">
             <h2 className="card-title">Versions</h2>
-            <span className="card-meta card-meta--end">{doc.sourceKind}</span>
           </div>
-          <p className="cell-sub mono">{doc.mimeType}</p>
 
-          <section
-            className="panel"
-            tabIndex={0}
-            role="region"
-            aria-label={`Versions of ${doc.title}`}
-          >
+          <Panel aria-label={`Versions of ${doc.title}`}>
             <Table caption={`Versions of ${doc.title}.`}>
               <thead>
                 <tr>
@@ -114,12 +139,12 @@ export default function DocumentDetail({ id }: { id: string }) {
                 ))}
               </tbody>
             </Table>
-          </section>
+          </Panel>
 
-          <section className="card">
-            <div className="card-head">
-              <h2 className="card-title">Delete document</h2>
-            </div>
+          {/* Quiet and deliberately last: a destructive action should be findable, not
+              prominent. */}
+          <section className="card card--danger">
+            <p className="cell-sub">Deleting a document cannot be undone.</p>
             {sessionResolved && !canDelete && (
               <p className="cell-sub">Deleting evidence requires an admin.</p>
             )}

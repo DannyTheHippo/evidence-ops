@@ -33,4 +33,24 @@ describe('CopyButton', () => {
     expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('Copied to clipboard.');
   });
+
+  it('renders icon-only with an aria-label and no visible text when iconOnly is set', () => {
+    render(<CopyButton text="secret-token" iconOnly />);
+
+    const button = screen.getByRole('button', { name: 'Copy' });
+    expect(button).not.toHaveTextContent('Copy');
+  });
+
+  it('resets the copied announcement when the text prop changes, e.g. after a token rotation', async () => {
+    stubClipboard(() => Promise.resolve());
+    const { rerender } = render(<CopyButton text="token-v1" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
+
+    rerender(<CopyButton text="token-v2" />);
+
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('');
+  });
 });

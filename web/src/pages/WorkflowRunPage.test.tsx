@@ -137,6 +137,10 @@ describe('WorkflowRunPage', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('Not yet resumed')).toBeInTheDocument();
 
+    // jsdom has no EventSource in this test, so the connection chip reads the fallback transport
+    // by name while the run is still in flight.
+    expect(screen.getByText('Polling')).toBeInTheDocument();
+
     // The id stays on screen shortened, with the full value recoverable on hover.
     expect(screen.getByTitle('wf-1')).toHaveTextContent('wf-1');
     // No claim of live-to-the-second status, given the API's own 15s cache on this field.
@@ -161,6 +165,8 @@ describe('WorkflowRunPage', () => {
     // This run resumed by a decision made outside this browser tab — `listApprovals()` never
     // hands back a decided approval, so there is no `decidedAt` this page could show.
     expect(within(resumedStep).getByText('Time not recorded')).toBeInTheDocument();
+    // The chip hides once the run is terminal — nothing left to name a transport for.
+    expect(screen.queryByText('Polling')).not.toBeInTheDocument();
   });
 
   it('stops polling once the run reaches a terminal status', async () => {
@@ -202,6 +208,10 @@ describe('WorkflowRunPage', () => {
 
     renderAt('run-1', 1000);
     await tick();
+
+    // `runningRun` carries neither `subjectId` nor `subjectType` — the cross-link to a conflict
+    // never renders without a target to guess.
+    expect(screen.queryByRole('link', { name: 'View conflict' })).not.toBeInTheDocument();
 
     expect(setIntervalSpy).toHaveBeenCalledTimes(1);
 
@@ -273,14 +283,21 @@ describe('WorkflowRunPage', () => {
 
     expect(screen.getByText('Paused — awaiting approval')).toBeInTheDocument();
     expect(source.closed).toBe(false);
+    // The connection chip names the transport, never the data — a live SSE frame reads
+    // "Streaming", not "Live".
+    expect(screen.getByText('Streaming')).toBeInTheDocument();
 
     act(() => {
       source.emit('run', failedRun);
     });
 
     expect(screen.getByText('Resumed — failed')).toBeInTheDocument();
-    expect(screen.getAllByText('Retrieval service returned a 503.')).toHaveLength(2);
+    // Rendered once, at the page level — not a second time on the step that failed.
+    expect(screen.getAllByText('Retrieval service returned a 503.')).toHaveLength(1);
     expect(source.closed).toBe(true);
+    // The chip hides once the run is terminal, in either of its two names.
+    expect(screen.queryByText('Streaming')).not.toBeInTheDocument();
+    expect(screen.queryByText('Polling')).not.toBeInTheDocument();
   });
 
   it('shows a two-step timeline for a sync-source run, with no approval step', async () => {
@@ -308,6 +325,31 @@ describe('WorkflowRunPage', () => {
     expect(screen.queryByText('Awaiting approval')).not.toBeInTheDocument();
     expect(screen.queryByText('Paused — awaiting approval')).not.toBeInTheDocument();
     expect(screen.queryByText('Not yet resumed')).not.toBeInTheDocument();
+  });
+
+  it('links to the conflict a resolve-conflict run acted on, once the run carries a subject', async () => {
+    const runWithSubject = {
+      ...runningRun,
+      workflowType: 'resolve-conflict' as const,
+      subjectId: 'conflict-1',
+      subjectType: 'Conflict',
+    };
+    const me = meRoute(admin);
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const meResponse = me(input);
+      if (meResponse) return meResponse;
+      return Promise.resolve(
+        isRunRequest(input) ? jsonResponse(runWithSubject) : jsonResponse({ docs: [], count: 0 }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderAt('run-1');
+
+    expect(await screen.findByRole('link', { name: 'View conflict' })).toHaveAttribute(
+      'href',
+      '/conflicts?selected=conflict-1',
+    );
   });
 
   it('lets an admin decide the blocking approval directly from the run page', async () => {

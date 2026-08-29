@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { IconMonitor, IconMoon, IconSun } from '../icons';
-import Button from '../ui/Button';
+import IconButton from '../ui/IconButton';
 
 export type ThemePreference = 'system' | 'light' | 'dark';
 
@@ -70,16 +70,14 @@ export function ThemeToggle() {
   };
 
   return (
-    <Button
+    <IconButton
+      icon={<Icon />}
       variant="ghost"
       size="sm"
       className="theme-toggle"
       aria-label={`Theme: ${current.label}. Switch to ${next.label}.`}
       title={`Theme: ${current.label}`}
       onClick={handleCycle}
-    >
-      <Icon />
-      <span>{current.label}</span>
-    </Button>
+    />
   );
 }

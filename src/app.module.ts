@@ -23,6 +23,7 @@ import { WorkflowRunsModule } from './features/evidence/workflow-runs/workflow-r
 import { ApiKeysModule } from './features/platform/api-keys/api-keys.module';
 import { AuditEventsModule } from './features/platform/audit-events/audit-events.module';
 import { AuthzModule } from './features/platform/authz/authz.module';
+import { DashboardModule } from './features/platform/dashboard/dashboard.module';
 import { GlobalExceptionFilter } from './shared/filters/global-exception.filter';
 import { PreAuthThrottlerGuard } from './shared/guards/pre-auth-throttler.guard';
 import { UserThrottlerGuard } from './shared/guards/user-throttler.guard';
@@ -98,6 +99,7 @@ class ThrottlingModule {}
     AuthzModule,
     AuditEventsModule,
     ApiKeysModule,
+    DashboardModule,
   ],
 })
 export class AppModule {

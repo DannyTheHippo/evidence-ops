@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import {
   listAnswers,
   type Answer,
@@ -11,6 +10,7 @@ import { IconFileText } from '../components/icons';
 import RecordListPage, { type RecordListStatus } from '../components/RecordListPage';
 import Badge from '../components/ui/Badge';
 import FilterBar from '../components/ui/FilterBar';
+import LinkButton from '../components/ui/LinkButton';
 import Pager from '../components/ui/Pager';
 import Select from '../components/ui/Select';
 import SortableHeaderCell from '../components/ui/SortableHeaderCell';
@@ -20,6 +20,13 @@ import { answerBadge } from '../lib/answer-status';
 import { useUrlState } from '../lib/use-url-state';
 
 const PAGE_SIZE = 25;
+
+/** Buckets a 0–1 coverage fraction into one of eleven deciles (`0`–`10`) for
+ * `coverage-meter--N`'s fill width — state stays on a modifier class rather than an inline
+ * style. `1` rounds up to its own top decile rather than falling short of a full track. */
+function coverageDecile(coverage: number): number {
+  return Math.min(10, Math.max(0, Math.round(coverage * 10)));
+}
 
 const RUN_STATUS_OPTIONS = [
   { value: '', label: 'All statuses' },
@@ -108,11 +115,7 @@ export default function AnswersPage() {
           icon: <IconFileText size={24} />,
           title: 'No answers yet',
           description: 'Ask a question to see it appear here.',
-          action: (
-            <Link className="btn btn--primary" to="/ask">
-              Ask a question
-            </Link>
-          ),
+          action: <LinkButton to="/ask">Ask a question</LinkButton>,
         };
   } else {
     status = { kind: 'ready' };
@@ -133,8 +136,16 @@ export default function AnswersPage() {
           />
         </FilterBar>
       }
+      toolbarEnd={
+        answers && (
+          <span className="mono cell-sub">
+            {count} answer{count === 1 ? '' : 's'}
+          </span>
+        )
+      }
       error={error ?? undefined}
       status={status}
+      skeletonVariant="table"
       footer={
         answers && (
           <Pager
@@ -198,10 +209,22 @@ export default function AnswersPage() {
                         <Badge tone="caution">citation withdrawn</Badge>
                       )}
                     </TableCell>
-                    <TableCell label="Claim coverage" className="cell-sub">
-                      {typeof answer.claimCoverage === 'number'
-                        ? `${Math.round(answer.claimCoverage * 100)}%`
-                        : '—'}
+                    <TableCell label="Claim coverage">
+                      {typeof answer.claimCoverage === 'number' ? (
+                        <div className="coverage-meter-cell">
+                          <div
+                            className={`coverage-meter coverage-meter--${coverageDecile(answer.claimCoverage)}`}
+                            aria-hidden="true"
+                          >
+                            <div className="coverage-meter-fill" />
+                          </div>
+                          <span className="mono cell-sub">
+                            {Math.round(answer.claimCoverage * 100)}%
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="cell-sub">—</span>
+                      )}
                     </TableCell>
                     <TableCell label="Created" className="cell-sub">
                       <Timestamp value={answer.createdAt} />

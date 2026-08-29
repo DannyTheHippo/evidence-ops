@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 import type { Answer } from '../api/client';
 import type { ResolvedVersion } from '../lib/document-index';
@@ -308,5 +308,125 @@ describe('AnswerView', () => {
     );
 
     expect(screen.queryByText(/dropped/)).not.toBeInTheDocument();
+  });
+
+  it('maps each insufficient_evidence reasonCode to its one dead-end action', () => {
+    renderView(
+      baseAnswer({
+        outcome: {
+          kind: 'insufficient_evidence',
+          reason: 'No relevant evidence was retrieved.',
+          reasonCode: 'no_relevant_evidence',
+        },
+      }),
+    );
+
+    expect(screen.getByRole('link', { name: 'Add or sync sources' })).toHaveAttribute(
+      'href',
+      '/sources',
+    );
+  });
+
+  it('maps retrieved_evidence_contradicts_itself to the conflicts queue', () => {
+    renderView(
+      baseAnswer({
+        outcome: {
+          kind: 'insufficient_evidence',
+          reason: 'The retrieved evidence contradicts itself.',
+          reasonCode: 'retrieved_evidence_contradicts_itself',
+        },
+      }),
+    );
+
+    expect(screen.getByRole('link', { name: 'Check the conflicts queue' })).toHaveAttribute(
+      'href',
+      '/conflicts',
+    );
+  });
+
+  it('maps evidence_does_not_address_question to a rephrase link carrying the question as router state', () => {
+    function LocationProbe() {
+      const location = useLocation();
+      return (
+        <output aria-label="current location">
+          {location.pathname}::{JSON.stringify(location.state)}
+        </output>
+      );
+    }
+
+    render(
+      <MemoryRouter>
+        <AnswerView
+          answer={baseAnswer({
+            questionText: 'What is the cap rate?',
+            outcome: {
+              kind: 'insufficient_evidence',
+              reason: 'The evidence does not address the question.',
+              reasonCode: 'evidence_does_not_address_question',
+            },
+          })}
+          documentIndex={new Map()}
+          conflictChunkIndex={new Map()}
+        />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole('link', { name: 'Rephrase the question' }));
+
+    expect(screen.getByRole('status', { name: 'current location' })).toHaveTextContent(
+      `/ask::${JSON.stringify({ questionText: 'What is the cap rate?' })}`,
+    );
+  });
+
+  it('anchors to the dropped-claims band when no reasonCode is present but claims were dropped', () => {
+    renderView(
+      baseAnswer({
+        outcome: {
+          kind: 'insufficient_evidence',
+          reason: 'grounding gate verified 0 of 1 claim(s); every citation failed verification',
+        },
+        verificationReport: {
+          verifiedClaimCount: 0,
+          totalClaimCount: 1,
+          droppedClaims: [
+            { statement: 'Occupancy is 95%.', reason: 'No retrieved chunk supports this figure.' },
+          ],
+        },
+      }),
+    );
+
+    expect(screen.getByRole('link', { name: 'Review the dropped claims' })).toHaveAttribute(
+      'href',
+      '#dropped-claims',
+    );
+  });
+
+  it('renders no dead-end action for an abstention with no dropped claims and no reasonCode', () => {
+    renderView(
+      baseAnswer({
+        outcome: { kind: 'insufficient_evidence', reason: 'No evidence found.' },
+      }),
+    );
+
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it('offers a Review conflict handoff per conflictId on a conflicting_evidence outcome', () => {
+    renderView(
+      baseAnswer({
+        conflictIds: ['conflict-1', 'conflict-2'],
+        outcome: {
+          kind: 'conflicting_evidence',
+          factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+          values: [],
+        },
+      }),
+    );
+
+    const links = screen.getAllByRole('link', { name: 'Review conflict' });
+    expect(links).toHaveLength(2);
+    expect(links[0]).toHaveAttribute('href', '/conflicts?selected=conflict-1');
+    expect(links[1]).toHaveAttribute('href', '/conflicts?selected=conflict-2');
   });
 });

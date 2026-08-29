@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type DragEvent } from 'react';
 import {
   documentEventsUrl,
   listDocuments,
@@ -9,22 +9,28 @@ import {
   type EvidenceDocument,
   type SortDirection,
 } from '../../api/client';
-import Badge, { type BadgeTone } from '../../components/ui/Badge';
+import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import EmptyState from '../../components/ui/EmptyState';
 import Field from '../../components/ui/Field';
 import FilterBar from '../../components/ui/FilterBar';
+import PageHeader from '../../components/ui/PageHeader';
 import Pager from '../../components/ui/Pager';
+import Panel from '../../components/ui/Panel';
 import Select from '../../components/ui/Select';
 import Skeleton from '../../components/ui/Skeleton';
 import SortableHeaderCell from '../../components/ui/SortableHeaderCell';
 import Table, { RowLink, TableCell, TableHeaderCell, TableRow } from '../../components/ui/Table';
+import Toolbar from '../../components/ui/Toolbar';
 import { notify } from '../../components/ui/toast';
 import { IconFolder } from '../../components/icons';
 import { workbenchHref } from '../../lib/citation-link';
 import { useEventStream } from '../../lib/use-event-stream';
+import { useFormSubmit } from '../../lib/use-form-submit';
 import { useUrlState } from '../../lib/use-url-state';
 import { formatBytes } from './format-size';
+import { INGESTION_TONE } from './ingestion-status';
+import UploadQueue, { type QueueRow } from './UploadQueue';
 
 const POLL_INTERVAL_MS = 3000;
 const PAGE_SIZE = 20;
@@ -49,19 +55,14 @@ const INGESTION_STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: 'facts-failed', label: 'No facts extracted' },
 ];
 
-// 'needs-ocr' and 'facts-failed' carry the same 'caution' tone as 'pending', each deliberately: a
-// scanned PDF with no text layer is a gap in the corpus to flag for attention, and a 'facts-failed'
-// version has real, citable chunks and only lacks extracted facts. Neither is the
-// verification-grade failure 'rejected' signals elsewhere in this app. A total map rather than a
-// fallthrough, so a status added to the API's union fails the type-check here instead of silently
-// inheriting a tone nobody chose for it.
-const INGESTION_TONE: Record<DocumentVersionIngestionStatus, BadgeTone> = {
-  pending: 'caution',
-  completed: 'verified',
-  'facts-failed': 'caution',
-  failed: 'rejected',
-  'needs-ocr': 'caution',
-};
+// Mirrors UPLOAD_EXTENSION_ALLOWLIST in documents.constant.ts — the nine kinds the upload gate
+// accepts. A narrower list here hides formats the server would take; a wider one only reaches the
+// server's own rejection, since this pre-check is a courtesy, not the authority.
+const UPLOAD_ACCEPT = '.pdf,.docx,.xlsx,.pptx,.csv,.tsv,.txt,.md,.eml';
+const UPLOAD_ALLOWED_EXTENSIONS = UPLOAD_ACCEPT.split(',');
+
+// Mirrors MAX_FILE_SIZE_BYTES in documents.constant.ts.
+const MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024;
 
 // Declared at module scope: `useUrlState` adopts `defaults` once on mount and keeps that
 // identity, but only needs it stable in value — a module-level object satisfies both.
@@ -72,6 +73,28 @@ const URL_DEFAULTS: Record<'ingestionStatus' | 'sort' | 'sortDir' | 'skip', stri
   skip: '0',
 };
 
+type UploadField = 'files';
+
+function fileExtension(fileName: string): string {
+  const dot = fileName.lastIndexOf('.');
+  return dot === -1 ? '' : fileName.slice(dot).toLowerCase();
+}
+
+// A courtesy check the server re-enforces authoritatively. Drag-and-drop bypasses the file input's
+// own `accept` attribute entirely, so this is the only thing standing between a dropped file and a
+// doomed request for either failure mode below.
+function precheckUploadFile(file: File): string | null {
+  if (!UPLOAD_ALLOWED_EXTENSIONS.includes(fileExtension(file.name))) {
+    return 'Unsupported file type.';
+  }
+  if (file.size > MAX_UPLOAD_SIZE_BYTES) {
+    return 'File exceeds the 50 MB limit.';
+  }
+  return null;
+}
+
+// Deliberately not RecordListPage: this page owns an SSE subscription and an upload region the
+// shared list-page scaffold has no slot for. Do not fold it onto RecordListPage in a later sweep.
 export default function DocumentList() {
   const [urlState, setUrlState] = useUrlState(URL_DEFAULTS);
   const appliedIngestionStatus = urlState.ingestionStatus as DocumentVersionIngestionStatus | '';
@@ -87,13 +110,12 @@ export default function DocumentList() {
   const [draftIngestionStatus, setDraftIngestionStatus] = useState(appliedIngestionStatus);
   const [title, setTitle] = useState('');
   const [sourceClass, setSourceClass] = useState<DocumentSourceClass | ''>('');
-  const [files, setFiles] = useState<File[]>([]);
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  // Blocks a double submit between the click and the re-render that disables the submit button —
-  // `disabled={uploading}` alone only takes effect once React has committed it, and each upload
-  // creates a real document.
-  const uploadInFlightRef = useRef(false);
+  const [queue, setQueue] = useState<QueueRow[]>([]);
+  const [dragOver, setDragOver] = useState(false);
+  // Keyed by QueueRow.id, holding only the rows currently 'queued' — a row that failed its client
+  // pre-check never gets an entry here, and a submitted row's entry is removed once it settles.
+  const pendingFilesRef = useRef<Map<string, File>>(new Map());
+  const nextRowIdRef = useRef(0);
 
   const refetch = useCallback(() => {
     listDocuments({
@@ -157,41 +179,97 @@ export default function DocumentList() {
     return () => clearInterval(timer);
   }, [streamState, hasPending, refetch]);
 
-  async function handleUpload(e: FormEvent<HTMLFormElement>) {
+  function addUploadFiles(incoming: File[]) {
+    const additions: QueueRow[] = incoming.map((file) => {
+      const id = String(nextRowIdRef.current++);
+      const failure = precheckUploadFile(file);
+      if (failure) {
+        return { id, fileName: file.name, state: { kind: 'failed', message: failure } };
+      }
+      pendingFilesRef.current.set(id, file);
+      return { id, fileName: file.name, state: { kind: 'queued' } };
+    });
+    setQueue((rows) => [...rows, ...additions]);
+  }
+
+  function handleFileInputChange(e: ChangeEvent<HTMLInputElement>) {
+    addUploadFiles(Array.from(e.target.files ?? []));
+    // Clears the native control so selecting the same file again still fires a change event —
+    // the file itself already lives in the queue, not in the input's own selection anymore.
+    e.target.value = '';
+  }
+
+  function handleDragOver(e: DragEvent<HTMLElement>) {
     e.preventDefault();
-    if (files.length === 0) return;
-    if (uploadInFlightRef.current) return;
-    uploadInFlightRef.current = true;
-    setUploading(true);
-    setUploadError(null);
-    // Sequential, not Promise.all — accumulate one error per file rather than letting an early
-    // rejection hide the others, and avoid hammering the upload endpoint concurrently.
-    const errors: string[] = [];
-    for (const uploadFile of files) {
+    setDragOver(true);
+  }
+
+  function handleDragLeave() {
+    setDragOver(false);
+  }
+
+  function handleDrop(e: DragEvent<HTMLElement>) {
+    e.preventDefault();
+    setDragOver(false);
+    addUploadFiles(Array.from(e.dataTransfer.files));
+  }
+
+  function updateQueueRow(id: string, state: QueueRow['state']) {
+    setQueue((rows) => rows.map((row) => (row.id === id ? { ...row, state } : row)));
+  }
+
+  function validateUpload(): Partial<Record<UploadField, string>> {
+    const hasQueuedFile = queue.some((row) => row.state.kind === 'queued');
+    return hasQueuedFile ? {} : { files: 'Select at least one file to upload.' };
+  }
+
+  async function submitUpload() {
+    const batch = queue.filter((row) => row.state.kind === 'queued');
+    let uploadedCount = 0;
+    for (const row of batch) {
+      const file = pendingFilesRef.current.get(row.id);
+      if (!file) continue;
+      updateQueueRow(row.id, { kind: 'uploading' });
       try {
-        await uploadDocument(uploadFile, {
+        await uploadDocument(file, {
           title: title || undefined,
           sourceClass: sourceClass || undefined,
         });
-      } catch (err: unknown) {
-        errors.push(`${uploadFile.name}: ${err instanceof Error ? err.message : 'Upload failed'}`);
+        uploadedCount += 1;
+        updateQueueRow(row.id, { kind: 'uploaded' });
+      } catch (err) {
+        // The message an ApiError carries already folds in any per-field detail the server sent —
+        // this row's own file name is what disambiguates it from every other row, so nothing here
+        // needs to re-mention the title uploadDocument may have silently substituted for it.
+        updateQueueRow(row.id, {
+          kind: 'failed',
+          message: err instanceof Error ? err.message : 'Upload failed',
+        });
+      } finally {
+        pendingFilesRef.current.delete(row.id);
       }
     }
-    const uploadedCount = files.length - errors.length;
-    setTitle('');
-    setSourceClass('');
-    setFiles([]);
-    setUploading(false);
-    uploadInFlightRef.current = false;
     refetch();
+    // Cleared only once the outcome is known, and only once at least one file actually uploaded —
+    // a batch that fails outright leaves title and source class exactly as typed, so retrying
+    // never means retyping them.
     if (uploadedCount > 0) {
+      setTitle('');
+      setSourceClass('');
       notify(
         'success',
         uploadedCount === 1 ? 'Uploaded 1 file.' : `Uploaded ${uploadedCount} files.`,
       );
     }
-    if (errors.length > 0) setUploadError(errors.join('; '));
   }
+
+  // No ErrorSummary: the file control is the only field that can fail client-side, and a per-file
+  // server failure belongs on its own row in the queue, not folded into a summary block.
+  const { pending, onSubmit, fieldProps } = useFormSubmit<UploadField>({
+    validate: validateUpload,
+    submit: submitUpload,
+  });
+  const filesField = fieldProps('files');
 
   function handleFilterApply() {
     setUrlState({ ingestionStatus: draftIngestionStatus, skip: URL_DEFAULTS.skip });
@@ -210,80 +288,110 @@ export default function DocumentList() {
   }
 
   const hasFilter = appliedIngestionStatus !== '';
+  // Makes the ADR-0017 stream pause visible rather than leaving the page silently stale: a filter
+  // or non-default sort always disables the stream, independent of whatever `streamState` itself
+  // reads, so that case is checked first.
+  const statusLine = !isDefaultView
+    ? 'updates paused — filter or sort applied'
+    : streamState === 'fallback'
+      ? 'polling'
+      : 'live';
 
   return (
     <div className="view">
-      <div className="page-head">
-        <div>
-          <span className="eyebrow">Evidence</span>
-          <h1 className="page-title">Data Room</h1>
-          <p className="page-sub">Upload source documents and track ingestion.</p>
+      <PageHeader
+        eyebrow="Evidence"
+        title="Data Room"
+        description="Upload source documents and track ingestion."
+      />
+
+      <div className="split-view split-view--upload">
+        <div className="split-view-pane">
+          {/* The whole card is a drag-and-drop target, as a progressive enhancement over the
+              native file input below — which stays visible and keyboard-operable rather than
+              being replaced, since a drop target that hides the input would strand a keyboard
+              user. */}
+          <section
+            className="card upload-card"
+            data-dragover={dragOver || undefined}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
+            <div className="card-head">
+              <h2 className="card-title">Upload</h2>
+            </div>
+            <form onSubmit={onSubmit} className="form" noValidate>
+              <Field label="Title" hint="Applies to every file in this batch" optional>
+                {(inputProps) => (
+                  <input
+                    type="text"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder="Q3 Rent Roll"
+                    {...inputProps}
+                  />
+                )}
+              </Field>
+              <Select
+                label="Source class"
+                hint="Authority for future conflicts on this metric. Leave unset for unclassified."
+                options={SOURCE_CLASS_OPTIONS}
+                value={sourceClass}
+                onChange={(value) => setSourceClass(value as DocumentSourceClass | '')}
+              />
+              <Field
+                id={filesField.id}
+                label="File"
+                hint="PDF, Word, Excel, PowerPoint, CSV, TSV, Markdown, text or Email, up to 50 MB each"
+                error={filesField.error}
+              >
+                {(inputProps) => (
+                  <input
+                    type="file"
+                    required
+                    multiple
+                    accept={UPLOAD_ACCEPT}
+                    onChange={handleFileInputChange}
+                    onBlur={filesField.onBlur}
+                    {...inputProps}
+                  />
+                )}
+              </Field>
+              <div className="form-actions">
+                <Button type="submit" disabled={pending}>
+                  {pending ? 'Uploading…' : 'Upload'}
+                </Button>
+              </div>
+            </form>
+          </section>
+        </div>
+        <div className="split-view-pane">
+          <UploadQueue rows={queue} />
         </div>
       </div>
 
-      <section className="card">
-        <div className="card-head">
-          <h2 className="card-title">Upload</h2>
-        </div>
-        <form onSubmit={(e) => void handleUpload(e)} className="form">
-          <Field label="Title">
-            {(inputProps) => (
-              <input
-                type="text"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="Q3 Rent Roll"
-                {...inputProps}
-              />
-            )}
-          </Field>
-          <Select
-            label="Source class"
-            hint="Authority for future conflicts on this metric. Leave unset for unclassified."
-            options={SOURCE_CLASS_OPTIONS}
-            value={sourceClass}
-            onChange={(value) => setSourceClass(value as DocumentSourceClass | '')}
-          />
-          {/* Mirrors UPLOAD_EXTENSION_ALLOWLIST in documents.constant.ts — the nine kinds the
-              upload gate accepts. A narrower list here hides formats the server would take. */}
-          <Field
-            label="File"
-            hint="PDF, Word, Excel, PowerPoint, CSV, TSV, Markdown, text or Email, up to 50 MB each"
-          >
-            {(inputProps) => (
-              <input
-                type="file"
-                required
-                multiple
-                accept=".pdf,.docx,.xlsx,.pptx,.csv,.tsv,.txt,.md,.eml"
-                onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
-                {...inputProps}
-              />
-            )}
-          </Field>
-          <div className="form-actions">
-            <Button type="submit" disabled={uploading || files.length === 0}>
-              {uploading ? 'Uploading…' : 'Upload'}
-            </Button>
-          </div>
-        </form>
-        {uploadError && (
-          <p className="error" role="alert">
-            {uploadError}
-          </p>
-        )}
-      </section>
-
-      <FilterBar onApply={handleFilterApply} onClear={handleFilterClear} hasFilter={hasFilter}>
-        <Select
-          label="Ingestion status"
-          options={INGESTION_STATUS_OPTIONS}
-          value={draftIngestionStatus}
-          onChange={(value) =>
-            setDraftIngestionStatus(value as DocumentVersionIngestionStatus | '')
-          }
-        />
-      </FilterBar>
+      <Toolbar
+        start={
+          <FilterBar onApply={handleFilterApply} onClear={handleFilterClear} hasFilter={hasFilter}>
+            <Select
+              label="Ingestion status"
+              options={INGESTION_STATUS_OPTIONS}
+              value={draftIngestionStatus}
+              onChange={(value) =>
+                setDraftIngestionStatus(value as DocumentVersionIngestionStatus | '')
+              }
+            />
+          </FilterBar>
+        }
+        end={
+          documents && (
+            <span className="mono cell-sub" role="status">
+              {count} {count === 1 ? 'document' : 'documents'} · {statusLine}
+            </span>
+          )
+        }
+      />
 
       {error && (
         <p className="error error--page" role="alert">
@@ -310,12 +418,7 @@ export default function DocumentList() {
       )}
 
       {documents && documents.length > 0 && (
-        <section
-          className="panel"
-          tabIndex={0}
-          role="region"
-          aria-label="Documents uploaded to the data room, with their ingestion status"
-        >
+        <Panel aria-label="Documents uploaded to the data room, with their ingestion status">
           <Table caption="Documents uploaded to the data room, with their ingestion status.">
             <thead>
               <tr>
@@ -326,6 +429,7 @@ export default function DocumentList() {
                   direction={sortDir}
                   onSort={handleSort}
                 />
+                <TableHeaderCell>Ingestion</TableHeaderCell>
                 <SortableHeaderCell<DocumentSortField>
                   field="sourceKind"
                   label="Source"
@@ -335,7 +439,6 @@ export default function DocumentList() {
                 />
                 <TableHeaderCell>Version</TableHeaderCell>
                 <TableHeaderCell>Size</TableHeaderCell>
-                <TableHeaderCell>Ingestion</TableHeaderCell>
               </tr>
             </thead>
             <tbody>
@@ -349,6 +452,14 @@ export default function DocumentList() {
                     <TableCell label="Title">
                       <RowLink to={href}>{doc.title}</RowLink>
                     </TableCell>
+                    <TableCell label="Ingestion">
+                      <Badge tone={INGESTION_TONE[doc.currentVersion.ingestionStatus]}>
+                        {doc.currentVersion.ingestionStatus}
+                      </Badge>
+                      {doc.currentVersion.ingestionFailureReason && (
+                        <p className="cell-sub">{doc.currentVersion.ingestionFailureReason}</p>
+                      )}
+                    </TableCell>
                     <TableCell label="Source">
                       {doc.sourceKind}
                       <p className="cell-sub">{doc.mimeType}</p>
@@ -359,20 +470,12 @@ export default function DocumentList() {
                     <TableCell label="Size" className="num">
                       {formatBytes(doc.currentVersion.sizeBytes)}
                     </TableCell>
-                    <TableCell label="Ingestion">
-                      <Badge tone={INGESTION_TONE[doc.currentVersion.ingestionStatus]}>
-                        {doc.currentVersion.ingestionStatus}
-                      </Badge>
-                      {doc.currentVersion.ingestionFailureReason && (
-                        <p className="cell-sub">{doc.currentVersion.ingestionFailureReason}</p>
-                      )}
-                    </TableCell>
                   </TableRow>
                 );
               })}
             </tbody>
           </Table>
-        </section>
+        </Panel>
       )}
 
       {documents && (

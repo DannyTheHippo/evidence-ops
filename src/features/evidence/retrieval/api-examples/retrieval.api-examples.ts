@@ -10,6 +10,8 @@ const exampleChunk = {
   locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 3 },
   documentId: '65f1c2e4a1b2c3d4e5f6a7b8',
   documentTitle: 'Northgate Business Park — Q3 Rent Roll',
+  sourceClass: 'report',
+  documentCreatedAt: '2026-07-01T00:00:00.000Z',
   score: 0.0164,
 };
 

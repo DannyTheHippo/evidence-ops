@@ -388,3 +388,868 @@
 .evidence-chunk-text {
   margin: var(--space-1) 0;
 }
+
+/* ── Auth ────────────────────────────────────────────────────────────────── */
+
+/* The frame LoginPage and InvitePage draw before any session exists — no sidebar or topbar to sit
+   inside, so this owns the whole viewport instead of `.container`. Centred by grid; at the ≤560px
+   breakpoint it top-aligns instead, so an opening on-screen keyboard shrinking the viewport never
+   re-centres the card and jumps the layout underneath a visitor's thumb. */
+.auth-view {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: var(--space-6);
+}
+.auth-canvas {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-6);
+  width: 100%;
+  max-width: var(--dialog-w-sm);
+}
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+}
+.brand-wordmark {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--text-lg);
+}
+/* No box-shadow: elevation in this design language means "floats above the page", which a static
+   page panel never does — `.card`'s own hairline border is the only edge this needs. */
+.card--auth {
+  width: 100%;
+  max-width: var(--dialog-w-sm);
+}
+.auth-alt {
+  text-align: center;
+}
+/* The one signal control on either page — full width so it reads as the primary action rather
+   than one button among several. */
+.auth-submit {
+  width: 100%;
+}
+
+@media (max-width: 560px) {
+  .auth-view {
+    align-items: start;
+    padding-top: var(--space-8);
+  }
+}
+
+/* ── Ask composer ────────────────────────────────────────────────────────── */
+
+/* The composer is the full-width, untitled `.card` AskPage.tsx renders — see that file's own
+   comment for why it carries no heading. Everything below styles what sits inside it. */
+.composer-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+/* --control-h-hero is the one sanctioned exception to the app's --control-h control height, spent
+   here and nowhere else — this is the core moment the whole interface exists for, and it is the
+   only input that earns a taller target than every other field in the app. */
+.composer-input {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-h-hero);
+  padding: 0 var(--control-pad-x);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: var(--text-md);
+}
+.composer-input:hover {
+  border-color: var(--muted);
+}
+.composer-input:focus-visible {
+  outline: none;
+  border-color: var(--signal);
+  box-shadow: var(--ring);
+}
+.composer-input:disabled {
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+/* Matches --control-h-hero so the button reads as one control alongside the input, not a
+   shorter one riding beside it. */
+.composer-ask {
+  height: var(--control-h-hero);
+}
+.composer-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+.composer-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.composer-hint kbd {
+  font-family: var(--font-mono);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-xs);
+  padding: 0 var(--space-1);
+}
+.composer-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* ── RunStageStrip ───────────────────────────────────────────────────────── */
+/* Rotates ProvenanceRail's filled/pulsing/outline marker language horizontal, joined by a
+   hairline connector rather than rail.css's vertical border-left thread. */
+
+.run-stage-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+.run-stage-strip--exiting {
+  animation: run-stage-strip-exit var(--motion-enter) var(--ease-in) forwards;
+}
+@keyframes run-stage-strip-exit {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+.run-stage-list {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.run-stage {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+/* The horizontal connector between one stage and the next — rail.css's border-left thread rotated
+   90 degrees, drawn between markers rather than beside them. */
+.run-stage:not(:last-child)::after {
+  content: '';
+  flex: 1;
+  height: var(--rail-width);
+  background: var(--rail-line-idle);
+  margin: 0 var(--space-2);
+}
+.run-stage-marker {
+  display: inline-block;
+  width: var(--rail-node-size);
+  height: var(--rail-node-size);
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--rail-line-idle);
+}
+.run-stage--filled {
+  color: var(--ink-dim);
+}
+.run-stage--filled .run-stage-marker {
+  background: var(--rail-line-verified);
+  border-color: var(--rail-line-verified);
+}
+.run-stage--filled:not(:last-child)::after {
+  background: var(--rail-line-verified);
+}
+.run-stage--pulsing {
+  color: var(--ink);
+  font-weight: 600;
+}
+.run-stage--pulsing .run-stage-marker {
+  background: var(--signal);
+  border-color: var(--signal);
+  animation: pulse var(--motion-pulse) ease-out infinite;
+}
+.run-stage-timer {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+/* ── Get-started stepper ─────────────────────────────────────────────────── */
+
+/* The first-run checklist's ordered list. `<ol>` semantics announce each step's position for
+   free, so the numbered marker below is decorative rather than the only source of that count. */
+.stepper {
+  list-style: none;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+/* Same border-left-carries-state language as `.timeline-step`/`.ledger-outcome` above, on the
+   same `--rail-line-*` tokens, so a done step reads as the same species of signal as a reached
+   timeline step or a verified ledger outcome. */
+.stepper-step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--rail-line-idle);
+  border-radius: var(--radius-sm);
+}
+.stepper-step.is-done {
+  border-left-color: var(--rail-line-verified);
+}
+.stepper-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  font-weight: 600;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.stepper-step.is-done .stepper-marker {
+  color: var(--status-verified-ink);
+  border-color: var(--rail-line-verified);
+}
+.stepper-label {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── W5c: answers list, answer detail, answer apparatus ─────────────────── */
+
+/* A compact claim-coverage indicator for a table cell: a short hairline track plus the mono
+   percentage that carries the accessible value — the track itself is `aria-hidden`, decorative
+   only. `--coverage-meter-w` is expressed as a token sum rather than a bare pixel literal so the
+   styles contract's bare-px sweep never has to special-case it. */
+.coverage-meter-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.coverage-meter {
+  width: calc(var(--space-8) + var(--space-4));
+  height: var(--ledger-bar-height);
+  flex-shrink: 0;
+  background: var(--surface-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+.coverage-meter-fill {
+  height: 100%;
+  background: var(--signal);
+}
+/* One rule per decile — width stays a modifier class, never an inline style. */
+.coverage-meter--0 .coverage-meter-fill {
+  width: 0%;
+}
+.coverage-meter--1 .coverage-meter-fill {
+  width: 10%;
+}
+.coverage-meter--2 .coverage-meter-fill {
+  width: 20%;
+}
+.coverage-meter--3 .coverage-meter-fill {
+  width: 30%;
+}
+.coverage-meter--4 .coverage-meter-fill {
+  width: 40%;
+}
+.coverage-meter--5 .coverage-meter-fill {
+  width: 50%;
+}
+.coverage-meter--6 .coverage-meter-fill {
+  width: 60%;
+}
+.coverage-meter--7 .coverage-meter-fill {
+  width: 70%;
+}
+.coverage-meter--8 .coverage-meter-fill {
+  width: 80%;
+}
+.coverage-meter--9 .coverage-meter-fill {
+  width: 90%;
+}
+.coverage-meter--10 .coverage-meter-fill {
+  width: 100%;
+}
+
+/* The AnswerDetailPage title is the question text itself, not a short static label — it wraps
+   at the same reading measure as any other page prose rather than running the header's full
+   width. Scoped to this one page rather than `.page-title` globally, since every other page's
+   title is short enough that a cap would never engage. */
+.answer-detail .page-title {
+  max-width: var(--measure-reading);
+}
+.answer-detail-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  margin: var(--space-2) 0 0;
+}
+
+/* One next step for an insufficient-evidence outcome with no menu of options — `AnswerView`
+   resolves `reasonCode` to exactly one action before rendering this wrapper. */
+.dead-end-action {
+  margin-top: var(--space-4);
+}
+
+/* The conflicting-evidence handoff: one "Review conflict" link per id the answer names, styled
+   as a plain list rather than `.form-actions` since it is not a form's own action row. */
+.conflict-handoff {
+  list-style: none;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+/* The admin-only run-cost line, set off from the apparatus above it by a hairline rather than a
+   full card boundary — a footnote to the answer, not a section of its own. */
+.run-cost-footer {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--hairline);
+}
+
+/* ── W7a: document detail & fidelity notice ─────────────────────────────── */
+
+/* A version's or document's fidelity gaps, set off from the ingestion badge above it by a
+   hairline rather than the thicker state-carrying rail `.ledger-outcome`/`.timeline-step` use —
+   this is a footnote alongside a status, not the status itself. */
+.fidelity-notice {
+  margin-top: var(--space-2);
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--hairline-strong);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* The document detail page's delete section: a quiet, hairline-bordered card in the danger
+   tone rather than a filled caution band — a destructive action should be findable at the foot
+   of the page, not prominent. */
+.card--danger {
+  border-color: var(--status-reject-line);
+}
+.card--danger .form-actions {
+  justify-content: flex-end;
+}
+
+/* ── W7c: document workbench & evidence reader ──────────────────────────── */
+
+/* The reading-surface variant: capped to the shared reading measure and set in the reading
+   line-height, unlike the rail variant, which keeps its existing, denser default. */
+.evidence-reader--reading {
+  max-width: var(--measure-reading);
+}
+.evidence-reader--reading .evidence-chunk-text {
+  font-size: var(--text-base);
+  line-height: var(--leading-snug);
+}
+
+/* A group's summary as a full-width row — its own locator on the left, a mono chunk count on the
+   right — rather than the bare label a native <summary> renders alone. */
+.evidence-group summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border-top: 1px solid var(--hairline);
+  padding: var(--space-2) 0;
+}
+.evidence-group:first-of-type summary {
+  border-top: none;
+}
+
+/* Fades a group's revealed chunks in on open. A <details> element's content moves between
+   display: none and displayed as the browser toggles `open`, and a CSS animation restarts on
+   every such display change — no JS listener is needed to retrigger it per toggle. */
+.evidence-chunk-list {
+  animation: evidence-group-content-enter var(--motion-enter-sm) ease-out;
+}
+@keyframes evidence-group-content-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* The copy control reads as secondary chrome until the chunk it belongs to is actually in play —
+   dimmed at rest, restored on hover or on focus-within so a keyboard user tabbing onto the button
+   itself sees it at full strength rather than relying on a hover it can never produce. */
+.evidence-chunk .form-actions .btn--secondary {
+  color: var(--ink-dim);
+}
+.evidence-chunk:hover .form-actions .btn--secondary,
+.evidence-chunk:focus-within .form-actions .btn--secondary {
+  color: var(--ink);
+}
+
+/* The deep-link landing chunk: an inset rail rather than a border, so it costs no layout shift; a
+   scroll margin clearing sticky chrome per WCAG 2.2 SC 2.4.11; and a one-time settle fade driven
+   entirely by @starting-style rather than a JS-triggered animation, so base.css's
+   prefers-reduced-motion query remains the single switch that can turn it off. */
+.evidence-chunk[aria-current='location'] {
+  scroll-margin-top: var(--scroll-margin-sticky);
+  box-shadow: inset 2px 0 0 var(--signal-line);
+  transition:
+    opacity var(--motion-enter-sm) ease-out,
+    background var(--motion-enter-sm) ease-out;
+}
+@starting-style {
+  .evidence-chunk[aria-current='location'] {
+    opacity: 0;
+    background: transparent;
+  }
+}
+
+/* ── W7b: document list & upload restructure ────────────────────────────── */
+
+/* The upload form and its queue standing side by side — the form narrow enough that it never
+   competes with the queue for a reader's attention, the queue taking whatever room is left.
+   Collapses to one column at 1023px via `.split-view`'s own shared media query. */
+.split-view--upload {
+  grid-template-columns: 360px 1fr;
+}
+
+/* Drag-and-drop is a progressive enhancement over the native file input the card still shows —
+   the border is the whole affordance, so it only needs a colour change, not a layout shift that
+   would jump content under a pointer mid-drag. */
+.upload-card {
+  transition: border-color var(--motion-press) ease;
+}
+.upload-card[data-dragover] {
+  border-color: var(--signal-line);
+}
+
+/* The upload queue: a persistent record of a batch's outcome, standing beside the form rather
+   than a toast that would disappear before "3 of 5 uploaded" could be read. */
+.upload-queue {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.upload-queue-empty {
+  margin: 0;
+}
+.upload-queue-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--density-row) 0;
+  border-top: 1px solid var(--hairline);
+}
+.upload-queue-row:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.upload-queue-name {
+  overflow-wrap: anywhere;
+}
+/* Forces the failure message onto its own line below the name/badge pair, rather than wrapping
+   awkwardly between them. */
+.upload-queue-message {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+/* ── W8b: QueueList & approvals queue ────────────────────────────────────── */
+
+/* The three fixed slots inside a `QueueList` row (`card queue-item`): identity (title plus a
+   status badge), quantifier, and age. `.queue-item-identity`'s `:first-child` gets `min-width: 0`
+   for the same reason `.card-head` does — a flex item's default auto minimum is its content size,
+   which would push the row wider than the card instead of letting the title ellipsis. */
+.queue-item-identity {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.queue-item-identity > :first-child {
+  min-width: 0;
+}
+.queue-item-quantifier {
+  margin-top: var(--space-1);
+  color: var(--ink-dim);
+  font-size: var(--text-sm);
+}
+.queue-item-age {
+  margin-top: var(--space-1);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+/* Selected state for a `QueueList` row, keyed off `aria-current` rather than an `.is-active`
+   modifier class — the ARIA attribute already carries the semantic, so nothing here duplicates it
+   on a class React would otherwise have to keep in sync. Same `--signal-soft`/`--signal-line`
+   pairing as the table's own selected-row treatment, plus a left inset marking the row as current
+   the way a vertical rule marks the active item in a nav list. */
+.queue-item[aria-current='true'] {
+  border-color: var(--signal-line);
+  border-left: 2px solid var(--signal-line);
+  background: var(--signal-soft);
+}
+
+/* ── Search composer ─────────────────────────────────────────────────────── */
+
+/* The full-width, untitled `.card` SearchPage.tsx renders above its filters — see that file's own
+   comment for why it carries no heading. Sits at the app's ordinary --control-h, not
+   --control-h-hero: Search and Ask are visual siblings with distinct promises, and only Ask earns
+   the taller hero control. */
+.search-composer-row {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.search-composer-row .field {
+  flex: 1;
+  min-width: 0;
+}
+.search-composer-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* The countdown moved off the button and onto its own chip so the button's accessible name stops
+   changing every second while disabled; aria-hidden on the caller's span keeps this decorative for
+   assistive tech, which already gets the disabled state from the button itself. */
+.search-cooldown-chip {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h);
+  padding: 0 var(--control-pad-x);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.search-ask-link {
+  font-size: var(--text-xs);
+}
+
+/* ── Search result groups ────────────────────────────────────────────────── */
+
+.search-result-group-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.search-result-group-class {
+  font-weight: 600;
+  letter-spacing: var(--tracking-mono-id);
+  text-transform: uppercase;
+}
+/* Locator and citation link on one row, the locator leading and the citation chip trailing —
+   distinct from ProvenanceRail's apparatus-meta, which right-aligns both because it has no
+   leading label to balance against. */
+.search-citation-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* ── W8c: conflicts queue & value comparison ─────────────────────────────── */
+
+/* Overrides the flex-wrap layout declared at the top of this file: a card grid keeps three or
+   more competing values legible side by side, and 220px is the narrowest a card goes before its
+   figure and source line start colliding. */
+.value-compare {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  align-items: start;
+}
+.value-compare-item {
+  position: relative;
+  min-width: 0;
+}
+.value-compare-figure {
+  font-size: var(--text-xl);
+  font-weight: 600;
+}
+.value-compare-item--recommended {
+  border-color: var(--signal-line);
+  background: var(--signal-soft);
+}
+/* Cancels the card's own padding on two sides and the top so the band reads as a ribbon flush
+   with the card's edges, then restores clearance below it so the figure lines up with a
+   non-recommended card's. */
+.value-compare-band {
+  display: block;
+  margin: calc(var(--space-3) * -1) calc(var(--space-4) * -1) var(--space-2);
+  padding: var(--space-1) var(--space-4);
+  background: var(--signal);
+  color: var(--signal-ink);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+/* Withdrawn evidence dims through ink weight, never opacity — opacity composites the card's text
+   with its background and drags the whole card below the AA contrast floor, not just the value. */
+.value-compare-item--withdrawn,
+.value-compare-item--withdrawn .cell-sub {
+  color: var(--ink-dim);
+}
+.value-compare-action {
+  margin-top: var(--space-2);
+}
+
+/* ── W8d: run timeline instrument & connection chip ──────────────────────── */
+
+/* One continuous left rail for a run's steps, replacing the disconnected cards this page rendered
+   before — each step's border-left is the rail line and its ::before is the marker riding on top
+   of it, on the same --rail-* tokens ProvenanceRail's line-plus-marker language uses. */
+.run-rail {
+  list-style: none;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+.run-step {
+  position: relative;
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  border-left: var(--rail-width) solid var(--rail-line-idle);
+  color: var(--ink-dim);
+}
+.run-step::before {
+  content: '';
+  position: absolute;
+  top: var(--space-1);
+  left: calc(var(--rail-node-size) / -2 - var(--rail-width) / 2);
+  width: var(--rail-node-size);
+  height: var(--rail-node-size);
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--rail-line-idle);
+}
+.run-step--done {
+  color: var(--ink);
+  border-left-color: var(--rail-line-verified);
+}
+.run-step--done::before {
+  background: var(--rail-line-verified);
+  border-color: var(--rail-line-verified);
+}
+/* The active marker's ring is its own box-shadow, animated in place, so the pulse never resizes
+   the rail or shifts sibling steps. */
+.run-step--active {
+  color: var(--ink);
+  border-left-color: var(--signal);
+}
+.run-step--active::before {
+  border-color: var(--signal);
+  box-shadow: 0 0 0 0 var(--signal-line);
+  animation: run-step-pulse var(--motion-pulse) ease-out infinite;
+}
+.run-step--rejected {
+  color: var(--ink);
+  border-left-color: var(--status-reject-ink);
+}
+.run-step--rejected::before {
+  background: var(--status-reject-ink);
+  border-color: var(--status-reject-ink);
+}
+@keyframes run-step-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--signal-line);
+  }
+  70% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+/* Names the transport beside the run's status badge, never the data — see WorkflowRunPage.tsx's
+   `connectionChipLabel` for why "Live" is not a word this chip is allowed to use. */
+.connection-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.connection-chip::before {
+  content: '';
+  width: var(--rail-node-size);
+  height: var(--rail-node-size);
+  border-radius: 50%;
+  background: var(--signal-line);
+}
+.connection-chip--polling::before {
+  background: var(--hairline-strong);
+}
+
+/* The awaiting-approval step's action card once a decision is actually pending — signal-soft
+   rather than the generic `.notice--info` this used to borrow, so the page's one primary action
+   reads as the page's focus rather than one more notice among several. */
+.approval-action-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--signal-soft);
+  border: 1px solid var(--signal-line);
+  border-radius: var(--radius-sm);
+}
+.approval-action-card-summary {
+  margin: 0;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* ── W9b: sources list ────────────────────────────────────────────────── */
+/* Wraps SourcesPage's SegmentedControl only — its count renders through a shared, unstyled
+   aria-hidden span, so this is the one place that count can be given the tabular-numeral
+   treatment every other rendered count in the app already gets. */
+.sources-segmented .btn span[aria-hidden] {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── W10a: one-time secret panel ─────────────────────────────────────────── */
+/* Shared by every surface that hands back a plaintext value exactly once — a minted invitation
+   link, a minted or rotated API token. The left hairline is the one place `.card`'s neutral
+   border is overridden, so a live secret reads as distinct from every other panel on the page
+   before a reader has parsed the eyebrow or the notice above it. */
+.secret-reveal {
+  border-left: 3px solid var(--status-caution-line);
+}
+.secret-reveal-value {
+  display: block;
+  width: 100%;
+  margin: var(--space-3) 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.secret-reveal-meta {
+  margin: 0 0 var(--space-4);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+/* ── W10c: canonical entities, proposals queue & entity editor ───────────── */
+
+/* Groups the proposals queue's page-scoped count with its scan action, so `.card-head`'s
+   space-between splits title from this cluster rather than spreading title/count/button evenly
+   across the row. */
+.queue-head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* A proposal's quote, set on its own line below the locator pill and indented by a hairline —
+   the same footnote-under-a-header treatment `.fidelity-notice` uses — then clamped to two lines
+   so a long passage never stretches the row. The full quote still reaches a mouse or a screen
+   reader through the element's own `title`. */
+.proposal-evidence-quote {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--hairline-strong);
+  color: var(--ink-dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ── W10b: API keys & audit console ──────────────────────────────────────── */
+
+/* Stacks FilterBar's own control row above the applied-filter chip row as one flex child of
+   Toolbar's start slot, so the chips sit below the filters rather than beside them. */
+.audit-filters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 100%;
+}
+
+/* One chip per applied filter — the row shortcut that fills entityType/entityId directly is
+   otherwise silent about what it just did. */
+.filter-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-h-sm);
+  padding: 0 var(--space-1) 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline-strong);
+  color: var(--ink-dim);
+  font-size: var(--text-xs);
+}
+/* Borderless: `.btn--ghost`'s own border would double the chip's. */
+.filter-chip-remove {
+  border-color: transparent;
+  background: transparent;
+}
+.filter-chip-remove:hover {
+  background: var(--surface-3);
+}

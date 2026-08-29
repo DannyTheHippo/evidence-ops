@@ -219,4 +219,32 @@ describe('InvitePage', () => {
       'Could not reach the server. Check your connection and try again.',
     );
   });
+
+  it('focuses the password field when an empty form is submitted', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(previewResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(PREVIEW_URL, expect.anything()));
+    fireEvent.click(screen.getByRole('button', { name: 'Accept invitation' }));
+
+    await waitFor(() => expect(screen.getByLabelText('Password')).toHaveFocus());
+  });
+
+  it('shows no stray alert when a preview failure alone triggers the recovery path', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ message: 'Invitation is invalid, expired, or already used' }, 400),
+        ),
+    );
+
+    renderPage();
+
+    await screen.findByRole('link', { name: 'sign in' });
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });

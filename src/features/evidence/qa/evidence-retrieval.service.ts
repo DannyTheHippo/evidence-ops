@@ -93,8 +93,9 @@ interface RetrievedChunkJoin {
  * field-by-field. `sha256` isn't on `EvidenceChunk` or the store's hit metadata at all — it lives
  * on `DocumentVersion` (content-addressing, see that schema) — so this service is the one place
  * that joins a retrieval hit back to its version's hash before a citation can be built against it.
- * The same join also resolves `documentTitle` off `Document`, for callers (the retrieval endpoint,
- * the MCP `search_evidence` tool) that display a hit's source rather than only citing it.
+ * The same join also resolves `documentTitle`, `sourceClass` and `documentCreatedAt` off
+ * `Document`, for callers (the retrieval endpoint, the MCP `search_evidence` tool) that display a
+ * hit's source rather than only citing it.
  */
 @Injectable()
 export class EvidenceRetrievalService {
@@ -314,6 +315,8 @@ export class EvidenceRetrievalService {
             score: hit.score,
             documentId: hit.metadata.documentId,
             documentTitle: document.title,
+            sourceClass: document.sourceClass,
+            documentCreatedAt: document.createdAt,
           },
           document,
           score: hit.score,

@@ -72,9 +72,49 @@ describe('ProposalsQueue', () => {
     expect(screen.getByText('Acme Tower')).toBeInTheDocument();
     expect(screen.getByText('Acme Tower, LLC')).toBeInTheDocument();
     expect(screen.getByText('p.2')).toBeInTheDocument();
-    expect(screen.getByText(/Acme Tower, LLC reported NOI/)).toBeInTheDocument();
+    // The quote carries the full text in its title, since the rendered text clamps to two lines.
+    expect(screen.getByTitle(proposedAlias.quote)).toHaveTextContent(
+      /Acme Tower, LLC reported NOI/,
+    );
     // Southpark Commons carries no proposal and never appears as a row.
     expect(screen.queryByText('Southpark Commons')).not.toBeInTheDocument();
+  });
+
+  it('counts only the proposals from the entities this page loaded, singular and plural alike', () => {
+    const { rerender } = render(
+      <ProposalsQueue
+        entities={[entityWithProposal]}
+        onEntityChanged={() => {}}
+        onScanned={() => Promise.resolve()}
+      />,
+    );
+    expect(screen.getByText('1 proposal on this page')).toBeInTheDocument();
+
+    const secondEntityWithProposal: CanonicalEntity = {
+      ...entityWithNoProposals,
+      harvestedAliases: [proposedAlias],
+    };
+    rerender(
+      <ProposalsQueue
+        entities={[entityWithProposal, secondEntityWithProposal]}
+        onEntityChanged={() => {}}
+        onScanned={() => Promise.resolve()}
+      />,
+    );
+    expect(screen.getByText('2 proposals on this page')).toBeInTheDocument();
+  });
+
+  it('gives Confirm a small primary weight and Reject a small ghost weight, not matching pairs', () => {
+    render(
+      <ProposalsQueue
+        entities={[entityWithProposal]}
+        onEntityChanged={() => {}}
+        onScanned={() => Promise.resolve()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Confirm' })).toHaveClass('btn--primary', 'btn--sm');
+    expect(screen.getByRole('button', { name: 'Reject' })).toHaveClass('btn--ghost', 'btn--sm');
   });
 
   it('confirms a proposal, notifying and handing the updated row back to the caller', async () => {

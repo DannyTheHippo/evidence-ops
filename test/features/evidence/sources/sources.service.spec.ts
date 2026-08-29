@@ -355,6 +355,40 @@ describe('SourcesService', () => {
       );
     });
 
+    it('should filter by a case-insensitive q across name, path and owner when provided', async () => {
+      mockSourceModel.find.mockResolvedValueOnce([buildMockSource()]);
+      mockSourceModel.countDocuments.mockResolvedValueOnce(1);
+
+      await service.list({ skip: 0, limit: 20, q: 'Deal Room' }, actorId, 'tenant-a');
+
+      const pattern = /Deal Room/i;
+      expect(mockSourceModel.find).toHaveBeenCalledWith(
+        {
+          tenantId: 'tenant-a',
+          $or: [{ name: pattern }, { path: pattern }, { owner: pattern }],
+        },
+        null,
+        expect.objectContaining({ skip: 0, limit: 20 }),
+      );
+    });
+
+    it('should escape a regex-special character in q so it is treated as a literal', async () => {
+      mockSourceModel.find.mockResolvedValueOnce([]);
+      mockSourceModel.countDocuments.mockResolvedValueOnce(0);
+
+      await service.list({ skip: 0, limit: 20, q: 'a.b(c)' }, actorId, 'tenant-a');
+
+      const pattern = /a\.b\(c\)/i;
+      expect(mockSourceModel.find).toHaveBeenCalledWith(
+        {
+          tenantId: 'tenant-a',
+          $or: [{ name: pattern }, { path: pattern }, { owner: pattern }],
+        },
+        null,
+        expect.objectContaining({ skip: 0, limit: 20 }),
+      );
+    });
+
     it.each([
       ['createdAt', 'desc', { createdAt: -1 }],
       ['owner', 'asc', { owner: 1 }],

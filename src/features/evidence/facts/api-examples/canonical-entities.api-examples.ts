@@ -100,13 +100,13 @@ export const canonicalEntitiesApiExamples: Record<string, ApiResponseOptions> = 
   },
   aliasNotFound: {
     status: HttpStatus.NOT_FOUND,
-    description: 'This canonical entity carries no harvested alias by that name.',
+    description: 'This alias group carries no harvested alias by that name.',
     examples: {
       example: {
         summary: 'Unknown alias',
         value: {
           statusCode: HttpStatus.NOT_FOUND,
-          message: "Canonical entity '65f1c2e4a1b2c3d4e5f6a7b8' has no harvested alias 'Property'",
+          message: "Alias group '65f1c2e4a1b2c3d4e5f6a7b8' has no harvested alias 'Property'",
           error: 'Not Found',
         },
       },
@@ -121,7 +121,7 @@ export const canonicalEntitiesApiExamples: Record<string, ApiResponseOptions> = 
         value: {
           statusCode: HttpStatus.CONFLICT,
           message:
-            "Harvested alias 'Property' on canonical entity '65f1c2e4a1b2c3d4e5f6a7b8' is 'revoked', not 'proposed'",
+            "Harvested alias 'Property' on alias group '65f1c2e4a1b2c3d4e5f6a7b8' is 'revoked', not 'proposed'",
           error: 'Conflict',
         },
       },
@@ -129,13 +129,13 @@ export const canonicalEntitiesApiExamples: Record<string, ApiResponseOptions> = 
   },
   notFound: {
     status: HttpStatus.NOT_FOUND,
-    description: "No canonical entity with this id exists for the caller's tenant.",
+    description: "No alias group with this id exists for the caller's tenant.",
     examples: {
       example: {
         summary: 'Unknown id',
         value: {
           statusCode: HttpStatus.NOT_FOUND,
-          message: "Canonical entity '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+          message: "Alias group '65f1c2e4a1b2c3d4e5f6a7b8' not found",
           error: 'Not Found',
         },
       },
@@ -143,14 +143,13 @@ export const canonicalEntitiesApiExamples: Record<string, ApiResponseOptions> = 
   },
   nameConflict: {
     status: HttpStatus.CONFLICT,
-    description: 'A canonical entity with this name already exists for this tenant.',
+    description: 'An alias group with this name already exists for this tenant.',
     examples: {
       example: {
         summary: 'Duplicate canonical name',
         value: {
           statusCode: HttpStatus.CONFLICT,
-          message:
-            "A canonical entity named 'Northgate Business Park' already exists for this tenant",
+          message: "An alias group named 'Northgate Business Park' already exists for this tenant",
           error: 'Conflict',
         },
       },

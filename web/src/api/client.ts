@@ -19,13 +19,37 @@ export type Me = Schemas['MeResponseDto'];
 export type UserRole = Me['role'];
 export type AuthToken = Schemas['AuthTokenResponseDto'];
 
+/** A single failed constraint, naming the field it failed on — the per-field breakdown of a
+ * `ValidationErrorResponseDto`. */
+export type FieldError = Schemas['FieldValidationErrorResponseDto'];
+
 export class ApiError extends Error {
   status: number;
 
-  constructor(status: number, message: string) {
+  /** Present only when the response body was a well-formed validation-error payload — a domain
+   * exception's `{ status, message }` body carries no `errors` key, so this stays `undefined`
+   * there. Form code branches on `isFieldValidationError` rather than checking this directly. */
+  readonly fields?: FieldError[];
+
+  /** Seconds until the caller may retry, read from the response's `Retry-After` header. Present
+   * only when the header carries a non-negative number — absent for every response that omits it
+   * or sends something this client cannot parse as one, in which case a caller falls back to its
+   * own fixed cooldown window. */
+  readonly retryAfterSeconds?: number;
+
+  constructor(status: number, message: string, fields?: FieldError[], retryAfterSeconds?: number) {
     super(message);
     this.status = status;
+    this.fields = fields;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
+}
+
+/** Narrows an unknown caught value to an `ApiError` carrying at least one field-level validation
+ * error, the signal a form uses to render per-field messages instead of a single banner. Safe to
+ * call on anything, including `null` and a plain `Error`. */
+export function isFieldValidationError(err: unknown): err is ApiError & { fields: FieldError[] } {
+  return err instanceof ApiError && Array.isArray(err.fields) && err.fields.length > 0;
 }
 
 // The single wording for an unreachable server, reached by every call site through
@@ -51,21 +75,60 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 // calls above; the default budget would abort a large file partway through.
 const UPLOAD_TIMEOUT_MS = 120_000;
 
-async function readErrorMessage(res: Response): Promise<string> {
+function extractMessage(body: Record<string, unknown>, fallback: string): string {
+  const { message } = body;
+  if (typeof message === 'string') return message;
+  // Defensive: the API now always sends a joined string, but a stale deployment may still send
+  // class-validator's original array-of-messages shape.
+  if (
+    Array.isArray(message) &&
+    message.every((entry): entry is string => typeof entry === 'string')
+  ) {
+    return message.join('; ');
+  }
+  return fallback;
+}
+
+function isFieldError(value: unknown): value is FieldError {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    typeof (value as Record<string, unknown>).field === 'string' &&
+    typeof (value as Record<string, unknown>).message === 'string'
+  );
+}
+
+// Untrusted network input: an `errors` value that is not an array, or whose entries are not all
+// well-formed, degrades to the valid subset (or `undefined` once that subset is empty) rather than
+// throwing.
+function extractFields(body: Record<string, unknown>): FieldError[] | undefined {
+  const { errors } = body;
+  if (!Array.isArray(errors)) return undefined;
+  const valid = errors.filter(isFieldError);
+  return valid.length > 0 ? valid : undefined;
+}
+
+// Untrusted network input: a missing header, a non-numeric value, or a negative one all degrade
+// to `undefined` rather than producing a nonsensical cooldown.
+function readRetryAfterSeconds(res: Response): number | undefined {
+  const raw = res.headers.get('Retry-After');
+  if (raw === null) return undefined;
+  const seconds = Number(raw);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
+}
+
+async function readErrorBody(res: Response): Promise<{ message: string; fields?: FieldError[] }> {
+  const fallback = res.statusText || `HTTP ${res.status}`;
   try {
     const text = await res.text();
-    if (!text) return res.statusText || `HTTP ${res.status}`;
+    if (!text) return { message: fallback };
     const body = JSON.parse(text) as unknown;
-    if (
-      body !== null &&
-      typeof body === 'object' &&
-      'message' in body &&
-      typeof (body as Record<string, unknown>).message === 'string'
-    ) {
-      return (body as Record<string, unknown>).message as string;
-    }
-  } catch {}
-  return res.statusText || `HTTP ${res.status}`;
+    if (body === null || typeof body !== 'object') return { message: fallback };
+    const record = body as Record<string, unknown>;
+    return { message: extractMessage(record, fallback), fields: extractFields(record) };
+  } catch {
+    return { message: fallback };
+  }
 }
 
 /** Shared behind `request<T>()` and `requestBlob()`: the timeout/abort signal, the same-origin
@@ -103,7 +166,8 @@ async function fetchGuarded<T>(
     }
 
     if (!res.ok) {
-      throw new ApiError(res.status, await readErrorMessage(res));
+      const { message, fields } = await readErrorBody(res);
+      throw new ApiError(res.status, message, fields, readRetryAfterSeconds(res));
     }
 
     return await parseBody(res);
@@ -203,6 +267,15 @@ export async function logout(): Promise<void> {
 
 export function getMe(): Promise<Me> {
   return request<Me>('/auth/me');
+}
+
+// ── Dashboard ────────────────────────────────────────────────────────────
+
+export type DashboardSummary = Schemas['DashboardSummaryResponseDto'];
+
+/** The tenant-wide counts `HomePage` renders as its summary cards. */
+export function getDashboardSummary(): Promise<DashboardSummary> {
+  return request<DashboardSummary>('/dashboard/summary');
 }
 
 // ── Documents ────────────────────────────────────────────────────────────
@@ -461,25 +534,16 @@ export function answerEventsUrl(id: string): string {
 
 // ── Retrieval ────────────────────────────────────────────────────────────
 
-// What `search_evidence` returns — the retrieved chunk itself, not a relevance score, because
-// the API does not return one.
-export interface RetrievedChunkView {
-  chunkId: string;
-  docVersionId: string;
-  sha256: string;
-  text: string;
+/** What `search_evidence` returns for one retrieved chunk, including the owning document's
+ * `sourceClass` and `documentCreatedAt` for display alongside a result group. `score` is a fused
+ * hybrid-retrieval relevance value — bounded above by a small constant, not a 0-1 similarity, per
+ * the generated schema's own doc comment: rank this response's hits against each other with it,
+ * never render it as a percentage, compare it across queries, or test it against a threshold. */
+export type RetrievedChunkView = StrictOmit<Schemas['RetrievedChunkResponseDto'], 'locator'> & {
+  // The document types a locator as a bare object: `Locator` is a discriminated union the API
+  // describes in prose, and OpenAPI carries no schema for it.
   locator: Locator;
-  documentId: string;
-  documentTitle: string;
-  /**
-   * Fused hybrid-retrieval relevance score (reciprocal rank fusion across the lexical and vector
-   * pipelines). **Not a 0-1 similarity**: it is bounded above by a small constant — two pipelines
-   * over (60 + best rank 1), about 0.0328 — that shrinks as the query widens. Rank this response's
-   * hits against each other with it; never render it as a percentage, compare it across queries,
-   * or test it against a fixed threshold.
-   */
-  score: number;
-}
+};
 
 /**
  * `docs` plus `hasMore`, never a total. The store over-fetches non-deterministically, a
@@ -673,9 +737,9 @@ export interface WorkflowRun {
   status: WorkflowRunStatus;
   errorMessage?: string;
   /**
-   * What the run acted on. Derived from the run's `answerId`, so it is populated only for runs
-   * that carry one — a resolve-conflict or sync-source run records no subject today, and reads
-   * back empty. Render the link only when both fields are present.
+   * What the run acted on, written at creation. A resolve-conflict run records the conflict it is
+   * resolving; a sync-source run records no subject and reads back empty. Both fields are written
+   * together or not at all, so render a link only when both are present.
    */
   subjectId?: string;
   subjectType?: string;
@@ -823,6 +887,10 @@ export function listSources(pagination?: {
   lastSyncStatus?: string;
   sort?: SourceSortField;
   sortDir?: SortDirection;
+  // Case-insensitive over name, path and owner, applied on both the tracked and inventory lists
+  // before `count` is computed — the returned total describes exactly the rows a caller can page
+  // through, not the tenant's full list.
+  q?: string;
 }): Promise<WithCount<Source>> {
   const query = new URLSearchParams();
   if (pagination?.skip !== undefined) query.set('skip', String(pagination.skip));
@@ -833,6 +901,7 @@ export function listSources(pagination?: {
   }
   if (pagination?.sort !== undefined) query.set('sort', pagination.sort);
   if (pagination?.sortDir !== undefined) query.set('sortDir', pagination.sortDir);
+  if (pagination?.q) query.set('q', pagination.q);
   const qs = query.toString();
   return request<WithCount<Source>>(`/sources${qs ? `?${qs}` : ''}`);
 }

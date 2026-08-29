@@ -4,6 +4,10 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { writeFileSync } from 'fs';
 import packageJSON from '../../package.json';
 import { resolveSessionCookieName } from '../features/common/auth/auth.constant';
+import {
+  FieldValidationErrorResponseDto,
+  ValidationErrorResponseDto,
+} from '../shared/dtos/response/validation-error.response.dto';
 import { TypedConfigService } from './environment/typed-config.service';
 
 export const createSwaggerConfig = (app: INestApplication, config: TypedConfigService) => {
@@ -17,6 +21,7 @@ export const createSwaggerConfig = (app: INestApplication, config: TypedConfigSe
       .setDescription('Evidence Ops API specification')
       .addCookieAuth(resolveSessionCookieName(appConfig.env))
       .build(),
+    { extraModels: [ValidationErrorResponseDto, FieldValidationErrorResponseDto] },
   );
 
   SwaggerModule.setup('docs', app, document, {

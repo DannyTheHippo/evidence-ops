@@ -64,6 +64,11 @@ export interface CreateWorkflowRunInput {
   readonly workflowType: WorkflowRunType;
   readonly status: WorkflowRunStatus;
   readonly tenantId?: string;
+  /** Identifies the entity this run acts on — e.g. the `Conflict` a `resolve-conflict` run gates.
+   *  Read alongside `subjectType`; a caller passing one without the other leaves both unset (see
+   *  `create`'s own doc comment). */
+  readonly subjectId?: string;
+  readonly subjectType?: string;
 }
 
 export interface WorkflowRunResult {
@@ -120,15 +125,27 @@ export class WorkflowRunsService {
   /**
    * Creates the durable projection a caller who just started a workflow hands back, so a client
    * has an id to poll `GET /workflow-runs/:id` with. Two callers write here:
-   * `ConflictsService.requestResolution` and `SourcesService.requestSync` — `answer-question` and
-   * `ingest-document-version` run without a projection, so no run row exists for them.
+   * `ConflictsService.requestResolution` (which passes `subjectId`/`subjectType` naming the
+   * `Conflict` being gated) and `SourcesService.requestSync` (which passes neither) —
+   * `answer-question` and `ingest-document-version` run without a projection, so no run row
+   * exists for them either way.
    */
   async create(input: CreateWorkflowRunInput): Promise<WorkflowRunResult> {
+    // Written together or not at all, matching the schema field's own invariant (see
+    // `WorkflowRun.subjectId`'s doc comment) — a caller naming only one of the pair leaves both
+    // unset rather than persisting a `subjectType` with no `subjectId` to pair it with, or vice
+    // versa.
+    const subject =
+      input.subjectId !== undefined && input.subjectType !== undefined
+        ? { subjectId: new Types.ObjectId(input.subjectId), subjectType: input.subjectType }
+        : {};
+
     const run = await this.workflowRunModel.create({
       workflowId: input.workflowId,
       workflowType: input.workflowType,
       status: input.status,
       tenantId: input.tenantId,
+      ...subject,
     });
 
     return this.toResult(run);
@@ -433,11 +450,10 @@ export class WorkflowRunsService {
       workflowType: run.workflowType,
       status: statusOverride ?? run.status,
       errorMessage: run.errorMessage,
-      // `answerId` is the only subject reference the schema carries today; no current writer of
-      // `resolve-conflict` or `sync-source` rows sets it, so this pair is populated only for a row
-      // that does.
-      subjectId: run.answerId?.toString(),
-      subjectType: run.answerId ? 'Answer' : undefined,
+      // `SourcesService.requestSync` writes no subject, so this pair stays undefined on a
+      // `sync-source` row — only a writer that names one populates it.
+      subjectId: run.subjectId?.toString(),
+      subjectType: run.subjectId ? run.subjectType : undefined,
       createdAt: run.createdAt,
     };
   }

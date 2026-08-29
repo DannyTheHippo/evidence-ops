@@ -48,8 +48,16 @@ export class WorkflowRun extends AuditableDocument {
   @Prop({ type: String, required: true, enum: WORKFLOW_RUN_STATUSES, default: 'queued' })
   status: WorkflowRunStatus;
 
-  @Prop({ type: Types.ObjectId, ref: 'Answer' })
-  answerId?: Types.ObjectId;
+  // Generic rather than an `Answer`-only or `Conflict`-only reference — mirrors `ApprovalSubject`
+  // (`approval.schema.ts`) for the identical reason: more than one workflow type can gate a
+  // different entity kind, and a single discriminated pair serves all of them without a schema
+  // change per subject kind. Set together or not at all — a row with one and not the other is
+  // never written by any current caller.
+  @Prop({ type: Types.ObjectId })
+  subjectId?: Types.ObjectId;
+
+  @Prop({ type: String })
+  subjectType?: string;
 
   @Prop({ type: String })
   errorMessage?: string;

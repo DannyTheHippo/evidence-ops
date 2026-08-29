@@ -51,7 +51,7 @@ export const NAV_LABELS: { to: string; label: string }[] = [
   { to: '/approvals', label: 'Approvals' },
   { to: '/workflow-runs', label: 'Runs' },
   { to: '/people', label: 'People' },
-  { to: '/canonical-entities', label: 'Canonical Entities' },
+  { to: '/canonical-entities', label: 'Aliases' },
   { to: '/audit-events', label: 'Audit Log' },
   { to: '/api-keys', label: 'API Keys' },
 ];
@@ -103,7 +103,7 @@ function buildNavGroups(isAdmin: boolean, counts: PendingCounts): NavGroup[] {
         { to: '/people', label: 'People', icon: <IconUsers /> },
         // No badge: no endpoint exposes a count of pending harvested-alias proposals without
         // fetching every canonical entity's alias list, which the badge contract forbids.
-        { to: '/canonical-entities', label: 'Canonical Entities', icon: <IconTag /> },
+        { to: '/canonical-entities', label: 'Aliases', icon: <IconTag /> },
         { to: '/audit-events', label: 'Audit Log', icon: <IconClipboard /> },
       ],
     });
@@ -132,7 +132,7 @@ function NavGroups({ groups, onNavigate }: { groups: NavGroup[]; onNavigate?: ()
     <>
       {groups.map((group, index) => (
         <div className="sidebar-group" key={group.heading ?? `group-${index}`}>
-          {group.heading && <h2 className="sidebar-heading">{group.heading}</h2>}
+          {group.heading && <h2 className="sidebar-heading micro-label">{group.heading}</h2>}
           <ul className="sidebar-list">
             {group.items.map((item) => (
               <li key={item.to}>
@@ -140,6 +140,7 @@ function NavGroups({ groups, onNavigate }: { groups: NavGroup[]; onNavigate?: ()
                   to={item.to}
                   end={item.end}
                   aria-label={navItemAriaLabel(item)}
+                  title={item.label}
                   className={sidebarLinkClassName}
                   onClick={onNavigate}
                 >
@@ -148,7 +149,7 @@ function NavGroups({ groups, onNavigate }: { groups: NavGroup[]; onNavigate?: ()
                   {!!item.count && (
                     <>
                       <span className="nav-count" aria-hidden="true">
-                        · {item.count}
+                        {item.count}
                       </span>
                       <span className="nav-count-dot" aria-hidden="true" />
                     </>

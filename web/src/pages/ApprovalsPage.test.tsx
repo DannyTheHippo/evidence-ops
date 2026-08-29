@@ -171,7 +171,8 @@ describe('ApprovalsPage', () => {
         'Resolve Northgate Business Park cap_rate (2025-03) in favor of 5.25% over 6.10%.',
       ),
     ).toBeInTheDocument();
-    expect(within(detail).getByText('Requested by analyst@example.com')).toBeInTheDocument();
+    expect(within(detail).getByText('Requested by')).toBeInTheDocument();
+    expect(within(detail).getByText('analyst@example.com')).toBeInTheDocument();
     expect(
       within(detail).getByText(formatRelativeTimestamp(pendingApproval.createdAt)),
     ).toBeInTheDocument();
@@ -202,6 +203,13 @@ describe('ApprovalsPage', () => {
     // pre-fills a decision or triggers one on its own.
     expect(within(detail).getByRole('button', { name: 'Approve' })).toBeInTheDocument();
     expect(within(detail).getByRole('button', { name: 'Reject' })).toBeInTheDocument();
+    // A conflict-derived approval always links back to the conflict it resolves, best-effort:
+    // the annotation itself can go missing for a conflict outside the bounded fetch, but here it
+    // resolved, so the link is expected too.
+    expect(within(detail).getByRole('link', { name: 'View conflict' })).toHaveAttribute(
+      'href',
+      '/conflicts?selected=conflict-1',
+    );
   });
 
   it('shows a recency-rule recommendation the same way', async () => {
@@ -252,7 +260,7 @@ describe('ApprovalsPage', () => {
     expect(within(detail).queryByText(/^recommended ·/)).not.toBeInTheDocument();
   });
 
-  it('shows the empty pending inbox as an invitation, not an error', async () => {
+  it('shows the empty pending inbox as an earned zero, not an error', async () => {
     stubFetch({
       '/api/v1/auth/me': () => jsonResponse(admin),
       [PENDING_URL]: () => jsonResponse({ docs: [], count: 0 }),
@@ -260,15 +268,20 @@ describe('ApprovalsPage', () => {
 
     renderPage();
 
-    expect(await screen.findByText('Nothing waiting on you')).toBeInTheDocument();
+    const title = await screen.findByText('Nothing waiting on you');
+    expect(title).toBeInTheDocument();
+    // The earned-zero-inbox treatment (`.empty-state--zero`'s verified-tone icon ring) is what
+    // distinguishes "everything is decided" from an ordinary filtered-empty result below.
+    expect(title.closest('.empty-state--zero')).not.toBeNull();
     expect(screen.queryByRole('region', { name: 'Approvals queue' })).not.toBeInTheDocument();
   });
 
-  it('shows a distinct empty state when a non-pending filter matches nothing', async () => {
+  it('shows a distinct, neutral empty state with a "Show all" action when a non-pending filter matches nothing', async () => {
     stubFetch({
       '/api/v1/auth/me': () => jsonResponse(admin),
       '/api/v1/approvals?skip=0&limit=20&state=rejected&sort=createdAt&sortDir=desc': () =>
         jsonResponse({ docs: [], count: 0 }),
+      [PENDING_URL]: () => jsonResponse({ docs: [], count: 0 }),
     });
 
     render(
@@ -279,8 +292,14 @@ describe('ApprovalsPage', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('No approvals match this filter')).toBeInTheDocument();
+    const title = await screen.findByText('No approvals match this filter');
+    expect(title).toBeInTheDocument();
+    expect(title.closest('.empty-state--zero')).toBeNull();
     expect(screen.queryByText('Nothing waiting on you')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show all' }));
+
+    expect(await screen.findByText('Nothing waiting on you')).toBeInTheDocument();
   });
 
   it('an admin sees the decide controls, and clicking Approve opens a dialog naming the approval', async () => {
@@ -523,7 +542,7 @@ describe('ApprovalsPage', () => {
 
     renderPage();
 
-    expect(await screen.findByText('32 total')).toBeInTheDocument();
+    expect(await screen.findByText('1–20 of 32')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
   });
@@ -537,7 +556,7 @@ describe('ApprovalsPage', () => {
 
     renderPage();
 
-    await screen.findByText('1 total');
+    await screen.findByText('1–1 of 1');
     expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
   });
 
@@ -620,8 +639,8 @@ describe('ApprovalsPage', () => {
     expect(screen.queryByRole('option', { name: /all states/i })).not.toBeInTheDocument();
 
     // Advance to page 2 first, so the filter submit below is what proves skip resets to 0. Waits
-    // on page 2's own distinct row, not just the shared "25 total" count, so the assertion below
-    // cannot race ahead of the page-2 fetch actually resolving.
+    // on page 2's own distinct row, not just the shared count both pages report, so the assertion
+    // below cannot race ahead of the page-2 fetch actually resolving.
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     await within(await queueRegion()).findByText(page2PendingApproval.summary);
 
@@ -645,7 +664,8 @@ describe('ApprovalsPage', () => {
     expect(
       within(detail).getByText('by reviewer@example.com', { exact: false }),
     ).toBeInTheDocument();
-    expect(within(detail).getByText('Reason: Evidence checks out.')).toBeInTheDocument();
+    expect(within(detail).getByText('Reason')).toBeInTheDocument();
+    expect(within(detail).getByText('Evidence checks out.')).toBeInTheDocument();
   });
 
   it('sorts on an explicit column choice, resetting paging, without requiring Apply', async () => {
@@ -668,7 +688,7 @@ describe('ApprovalsPage', () => {
 
     await within(await queueRegion()).findByText(pendingApproval.summary);
 
-    fireEvent.change(screen.getByLabelText('Sort by'), { target: { value: 'state' } });
+    fireEvent.change(screen.getByLabelText('Sort'), { target: { value: 'state-desc' } });
 
     await waitFor(() => {
       expect(
@@ -752,6 +772,49 @@ describe('ApprovalsPage', () => {
     // exactly the two Conflict-subject rows on screen, not the tenant's whole `/conflicts`
     // collection — still resolved it.
     expect(await within(detail).findByText('recommended · authority')).toBeInTheDocument();
+  });
+
+  it('ArrowDown in the queue moves both focus and selection to the next approval', async () => {
+    const secondApproval = { ...pendingApproval, id: 'approval-2', summary: 'Second approval.' };
+    stubFetch({
+      '/api/v1/auth/me': () => jsonResponse(admin),
+      [PENDING_URL]: () => jsonResponse({ docs: [pendingApproval, secondApproval], count: 2 }),
+      '/api/v1/conflicts?limit=2': () => jsonResponse({ docs: [authorityConflict], count: 1 }),
+    });
+
+    renderPage();
+
+    const queue = await queueRegion();
+    const rows = within(queue).getAllByRole('button');
+    rows[0].focus();
+
+    fireEvent.keyDown(rows[0], { key: 'ArrowDown' });
+
+    expect(rows[1]).toHaveFocus();
+    expect(
+      await within(await detailRegion()).findByText(secondApproval.summary),
+    ).toBeInTheDocument();
+  });
+
+  it("selects the approval named by the URL's selected param instead of defaulting to the first row", async () => {
+    const secondApproval = { ...pendingApproval, id: 'approval-2', summary: 'Second approval.' };
+    stubFetch({
+      '/api/v1/auth/me': () => jsonResponse(admin),
+      [PENDING_URL]: () => jsonResponse({ docs: [pendingApproval, secondApproval], count: 2 }),
+      '/api/v1/conflicts?limit=2': () => jsonResponse({ docs: [authorityConflict], count: 1 }),
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/?selected=approval-2']}>
+        <Routes>
+          <Route path="/" element={<ApprovalsPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await within(await detailRegion()).findByText(secondApproval.summary),
+    ).toBeInTheDocument();
   });
 
   it('ignores a stale approvals-list response that resolves after a newer filter change replaced it', async () => {

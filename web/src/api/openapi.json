@@ -1801,7 +1801,7 @@
             }
           },
           "409": {
-            "description": "A canonical entity with this name already exists for this tenant.",
+            "description": "An alias group with this name already exists for this tenant.",
             "content": {
               "application/json": {
                 "examples": {
@@ -1809,7 +1809,7 @@
                     "summary": "Duplicate canonical name",
                     "value": {
                       "statusCode": 409,
-                      "message": "A canonical entity named 'Northgate Business Park' already exists for this tenant",
+                      "message": "An alias group named 'Northgate Business Park' already exists for this tenant",
                       "error": "Conflict"
                     }
                   }
@@ -1948,7 +1948,7 @@
             }
           },
           "404": {
-            "description": "No canonical entity with this id exists for the caller's tenant.",
+            "description": "No alias group with this id exists for the caller's tenant.",
             "content": {
               "application/json": {
                 "examples": {
@@ -1956,7 +1956,7 @@
                     "summary": "Unknown id",
                     "value": {
                       "statusCode": 404,
-                      "message": "Canonical entity '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "message": "Alias group '65f1c2e4a1b2c3d4e5f6a7b8' not found",
                       "error": "Not Found"
                     }
                   }
@@ -1965,7 +1965,7 @@
             }
           },
           "409": {
-            "description": "A canonical entity with this name already exists for this tenant.",
+            "description": "An alias group with this name already exists for this tenant.",
             "content": {
               "application/json": {
                 "examples": {
@@ -1973,7 +1973,7 @@
                     "summary": "Duplicate canonical name",
                     "value": {
                       "statusCode": 409,
-                      "message": "A canonical entity named 'Northgate Business Park' already exists for this tenant",
+                      "message": "An alias group named 'Northgate Business Park' already exists for this tenant",
                       "error": "Conflict"
                     }
                   }
@@ -2020,7 +2020,7 @@
             }
           },
           "404": {
-            "description": "No canonical entity with this id exists for the caller's tenant.",
+            "description": "No alias group with this id exists for the caller's tenant.",
             "content": {
               "application/json": {
                 "examples": {
@@ -2028,7 +2028,7 @@
                     "summary": "Unknown id",
                     "value": {
                       "statusCode": 404,
-                      "message": "Canonical entity '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "message": "Alias group '65f1c2e4a1b2c3d4e5f6a7b8' not found",
                       "error": "Not Found"
                     }
                   }
@@ -2121,7 +2121,7 @@
             }
           },
           "404": {
-            "description": "This canonical entity carries no harvested alias by that name.\n\nNo canonical entity with this id exists for the caller's tenant.",
+            "description": "This alias group carries no harvested alias by that name.\n\nNo alias group with this id exists for the caller's tenant.",
             "content": {
               "application/json": {
                 "examples": {
@@ -2129,7 +2129,7 @@
                     "summary": "Unknown id",
                     "value": {
                       "statusCode": 404,
-                      "message": "Canonical entity '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "message": "Alias group '65f1c2e4a1b2c3d4e5f6a7b8' not found",
                       "error": "Not Found"
                     }
                   }
@@ -2146,7 +2146,7 @@
                     "summary": "Already applied or revoked",
                     "value": {
                       "statusCode": 409,
-                      "message": "Harvested alias 'Property' on canonical entity '65f1c2e4a1b2c3d4e5f6a7b8' is 'revoked', not 'proposed'",
+                      "message": "Harvested alias 'Property' on alias group '65f1c2e4a1b2c3d4e5f6a7b8' is 'revoked', not 'proposed'",
                       "error": "Conflict"
                     }
                   }
@@ -2239,7 +2239,7 @@
             }
           },
           "404": {
-            "description": "This canonical entity carries no harvested alias by that name.\n\nNo canonical entity with this id exists for the caller's tenant.",
+            "description": "This alias group carries no harvested alias by that name.\n\nNo alias group with this id exists for the caller's tenant.",
             "content": {
               "application/json": {
                 "examples": {
@@ -2247,7 +2247,7 @@
                     "summary": "Unknown id",
                     "value": {
                       "statusCode": 404,
-                      "message": "Canonical entity '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "message": "Alias group '65f1c2e4a1b2c3d4e5f6a7b8' not found",
                       "error": "Not Found"
                     }
                   }
@@ -2354,6 +2354,21 @@
                 "resolved",
                 "dismissed"
               ]
+            }
+          },
+          {
+            "name": "ids",
+            "required": false,
+            "in": "query",
+            "description": "Conflict ids to resolve directly, comma-separated in a single querystring value or repeated (ids=a&ids=b) — both arrive at this handler the same way. When present, skip/limit are ignored and every matching conflict is returned, so a caller resolving a fixed batch (an answer's conflictIds, an approval's subject) never loses one to pagination. An id that does not resolve — unknown or belonging to another tenant — is silently absent from the result rather than a 404, matching DocumentsService.lookupVersions.",
+            "schema": {
+              "example": [
+                "65f1c2e4a1b2c3d4e5f6a7b8"
+              ],
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           },
           {
@@ -3487,6 +3502,8 @@
                           },
                           "documentId": "65f1c2e4a1b2c3d4e5f6a7b8",
                           "documentTitle": "Northgate Business Park — Q3 Rent Roll",
+                          "sourceClass": "report",
+                          "documentCreatedAt": "2026-07-01T00:00:00.000Z",
                           "score": 0.0164
                         }
                       ],
@@ -3672,6 +3689,16 @@
                 "asc",
                 "desc"
               ]
+            }
+          },
+          {
+            "name": "q",
+            "required": false,
+            "in": "query",
+            "description": "Case-insensitive search over name, path and owner. Applies before pagination, so `count` reflects the filtered total rather than the full tenant list.",
+            "schema": {
+              "example": "deal room",
+              "type": "string"
             }
           }
         ],
@@ -4513,6 +4540,44 @@
         },
         "tags": [
           "api-keys"
+        ]
+      }
+    },
+    "/dashboard/summary": {
+      "get": {
+        "operationId": "DashboardController_summary",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "The caller's tenant, summarized into the counts the Home dashboard needs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DashboardSummaryResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "A tenant partway through onboarding",
+                    "value": {
+                      "pendingApprovalCount": 2,
+                      "openConflictCount": 1,
+                      "documentCount": 128,
+                      "sourceCount": 4,
+                      "ingestionFailedCount": 2,
+                      "syncFailedCount": 1,
+                      "needsOcrCount": 3,
+                      "factsFailedCount": 1,
+                      "answerCount": 12,
+                      "hasIngestedDocument": true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "dashboard"
         ]
       }
     }
@@ -5717,6 +5782,25 @@
             "example": "Northgate Business Park — Q3 Rent Roll",
             "description": "The owning document's title, for display alongside a citation."
           },
+          "sourceClass": {
+            "type": "string",
+            "example": "report",
+            "enum": [
+              "crm-export",
+              "pm-export",
+              "spreadsheet",
+              "memo",
+              "report",
+              "unclassified"
+            ],
+            "description": "Authority classification of the owning document — 'unclassified' means nobody has declared one, not that it ranks lowest."
+          },
+          "documentCreatedAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "When the owning document was created."
+          },
           "score": {
             "type": "number",
             "example": 0.0164,
@@ -5731,6 +5815,8 @@
           "locator",
           "documentId",
           "documentTitle",
+          "sourceClass",
+          "documentCreatedAt",
           "score"
         ]
       },
@@ -6054,6 +6140,125 @@
         },
         "required": [
           "name"
+        ]
+      },
+      "DashboardSummaryResponseDto": {
+        "type": "object",
+        "properties": {
+          "pendingApprovalCount": {
+            "type": "number",
+            "example": 2,
+            "description": "Approvals still awaiting a human decision."
+          },
+          "openConflictCount": {
+            "type": "number",
+            "example": 1,
+            "description": "Conflicts still open for this tenant."
+          },
+          "documentCount": {
+            "type": "number",
+            "example": 128,
+            "description": "The tenant's total document count."
+          },
+          "sourceCount": {
+            "type": "number",
+            "example": 4,
+            "description": "The tenant's total source count."
+          },
+          "ingestionFailedCount": {
+            "type": "number",
+            "example": 2,
+            "description": "Documents whose current version failed ingestion."
+          },
+          "syncFailedCount": {
+            "type": "number",
+            "example": 1,
+            "description": "Sources whose most recent sync attempt failed."
+          },
+          "needsOcrCount": {
+            "type": "number",
+            "example": 3,
+            "description": "Documents whose current version needs OCR — a scanned PDF with no embedded text layer."
+          },
+          "factsFailedCount": {
+            "type": "number",
+            "example": 1,
+            "description": "Documents whose current version ingested successfully but carries no extracted facts."
+          },
+          "answerCount": {
+            "type": "number",
+            "example": 12,
+            "description": "The tenant's total answer count."
+          },
+          "hasIngestedDocument": {
+            "type": "boolean",
+            "example": true,
+            "description": "Whether any document in the tenant has a completed current version, resolved across the whole corpus rather than a single page."
+          }
+        },
+        "required": [
+          "pendingApprovalCount",
+          "openConflictCount",
+          "documentCount",
+          "sourceCount",
+          "ingestionFailedCount",
+          "syncFailedCount",
+          "needsOcrCount",
+          "factsFailedCount",
+          "answerCount",
+          "hasIngestedDocument"
+        ]
+      },
+      "FieldValidationErrorResponseDto": {
+        "type": "object",
+        "properties": {
+          "field": {
+            "type": "string",
+            "example": "ownerEmail",
+            "description": "Fully-qualified, dot-joined path of the field that failed validation."
+          },
+          "message": {
+            "type": "string",
+            "example": "ownerEmail must be an email",
+            "description": "The failed constraint's message, naming only the field's local property."
+          }
+        },
+        "required": [
+          "field",
+          "message"
+        ]
+      },
+      "ValidationErrorResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 400,
+            "description": "HTTP status code."
+          },
+          "error": {
+            "type": "string",
+            "example": "Bad Request",
+            "description": "HTTP status text."
+          },
+          "message": {
+            "type": "string",
+            "example": "ownerEmail must be an email; values.0.unit should not be empty",
+            "description": "Every failed constraint, joined with \"; \"."
+          },
+          "errors": {
+            "description": "Per-field breakdown of every failed constraint.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldValidationErrorResponseDto"
+            }
+          }
+        },
+        "required": [
+          "statusCode",
+          "error",
+          "message",
+          "errors"
         ]
       }
     }

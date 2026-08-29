@@ -193,17 +193,21 @@ describe('EvidenceRetrievalService', () => {
     expect(fakeEmbeddingProvider.calls).toHaveLength(1);
   });
 
-  it("should join a retrieval hit back to its document version's sha256, its document's title, and carry the hit's score", async () => {
+  it("should join a retrieval hit back to its document version's sha256, its document's title/sourceClass/createdAt, and carry the hit's score", async () => {
     const versionId = new Types.ObjectId();
     const hit = buildHit({ documentVersionId: versionId.toString(), text: 'excerpt' });
     const documentId = documentIdOf(hit);
+    const document = buildDocumentFixture({
+      _id: documentId,
+      title: 'Northgate Business Park — Q3 Rent Roll',
+      sourceClass: 'report',
+      createdAt: new Date('2026-06-15T00:00:00.000Z'),
+    });
     fakeRetrievalStore.setHits([hit]);
     mockDocumentVersionModel.find.mockResolvedValueOnce([
       { _id: versionId, sha256: 'a'.repeat(64) },
     ]);
-    mockDocumentModel.find.mockResolvedValueOnce([
-      { _id: documentId, title: 'Northgate Business Park — Q3 Rent Roll' },
-    ]);
+    mockDocumentModel.find.mockResolvedValueOnce([document]);
 
     const result = await service.retrieve({
       questionText: 'What is the cap rate?',
@@ -220,6 +224,8 @@ describe('EvidenceRetrievalService', () => {
         score: hit.score,
         documentId: documentId.toString(),
         documentTitle: 'Northgate Business Park — Q3 Rent Roll',
+        sourceClass: 'report',
+        documentCreatedAt: document.createdAt,
       },
     ]);
     expect(mockDocumentVersionModel.find).toHaveBeenCalledWith({

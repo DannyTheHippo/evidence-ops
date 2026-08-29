@@ -1,8 +1,17 @@
-import type { Answer, ConflictingValue, ConflictValue, DroppedClaim, Locator } from '../api/client';
+import { Link } from 'react-router-dom';
+import type {
+  Answer,
+  ConflictingValue,
+  ConflictValue,
+  DroppedClaim,
+  InsufficientEvidenceReasonCode,
+  Locator,
+} from '../api/client';
 import type { ResolvedVersion } from '../lib/document-index';
 import ConflictValueCompare from './ConflictValueCompare';
 import ProvenanceRail from './ProvenanceRail';
 import VerificationLedger from './VerificationLedger';
+import LinkButton from './ui/LinkButton';
 
 /** A conflicting_evidence value's source chunk resolved to the document version and locator it
  * came from, keyed by `sourceChunkId` — built by the caller from `listConflicts()`, narrowed to
@@ -40,7 +49,7 @@ function DroppedClaimsBand({ droppedClaims, isAbstention }: DroppedClaimsBandPro
     : `${droppedClaims.length} claim${droppedClaims.length === 1 ? '' : 's'} dropped by the grounding check`;
 
   return (
-    <section className="verification-integrity">
+    <section id="dropped-claims" className="verification-integrity">
       <h3 className="dropped-claims-headline">{headline}</h3>
       <ul className="dropped-claims-list">
         {droppedClaims.map((dropped, droppedIndex) => (
@@ -94,6 +103,47 @@ function splitConflictValues(
 }
 
 /**
+ * An `insufficient_evidence` outcome names exactly one next step, never a menu of them, keyed on
+ * `reasonCode`. The grounding gate's own degradation carries no code at all (see `AnswerOutcome`'s
+ * doc comment in `api/client.ts`) — its one next step is the dropped-claims band already rendered
+ * below, not a fresh destination, so this anchors there instead of navigating away. That anchor
+ * only renders when the band itself will: an abstention with nothing dropped has nowhere for it
+ * to point.
+ */
+function insufficientEvidenceAction(
+  reasonCode: InsufficientEvidenceReasonCode | undefined,
+  questionText: string,
+  hasDroppedClaims: boolean,
+) {
+  switch (reasonCode) {
+    case 'no_relevant_evidence':
+      return (
+        <LinkButton to="/sources" variant="secondary" size="sm">
+          Add or sync sources
+        </LinkButton>
+      );
+    case 'evidence_does_not_address_question':
+      return (
+        <Link to="/ask" state={{ questionText }} className="btn btn--secondary btn--sm">
+          Rephrase the question
+        </Link>
+      );
+    case 'retrieved_evidence_contradicts_itself':
+      return (
+        <LinkButton to="/conflicts" variant="secondary" size="sm">
+          Check the conflicts queue
+        </LinkButton>
+      );
+    default:
+      return hasDroppedClaims ? (
+        <a href="#dropped-claims" className="btn btn--secondary btn--sm">
+          Review the dropped claims
+        </a>
+      ) : null;
+  }
+}
+
+/**
  * The completed-answer presentation shared by AskPage's live view and AnswerDetailPage's
  * historical view: the verification ledger's retrieval funnel, the provenance rail for
  * `answered`/`insufficient_evidence`, the value-compare markup for `conflicting_evidence` (the
@@ -111,6 +161,15 @@ export default function AnswerView({ answer, documentIndex, conflictChunkIndex }
   const conflictSplit =
     answer.outcome.kind === 'conflicting_evidence'
       ? splitConflictValues(answer.outcome.values, conflictChunkIndex, documentIndex)
+      : null;
+  const droppedClaims = answer.verificationReport?.droppedClaims ?? [];
+  const deadEndAction =
+    answer.outcome.kind === 'insufficient_evidence'
+      ? insufficientEvidenceAction(
+          answer.outcome.reasonCode,
+          answer.questionText,
+          droppedClaims.length > 0,
+        )
       : null;
 
   return (
@@ -130,6 +189,8 @@ export default function AnswerView({ answer, documentIndex, conflictChunkIndex }
         />
       )}
 
+      {deadEndAction && <div className="dead-end-action">{deadEndAction}</div>}
+
       {conflictSplit && (
         <div className="conflict-block">
           <ConflictValueCompare values={conflictSplit.resolved} documentIndex={documentIndex} />
@@ -145,11 +206,28 @@ export default function AnswerView({ answer, documentIndex, conflictChunkIndex }
               ))}
             </ul>
           )}
+          {answer.conflictIds.length > 0 && (
+            // Best-effort until a server-side conflicts `ids` filter lands: this links straight
+            // into `/conflicts` with `selected` set, the same query param `ConflictsPage` already
+            // reads, rather than guaranteeing the row is on whatever page loads first there.
+            <ul className="conflict-handoff" aria-label="Conflicts to review">
+              {answer.conflictIds.map((conflictId) => (
+                <li key={conflictId}>
+                  <Link
+                    to={`/conflicts?selected=${conflictId}`}
+                    className="btn btn--secondary btn--sm"
+                  >
+                    Review conflict
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
       <DroppedClaimsBand
-        droppedClaims={answer.verificationReport?.droppedClaims ?? []}
+        droppedClaims={droppedClaims}
         isAbstention={answer.outcome.kind === 'insufficient_evidence'}
       />
     </div>

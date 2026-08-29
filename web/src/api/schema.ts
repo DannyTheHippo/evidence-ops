@@ -756,6 +756,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/dashboard/summary': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['DashboardController_summary'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1521,6 +1537,18 @@ export interface components {
        */
       documentTitle: string;
       /**
+       * @description Authority classification of the owning document — 'unclassified' means nobody has declared one, not that it ranks lowest.
+       * @example report
+       * @enum {string}
+       */
+      sourceClass: 'crm-export' | 'pm-export' | 'spreadsheet' | 'memo' | 'report' | 'unclassified';
+      /**
+       * Format: date-time
+       * @description When the owning document was created.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      documentCreatedAt: string;
+      /**
        * @description Fused hybrid-retrieval relevance score (reciprocal rank fusion across the lexical and vector pipelines). Not a 0-1 similarity: it is bounded above by a small constant (2 pipelines / (60 + best rank 1), about 0.0328 today) that shrinks as the query widens, so rendering it as a percentage misrepresents it — use it only to rank this response's hits against each other, never against another query's hits or a fixed threshold.
        * @example 0.0164
        */
@@ -1747,6 +1775,89 @@ export interface components {
        * @example 2026-12-31T00:00:00.000Z
        */
       expiresAt?: string;
+    };
+    DashboardSummaryResponseDto: {
+      /**
+       * @description Approvals still awaiting a human decision.
+       * @example 2
+       */
+      pendingApprovalCount: number;
+      /**
+       * @description Conflicts still open for this tenant.
+       * @example 1
+       */
+      openConflictCount: number;
+      /**
+       * @description The tenant's total document count.
+       * @example 128
+       */
+      documentCount: number;
+      /**
+       * @description The tenant's total source count.
+       * @example 4
+       */
+      sourceCount: number;
+      /**
+       * @description Documents whose current version failed ingestion.
+       * @example 2
+       */
+      ingestionFailedCount: number;
+      /**
+       * @description Sources whose most recent sync attempt failed.
+       * @example 1
+       */
+      syncFailedCount: number;
+      /**
+       * @description Documents whose current version needs OCR — a scanned PDF with no embedded text layer.
+       * @example 3
+       */
+      needsOcrCount: number;
+      /**
+       * @description Documents whose current version ingested successfully but carries no extracted facts.
+       * @example 1
+       */
+      factsFailedCount: number;
+      /**
+       * @description The tenant's total answer count.
+       * @example 12
+       */
+      answerCount: number;
+      /**
+       * @description Whether any document in the tenant has a completed current version, resolved across the whole corpus rather than a single page.
+       * @example true
+       */
+      hasIngestedDocument: boolean;
+    };
+    FieldValidationErrorResponseDto: {
+      /**
+       * @description Fully-qualified, dot-joined path of the field that failed validation.
+       * @example ownerEmail
+       */
+      field: string;
+      /**
+       * @description The failed constraint's message, naming only the field's local property.
+       * @example ownerEmail must be an email
+       */
+      message: string;
+    };
+    ValidationErrorResponseDto: {
+      /**
+       * @description HTTP status code.
+       * @example 400
+       */
+      statusCode: number;
+      /**
+       * @description HTTP status text.
+       * @example Bad Request
+       */
+      error: string;
+      /**
+       * @description Every failed constraint, joined with "; ".
+       * @example ownerEmail must be an email; values.0.unit should not be empty
+       */
+      message: string;
+      /** @description Per-field breakdown of every failed constraint. */
+      errors: components['schemas']['FieldValidationErrorResponseDto'][];
     };
   };
   responses: never;
@@ -2644,7 +2755,7 @@ export interface operations {
           'application/json': unknown;
         };
       };
-      /** @description A canonical entity with this name already exists for this tenant. */
+      /** @description An alias group with this name already exists for this tenant. */
       409: {
         headers: {
           [name: string]: unknown;
@@ -2711,7 +2822,7 @@ export interface operations {
           'application/json': unknown;
         };
       };
-      /** @description No canonical entity with this id exists for the caller's tenant. */
+      /** @description No alias group with this id exists for the caller's tenant. */
       404: {
         headers: {
           [name: string]: unknown;
@@ -2755,7 +2866,7 @@ export interface operations {
           'application/json': unknown;
         };
       };
-      /** @description No canonical entity with this id exists for the caller's tenant. */
+      /** @description No alias group with this id exists for the caller's tenant. */
       404: {
         headers: {
           [name: string]: unknown;
@@ -2764,7 +2875,7 @@ export interface operations {
           'application/json': unknown;
         };
       };
-      /** @description A canonical entity with this name already exists for this tenant. */
+      /** @description An alias group with this name already exists for this tenant. */
       409: {
         headers: {
           [name: string]: unknown;
@@ -2809,9 +2920,9 @@ export interface operations {
         };
       };
       /**
-       * @description This canonical entity carries no harvested alias by that name.
+       * @description This alias group carries no harvested alias by that name.
        *
-       *     No canonical entity with this id exists for the caller's tenant.
+       *     No alias group with this id exists for the caller's tenant.
        */
       404: {
         headers: {
@@ -2866,9 +2977,9 @@ export interface operations {
         };
       };
       /**
-       * @description This canonical entity carries no harvested alias by that name.
+       * @description This alias group carries no harvested alias by that name.
        *
-       *     No canonical entity with this id exists for the caller's tenant.
+       *     No alias group with this id exists for the caller's tenant.
        */
       404: {
         headers: {
@@ -2911,6 +3022,8 @@ export interface operations {
         limit?: number;
         /** @description Exact conflict status to filter by. */
         status?: 'open' | 'resolved' | 'dismissed';
+        /** @description Conflict ids to resolve directly, comma-separated in a single querystring value or repeated (ids=a&ids=b) — both arrive at this handler the same way. When present, skip/limit are ignored and every matching conflict is returned, so a caller resolving a fixed batch (an answer's conflictIds, an approval's subject) never loses one to pagination. An id that does not resolve — unknown or belonging to another tenant — is silently absent from the result rather than a 404, matching DocumentsService.lookupVersions. */
+        ids?: string[];
         /** @description Field to sort by. Defaults to createdAt. */
         sort?: 'createdAt' | 'status';
         /** @description Sort direction. Defaults to desc. */
@@ -3345,6 +3458,8 @@ export interface operations {
         sort?: 'name' | 'owner' | 'lastSyncAt' | 'createdAt';
         /** @description Sort direction. Defaults to asc. */
         sortDir?: 'asc' | 'desc';
+        /** @description Case-insensitive search over name, path and owner. Applies before pagination, so `count` reflects the filtered total rather than the full tenant list. */
+        q?: string;
       };
       header?: never;
       path?: never;
@@ -3752,6 +3867,26 @@ export interface operations {
         };
         content: {
           'application/json': unknown;
+        };
+      };
+    };
+  };
+  DashboardController_summary: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The caller's tenant, summarized into the counts the Home dashboard needs. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DashboardSummaryResponseDto'];
         };
       };
     };

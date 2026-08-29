@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   decideApproval,
   listApprovals,
@@ -14,9 +14,12 @@ import {
 } from '../api/client';
 import ApprovalDecisionDialog from '../components/ApprovalDecisionDialog';
 import { IconCheck } from '../components/icons';
+import QueueList from '../components/QueueList';
 import RecordListPage, { type RecordListStatus } from '../components/RecordListPage';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
+import DescriptionList from '../components/ui/DescriptionList';
+import EmptyState from '../components/ui/EmptyState';
 import FilterBar from '../components/ui/FilterBar';
 import Pager from '../components/ui/Pager';
 import Select from '../components/ui/Select';
@@ -39,15 +42,15 @@ const STATE_OPTIONS: { value: ApprovalState; label: string }[] = [
   { value: 'timed_out', label: 'Timed out' },
 ];
 
-const SORT_OPTIONS: { value: ApprovalSortField; label: string }[] = [
-  { value: 'createdAt', label: 'Requested' },
-  { value: 'state', label: 'State' },
-  { value: 'decidedAt', label: 'Decided' },
-];
-
-const DIRECTION_OPTIONS: { value: SortDirection; label: string }[] = [
-  { value: 'desc', label: 'Descending' },
-  { value: 'asc', label: 'Ascending' },
+// Field/direction pairs collapsed into one control, matching ConflictsPage.tsx's own combined
+// sort — the queue column has no header row for `SortableHeaderCell` to attach to.
+const SORT_OPTIONS: { value: string; label: string }[] = [
+  { value: 'createdAt-desc', label: 'Newest first' },
+  { value: 'createdAt-asc', label: 'Oldest first' },
+  { value: 'state-asc', label: 'State (A–Z)' },
+  { value: 'state-desc', label: 'State (Z–A)' },
+  { value: 'decidedAt-desc', label: 'Recently decided' },
+  { value: 'decidedAt-asc', label: 'Decided (oldest)' },
 ];
 
 const stateTone: Record<ApprovalState, 'caution' | 'verified' | 'rejected' | 'neutral'> = {
@@ -58,12 +61,15 @@ const stateTone: Record<ApprovalState, 'caution' | 'verified' | 'rejected' | 'ne
 };
 
 // Declared at module scope, matching AnswersPage.tsx's own `URL_DEFAULTS` — `useUrlState` adopts
-// this once on mount and keeps that identity for the hook's lifetime.
-const URL_DEFAULTS: Record<'state' | 'sort' | 'sortDir' | 'skip', string> = {
+// this once on mount and keeps that identity for the hook's lifetime. `selected` has no server
+// meaning; it names which queue row the detail pane shows, mirroring ConflictsPage.tsx's own key so
+// an approval can be linked to the same way a conflict already can.
+const URL_DEFAULTS: Record<'state' | 'sort' | 'sortDir' | 'skip' | 'selected', string> = {
   state: 'pending',
   sort: 'createdAt',
   sortDir: 'desc',
   skip: '0',
+  selected: '',
 };
 
 /** The value `conflict.proposedWinnerFactId` points at, formatted for display — undefined when
@@ -126,6 +132,36 @@ function ApprovalDetail({
     onDecided(approval.id);
   }
 
+  const detailItems = [
+    { term: 'Requested', description: <Timestamp value={approval.createdAt} /> },
+    ...(approval.requestedBy ? [{ term: 'Requested by', description: approval.requestedBy }] : []),
+    {
+      term: 'Subject',
+      description: (
+        <>
+          {approval.subject.entityType}{' '}
+          <span className="mono" title={approval.subject.entityId}>
+            {shortId(approval.subject.entityId)}
+          </span>
+        </>
+      ),
+    },
+    ...(approval.state !== 'pending' && approval.decidedAt
+      ? [
+          {
+            term: 'Decided',
+            description: (
+              <>
+                <Timestamp value={approval.decidedAt} />
+                {approval.decidedBy ? ` by ${approval.decidedBy}` : ''}
+              </>
+            ),
+          },
+        ]
+      : []),
+    ...(approval.decisionReason ? [{ term: 'Reason', description: approval.decisionReason }] : []),
+  ];
+
   return (
     <div className="card">
       <div className="card-head">
@@ -133,25 +169,7 @@ function ApprovalDetail({
         <Badge tone={stateTone[approval.state]}>{approval.state}</Badge>
       </div>
 
-      {approval.requestedBy && <p className="cell-sub">Requested by {approval.requestedBy}</p>}
-      {/* The summary above already says what is being approved; the raw entity id is a lookup
-          key, shown truncated with the full value on hover rather than as a wall of hex. */}
-      <p className="cell-sub">
-        {approval.subject.entityType}{' '}
-        <span className="mono" title={approval.subject.entityId}>
-          {shortId(approval.subject.entityId)}
-        </span>
-      </p>
-      <p className="cell-sub">
-        Requested <Timestamp value={approval.createdAt} />
-      </p>
-      {approval.state !== 'pending' && approval.decidedAt && (
-        <p className="cell-sub">
-          Decided <Timestamp value={approval.decidedAt} />
-          {approval.decidedBy ? ` by ${approval.decidedBy}` : ''}
-        </p>
-      )}
-      {approval.decisionReason && <p className="cell-sub">Reason: {approval.decisionReason}</p>}
+      <DescriptionList columns={2} items={detailItems} />
 
       {conflict && (
         <>
@@ -164,14 +182,17 @@ function ApprovalDetail({
               Policy has no recommendation for this conflict — {conflict.explanation}
             </p>
           ) : (
-            <>
-              <Badge tone="info">recommended · {conflict.ruleFired}</Badge>
-              <p className="cell-sub">
+            <div className="policy-strip">
+              <span className="policy-strip-label">recommended · {conflict.ruleFired}</span>
+              <span className="policy-strip-reason">
                 {winnerLabel ? `${winnerLabel} — ` : ''}
                 {conflict.explanation}
-              </p>
-            </>
+              </span>
+            </div>
           )}
+          <p className="cell-sub">
+            <Link to={`/conflicts?selected=${conflict.id}`}>View conflict</Link>
+          </p>
         </>
       )}
 
@@ -225,6 +246,7 @@ export default function ApprovalsPage() {
   const sort = urlState.sort as ApprovalSortField;
   const sortDir = urlState.sortDir as SortDirection;
   const skip = Number(urlState.skip);
+  const selectedId = urlState.selected;
 
   // Only this, not the state Select's own value, drives the fetch — the filter applies on
   // submit, not on every selection change (AnswersPage.tsx follows the same split).
@@ -233,7 +255,6 @@ export default function ApprovalsPage() {
   const [count, setCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [conflictsById, setConflictsById] = useState<Map<string, Conflict>>(new Map());
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const session = useSession();
   const metricLabels = useMetricLabels();
   // Fails CLOSED on the still-loading probe too, not just anon/error — a member (or a session
@@ -244,7 +265,13 @@ export default function ApprovalsPage() {
   useEffect(() => {
     let cancelled = false;
 
-    listApprovals({ skip, limit: PAGE_SIZE, state: appliedState, sort, sortDir })
+    listApprovals({
+      skip,
+      limit: PAGE_SIZE,
+      state: appliedState,
+      sort,
+      sortDir,
+    })
       .then(({ docs, count: total }) => {
         if (cancelled) return;
         setApprovals(docs);
@@ -293,6 +320,15 @@ export default function ApprovalsPage() {
     setUrlState({ state: URL_DEFAULTS.state, skip: URL_DEFAULTS.skip });
   }
 
+  function handleSortChange(value: string) {
+    const [field, direction] = value.split('-');
+    setUrlState({ sort: field, sortDir: direction, skip: URL_DEFAULTS.skip });
+  }
+
+  function handleSelect(id: string) {
+    setUrlState({ selected: id });
+  }
+
   // A decided approval leaves the pending inbox — decide controls only render on a pending-state
   // row (`decide()` in `approvals.service.ts` rejects anything else), so removing it locally on
   // success matches what a re-fetch of the pending filter would show anyway.
@@ -302,6 +338,7 @@ export default function ApprovalsPage() {
   }
 
   const hasFilter = appliedState !== URL_DEFAULTS.state;
+  const sortKey = `${sort}-${sortDir}`;
   // Falls back to the first row once the previous selection leaves the current page (paging,
   // filtering, or its own decision) — a render-time derivation rather than an effect syncing
   // selection to a prop/state change.
@@ -315,22 +352,6 @@ export default function ApprovalsPage() {
   let status: RecordListStatus;
   if (approvals === null) {
     status = error ? { kind: 'blank' } : { kind: 'loading', label: 'Loading approvals…' };
-  } else if (approvals.length === 0) {
-    status =
-      appliedState === 'pending'
-        ? {
-            kind: 'empty',
-            icon: <IconCheck size={24} />,
-            title: 'Nothing waiting on you',
-            description:
-              'Every approval has been decided. New requests appear here as workflows park on them.',
-          }
-        : {
-            kind: 'empty',
-            icon: <IconCheck size={24} />,
-            title: 'No approvals match this filter',
-            description: 'Clear or adjust the state filter above.',
-          };
   } else {
     status = { kind: 'ready' };
   }
@@ -353,18 +374,10 @@ export default function ApprovalsPage() {
           <div className="control-row">
             <div className="sort-select">
               <Select
-                label="Sort by"
+                label="Sort"
                 options={SORT_OPTIONS}
-                value={sort}
-                onChange={(value) => setUrlState({ sort: value, skip: URL_DEFAULTS.skip })}
-              />
-            </div>
-            <div className="sort-select">
-              <Select
-                label="Direction"
-                options={DIRECTION_OPTIONS}
-                value={sortDir}
-                onChange={(value) => setUrlState({ sortDir: value, skip: URL_DEFAULTS.skip })}
+                value={sortKey}
+                onChange={handleSortChange}
               />
             </div>
           </div>
@@ -383,35 +396,59 @@ export default function ApprovalsPage() {
         )
       }
     >
+      {approvals && approvals.length === 0 && appliedState === 'pending' && (
+        <EmptyState
+          className="empty-state--zero"
+          icon={<IconCheck size={24} />}
+          title="Nothing waiting on you"
+          description="Every approval has been decided. New requests appear here as workflows park on them."
+        />
+      )}
+
+      {approvals && approvals.length === 0 && appliedState !== 'pending' && (
+        <EmptyState
+          icon={<IconCheck size={24} />}
+          title="No approvals match this filter"
+          description="Clear or adjust the state filter above."
+          action={
+            <Button variant="secondary" onClick={handleClearFilter}>
+              Show all
+            </Button>
+          }
+        />
+      )}
+
       {approvals && approvals.length > 0 && (
         <SplitView
           ratio="queue"
           primaryLabel="Approvals queue"
           secondaryLabel="Approval details"
           primary={
-            <ul className="approval-list" aria-label="Approvals awaiting review">
-              {approvals.map((approval) => {
-                const isSelected = approval.id === selectedApproval?.id;
-                return (
-                  <li key={approval.id}>
-                    <button
-                      type="button"
-                      className={`card queue-item${isSelected ? ' is-active' : ''}`}
-                      aria-current={isSelected ? 'true' : undefined}
-                      onClick={() => setSelectedId(approval.id)}
-                    >
-                      <div className="card-head">
-                        <h2 className="card-title cell-truncate">{approval.summary}</h2>
-                        <Badge tone={stateTone[approval.state]}>{approval.state}</Badge>
-                      </div>
-                      <p className="cell-sub">
-                        Requested <Timestamp value={approval.createdAt} />
-                      </p>
-                    </button>
-                  </li>
-                );
+            <QueueList
+              items={approvals}
+              selectedId={selectedApproval?.id ?? null}
+              onSelect={handleSelect}
+              ariaLabel="Approvals awaiting review"
+              renderItem={(approval) => ({
+                identity: (
+                  <>
+                    <h2 className="card-title cell-truncate">{approval.summary}</h2>
+                    <Badge tone={stateTone[approval.state]}>{approval.state}</Badge>
+                  </>
+                ),
+                quantifier: (
+                  <>
+                    {approval.subject.entityType}{' '}
+                    <span className="mono">{shortId(approval.subject.entityId)}</span>
+                  </>
+                ),
+                age: (
+                  <>
+                    Requested <Timestamp value={approval.createdAt} />
+                  </>
+                ),
               })}
-            </ul>
+            />
           }
           secondary={
             selectedApproval ? (

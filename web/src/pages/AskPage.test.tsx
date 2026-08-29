@@ -1,9 +1,12 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { clearToasts, getToasts } from '../components/ui/toast';
 import { clearSession } from '../lib/auth';
 import { FakeEventSource } from '../test/fake-event-source';
 import AskPage from './AskPage';
+
+const EXAMPLE_QUESTION = 'What is the cap rate for Northgate Business Park in Q1 2025?';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -32,6 +35,7 @@ describe('AskPage', () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     clearSession();
+    clearToasts();
   });
 
   it('renders insufficient_evidence as a valid answer, not an error', async () => {
@@ -416,5 +420,136 @@ describe('AskPage', () => {
     await screen.findByText('queued');
 
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/questions')).toHaveLength(1);
+  });
+
+  it('deletes the error toast for a failed submit — the page alert is the only report', async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(jsonResponse({ message: 'Question limit exceeded' }, 500)),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter>
+        <AskPage pollIntervalMs={5} />
+      </MemoryRouter>,
+    );
+
+    ask('Q');
+
+    expect(await screen.findByText('Question limit exceeded')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('Question')).toHaveFocus());
+    // Proves the toast deletion, rather than merely asserting the alert renders: the module-scope
+    // toast store stays empty, so nothing was ever reported through `notify()` for this failure.
+    expect(getToasts()).toHaveLength(0);
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+  });
+
+  it('reads a prefill question from router state, for a redundant-entry "Ask again" link elsewhere', () => {
+    render(
+      <MemoryRouter
+        initialEntries={[
+          { pathname: '/ask', state: { questionText: 'What is the vacancy rate?' } },
+        ]}
+      >
+        <AskPage pollIntervalMs={5} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByLabelText('Question')).toHaveValue('What is the vacancy rate?');
+  });
+
+  it('rejects a trimmed-empty question, refocusing the input and issuing no request', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter>
+        <AskPage pollIntervalMs={5} />
+      </MemoryRouter>,
+    );
+
+    fireEvent.change(screen.getByLabelText('Question'), { target: { value: '   ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
+
+    expect(await screen.findByText('Enter a question')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('Question')).toHaveFocus());
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('fills the input and focuses it from an example chip, never submitting', () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter>
+        <AskPage pollIntervalMs={5} />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: EXAMPLE_QUESTION }));
+
+    const input = screen.getByLabelText('Question');
+    expect(input).toHaveValue(EXAMPLE_QUESTION);
+    expect(input).toHaveFocus();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('hides the example chips once a run exists', async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(jsonResponse({ id: 'answer-9', runStatus: 'queued' }, 201)),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter>
+        <AskPage pollIntervalMs={5} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('button', { name: EXAMPLE_QUESTION })).toBeInTheDocument();
+
+    ask('Q');
+    await screen.findByText('queued');
+
+    expect(screen.queryByRole('button', { name: EXAMPLE_QUESTION })).not.toBeInTheDocument();
+  });
+
+  it('reports a run error next to the workspace rather than folding it into the submit alert or a toast', async () => {
+    FakeEventSource.reset();
+    vi.stubGlobal('EventSource', FakeEventSource);
+
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/questions') {
+        return Promise.resolve(jsonResponse({ id: 'answer-10', runStatus: 'queued' }, 201));
+      }
+      if (url === '/api/v1/answers/answer-10') {
+        return Promise.reject(new Error('Simulated poll failure'));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter>
+        <AskPage pollIntervalMs={5} />
+      </MemoryRouter>,
+    );
+
+    ask('Q');
+    await screen.findByText('queued');
+
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const [source] = FakeEventSource.instances;
+
+    // A hard transport failure (readyState CLOSED) falls back to polling immediately, which then
+    // hits the same rejecting fetch mock and surfaces as `runError`.
+    act(() => {
+      source.failConnection();
+    });
+
+    expect(await screen.findByText('Simulated poll failure')).toBeInTheDocument();
+    // Proves the toast deletion, rather than merely asserting the alert renders: the module-scope
+    // toast store stays empty, so nothing was ever reported through `notify()` for this failure.
+    expect(getToasts()).toHaveLength(0);
   });
 });

@@ -50,7 +50,14 @@ interface WorkflowRunBody {
   workflowType?: string;
   status: string;
   errorMessage?: string;
+  subjectId?: string;
+  subjectType?: string;
   createdAt: string;
+}
+
+interface ConflictBody {
+  id: string;
+  status: string;
 }
 
 describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () => {
@@ -221,10 +228,22 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       // Asserting the exact key set is the only gate that catches a response-DTO field missing
       // @Expose() — such a field is silently dropped from the payload with no error anywhere.
       expect(Object.keys(body).sort()).toEqual(
-        ['id', 'workflowId', 'workflowType', 'status', 'createdAt'].sort(),
+        [
+          'id',
+          'workflowId',
+          'workflowType',
+          'status',
+          'subjectId',
+          'subjectType',
+          'createdAt',
+        ].sort(),
       );
       // The label the Runs list shows in place of the opaque workflow uuid.
       expect(body.workflowType).toBe('resolve-conflict');
+      // Closes the approval <-> run <-> conflict triangle: WorkflowRunPage can link straight back
+      // to the conflict this run is gating.
+      expect(body.subjectId).toBe(conflict._id.toString());
+      expect(body.subjectType).toBe('Conflict');
 
       expect(fakeWorkflowEngine.started).toHaveLength(startedBefore + 1);
       const started = fakeWorkflowEngine.started[fakeWorkflowEngine.started.length - 1];
@@ -253,6 +272,101 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
         'subject.entityId': conflict._id,
       });
       expect(events.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('GET /conflicts?ids=', () => {
+    it('rejects an unauthenticated request', async () => {
+      const response = await request(getTestServer(app)).get('/api/v1/conflicts').query({
+        ids: new Types.ObjectId().toString(),
+      });
+
+      expect(response.status).toBe(401);
+    });
+
+    it('resolves a single conflict by id, ignoring pagination', async () => {
+      const { conflict } = await seedConflictWithFacts();
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/conflicts')
+        .query({ ids: conflict._id.toString() })
+        .set('Cookie', cookie);
+      const body = response.body as { docs: ConflictBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.count).toBe(1);
+      expect(body.docs).toHaveLength(1);
+      expect(body.docs[0].id).toBe(conflict._id.toString());
+    });
+
+    it('resolves several conflicts at once, in a single request — the answer.conflictIds case', async () => {
+      const { conflict: conflictA } = await seedConflictWithFacts();
+      const { conflict: conflictB } = await seedConflictWithFacts();
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/conflicts')
+        .query({ ids: [conflictA._id.toString(), conflictB._id.toString()].join(',') })
+        .set('Cookie', cookie);
+      const body = response.body as { docs: ConflictBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.count).toBe(2);
+      expect(body.docs.map((doc) => doc.id).sort()).toEqual(
+        [conflictA._id.toString(), conflictB._id.toString()].sort(),
+      );
+    });
+
+    it('returns an empty result for a well-formed id that does not resolve to any conflict', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/conflicts')
+        .query({ ids: new Types.ObjectId().toString() })
+        .set('Cookie', cookie);
+      const body = response.body as { docs: ConflictBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.docs).toHaveLength(0);
+      expect(body.count).toBe(0);
+    });
+
+    // Cross-tenant isolation: a conflict id belonging to another tenant must not be readable by
+    // guessing its id — silently absent, the same as any other id that fails to resolve, never a
+    // distinguishing 404 that would confirm the id exists in someone else's tenant.
+    it('excludes a conflict belonging to a different tenant, even when its id is named directly', async () => {
+      const { conflict: ownConflict } = await seedConflictWithFacts();
+      const otherTenantConflict = await conflictModel.create({
+        factKey: { entity: 'Riverside Plaza', metric: 'cap_rate', period: '2025-04' },
+        groupKeyNormalized: groupKey({
+          entity: 'Riverside Plaza',
+          metric: 'cap_rate',
+          period: '2025-04',
+        }),
+        factIds: [new Types.ObjectId(), new Types.ObjectId()],
+        magnitude: 0.01,
+        magnitudeUnit: 'ratio',
+        packId: 'cre',
+        packVersion: 1,
+        status: 'open',
+        tenantId: 'other-tenant',
+      });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/conflicts')
+        .query({ ids: [ownConflict._id.toString(), otherTenantConflict._id.toString()].join(',') })
+        .set('Cookie', cookie);
+      const body = response.body as { docs: ConflictBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.count).toBe(1);
+      expect(body.docs.map((doc) => doc.id)).toEqual([ownConflict._id.toString()]);
+    });
+
+    it('returns 400 for a malformed id', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/conflicts')
+        .query({ ids: 'not-an-object-id' })
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(400);
     });
   });
 

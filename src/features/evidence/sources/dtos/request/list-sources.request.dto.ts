@@ -65,4 +65,15 @@ export class ListSourcesRequestDto extends PaginationRequestDto {
   @IsOptional()
   @IsIn(SORT_DIRECTIONS)
   sortDir?: SortDirection;
+
+  @ApiProperty({
+    example: 'deal room',
+    description:
+      'Case-insensitive search over name, path and owner. Applies before pagination, so `count` ' +
+      'reflects the filtered total rather than the full tenant list.',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  q?: string;
 }

@@ -73,9 +73,15 @@ function ProposalRow({
           exists, this is where its link belongs, built from `alias.documentVersionId` and
           `alias.locator` to open straight to the passage. */}
       <TableCell label="Evidence" className="cell-sub">
-        <span className="mono">{formatLocator(alias.locator)}</span> — &ldquo;{alias.quote}&rdquo;
+        <span className="trace-chip mono">{formatLocator(alias.locator)}</span>
+        <blockquote className="proposal-evidence-quote" title={alias.quote}>
+          &ldquo;{alias.quote}&rdquo;
+        </blockquote>
       </TableCell>
       <TableCell label="Actions" className="cell-actions">
+        {/* Confirm is the row's one signal and reversible — a plain small primary. Reject opens a
+            destructive confirmation and reads as the quieter of the two, a small ghost, rather
+            than matching Confirm's weight. */}
         <Button
           variant="primary"
           size="sm"
@@ -85,7 +91,7 @@ function ProposalRow({
           {confirming ? 'Confirming…' : 'Confirm'}
         </Button>
         <Button
-          variant="secondary"
+          variant="ghost"
           size="sm"
           disabled={confirming || rejecting}
           onClick={() => setRejectOpen(true)}
@@ -181,7 +187,16 @@ export default function ProposalsQueue({
       <section className="card">
         <div className="card-head">
           <h2 className="card-title">Review queue</h2>
-          {proposals.length > 0 && scanButton}
+          {proposals.length > 0 && (
+            <div className="queue-head-actions">
+              {/* Counts only the entities this page loaded — the queue has no server-side filter
+                  of its own, so it never claims to be a tenant-wide total. */}
+              <span className="mono cell-sub">
+                {proposals.length} proposal{proposals.length === 1 ? '' : 's'} on this page
+              </span>
+              {scanButton}
+            </div>
+          )}
         </div>
         <p className="page-sub">
           Suffix-only and punctuation-only spelling variants, and aliases read out of documents,

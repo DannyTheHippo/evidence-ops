@@ -23,6 +23,8 @@ interface RetrievedChunkBody {
   locator: unknown;
   documentId: string;
   documentTitle: string;
+  sourceClass: string;
+  documentCreatedAt: string;
   score: number;
 }
 
@@ -34,6 +36,8 @@ const RETRIEVED_CHUNK_KEYS = [
   'locator',
   'documentId',
   'documentTitle',
+  'sourceClass',
+  'documentCreatedAt',
   'score',
 ].sort();
 
@@ -145,6 +149,8 @@ describe('Retrieval (e2e)', () => {
       expect(body.docs[0].sha256).toBe(version.sha256);
       expect(body.docs[0].documentId).toBe(document._id.toString());
       expect(body.docs[0].documentTitle).toBe(document.title);
+      expect(body.docs[0].sourceClass).toBe(document.sourceClass);
+      expect(body.docs[0].documentCreatedAt).toBe(document.createdAt.toISOString());
       expect(body.docs[0].score).toBe(1);
       // Asserting the exact key set is the only gate that catches a response-DTO field missing
       // @Expose() — such a field is silently dropped from the payload with no error anywhere.
@@ -300,19 +306,25 @@ describe('Retrieval (e2e)', () => {
   // across every earlier `search` call above, so exhausting it here would 429 those tests if this
   // block ran before them.
   describe('GET /retrieval/search throttling', () => {
-    it('returns 429 after exceeding the search throttle', async () => {
+    it('returns 429 after exceeding the search throttle, with a readable Retry-After window', async () => {
       fakeRetrievalStore.setHits([]);
-      let lastStatus: number | undefined;
+      let lastResponse: request.Response | undefined;
 
       for (let attempt = 0; attempt < 11; attempt += 1) {
-        const response = await request(getTestServer(app))
+        lastResponse = await request(getTestServer(app))
           .get('/api/v1/retrieval/search')
           .set('Cookie', cookie)
           .query({ query: 'throttle probe' });
-        lastStatus = response.status;
       }
 
-      expect(lastStatus).toBe(429);
+      expect(lastResponse?.status).toBe(429);
+      // `@nestjs/throttler`'s `ThrottlerGuard` sets this itself from the same remaining-TTL value
+      // the storage layer tracks — asserting it here is what catches a regression to a flat,
+      // client-guessed cooldown rather than the window the server actually enforces.
+      const retryAfterSeconds = Number(lastResponse?.headers['retry-after']);
+      expect(Number.isFinite(retryAfterSeconds)).toBe(true);
+      expect(retryAfterSeconds).toBeGreaterThan(0);
+      expect(retryAfterSeconds).toBeLessThanOrEqual(60);
     });
 
     // Regression for the defect `UserThrottlerGuard` closes: every request in this suite reaches

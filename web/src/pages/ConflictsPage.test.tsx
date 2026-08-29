@@ -162,6 +162,36 @@ const threeWayConflict = {
   ],
 };
 
+// The policy recommended a value whose source has since been withdrawn — no primary should render
+// for it, since promoting dead evidence would manufacture a recommendation the system did not make.
+const withdrawnWinnerConflict = {
+  ...openConflict,
+  id: 'conflict-8',
+  factKey: { entity: 'Cedar Court', metric: 'cap_rate', period: '2025-09' },
+  factIds: ['fact-9', 'fact-10'],
+  proposedWinnerFactId: 'fact-9',
+  values: [
+    {
+      factId: 'fact-9',
+      value: 6.1,
+      unit: 'percent',
+      sourceChunkId: 'chunk-i',
+      documentVersionId: 'docver-1',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 1 },
+      withdrawn: true,
+    },
+    {
+      factId: 'fact-10',
+      value: 5.4,
+      unit: 'percent',
+      sourceChunkId: 'chunk-j',
+      documentVersionId: 'docver-1',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+      withdrawn: false,
+    },
+  ],
+};
+
 function renderPage() {
   render(
     <MemoryRouter>
@@ -245,15 +275,16 @@ describe('ConflictsPage', () => {
 
     const detail = screen.getByRole('region', { name: 'Conflict detail' });
     expect(within(detail).getByRole('heading', { name: 'Riverside Plaza' })).toBeInTheDocument();
-    expect(within(detail).getByText('recommended · recency')).toBeInTheDocument();
+    expect(within(detail).getAllByText('Recommended · recency').length).toBeGreaterThan(0);
   });
 
-  it('shows the recommended value with the rule that fired and why', async () => {
+  it('shows the recommended value with the rule that fired and why, above the grid and on its card', async () => {
     vi.stubGlobal('fetch', fetchStub());
 
     renderPage();
 
-    expect(await screen.findByText('recommended · authority')).toBeInTheDocument();
+    // Once in the policy strip above the grid, once on the recommended card's own band.
+    expect(await screen.findAllByText('Recommended · authority')).toHaveLength(2);
     expect(
       screen.getByText(
         "Source 'chunk-a' outranks the other value's source under the authority policy.",
@@ -271,20 +302,23 @@ describe('ConflictsPage', () => {
         'Policy has no recommendation for this conflict — No configured rule distinguishes between these sources.',
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/^recommended ·/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Recommended ·/)).not.toBeInTheDocument();
   });
 
-  it('shows an unscorable conflict with its reason, and never offers a resolve control for it', async () => {
+  it('shows an unscorable conflict with its reason, untruncated, and never offers a resolve control for it', async () => {
     vi.stubGlobal('fetch', fetchStub(undefined, [unscorableConflict]));
 
     renderPage();
 
-    expect(await screen.findByText('Unscorable')).toBeInTheDocument();
-    expect(
-      screen.getByText('1 of 2 disagreeing fact(s) no longer resolve to an ExtractedFact.'),
-    ).toBeInTheDocument();
+    const detail = await screen.findByRole('region', { name: 'Conflict detail' });
+    expect(within(detail).getByText('Unscorable')).toBeInTheDocument();
+    const reason = within(detail).getByText(
+      '1 of 2 disagreeing fact(s) no longer resolve to an ExtractedFact.',
+    );
+    expect(reason).toBeInTheDocument();
+    expect(reason).not.toHaveAttribute('title');
     expect(screen.getByText('5.25 percent')).toBeInTheDocument();
-    expect(screen.queryByText(/^recommended ·/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Recommended ·/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Request resolution' })).not.toBeInTheDocument();
   });
 
@@ -298,9 +332,11 @@ describe('ConflictsPage', () => {
 
     const detail = screen.getByRole('region', { name: 'Conflict detail' });
     expect(within(detail).getByText('Stale')).toBeInTheDocument();
-    expect(
-      within(detail).getByText("Detected under pack 'cre' v1; the active pack is now 'cre' v2."),
-    ).toBeInTheDocument();
+    const reason = within(detail).getByText(
+      "Detected under pack 'cre' v1; the active pack is now 'cre' v2.",
+    );
+    expect(reason).toBeInTheDocument();
+    expect(reason).not.toHaveAttribute('title');
   });
 
   it('reads correctly with three or more competing values, labelling the withdrawn one', async () => {
@@ -313,6 +349,43 @@ describe('ConflictsPage', () => {
     expect(within(detail).getByText('5.4 percent')).toBeInTheDocument();
     expect(within(detail).getByText('7.9 percent')).toBeInTheDocument();
     expect(within(detail).getByText('Source withdrawn')).toBeInTheDocument();
+  });
+
+  it('offers a primary resolve action on the recommended card only, secondary on every other', async () => {
+    vi.stubGlobal('fetch', fetchStub(undefined, [threeWayConflict]));
+
+    renderPage();
+
+    const detail = await screen.findByRole('region', { name: 'Conflict detail' });
+    const resolveButtons = within(detail).getAllByRole('button', { name: 'Request resolution' });
+    expect(resolveButtons).toHaveLength(3);
+    // fact-6 (6.1 percent) is threeWayConflict's proposedWinnerFactId and is not withdrawn — its
+    // action is the pane's only primary. fact-7 (5.4 percent) is neither recommended nor withdrawn,
+    // and fact-8 (7.9 percent) is withdrawn — neither gets primary treatment.
+    expect(resolveButtons[0]).toHaveClass('btn--primary');
+    expect(resolveButtons[1]).toHaveClass('btn--secondary');
+    expect(resolveButtons[2]).toHaveClass('btn--secondary');
+  });
+
+  it('offers no primary resolve action when the policy has no recommendation', async () => {
+    vi.stubGlobal('fetch', fetchStub(undefined, [undecidedConflict]));
+
+    renderPage();
+
+    const resolveButton = await screen.findByRole('button', { name: 'Request resolution' });
+    expect(resolveButton).toHaveClass('btn--secondary');
+    expect(resolveButton).not.toHaveClass('btn--primary');
+  });
+
+  it('offers no primary resolve action when the recommended value has been withdrawn', async () => {
+    vi.stubGlobal('fetch', fetchStub(undefined, [withdrawnWinnerConflict]));
+
+    renderPage();
+
+    const detail = await screen.findByRole('region', { name: 'Conflict detail' });
+    const resolveButtons = within(detail).getAllByRole('button', { name: 'Request resolution' });
+    expect(resolveButtons).toHaveLength(2);
+    expect(resolveButtons.some((button) => button.classList.contains('btn--primary'))).toBe(false);
   });
 
   it('opens a confirm dialog before requesting a resolution, and does not fire on load', async () => {
@@ -433,7 +506,7 @@ describe('ConflictsPage', () => {
 
     renderPage();
 
-    expect(await screen.findByText('47 total')).toBeInTheDocument();
+    expect(await screen.findByText('1–20 of 47')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
   });
@@ -455,16 +528,19 @@ describe('ConflictsPage', () => {
 
     renderPage();
 
-    await screen.findByRole('heading', { name: 'Northgate Business Park' });
+    const detail = await screen.findByRole('region', { name: 'Conflict detail' });
+    await within(detail).findByRole('heading', { name: 'Northgate Business Park' });
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-    await screen.findByText('47 total');
+    await screen.findByText('21–40 of 47');
 
     fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'resolved' } });
     expect(fetchMock.mock.calls.some(([url]) => url.includes('status=resolved'))).toBe(false);
 
     fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
 
-    expect(await screen.findByRole('heading', { name: 'Riverside Plaza' })).toBeInTheDocument();
+    expect(
+      await within(detail).findByRole('heading', { name: 'Riverside Plaza' }),
+    ).toBeInTheDocument();
     expect(
       fetchMock.mock.calls.some(
         ([url]) =>
@@ -490,7 +566,8 @@ describe('ConflictsPage', () => {
 
     renderPage();
 
-    await screen.findByRole('heading', { name: 'Northgate Business Park' });
+    const detail = await screen.findByRole('region', { name: 'Conflict detail' });
+    await within(detail).findByRole('heading', { name: 'Northgate Business Park' });
 
     const sortSelect = screen.getByLabelText('Sort');
     const sortableValues = [...sortSelect.querySelectorAll('option')].map((option) => option.value);
@@ -498,7 +575,9 @@ describe('ConflictsPage', () => {
 
     fireEvent.change(sortSelect, { target: { value: 'status-asc' } });
 
-    expect(await screen.findByRole('heading', { name: 'Riverside Plaza' })).toBeInTheDocument();
+    expect(
+      await within(detail).findByRole('heading', { name: 'Riverside Plaza' }),
+    ).toBeInTheDocument();
     expect(
       fetchMock.mock.calls.some(
         ([url]) => url === '/api/v1/conflicts?skip=0&limit=20&sort=status&sortDir=asc',

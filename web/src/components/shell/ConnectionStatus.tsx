@@ -5,15 +5,14 @@ import {
   unsubscribeStreamStatus,
 } from '../../lib/use-event-stream';
 import type { StreamState } from '../../lib/use-event-stream';
-import Badge from '../ui/Badge';
 
-const STATE_CONFIG: Partial<
-  Record<StreamState, { label: string; tone: 'info' | 'verified' | 'caution' | 'neutral' }>
-> = {
-  connecting: { label: 'Connecting', tone: 'info' },
-  live: { label: 'Live', tone: 'verified' },
-  stale: { label: 'Stale', tone: 'caution' },
-  fallback: { label: 'Polling', tone: 'neutral' },
+type ConnectionTone = 'live' | 'connecting' | 'stale' | 'polling';
+
+const STATE_CONFIG: Partial<Record<StreamState, { label: string; tone: ConnectionTone }>> = {
+  connecting: { label: 'Connecting', tone: 'connecting' },
+  live: { label: 'Live', tone: 'live' },
+  stale: { label: 'Stale', tone: 'stale' },
+  fallback: { label: 'Polling', tone: 'polling' },
 };
 
 /** Reads the module-scope stream status published by whichever page currently holds an
@@ -33,7 +32,12 @@ export default function ConnectionStatus() {
 
   return (
     <div className="connection-status" aria-live="polite">
-      {config && <Badge tone={config.tone}>{config.label}</Badge>}
+      {config && (
+        <>
+          <span className={`connection-dot connection-dot--${config.tone}`} aria-hidden="true" />
+          <span className="micro-label">{config.label}</span>
+        </>
+      )}
     </div>
   );
 }

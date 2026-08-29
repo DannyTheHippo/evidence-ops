@@ -28,9 +28,9 @@ describe('EntityEditorDialog', () => {
   it('opens empty in create mode', () => {
     render(<EntityEditorDialog onClose={() => {}} onSaved={() => {}} />);
 
-    expect(screen.getByRole('dialog', { name: 'Add canonical entity' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Add alias group' })).toBeInTheDocument();
     expect(screen.getByLabelText('Canonical name')).toHaveValue('');
-    expect(screen.getByLabelText('Aliases')).toHaveValue('');
+    expect(screen.getByLabelText('Aliases (optional)')).toHaveValue('');
     expect(screen.getByRole('button', { name: 'Add entity' })).toBeInTheDocument();
   });
 
@@ -39,7 +39,9 @@ describe('EntityEditorDialog', () => {
 
     expect(screen.getByRole('dialog', { name: 'Edit "Northgate Plaza"' })).toBeInTheDocument();
     expect(screen.getByLabelText('Canonical name')).toHaveValue('Northgate Plaza');
-    expect(screen.getByLabelText('Aliases')).toHaveValue('Northgate\nNorthgate Shopping Center');
+    expect(screen.getByLabelText('Aliases (optional)')).toHaveValue(
+      'Northgate\nNorthgate Shopping Center',
+    );
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeInTheDocument();
   });
 
@@ -61,7 +63,7 @@ describe('EntityEditorDialog', () => {
     fireEvent.change(screen.getByLabelText('Canonical name'), {
       target: { value: 'Southpark Commons' },
     });
-    fireEvent.change(screen.getByLabelText('Aliases'), {
+    fireEvent.change(screen.getByLabelText('Aliases (optional)'), {
       target: { value: '  Southpark  \n\n' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Add entity' }));
@@ -104,10 +106,7 @@ describe('EntityEditorDialog', () => {
       'fetch',
       vi.fn(() =>
         Promise.resolve(
-          jsonResponse(
-            { message: 'A canonical entity named "Northgate Plaza" already exists' },
-            409,
-          ),
+          jsonResponse({ message: 'An alias group named "Northgate Plaza" already exists' }, 409),
         ),
       ),
     );
@@ -121,7 +120,7 @@ describe('EntityEditorDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add entity' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'A canonical entity named "Northgate Plaza" already exists',
+      'An alias group named "Northgate Plaza" already exists',
     );
     expect(onSaved).not.toHaveBeenCalled();
     expect(screen.getByRole('dialog')).toBeInTheDocument();
@@ -134,5 +133,82 @@ describe('EntityEditorDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('submits on Enter from the canonical name field, but Enter in the aliases textarea never submits', async () => {
+    const created = {
+      id: 'entity-3',
+      canonicalName: 'Lakeside Mall',
+      aliases: ['Lakeside', 'Lake Mall'],
+      createdAt: '2026-08-01T00:00:00.000Z',
+    };
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(created, 201)));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<EntityEditorDialog onClose={() => {}} onSaved={() => {}} />);
+
+    const aliasesField = screen.getByLabelText('Aliases (optional)');
+    // A real browser inserts the newline itself and never submits from a <textarea> on Enter;
+    // jsdom does neither, so the value change below stands in for what that keystroke produces —
+    // the assertion that matters here is that no request follows it.
+    fireEvent.change(aliasesField, { target: { value: 'Lakeside\nLake Mall' } });
+    fireEvent.keyDown(aliasesField, { key: 'Enter' });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(aliasesField).toHaveValue('Lakeside\nLake Mall');
+
+    const nameField = screen.getByLabelText('Canonical name');
+    fireEvent.change(nameField, { target: { value: 'Lakeside Mall' } });
+    fireEvent.keyDown(nameField, { key: 'Enter' });
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+  });
+
+  it('flags case-insensitive duplicate alias lines without calling the server', () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<EntityEditorDialog onClose={() => {}} onSaved={() => {}} />);
+
+    fireEvent.change(screen.getByLabelText('Canonical name'), {
+      target: { value: 'Northgate Plaza' },
+    });
+    fireEvent.change(screen.getByLabelText('Aliases (optional)'), {
+      target: { value: 'Northgate\nnorthgate' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add entity' }));
+
+    expect(screen.getByText('Aliases repeat: northgate')).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('folds an indexed aliases.0 server-validation error onto the aliases field, not the form banner', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse(
+            {
+              message: 'Validation failed',
+              errors: [{ field: 'aliases.0', message: 'each value in aliases must be a string' }],
+            },
+            400,
+          ),
+        ),
+      ),
+    );
+    const onSaved = vi.fn();
+
+    render(<EntityEditorDialog onClose={() => {}} onSaved={onSaved} />);
+
+    fireEvent.change(screen.getByLabelText('Canonical name'), {
+      target: { value: 'Lakeside Mall' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add entity' }));
+
+    // `useFormSubmit` matches a dotted field path on its root segment, so `aliases.0` lands on the
+    // `aliases` control rather than the form-level banner.
+    expect(await screen.findByText('each value in aliases must be a string')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(onSaved).not.toHaveBeenCalled();
   });
 });

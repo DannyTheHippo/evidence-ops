@@ -36,6 +36,11 @@ function renderPage(initialEntries: string[] = ['/api-keys']) {
   );
 }
 
+function openMintDialog() {
+  fireEvent.click(screen.getByRole('button', { name: 'Mint key' }));
+  return screen.getByRole('dialog', { name: 'Mint a key' });
+}
+
 const DEFAULT_LIST_URL = '/api/v1/api-keys?skip=0&limit=20&sort=createdAt&sortDir=desc';
 
 const existingKey = {
@@ -75,6 +80,7 @@ const mintedKey = {
   token: 'eo_pat_brandnewtoken123',
   tokenPrefix: 'eo_pat_brandn',
   createdAt: '2026-08-01T00:00:00.000Z',
+  expiresAt: '2099-01-01T00:00:00.000Z',
 };
 
 // What the list endpoint returns for `mintedKey` once minted — the server's list mapping never
@@ -84,6 +90,7 @@ const listedMintedKey = {
   name: mintedKey.name,
   tokenPrefix: mintedKey.tokenPrefix,
   createdAt: mintedKey.createdAt,
+  expiresAt: mintedKey.expiresAt,
 };
 
 // A rotation onto `existingKey`'s row: same id and name, a fresh token and prefix.
@@ -93,12 +100,23 @@ const rotatedKey = {
   token: 'eo_pat_rotatedtoken456',
   tokenPrefix: 'eo_pat_rotate',
   createdAt: existingKey.createdAt,
+  expiresAt: '2099-01-01T00:00:00.000Z',
 };
 
 describe('ApiKeysPage', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it('names its sidebar group in the eyebrow, since this route is signed-in-only, not admin-gated', async () => {
+    stubFetch({
+      [DEFAULT_LIST_URL]: () => jsonResponse({ docs: [], count: 0 }),
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('Account')).toBeInTheDocument();
   });
 
   it('lists existing keys, showing only the prefix, never a token', async () => {
@@ -145,21 +163,6 @@ describe('ApiKeysPage', () => {
     const revokedRow = screen.getByText('Retired integration').closest('tr');
     expect(revokedRow).not.toBeNull();
     expect(within(revokedRow as HTMLElement).queryByRole('button')).not.toBeInTheDocument();
-  });
-
-  it('tells the operator what a blank expiry actually does', async () => {
-    stubFetch({
-      [DEFAULT_LIST_URL]: () => jsonResponse({ docs: [], count: 0 }),
-    });
-
-    renderPage();
-    await screen.findByText('No API keys yet');
-
-    expect(
-      screen.getByText(
-        'Leave blank and the platform applies its own default expiry. Set a date to choose a different one.',
-      ),
-    ).toBeInTheDocument();
   });
 
   it('reads as empty when there are no keys', async () => {
@@ -210,7 +213,86 @@ describe('ApiKeysPage', () => {
     expect(screen.getByText('CI integration')).toBeInTheDocument();
   });
 
-  it('shows the plaintext token exactly once at mint, unmistakably marked as unrepeatable', async () => {
+  it('opens the mint dialog from the header action and closes it on Cancel without minting', async () => {
+    stubFetch({
+      [DEFAULT_LIST_URL]: () => jsonResponse({ docs: [], count: 0 }),
+    });
+
+    renderPage();
+    await screen.findByText('No API keys yet');
+
+    const dialog = openMintDialog();
+    expect(within(dialog).getByLabelText('Name')).toBeInTheDocument();
+    expect(
+      within(dialog).getByText('So you can tell this key apart from your others later.'),
+    ).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('caps the expiry picker at 365 days out, mirroring the server bound', async () => {
+    stubFetch({
+      [DEFAULT_LIST_URL]: () => jsonResponse({ docs: [], count: 0 }),
+    });
+
+    renderPage();
+    await screen.findByText('No API keys yet');
+
+    const dialog = openMintDialog();
+    const expiresInput = within(dialog).getByLabelText(/Expires/);
+    const max = expiresInput.getAttribute('max');
+    expect(max).not.toBeNull();
+
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    const untilMax = new Date(max as string).getTime() - Date.now();
+    expect(untilMax).toBeGreaterThan(364 * oneDayMs);
+    expect(untilMax).toBeLessThan(366 * oneDayMs);
+  });
+
+  it('refuses an expiry beyond the 365-day bound before any request is sent', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === DEFAULT_LIST_URL) return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+    await screen.findByText('No API keys yet');
+
+    const dialog = openMintDialog();
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Local dev' } });
+    fireEvent.change(within(dialog).getByLabelText(/Expires/), {
+      target: { value: '2099-01-01T00:00' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Mint' }));
+
+    expect(await screen.findByText('Expiry cannot be more than 365 days out.')).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => url === '/api/v1/api-keys')).toBe(false);
+  });
+
+  it('refuses an expiry that is not in the future before any request is sent', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === DEFAULT_LIST_URL) return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+    await screen.findByText('No API keys yet');
+
+    const dialog = openMintDialog();
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Local dev' } });
+    fireEvent.change(within(dialog).getByLabelText(/Expires/), {
+      target: { value: '2020-01-01T00:00' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Mint' }));
+
+    expect(await screen.findByText('Expiry must be in the future.')).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => url === '/api/v1/api-keys')).toBe(false);
+  });
+
+  it('shows the plaintext token exactly once at mint, unmistakably marked as unrepeatable, and moves focus onto it', async () => {
     let listCalls = 0;
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
       if (url === '/api/v1/api-keys' && init?.method === 'POST') {
@@ -233,15 +315,21 @@ describe('ApiKeysPage', () => {
     renderPage();
     await screen.findByText('No API keys yet');
 
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Local dev' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Mint key' }));
+    const dialog = openMintDialog();
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Local dev' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Mint' }));
 
     expect(await screen.findByText('eo_pat_brandnewtoken123')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(
       screen.getByText(
         'This is the only time this token is shown. It cannot be retrieved again — copy it now or mint a new key later.',
       ),
     ).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(document.activeElement).toHaveClass('secret-reveal');
+    });
 
     // The reloaded list row for the newly minted key shows only its prefix — the token itself
     // never appears anywhere except the one-time panel above.
@@ -251,7 +339,11 @@ describe('ApiKeysPage', () => {
       expect(row).not.toHaveTextContent(mintedKey.token);
     }
 
-    expect(JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)).toEqual({
+    // A blank expiry is omitted from the request body entirely, never sent as an empty string.
+    const mintCall = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/v1/api-keys' && (init as RequestInit)?.method === 'POST',
+    );
+    expect(JSON.parse((mintCall?.[1] as RequestInit).body as string)).toEqual({
       name: 'Local dev',
     });
 
@@ -261,20 +353,12 @@ describe('ApiKeysPage', () => {
     expect(within(table).getByText('eo_pat_brandn…')).toBeInTheDocument();
   });
 
-  it('clears the previous one-time token panel when a second mint fails', async () => {
-    let mintAttempts = 0;
+  it('shows a mint server error inside the dialog and keeps it open', async () => {
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
       if (url === '/api/v1/api-keys' && init?.method === 'POST') {
-        mintAttempts += 1;
-        return Promise.resolve(
-          mintAttempts === 1
-            ? jsonResponse(mintedKey, 201)
-            : jsonResponse({ message: 'Key limit reached' }, 409),
-        );
+        return Promise.resolve(jsonResponse({ message: 'Key limit reached' }, 409));
       }
-      if (url === DEFAULT_LIST_URL) {
-        return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
-      }
+      if (url === DEFAULT_LIST_URL) return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
       return Promise.reject(new Error(`Unhandled fetch: ${url}`));
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -282,14 +366,12 @@ describe('ApiKeysPage', () => {
     renderPage();
     await screen.findByText('No API keys yet');
 
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Local dev' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Mint key' }));
-    expect(await screen.findByText(mintedKey.token)).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Second key' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Mint key' }));
+    const dialog = openMintDialog();
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Local dev' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Mint' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Key limit reached');
+    expect(screen.getByRole('dialog', { name: 'Mint a key' })).toBeInTheDocument();
     expect(screen.queryByText(mintedKey.token)).not.toBeInTheDocument();
   });
 
@@ -307,10 +389,12 @@ describe('ApiKeysPage', () => {
     renderPage();
     await screen.findByText('No API keys yet');
 
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Local dev' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Mint key' }));
+    const dialog = openMintDialog();
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Local dev' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Mint' }));
+    await screen.findByText(mintedKey.token);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Copy' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
 
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(mintedKey.token);
@@ -330,8 +414,9 @@ describe('ApiKeysPage', () => {
     renderPage();
     await screen.findByText('No API keys yet');
 
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Local dev' } });
-    const button = screen.getByRole('button', { name: 'Mint key' });
+    const dialog = openMintDialog();
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Local dev' } });
+    const button = within(dialog).getByRole('button', { name: 'Mint' });
     fireEvent.click(button);
     fireEvent.click(button);
 
@@ -364,8 +449,9 @@ describe('ApiKeysPage', () => {
 
     expect(dispatchBeforeUnload().defaultPrevented).toBe(false);
 
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Local dev' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Mint key' }));
+    const dialog = openMintDialog();
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Local dev' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Mint' }));
     await screen.findByText(mintedKey.token);
 
     expect(dispatchBeforeUnload().defaultPrevented).toBe(true);
@@ -375,7 +461,7 @@ describe('ApiKeysPage', () => {
     expect(dispatchBeforeUnload().defaultPrevented).toBe(false);
   });
 
-  it('rotating shows the new token once and states the old one has stopped working', async () => {
+  it('rotating shows the new token once through the same panel, and states the old one has stopped working', async () => {
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
       if (url === DEFAULT_LIST_URL) {
         return Promise.resolve(jsonResponse({ docs: [existingKey], count: 1 }));
@@ -399,6 +485,10 @@ describe('ApiKeysPage', () => {
         'This is the only time the new token is shown, and it cannot be retrieved again. The previous token has already stopped working — copy this one now.',
       ),
     ).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(document.activeElement).toHaveClass('secret-reveal');
+    });
 
     // The row's prefix reflects the new token, in place, with no separate reload.
     expect(screen.getByText('eo_pat_rotate…')).toBeInTheDocument();

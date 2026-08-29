@@ -91,14 +91,14 @@ describe('Sidebar', () => {
     expect(screen.getByRole('link', { name: 'API Keys' })).toBeInTheDocument();
   });
 
-  it('shows the Organisation group, with People, Canonical Entities and Audit Log, only to an admin', () => {
+  it('shows the Organisation group, with People, Aliases and Audit Log, only to an admin', () => {
     vi.stubGlobal('fetch', fetchStub());
     const { rerender } = renderSidebar({ isAdmin: true });
 
     expect(screen.getByRole('heading', { name: 'Organisation' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'People' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Audit Log' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Canonical Entities' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Aliases' })).toBeInTheDocument();
 
     rerender(
       <MemoryRouter initialEntries={['/']}>
@@ -115,7 +115,7 @@ describe('Sidebar', () => {
     expect(screen.queryByRole('heading', { name: 'Organisation' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'People' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Audit Log' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Canonical Entities' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Aliases' })).not.toBeInTheDocument();
   });
 
   it('renders the drawer nav inside a dialog once open', () => {

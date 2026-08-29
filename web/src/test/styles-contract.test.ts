@@ -73,7 +73,6 @@ const BARE_HEIGHT_EXEMPTIONS: readonly BareSizeExemption[] = [
   { file: 'primitives.css', selector: '.sr-only', property: 'height' },
   { file: 'primitives.css', selector: '.badge::before', property: 'height' },
   { file: 'shell.css', selector: '.brand-mark', property: 'height' },
-  { file: 'shell.css', selector: '.theme-toggle > span', property: 'height' },
   { file: 'features.css', selector: '.live-dot', property: 'height' },
 ];
 
@@ -173,9 +172,11 @@ describe('styles contract', () => {
         }
       }
     }
-    // Canary: today's five exemptions (sr-only, badge::before, brand-mark, theme-toggle > span,
-    // live-dot) are the only bare-px height/padding/font-size declarations left outside tokens.css.
-    expect(occurrences).toBe(5);
+    // Canary: the four exemptions above (sr-only, badge::before, brand-mark, live-dot) are the only
+    // bare-px height/padding/font-size declarations outside tokens.css. Exact, not a floor: here the
+    // count is part of the gate, because the exemption list is selector-scoped — a new decorative
+    // marker must earn both a list entry and a bump to this number in the same change.
+    expect(occurrences).toBe(4);
   });
 
   it('keeps both dark-theme token blocks in tokens.css identical ignoring indentation', () => {
@@ -185,6 +186,105 @@ describe('styles contract', () => {
     expect(normalizeBody(firstBody)).toEqual(normalizeBody(secondBody));
     // Guard the comparison itself: two empty strings would also be "equal".
     expect(normalizeBody(firstBody).length).toBeGreaterThan(0);
+  });
+
+  it('tokenizes transition-duration and animation-duration outside tokens.css, save the reduced-motion kill switch', () => {
+    // The transition-duration/animation-duration longhands only — followed by a hyphen rather than
+    // a colon, so this never overlaps with the transition/animation shorthand check below.
+    const durationPattern = /\b(transition-duration|animation-duration)\s*:\s*([^;]+);/g;
+    const nearZero = /^0(?:\.\d+)?m?s\b/;
+    let occurrences = 0;
+    let exempt = 0;
+    for (const { file, css } of NON_TOKEN_SHEETS) {
+      const stripped = stripComments(css);
+      for (const [, property, rawValue] of stripped.matchAll(durationPattern)) {
+        occurrences += 1;
+        const value = rawValue.trim();
+        if (nearZero.test(value)) {
+          exempt += 1;
+          continue;
+        }
+        expect(
+          value,
+          `${file}: ${property} must read a var(--motion-*) token, found "${value}"`,
+        ).toMatch(/^var\(--motion-[\w-]+\)$/);
+      }
+    }
+    // Canary against a regex that silently stops matching. It is a floor, not an exact count: the
+    // rule above is the gate, and a new tokenized longhand must be free to raise this number. The
+    // two longhands present are base.css's reduced-motion kill switch, exempt as a near-zero
+    // override rather than a tokenized duration.
+    expect(occurrences).toBeGreaterThanOrEqual(2);
+    expect(exempt).toBeGreaterThanOrEqual(2);
+  });
+
+  it('tokenizes every duration inside a transition/animation shorthand outside tokens.css', () => {
+    // Property-name boundary requires a colon directly after "transition"/"animation", so this
+    // never overlaps with the -duration longhands checked above. A shorthand can list several
+    // comma-separated properties (each carrying its own duration) and may itself span lines, hence
+    // the non-greedy [\s\S]*? rather than [^;]+. Easing keywords (ease-out, ease-in-out, …) are
+    // deliberately out of scope — only the numeric time components are swept and required to
+    // originate from a var(--motion-*) reference; a bare literal survives everywhere else in the
+    // value (property names, "infinite", commas) because those never match the time pattern.
+    const shorthandPattern = /\b(transition|animation)\s*:\s*([\s\S]*?);/g;
+    const motionVarPattern = /var\(--motion-[\w-]+\)/g;
+    const timePattern = /\d+(?:\.\d+)?m?s\b/g;
+    let declarations = 0;
+    let tokenizedTimes = 0;
+    for (const { file, css } of NON_TOKEN_SHEETS) {
+      const stripped = stripComments(css);
+      for (const [, property, rawValue] of stripped.matchAll(shorthandPattern)) {
+        declarations += 1;
+        const value = rawValue.trim();
+        tokenizedTimes += value.match(motionVarPattern)?.length ?? 0;
+        const bareTimes = value.replace(motionVarPattern, '').match(timePattern) ?? [];
+        for (const bare of bareTimes) {
+          expect(
+            false,
+            `${file}: ${property} shorthand carries a bare duration "${bare}" — every time ` +
+              `component in a transition/animation shorthand must read a var(--motion-*) token`,
+          ).toBe(true);
+        }
+      }
+    }
+    // Canary against a regex that silently stops matching. Floors, not exact counts: the bare-time
+    // assertion above is the gate, and every new animation the interface grows must be free to
+    // raise both numbers. Some declarations list more than one transitioned property, which is why
+    // tokenized times outnumber declarations.
+    expect(declarations).toBeGreaterThanOrEqual(11);
+    expect(tokenizedTimes).toBeGreaterThanOrEqual(14);
+  });
+
+  it('tokenizes font-family outside tokens.css', () => {
+    const fontPattern = /font-family\s*:\s*([^;]+);/g;
+    let occurrences = 0;
+    for (const { file, css } of NON_TOKEN_SHEETS) {
+      const stripped = stripComments(css);
+      for (const [, rawValue] of stripped.matchAll(fontPattern)) {
+        occurrences += 1;
+        const value = rawValue.trim();
+        expect(
+          value,
+          `${file}: font-family must read a var(--font-*) token, or inherit one from an ancestor ` +
+            `that does, found "${value}"`,
+        ).toMatch(/^var\(--font-[\w-]+\)$|^inherit$/);
+      }
+    }
+    // Canary against a regex that silently stops matching. A floor, not an exact count: the rule
+    // above is the gate. The declarations present split between a var(--font-*) token and a control
+    // inheriting the ancestor stack rather than restating it.
+    expect(occurrences).toBeGreaterThanOrEqual(12);
+  });
+
+  it('keeps --control-h-sm at or above the WCAG 2.2 (2.5.8) minimum target dimension', () => {
+    const stripped = stripComments(tokensCss);
+    const match = stripped.match(/--control-h-sm:\s*(\d+(?:\.\d+)?)px/);
+    expect(match, 'could not locate "--control-h-sm: NNpx" in tokens.css').not.toBeNull();
+    const value = Number(match![1]);
+    expect(
+      value,
+      `--control-h-sm is ${value}px, below the 24px minimum target dimension`,
+    ).toBeGreaterThanOrEqual(24);
   });
 
   it('imports the eight stylesheets from main.tsx in cascade order', () => {

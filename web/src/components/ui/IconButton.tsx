@@ -13,13 +13,15 @@ interface IconButtonProps extends Omit<
 }
 
 /** Icon-only `Button`. `aria-label` is required in the type — an icon-only control has no text
- * content, so without it the button would ship with no accessible name. Passes its ref through to
- * `Button`'s underlying `<button>` — a keyboard reorder control needs to move focus onto a
- * specific button after a state change, which only works if the DOM node is reachable from the
+ * content, so without it the button would ship with no accessible name. Carries `btn--icon` so an
+ * icon-only control keeps a minimum 24x24px hit target (WCAG 2.2 SC 2.5.8) independent of the icon
+ * size a caller passes, rather than shrinking to fit whatever glyph is inside it. Passes its ref
+ * through to `Button`'s underlying `<button>` — a keyboard reorder control needs to move focus onto
+ * a specific button after a state change, which only works if the DOM node is reachable from the
  * caller. */
-export default function IconButton({ icon, ref, ...rest }: IconButtonProps) {
+export default function IconButton({ icon, ref, className, ...rest }: IconButtonProps) {
   return (
-    <Button ref={ref} {...rest}>
+    <Button ref={ref} className={['btn--icon', className].filter(Boolean).join(' ')} {...rest}>
       {icon}
     </Button>
   );

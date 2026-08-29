@@ -113,4 +113,28 @@ describe('ApprovalDecisionDialog', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(onConfirm).not.toHaveBeenCalled();
   });
+
+  it('submits on Enter in the reason field', async () => {
+    const { onConfirm } = renderDialog();
+
+    fireEvent.change(screen.getByLabelText('Reason (optional)'), {
+      target: { value: 'Evidence checks out.' },
+    });
+    fireEvent.keyDown(screen.getByLabelText('Reason (optional)'), { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(onConfirm).toHaveBeenCalledWith('approved', 'Evidence checks out.');
+    });
+  });
+
+  it('does not submit on Shift+Enter in the reason field, since it inserts a newline instead', () => {
+    const { onConfirm } = renderDialog();
+
+    fireEvent.keyDown(screen.getByLabelText('Reason (optional)'), {
+      key: 'Enter',
+      shiftKey: true,
+    });
+
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
 });

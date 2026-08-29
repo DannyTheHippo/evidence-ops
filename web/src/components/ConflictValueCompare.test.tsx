@@ -46,8 +46,8 @@ describe('ConflictValueCompare', () => {
     expect(screen.getByText('Rent Roll Q1 — p.2')).toBeInTheDocument();
   });
 
-  it('labels the rule that fired on the recommended value only', () => {
-    renderCompare(
+  it('labels the rule that fired both in the policy strip and on the recommended card, marking only that card recommended', () => {
+    const { container } = renderCompare(
       <ConflictValueCompare
         values={[
           value({ factId: 'fact-1', value: 6.1 }),
@@ -60,10 +60,15 @@ describe('ConflictValueCompare', () => {
       />,
     );
 
-    expect(screen.getByText('recommended · authority')).toBeInTheDocument();
+    // Once in the policy strip above the grid, once on the recommended card's own band.
+    expect(screen.getAllByText('Recommended · authority')).toHaveLength(2);
     expect(
       screen.getByText("Source 'chunk-a' outranks the other value's source."),
     ).toBeInTheDocument();
+
+    const items = container.querySelectorAll('.value-compare-item');
+    expect(items[0]).toHaveClass('value-compare-item--recommended');
+    expect(items[1]).not.toHaveClass('value-compare-item--recommended');
   });
 
   it('shows the policy explanation once, ahead of the list, when no rule fires', () => {
@@ -81,7 +86,15 @@ describe('ConflictValueCompare', () => {
         'Policy has no recommendation for this conflict — No configured rule distinguishes between these sources.',
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/^recommended ·/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Recommended ·/)).not.toBeInTheDocument();
+  });
+
+  it('renders no policy strip at all for an unscorable conflict, where no policy ran', () => {
+    const { container } = renderCompare(
+      <ConflictValueCompare values={[value({})]} documentIndex={documentIndex} />,
+    );
+
+    expect(container.querySelector('.policy-strip')).not.toBeInTheDocument();
   });
 
   it('reads correctly with three or more competing values, each in its own item', () => {
@@ -121,8 +134,8 @@ describe('ConflictValueCompare', () => {
     ).toBeInTheDocument();
   });
 
-  it('labels a withdrawn competing value', () => {
-    renderCompare(
+  it('labels a withdrawn competing value and dims it via a class, never via opacity', () => {
+    const { container } = renderCompare(
       <ConflictValueCompare
         values={[value({ factId: 'fact-3', documentVersionId: 'docver-3', withdrawn: true })]}
         documentIndex={documentIndex}
@@ -130,6 +143,9 @@ describe('ConflictValueCompare', () => {
     );
 
     expect(screen.getByText('Source withdrawn')).toBeInTheDocument();
+    const item = container.querySelector('.value-compare-item');
+    expect(item).toHaveClass('value-compare-item--withdrawn');
+    expect(item).not.toHaveAttribute('style');
   });
 
   it('does not label a value that is not withdrawn', () => {

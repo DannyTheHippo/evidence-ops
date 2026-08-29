@@ -1,6 +1,8 @@
 import type { ReactElement, ReactNode } from 'react';
 import EmptyState from './ui/EmptyState';
+import PageHeader from './ui/PageHeader';
 import Skeleton from './ui/Skeleton';
+import Toolbar from './ui/Toolbar';
 
 /**
  * The body region a list page can be in, each carrying the data that state needs. A discriminated
@@ -26,10 +28,17 @@ export interface RecordListPageProps {
   actions?: ReactNode;
   /** Rendered below the header, ahead of the status region — typically a `FilterBar`. */
   filters?: ReactNode;
+  /** Rendered on the trailing edge of the same toolbar row as `filters` — typically a result
+   * count. Absent by default: a page with no count to show renders a `Toolbar` with only its
+   * start slot, same as before this prop existed. */
+  toolbarEnd?: ReactNode;
   /** Rendered above the status region whenever present, independent of `status.kind` — a failed
    * refresh renders this alongside `ready`'s rows or `empty`'s state, not in place of them. */
   error?: string;
   status: RecordListStatus;
+  /** Forwarded to the `loading` state's `Skeleton`. Defaults to `Skeleton`'s own default
+   * (`'lines'`) when omitted, matching every existing caller. */
+  skeletonVariant?: 'lines' | 'table' | 'form';
   /** The ready-state body. `RecordListPage` makes no assumption about its shape: most pages hand
    * it a `<Table>` inside a `.panel`, the review queues hand it a split view. */
   children: ReactNode;
@@ -45,15 +54,12 @@ export interface RecordListPageProps {
  * `EmptyState`, and ready renders `children` — and an optional `footer` rendered after that region
  * regardless of `status.kind`.
  *
- * Accessibility contract a consumer owes: when `children` scrolls horizontally inside `.panel` (a
- * wide table between 768px and 1023px), `primitives.css` documents that fallback scrollbar as one
- * the app never announces to assistive tech — nothing about it is otherwise reachable except by a
- * mouse. The page that renders that scrolling element is the only one that knows which element it
- * is, so `RecordListPage` does not add this itself; the consumer must put `tabIndex={0}`,
- * `role="region"`, and an `aria-label` naming the table's contents on it. `tabIndex={0}` makes the
- * scrolling container itself a focusable stop, so keyboard scrolling reaches content a mouse would
- * otherwise be required for; `role="region"` plus `aria-label` give that stop a name a screen
- * reader announces, rather than an anonymous, unlabelled `<div>`.
+ * Accessibility contract a consumer owes: when `children` scrolls horizontally inside `Panel` (a
+ * wide table between 768px and 1023px), `Panel` documents that fallback scrollbar as one the app
+ * never announces to assistive tech — nothing about it is otherwise reachable except by a mouse.
+ * The page that renders that scrolling element is the only one that knows which element it is, so
+ * `RecordListPage` does not add this itself; the consumer wraps its scrolling table in `Panel`,
+ * naming it with an `aria-label` for its contents.
  */
 export default function RecordListPage({
   eyebrow,
@@ -61,23 +67,18 @@ export default function RecordListPage({
   description,
   actions,
   filters,
+  toolbarEnd,
   error,
   status,
+  skeletonVariant,
   children,
   footer,
 }: RecordListPageProps) {
   return (
     <div className="view">
-      <div className="page-head">
-        <div>
-          <span className="eyebrow">{eyebrow}</span>
-          <h1 className="page-title">{title}</h1>
-          <p className="page-sub">{description}</p>
-        </div>
-        {actions}
-      </div>
+      <PageHeader eyebrow={eyebrow} title={title} description={description} actions={actions} />
 
-      {filters}
+      <Toolbar start={filters} end={toolbarEnd} />
 
       {error && (
         <p className="error error--page" role="alert">
@@ -85,7 +86,9 @@ export default function RecordListPage({
         </p>
       )}
 
-      {status.kind === 'loading' && <Skeleton label={status.label ?? `Loading ${title}…`} />}
+      {status.kind === 'loading' && (
+        <Skeleton label={status.label ?? `Loading ${title}…`} variant={skeletonVariant} />
+      )}
 
       {status.kind === 'empty' && (
         <EmptyState

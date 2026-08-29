@@ -11,6 +11,7 @@ interface SelectProps extends Omit<
   label: string;
   hint?: string;
   error?: string;
+  optional?: boolean;
   options: { value: string; label: string }[];
   value: string;
   onChange: (value: string) => void;
@@ -18,19 +19,24 @@ interface SelectProps extends Omit<
 
 /** Labelled native `<select>`, composed on `Field` for the label/hint/error/`aria-describedby`
  * plumbing shared with every other labelled control — keyboard and role behaviour come from the
- * platform, not a hand-rolled listbox. Rest props (`disabled`, `name`, `required`, …) pass through
- * to the underlying `<select>`. */
+ * platform, not a hand-rolled listbox. Rest props (`disabled`, `name`, `required`, `onBlur`, …)
+ * pass through to the underlying `<select>`. `id`, when supplied, flows through `Field` rather
+ * than the rest spread, so it reaches both the `<label htmlFor>` and the select itself instead
+ * of being overwritten by Field's generated id. `optional` marks the minority case in a form,
+ * rendering its suffix inside the label so the accessible name reads "Label (optional)". */
 export default function Select({
+  id,
   label,
   hint,
   error,
+  optional,
   options,
   value,
   onChange,
   ...rest
 }: SelectProps) {
   return (
-    <Field label={label} hint={hint} error={error}>
+    <Field id={id} label={label} hint={hint} error={error} optional={optional}>
       {(inputProps) => (
         <select
           {...rest}

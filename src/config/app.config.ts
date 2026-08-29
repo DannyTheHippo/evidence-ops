@@ -2,6 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import { ShutdownSignal, ValidationPipe, VersioningType } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
+import { RequestValidationException } from '../shared/exceptions/request-validation.exception';
 import { AppLogger } from '../shared/services/logger/logger.service';
 import type { AppConfig } from './environment/environment.config';
 import { TypedConfigService } from './environment/typed-config.service';
@@ -48,7 +49,12 @@ export const createApplicationConfig = async (app: INestApplication): Promise<Ap
   app.setGlobalPrefix('api');
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
   app.useGlobalPipes(
-    new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }),
+    new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      exceptionFactory: (errors) => new RequestValidationException(errors),
+    }),
   );
   app.enableShutdownHooks([ShutdownSignal.SIGTERM, ShutdownSignal.SIGINT]);
 

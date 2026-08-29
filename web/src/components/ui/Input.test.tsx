@@ -18,16 +18,32 @@ describe('Input', () => {
     expect(onChange).toHaveBeenCalledWith('a name');
   });
 
-  it('sets aria-invalid and exposes the error via role=alert', () => {
+  it('sets aria-invalid and describes the input with the error text', () => {
     render(<Input label="Name" value="" onChange={() => {}} error="Name is required" />);
 
-    expect(screen.getByLabelText('Name')).toHaveAttribute('aria-invalid', 'true');
-    expect(screen.getByRole('alert')).toHaveTextContent('Name is required');
+    const input = screen.getByLabelText('Name');
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByText('Name is required', { exact: false })).toBeInTheDocument();
   });
 
   it('passes rest props through to the underlying input', () => {
     render(<Input label="Name" value="" onChange={() => {}} placeholder="Add a name" />);
 
     expect(screen.getByPlaceholderText('Add a name')).toBeInTheDocument();
+  });
+
+  it('uses a caller-supplied id for both the label and the input', () => {
+    render(<Input id="custom-id" label="Name" value="" onChange={() => {}} />);
+
+    expect(screen.getByLabelText('Name')).toHaveAttribute('id', 'custom-id');
+  });
+
+  it('forwards onBlur to the underlying input', () => {
+    const onBlur = vi.fn();
+    render(<Input label="Name" value="" onChange={() => {}} onBlur={onBlur} />);
+
+    fireEvent.blur(screen.getByLabelText('Name'));
+
+    expect(onBlur).toHaveBeenCalledTimes(1);
   });
 });

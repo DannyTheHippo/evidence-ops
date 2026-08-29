@@ -1,5 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose } from 'class-transformer';
+import type { DocumentSourceClass } from '../../../../../database/schemas/evidence/document/document.schema';
+import { DOCUMENT_SOURCE_CLASSES } from '../../../../../database/schemas/evidence/document/document.schema';
 import type { EvidenceLocator } from '../../../../../database/schemas/evidence/evidence-chunk/evidence-locator.type';
 
 /** A hybrid-retrieval hit, joined back to its owning document and version by
@@ -55,6 +57,23 @@ export class RetrievedChunkResponseDto {
     description: "The owning document's title, for display alongside a citation.",
   })
   documentTitle: string;
+
+  @Expose()
+  @ApiProperty({
+    example: 'report',
+    enum: DOCUMENT_SOURCE_CLASSES,
+    description:
+      "Authority classification of the owning document — 'unclassified' means nobody has " +
+      'declared one, not that it ranks lowest.',
+  })
+  sourceClass: DocumentSourceClass;
+
+  @Expose()
+  @ApiProperty({
+    example: '2026-07-01T00:00:00.000Z',
+    description: 'When the owning document was created.',
+  })
+  documentCreatedAt: Date;
 
   @Expose()
   @ApiProperty({

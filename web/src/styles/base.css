@@ -121,15 +121,6 @@ h2 {
   font-variant-numeric: tabular-nums;
 }
 
-/* ── Theme toggle ────────────────────────────────────────────────────────── */
-
-/* One button cycling System → Light → Dark. The label text changes with the mode, so the control
-   is pinned wide enough for the longest of the three; without it every press nudges the topbar. */
-.theme-toggle {
-  justify-content: flex-start;
-  min-width: 7.5rem;
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

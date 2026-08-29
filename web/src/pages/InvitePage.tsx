@@ -1,11 +1,17 @@
-import type { FormEvent } from 'react';
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import type { InvitationPreview } from '../api/client';
 import { ApiError, login, previewInvitation, registerWithInvitation } from '../api/client';
+import AuthCanvas from '../components/AuthCanvas';
 import Button from '../components/ui/Button';
-import Input from '../components/ui/Input';
-import PasswordRules from '../components/ui/PasswordRules';
+import PasswordInput from '../components/ui/PasswordInput';
+import PasswordRules, {
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+} from '../components/ui/PasswordRules';
+import { useFormSubmit } from '../lib/use-form-submit';
+
+type Field = 'password';
 
 // The invitation, not this form, dictates the account's email, tenant and role — only a password
 // is collected here. `token` comes from the link an admin shared out of band; there is no email
@@ -18,8 +24,6 @@ export default function InvitePage() {
   const location = useLocation();
   const token = new URLSearchParams(location.hash.replace(/^#/, '')).get('token') ?? '';
   const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   // Set only when redemption itself is refused — an unknown, expired, revoked, or already-used
   // token, or an invitation whose email already has an account — as distinct from a transport
   // failure or a login rejection right after a successful redemption. This is what a retry of the
@@ -50,58 +54,49 @@ export default function InvitePage() {
     };
   }, [token]);
 
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
-    setInvitationRejected(false);
+  function validate(): Partial<Record<Field, string>> {
+    const errors: Partial<Record<Field, string>> = {};
+    if (!password) {
+      errors.password = 'Password is required.';
+    } else if (password.length < PASSWORD_MIN_LENGTH || password.length > PASSWORD_MAX_LENGTH) {
+      errors.password = `Password must be ${PASSWORD_MIN_LENGTH}-${PASSWORD_MAX_LENGTH} characters.`;
+    }
+    return errors;
+  }
 
+  async function submit() {
     let me;
     try {
       me = await registerWithInvitation(password, token);
-    } catch (err: unknown) {
-      setLoading(false);
-      setInvitationRejected(err instanceof ApiError && err.status === 400);
-      setError(
-        err instanceof ApiError
-          ? err.message
-          : 'Could not reach the server. Check your connection and try again.',
-      );
-      return;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 400) setInvitationRejected(true);
+      throw err;
     }
-
-    try {
-      // Registration sets no session cookie — a real login call is still required, mirroring
-      // LoginPage's own signup path.
-      await login(me.email, password);
-      await navigate('/');
-    } catch (err: unknown) {
-      setError(
-        err instanceof ApiError
-          ? err.message
-          : 'Could not reach the server. Check your connection and try again.',
-      );
-    } finally {
-      setLoading(false);
-    }
+    // Registration sets no session cookie — a real login call is still required, mirroring
+    // LoginPage's own signup path.
+    await login(me.email, password);
+    await navigate('/');
   }
+
+  const { pending, formError, onSubmit, fieldProps } = useFormSubmit<Field>({
+    validate,
+    submit,
+  });
 
   if (!token) {
     return (
-      <div className="view">
-        <div className="page-head">
-          <div>
-            <span className="eyebrow">You're invited</span>
-            <h1 className="page-title">Missing invitation link</h1>
-          </div>
-        </div>
-        <p className="error error--page" role="alert">
+      <AuthCanvas
+        title="Missing invitation link"
+        footer={
+          <p>
+            Already have an account? <Link to="/login">Sign in</Link>.
+          </p>
+        }
+      >
+        <p className="error" role="alert">
           This invitation link is missing its token. Ask whoever invited you for a new link.
         </p>
-        <p className="page-sub">
-          Already have an account? <Link to="/login">Sign in</Link>.
-        </p>
-      </div>
+      </AuthCanvas>
     );
   }
 
@@ -112,52 +107,38 @@ export default function InvitePage() {
     : 'Set a password to accept the invitation and sign in.';
 
   return (
-    <div className="view">
-      <div className="page-head">
-        <div>
-          <span className="eyebrow">You're invited</span>
-          <h1 className="page-title">Join your team</h1>
-          <p className="page-sub">{inviteSummary}</p>
-        </div>
-      </div>
-
-      {!invitationRejected && (
-        <section className="card card--narrow">
-          <form onSubmit={(e) => void handleSubmit(e)} className="form">
-            <div className="field">
-              <Input
-                label="Password"
-                type="password"
-                required
-                minLength={8}
-                maxLength={72}
-                value={password}
-                onChange={setPassword}
-                autoComplete="new-password"
-              />
-              <PasswordRules password={password} />
-            </div>
-            <div className="form-actions">
-              <Button type="submit" variant="primary" disabled={loading}>
-                {loading ? 'Joining…' : 'Accept invitation'}
-              </Button>
-            </div>
-          </form>
-        </section>
-      )}
-
-      {error && (
+    <AuthCanvas title="Join your team" description={inviteSummary}>
+      {formError && (
         <p className="error" role="alert">
-          {error}
+          {formError}
         </p>
       )}
-
-      {invitationRejected && (
-        <p className="page-sub">
+      {invitationRejected ? (
+        // A rejected redemption is not something resubmitting the same form can fix, so the form
+        // is gone and only the two paths that can help remain: a fresh link, or signing in.
+        <p>
           Ask whoever invited you for a new link, or <Link to="/login">sign in</Link> if you already
           have an account.
         </p>
+      ) : (
+        <form onSubmit={onSubmit} className="form" noValidate>
+          <div className="field">
+            <PasswordInput
+              {...fieldProps('password')}
+              label="Password"
+              value={password}
+              onChange={setPassword}
+              autoComplete="new-password"
+            />
+            <PasswordRules password={password} />
+          </div>
+          <div className="form-actions">
+            <Button type="submit" variant="primary">
+              {pending ? 'Joining…' : 'Accept invitation'}
+            </Button>
+          </div>
+        </form>
       )}
-    </div>
+    </AuthCanvas>
   );
 }

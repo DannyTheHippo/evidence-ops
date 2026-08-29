@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   decideApproval,
+  getDashboardSummary,
   listAnswers,
   listApprovals,
   listConflicts,
@@ -13,23 +14,30 @@ import {
   type Approval,
   type ApprovalDecision,
   type Conflict,
+  type DashboardSummary,
   type EvidenceDocument,
   type Source,
   type WithCount,
 } from '../api/client';
 import ApprovalDecisionDialog from '../components/ApprovalDecisionDialog';
+import { IconCheck } from '../components/icons';
 import Badge, { type BadgeTone } from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Dialog from '../components/ui/Dialog';
 import EmptyState from '../components/ui/EmptyState';
 import Field from '../components/ui/Field';
-import Skeleton from '../components/ui/Skeleton';
+import LinkButton from '../components/ui/LinkButton';
+import PageHeader from '../components/ui/PageHeader';
+import Stat from '../components/ui/Stat';
+import Timestamp from '../components/ui/Timestamp';
 import { notify } from '../components/ui/toast';
 import { answerBadge } from '../lib/answer-status';
 import { metricLabel, useMetricLabels } from '../lib/metric-labels';
+import { useFormSubmit } from '../lib/use-form-submit';
 import { useSession } from '../lib/use-session';
 import { syncRunLabel, useSourceSync } from '../lib/use-source-sync';
+import { formatBytes } from './data-room/format-size';
 
 interface FetchState<T> {
   docs: T[] | null;
@@ -53,6 +61,57 @@ function toFetchState<T>(
     count: null,
     error: reason instanceof Error ? reason.message : fallbackError,
   };
+}
+
+interface SummaryState {
+  data: DashboardSummary | null;
+  error: string | null;
+}
+
+/** Same shape as `toFetchState` for the one-off `getDashboardSummary()` call, which returns a
+ * single object rather than a `WithCount` page. */
+function toSummaryState(result: PromiseSettledResult<DashboardSummary>): SummaryState {
+  if (result.status === 'fulfilled') {
+    return { data: result.value, error: null };
+  }
+  const reason: unknown = result.reason;
+  return {
+    data: null,
+    error: reason instanceof Error ? reason.message : 'Failed to load dashboard summary',
+  };
+}
+
+interface FailureEntry {
+  label: string;
+  message: string;
+}
+
+/** Names every failed leg of a section's `Promise.allSettled` batch inside one alert, rather than
+ * stacking one `role="alert"` per leg — a tenant whose approvals and conflicts both fail to load
+ * sees one banner naming both, not two identical-looking alerts. Labels are deduped for the
+ * headline (two document-status queries both read as "documents") while every underlying message
+ * still renders, so no failure detail is lost to the consolidation. `onRetry` re-runs the page's
+ * own `load`, since a failed leg carries no state of its own to retry independently. */
+function SectionAlert({ failures, onRetry }: { failures: FailureEntry[]; onRetry: () => void }) {
+  if (failures.length === 0) return null;
+  const labels = [...new Set(failures.map((failure) => failure.label))].join(', ');
+
+  return (
+    <div className="error" role="alert">
+      <p>
+        Couldn't load: {labels}
+        {failures.map((failure, index) => (
+          <span key={`${failure.label}-${index}`} className="cell-sub">
+            {' '}
+            — {failure.message}
+          </span>
+        ))}
+      </p>
+      <Button variant="ghost" size="sm" onClick={onRetry}>
+        Retry
+      </Button>
+    </div>
+  );
 }
 
 type WorkQueueItem =
@@ -81,7 +140,11 @@ type WorkQueueItem =
  * to the list page for anything the inline control does not cover (e.g. a conflict with no
  * policy recommendation, which needs the value picker `ConflictsPage` holds). `onChanged` is the
  * page's own `load`, re-run after a decision persists so the queue reflects the server's state
- * rather than the stale item this row was rendered from. */
+ * rather than the stale item this row was rendered from.
+ *
+ * Approval and conflict rows carry different badge tones — `info` for an approval (a process
+ * state awaiting a decision) and `caution` for a conflict (data actually in contention) — so the
+ * two kinds of row read as distinct at a glance rather than identical boxes with different text. */
 function WorkQueueSection({
   approvals,
   conflicts,
@@ -129,6 +192,11 @@ function WorkQueueSection({
       conflict,
     })),
   ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  const failures: FailureEntry[] = [
+    ...(approvals.error ? [{ label: 'approvals', message: approvals.error }] : []),
+    ...(conflicts.error ? [{ label: 'conflicts', message: conflicts.error }] : []),
+  ];
 
   function openDecision(approval: Approval, decision: ApprovalDecision) {
     setTargetApproval(approval);
@@ -182,24 +250,8 @@ function WorkQueueSection({
     <section className="card">
       <div className="card-head">
         <h2 className="card-title">Work queue</h2>
-        {!approvals.error &&
-          !conflicts.error &&
-          (approvals.count !== null || conflicts.count !== null) && (
-            <span className="card-meta card-meta--end">
-              {approvals.count ?? 0} pending approvals · {conflicts.count ?? 0} open conflicts
-            </span>
-          )}
       </div>
-      {approvals.error && (
-        <p className="error" role="alert">
-          {approvals.error}
-        </p>
-      )}
-      {conflicts.error && (
-        <p className="error" role="alert">
-          {conflicts.error}
-        </p>
-      )}
+      <SectionAlert failures={failures} onRetry={() => void onChanged()} />
       {(approvals.docs !== null || conflicts.docs !== null) && items.length === 0 && (
         <EmptyState className="empty-state--inline" title="Nothing needs your attention" />
       )}
@@ -214,11 +266,14 @@ function WorkQueueSection({
                     {item.name}
                   </Link>
                   <div className="form-actions">
-                    <Badge tone="caution">{item.typeLabel}</Badge>
+                    <span className="card-meta">
+                      <Timestamp value={item.createdAt} />
+                    </span>
+                    <Badge tone="info">{item.typeLabel}</Badge>
                     {canDecideApprovals && (
                       <>
                         <Button
-                          variant="primary"
+                          variant="secondary"
                           size="sm"
                           onClick={() => openDecision(approval, 'approved')}
                         >
@@ -244,6 +299,9 @@ function WorkQueueSection({
                   {item.name}
                 </Link>
                 <div className="form-actions">
+                  <span className="card-meta">
+                    <Timestamp value={item.createdAt} />
+                  </span>
                   <Badge tone="caution">{item.typeLabel}</Badge>
                   {conflict.proposedWinnerFactId && (
                     <Button
@@ -332,8 +390,11 @@ function SourceHealthRow({
       <span>
         <Link to={item.to} className="actionable-row-name">
           {item.name}
-        </Link>
-        <span className="card-meta"> — {item.detail}</span>
+        </Link>{' '}
+        —{' '}
+        <span className="cell-sub cell-truncate" title={item.detail}>
+          {item.detail}
+        </span>
       </span>
       <div className="form-actions">
         <Badge tone={item.tone}>{item.typeLabel}</Badge>
@@ -357,8 +418,10 @@ function SourceHealthRow({
 }
 
 /** Uploads a new version onto a document already surfaced as broken — a failed ingestion or a
- * facts-failed extraction. Owns the file input, in-flight state and error display; the caller
- * owns closing (via `doc` going back to `null`) and re-running `load` through `onReplaced`. */
+ * facts-failed extraction. Owns the file input and its submit lifecycle via `useFormSubmit`; the
+ * caller owns closing (via `doc` going back to `null`) and re-running `load` through
+ * `onReplaced`. Submit is gated on `validate()`, not on `disabled={!file}` — an empty submit
+ * focuses the file input and shows an inline error instead of silently doing nothing. */
 function ReplaceVersionDialog({
   doc,
   onClose,
@@ -369,34 +432,26 @@ function ReplaceVersionDialog({
   onReplaced: () => Promise<void>;
 }) {
   const [file, setFile] = useState<File | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const submitInFlightRef = useRef(false);
   const bodyId = useId();
+
+  const { pending, formError, onSubmit, fieldProps } = useFormSubmit<'file'>({
+    validate: () => (file ? {} : { file: 'Choose a file to upload.' }),
+    submit: async () => {
+      if (!doc || !file) return;
+      await uploadDocument(file, { documentId: doc.id });
+      notify('success', `Replacement version uploaded for ${doc.title}.`);
+    },
+    onSuccess: () => {
+      setFile(null);
+      onClose();
+      void onReplaced();
+    },
+  });
+  const { id: fileId, error: fileError, onBlur: fileBlur } = fieldProps('file');
 
   function handleClose() {
     setFile(null);
-    setError(null);
     onClose();
-  }
-
-  async function handleConfirm() {
-    if (!doc || !file || submitInFlightRef.current) return;
-    submitInFlightRef.current = true;
-    setBusy(true);
-    setError(null);
-    try {
-      await uploadDocument(file, { documentId: doc.id });
-      notify('success', `Replacement version uploaded for ${doc.title}.`);
-      setFile(null);
-      onClose();
-      await onReplaced();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to upload replacement version');
-    } finally {
-      setBusy(false);
-      submitInFlightRef.current = false;
-    }
   }
 
   return (
@@ -406,35 +461,41 @@ function ReplaceVersionDialog({
       title="Replace document version"
       describedBy={bodyId}
     >
-      <div className="form">
+      <form onSubmit={onSubmit} className="form" noValidate>
         <p id={bodyId}>{doc ? `Upload a new version of "${doc.title}".` : ''}</p>
         {/* Mirrors UPLOAD_EXTENSION_ALLOWLIST in documents.constant.ts — the nine kinds the
             upload gate accepts. A narrower list here hides formats the server would take. */}
-        <Field label="File">
+        <Field id={fileId} label="File" error={fileError}>
           {(inputProps) => (
             <input
               type="file"
               accept=".pdf,.docx,.xlsx,.pptx,.csv,.tsv,.txt,.md,.eml"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              disabled={busy}
+              onBlur={fileBlur}
+              disabled={pending}
               {...inputProps}
             />
           )}
         </Field>
-        {error && (
+        {file && (
+          <p className="cell-sub mono">
+            {file.name} · {formatBytes(file.size)}
+          </p>
+        )}
+        {formError && (
           <p className="error" role="alert">
-            {error}
+            {formError}
           </p>
         )}
         <div className="form-actions">
-          <Button variant="primary" disabled={busy || !file} onClick={() => void handleConfirm()}>
-            {busy ? 'Uploading…' : 'Upload'}
+          <Button type="submit" variant="primary" disabled={pending}>
+            {pending ? 'Uploading…' : 'Upload'}
           </Button>
-          <Button variant="ghost" disabled={busy} onClick={handleClose}>
+          <Button type="button" variant="ghost" disabled={pending} onClick={handleClose}>
             Cancel
           </Button>
         </div>
-      </div>
+      </form>
     </Dialog>
   );
 }
@@ -446,29 +507,26 @@ function ReplaceVersionDialog({
  * the server's own status-filtered queries rather than scanning a fixed-size page client-side, so a
  * failure older than any window is still visible here.
  *
- * Tone separates the two kinds of item the queue lists. An ingestion or sync failure is `rejected`:
- * the evidence never landed. A `facts-failed` document is `caution`: its chunks are committed and
- * searchable, and answers citing them are honest — it carries no extracted facts, so it feeds
- * neither the fact store nor conflict detection. A shared `rejected` tone would read as "unusable",
- * which it is not.
+ * Rows are severity-ordered — ingestion failures, then sync failures, then facts-failed documents —
+ * rather than grouped by resource type, so the most serious items surface first regardless of
+ * whether they are a document or a source. Tone follows the same split: an ingestion or sync
+ * failure is `rejected` (the evidence never landed), a `facts-failed` document is `caution` (its
+ * chunks are committed and searchable, and answers citing them are honest — it just carries no
+ * extracted facts, feeding neither the fact store nor conflict detection).
  *
- * `needsOcrDocuments` surfaces as a count only, in the card head, not as itemized rows in the
- * queue below — a scanned PDF is a gap in the corpus to flag for attention, not the kind of
- * broken-ingest item the queue otherwise lists, and a tenant with a hundred scans should not push
- * every one of them into this list one row at a time. A `facts-failed` document is itemized instead
- * of counted: it carries the extractor's own reason, and re-running extraction is a per-document
- * action. The full, browsable set of either is the Data Room's own `ingestionStatus` filter
- * (`DocumentList.tsx`). */
+ * `needsOcrCount` surfaces only in the stat row above, never as itemized rows here — a scanned PDF
+ * is a gap in the corpus to flag for attention, not the kind of broken-ingest item this queue
+ * otherwise lists, and a tenant with a hundred scans should not push every one of them into this
+ * list one row at a time. The full, browsable set of any of these three is the Data Room's own
+ * `ingestionStatus` filter (`DocumentList.tsx`). */
 function CorpusHealthSection({
   failedDocuments,
   failedSources,
-  needsOcrDocuments,
   factsFailedDocuments,
   onChanged,
 }: {
   failedDocuments: FetchState<EvidenceDocument>;
   failedSources: FetchState<Source>;
-  needsOcrDocuments: FetchState<EvidenceDocument>;
   factsFailedDocuments: FetchState<EvidenceDocument>;
   onChanged: () => Promise<void>;
 }) {
@@ -487,16 +545,6 @@ function CorpusHealthSection({
       kind: 'document',
       document: doc,
     })),
-    ...(factsFailedDocuments.docs ?? []).map((doc): CorpusHealthItem => ({
-      key: `facts-failed-${doc.id}`,
-      name: doc.title,
-      to: `/documents/${doc.id}`,
-      typeLabel: 'No facts extracted',
-      detail: doc.currentVersion.ingestionFailureReason ?? 'No reason recorded.',
-      tone: 'caution' as const,
-      kind: 'document',
-      document: doc,
-    })),
     ...(failedSources.docs ?? []).map((source): CorpusHealthItem => ({
       key: `source-${source.id}`,
       name: source.name,
@@ -507,53 +555,34 @@ function CorpusHealthSection({
       kind: 'source',
       source,
     })),
+    ...(factsFailedDocuments.docs ?? []).map((doc): CorpusHealthItem => ({
+      key: `facts-failed-${doc.id}`,
+      name: doc.title,
+      to: `/documents/${doc.id}`,
+      typeLabel: 'No facts extracted',
+      detail: doc.currentVersion.ingestionFailureReason ?? 'No reason recorded.',
+      tone: 'caution' as const,
+      kind: 'document',
+      document: doc,
+    })),
   ];
 
-  const anyError =
-    failedDocuments.error !== null ||
-    failedSources.error !== null ||
-    needsOcrDocuments.error !== null ||
-    factsFailedDocuments.error !== null;
+  const failures: FailureEntry[] = [
+    ...(failedDocuments.error ? [{ label: 'documents', message: failedDocuments.error }] : []),
+    ...(failedSources.error ? [{ label: 'sources', message: failedSources.error }] : []),
+    ...(factsFailedDocuments.error
+      ? [{ label: 'documents', message: factsFailedDocuments.error }]
+      : []),
+  ];
 
   return (
     <section className="card">
       <div className="card-head">
         <h2 className="card-title">Corpus health</h2>
-        {!anyError &&
-          (failedDocuments.count !== null ||
-            failedSources.count !== null ||
-            needsOcrDocuments.count !== null ||
-            factsFailedDocuments.count !== null) && (
-            <span className="card-meta card-meta--end">
-              {failedDocuments.count ?? 0} ingestion failures · {failedSources.count ?? 0} sync
-              failures · {needsOcrDocuments.count ?? 0} need OCR · {factsFailedDocuments.count ?? 0}{' '}
-              without extracted facts
-            </span>
-          )}
       </div>
-      {failedDocuments.error && (
-        <p className="error" role="alert">
-          {failedDocuments.error}
-        </p>
-      )}
-      {failedSources.error && (
-        <p className="error" role="alert">
-          {failedSources.error}
-        </p>
-      )}
-      {needsOcrDocuments.error && (
-        <p className="error" role="alert">
-          {needsOcrDocuments.error}
-        </p>
-      )}
-      {factsFailedDocuments.error && (
-        <p className="error" role="alert">
-          {factsFailedDocuments.error}
-        </p>
-      )}
+      <SectionAlert failures={failures} onRetry={() => void onChanged()} />
       {(failedDocuments.docs !== null ||
         failedSources.docs !== null ||
-        needsOcrDocuments.docs !== null ||
         factsFailedDocuments.docs !== null) &&
         items.length === 0 && (
           <EmptyState
@@ -573,8 +602,11 @@ function CorpusHealthSection({
                 <span>
                   <Link to={item.to} className="actionable-row-name">
                     {item.name}
-                  </Link>
-                  <span className="card-meta"> — {item.detail}</span>
+                  </Link>{' '}
+                  —{' '}
+                  <span className="cell-sub cell-truncate" title={item.detail}>
+                    {item.detail}
+                  </span>
                 </span>
                 <div className="form-actions">
                   <Badge tone={item.tone}>{item.typeLabel}</Badge>
@@ -600,17 +632,23 @@ function CorpusHealthSection({
   );
 }
 
-function RecentAnswersSection({ answers }: { answers: FetchState<Answer> }) {
+function RecentAnswersSection({
+  answers,
+  onChanged,
+}: {
+  answers: FetchState<Answer>;
+  onChanged: () => Promise<void>;
+}) {
+  const failures: FailureEntry[] = answers.error
+    ? [{ label: 'answers', message: answers.error }]
+    : [];
+
   return (
     <section className="card">
       <div className="card-head">
         <h2 className="card-title">Recent answers</h2>
       </div>
-      {answers.error && (
-        <p className="error" role="alert">
-          {answers.error}
-        </p>
-      )}
+      <SectionAlert failures={failures} onRetry={() => void onChanged()} />
       {!answers.error && answers.docs && answers.docs.length === 0 && (
         <EmptyState className="empty-state--inline" title="No answers yet" />
       )}
@@ -623,7 +661,12 @@ function RecentAnswersSection({ answers }: { answers: FetchState<Answer> }) {
                 <Link to={`/answers/${answer.id}`} className="dashboard-answer-question">
                   {answer.questionText}
                 </Link>
-                <Badge tone={badge.tone}>{badge.label}</Badge>
+                <div className="form-actions">
+                  <Badge tone={badge.tone}>{badge.label}</Badge>
+                  <span className="card-meta">
+                    <Timestamp value={answer.createdAt} />
+                  </span>
+                </div>
               </li>
             );
           })}
@@ -643,48 +686,52 @@ interface ChecklistStep {
 
 /** The guided first-run path: connect evidence, wait for it to ingest, ask a question. Each step
  * marks done from a live signal rather than a stored flag, so it reflects the tenant's actual state
- * even if a step is completed outside this page (e.g. a source added from a direct link). */
+ * even if a step is completed outside this page (e.g. a source added from a direct link). Rendered
+ * as an ordered list so the browser announces each step's position for free; the marker itself
+ * (a number, or a check once done) is `aria-hidden` and purely visual. Exactly one step — the
+ * first undone one — carries the primary button, since this section holds the page's only primary
+ * action whenever it renders. */
 function FirstRunChecklist({ steps }: { steps: ChecklistStep[] }) {
+  const firstUndoneIndex = steps.findIndex((step) => !step.done);
+
   return (
     <section className="card">
       <div className="card-head">
         <h2 className="card-title">Get started</h2>
       </div>
-      <ul className="actionable-list">
-        {steps.map((step) => (
-          <li key={step.key} className="actionable-row">
-            <span className="actionable-row-name">{step.label}</span>
+      <ol className="stepper">
+        {steps.map((step, index) => (
+          <li key={step.key} className={`stepper-step${step.done ? ' is-done' : ''}`}>
+            <span className="stepper-marker" aria-hidden="true">
+              {step.done ? <IconCheck size={14} /> : index + 1}
+            </span>
+            <span className="stepper-label">{step.label}</span>
             {step.done ? (
               <Badge tone="verified">done</Badge>
             ) : (
-              <Link to={step.to} className="btn btn--secondary btn--sm">
+              <LinkButton
+                to={step.to}
+                variant={index === firstUndoneIndex ? 'primary' : 'secondary'}
+                size="sm"
+              >
                 {step.cta}
-              </Link>
+              </LinkButton>
             )}
           </li>
         ))}
-      </ul>
+      </ol>
     </section>
   );
 }
 
 export default function HomePage() {
+  const [summary, setSummary] = useState<SummaryState>({ data: null, error: null });
   const [approvals, setApprovals] = useState<FetchState<Approval>>({
     docs: null,
     count: null,
     error: null,
   });
   const [conflicts, setConflicts] = useState<FetchState<Conflict>>({
-    docs: null,
-    count: null,
-    error: null,
-  });
-  const [documents, setDocuments] = useState<FetchState<EvidenceDocument>>({
-    docs: null,
-    count: null,
-    error: null,
-  });
-  const [sources, setSources] = useState<FetchState<Source>>({
     docs: null,
     count: null,
     error: null,
@@ -699,11 +746,6 @@ export default function HomePage() {
     count: null,
     error: null,
   });
-  const [needsOcrDocuments, setNeedsOcrDocuments] = useState<FetchState<EvidenceDocument>>({
-    docs: null,
-    count: null,
-    error: null,
-  });
   const [factsFailedDocuments, setFactsFailedDocuments] = useState<FetchState<EvidenceDocument>>({
     docs: null,
     count: null,
@@ -714,57 +756,45 @@ export default function HomePage() {
     count: null,
     error: null,
   });
-  // Gates the whole page behind one `Skeleton` so every section mounts on the same tick rather
-  // than each resolving on its own schedule. Only the first load holds this gate — a refresh
-  // keeps the page's existing content on screen while it runs, per `refreshing` below.
+  // Gates the whole page behind one loading region so every section mounts on the same tick
+  // rather than each resolving on its own schedule. Only the first load holds this gate — a
+  // refresh keeps the page's existing content on screen while it runs, per `refreshing` below.
   const [pageLoading, setPageLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   // Fires every section's fetch together and resolves them together via `Promise.allSettled`
   // rather than `Promise.all`, so one failing section reports its own error without blanking the
-  // rest of the page. Passing `state: 'pending'` and `status: 'open'` explicitly rather than
-  // relying on the approvals/conflicts endpoints' own defaults keeps the intent readable at this
-  // call site rather than resting on the API's behaviour. The four `listDocuments` calls stay
-  // separate — `ingestionStatus` takes a single value server-side, with no multi-value form, so
-  // one call per status is the only shape the API accepts.
+  // rest of the page. `getDashboardSummary()` carries every count the stat row and the first-run
+  // checklist need, computed server-side across the tenant's whole corpus rather than a
+  // client-side scan of a fixed-size page — so this no longer fetches the unfiltered document,
+  // source, or needs-OCR lists at all. `failedDocuments`/`failedSources`/`factsFailedDocuments`
+  // still read the server's own status-filtered queries, since corpus health itemizes those rows
+  // rather than only counting them. The two `listDocuments` calls stay separate — `ingestionStatus`
+  // takes a single value server-side, with no multi-value form.
   const load = useCallback(() => {
     return Promise.allSettled([
+      getDashboardSummary(),
       listApprovals({ state: 'pending', limit: 5 }),
       listConflicts({ status: 'open', limit: 5 }),
-      listDocuments({ limit: 100 }),
-      listSources({ limit: 100 }),
       listDocuments({ ingestionStatus: 'failed', limit: 100 }),
       listSources({ lastSyncStatus: 'failed', limit: 100 }),
-      listDocuments({ ingestionStatus: 'needs-ocr', limit: 100 }),
       listDocuments({ ingestionStatus: 'facts-failed', limit: 100 }),
       listAnswers({ limit: 5 }),
     ]).then(
       ([
+        summaryResult,
         approvalsResult,
         conflictsResult,
-        documentsResult,
-        sourcesResult,
         failedDocumentsResult,
         failedSourcesResult,
-        needsOcrResult,
         factsFailedResult,
         answersResult,
       ]) => {
+        setSummary(toSummaryState(summaryResult));
         setApprovals(toFetchState(approvalsResult, 'Failed to load approvals'));
         setConflicts(toFetchState(conflictsResult, 'Failed to load conflicts'));
-        // Unfiltered — feeds only the first-run checklist and the empty-tenant check below, which
-        // need the tenant's actual corpus shape rather than its failures. Corpus health reads its
-        // own failed-only queries beneath, so this fetch's `count`/`docs` never doubles as a
-        // failure signal.
-        setDocuments(toFetchState(documentsResult, 'Failed to load documents'));
-        setSources(toFetchState(sourcesResult, 'Failed to load sources'));
-        // Corpus health reads the server's own failed-only filters rather than scanning a
-        // fixed-size page client-side, so a failure older than any window is still visible here.
         setFailedDocuments(toFetchState(failedDocumentsResult, 'Failed to load documents'));
         setFailedSources(toFetchState(failedSourcesResult, 'Failed to load sources'));
-        // Same server-side-filter reasoning as the failed-only fetch above — a count that never
-        // falls out of view behind a fixed-size window.
-        setNeedsOcrDocuments(toFetchState(needsOcrResult, 'Failed to load documents'));
         // A 'facts-failed' version is searchable and answerable while carrying no extracted
         // facts, so nothing else on this page would report it — it is not a 'failed' ingestion
         // and its document reads as healthy everywhere the status is not shown.
@@ -791,17 +821,17 @@ export default function HomePage() {
     }
   }
 
-  // The checklist and the empty-tenant supersession below both wait for all three funnel signals
-  // to have actually loaded, rather than treating a still-loading `null` as "not done yet", so the
-  // page never flashes onboarding at a tenant that already has a corpus.
-  const funnelLoaded = documents.count !== null && sources.count !== null && answers.count !== null;
-  const hasCorpus = (documents.count ?? 0) > 0 || (sources.count ?? 0) > 0;
-  const hasIngestedDocument = (documents.docs ?? []).some(
-    (doc) => doc.currentVersion.ingestionStatus === 'completed',
-  );
-  const hasAnswer = (answers.count ?? 0) > 0;
+  const data = summary.data;
+  // `funnelLoaded` gates on the summary having actually resolved, not on any individual count —
+  // a failed summary fetch must not let a `null`-coerced-to-zero count masquerade as a genuinely
+  // empty or complete tenant, which is why both the empty-tenant supersession and the Get started
+  // section below stay hidden while it is false.
+  const funnelLoaded = data !== null;
+  const hasCorpus = (data?.documentCount ?? 0) > 0 || (data?.sourceCount ?? 0) > 0;
+  const hasIngestedDocument = data?.hasIngestedDocument ?? false;
+  const hasAnswer = (data?.answerCount ?? 0) > 0;
   const isEmptyTenant =
-    funnelLoaded && documents.count === 0 && sources.count === 0 && answers.count === 0;
+    funnelLoaded && data.documentCount === 0 && data.sourceCount === 0 && data.answerCount === 0;
   const funnelComplete = funnelLoaded && hasCorpus && hasIngestedDocument && hasAnswer;
 
   const steps: ChecklistStep[] = [
@@ -828,40 +858,113 @@ export default function HomePage() {
     },
   ];
 
+  const failuresSum = data
+    ? data.ingestionFailedCount + data.syncFailedCount + data.factsFailedCount
+    : null;
+
   return (
     <div className="view">
-      <div className="page-head">
-        <div>
-          <span className="eyebrow">Overview</span>
-          <h1 className="page-title">Home</h1>
-          <p className="page-sub">Where your evidence stands right now.</p>
-        </div>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => void handleRefresh()}
-          disabled={pageLoading || refreshing}
-        >
-          {refreshing ? 'Refreshing…' : 'Refresh'}
-        </Button>
-      </div>
+      <PageHeader
+        eyebrow="Overview"
+        title="Home"
+        description="Where your evidence stands right now."
+        actions={
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => void handleRefresh()}
+            disabled={pageLoading || refreshing}
+          >
+            {refreshing ? 'Refreshing…' : 'Refresh'}
+          </Button>
+        }
+      />
 
       {pageLoading ? (
-        <Skeleton label="Loading your dashboard…" />
-      ) : isEmptyTenant ? (
-        <FirstRunChecklist steps={steps} />
+        <div className="skeleton" role="status" aria-live="polite">
+          <span className="sr-only">Loading your dashboard…</span>
+          <div className="stat-row" aria-hidden="true">
+            {Array.from({ length: 4 }, (_, i) => (
+              <div key={i} className="skeleton-field">
+                <span className="skeleton-field-label" />
+                <span className="skeleton-line" />
+              </div>
+            ))}
+          </div>
+          <div className="card" aria-hidden="true">
+            <div className="skeleton-table">
+              {Array.from({ length: 3 }, (_, i) => (
+                <div key={i} className="skeleton-row" />
+              ))}
+            </div>
+          </div>
+          <div className="card" aria-hidden="true">
+            <div className="skeleton-table">
+              {Array.from({ length: 3 }, (_, i) => (
+                <div key={i} className="skeleton-row" />
+              ))}
+            </div>
+          </div>
+          <div className="card" aria-hidden="true">
+            <div className="skeleton-table">
+              {Array.from({ length: 2 }, (_, i) => (
+                <div key={i} className="skeleton-row" />
+              ))}
+            </div>
+          </div>
+        </div>
       ) : (
         <>
-          <WorkQueueSection approvals={approvals} conflicts={conflicts} onChanged={load} />
-          <CorpusHealthSection
-            failedDocuments={failedDocuments}
-            failedSources={failedSources}
-            needsOcrDocuments={needsOcrDocuments}
-            factsFailedDocuments={factsFailedDocuments}
-            onChanged={load}
-          />
-          <RecentAnswersSection answers={answers} />
-          {funnelLoaded && !funnelComplete && <FirstRunChecklist steps={steps} />}
+          <div className="stat-row">
+            <Stat
+              label="Pending approvals"
+              value={data ? data.pendingApprovalCount : '—'}
+              tone={data ? (data.pendingApprovalCount > 0 ? 'caution' : 'neutral') : 'neutral'}
+              hint={data ? undefined : 'unavailable'}
+              to="/approvals"
+            />
+            <Stat
+              label="Open conflicts"
+              value={data ? data.openConflictCount : '—'}
+              tone={data ? (data.openConflictCount > 0 ? 'caution' : 'neutral') : 'neutral'}
+              hint={data ? undefined : 'unavailable'}
+              to="/conflicts"
+            />
+            <Stat
+              label="Corpus failures"
+              value={data ? (failuresSum ?? 0) : '—'}
+              tone={data ? ((failuresSum ?? 0) > 0 ? 'rejected' : 'neutral') : 'neutral'}
+              hint={
+                data
+                  ? `${data.ingestionFailedCount} ingestion · ${data.syncFailedCount} sync · ${data.factsFailedCount} facts`
+                  : 'unavailable'
+              }
+              to="/documents?ingestionStatus=failed"
+            />
+            <Stat
+              label="Needs OCR"
+              value={data ? data.needsOcrCount : '—'}
+              tone="neutral"
+              hint={data ? undefined : 'unavailable'}
+              to="/documents?ingestionStatus=needs-ocr"
+            />
+          </div>
+
+          {isEmptyTenant ? (
+            <FirstRunChecklist steps={steps} />
+          ) : (
+            <>
+              <WorkQueueSection approvals={approvals} conflicts={conflicts} onChanged={load} />
+              <CorpusHealthSection
+                failedDocuments={failedDocuments}
+                failedSources={failedSources}
+                factsFailedDocuments={factsFailedDocuments}
+                onChanged={load}
+              />
+              <RecentAnswersSection answers={answers} onChanged={load} />
+              {funnelLoaded && !funnelComplete && <FirstRunChecklist steps={steps} />}
+            </>
+          )}
         </>
       )}
     </div>

@@ -309,7 +309,7 @@ export class CanonicalEntityService {
     } catch (error) {
       if (this.isDuplicateKeyError(error)) {
         throw new CanonicalEntityNameConflictException(
-          `A canonical entity named '${input.canonicalName}' already exists for this tenant`,
+          `An alias group named '${input.canonicalName}' already exists for this tenant`,
           error,
         );
       }
@@ -348,12 +348,12 @@ export class CanonicalEntityService {
     actorId: string,
   ): Promise<CanonicalEntityResult> {
     if (!Types.ObjectId.isValid(id)) {
-      throw new CanonicalEntityNotFoundException(`Canonical entity '${id}' not found`);
+      throw new CanonicalEntityNotFoundException(`Alias group '${id}' not found`);
     }
 
     const entity = await this.canonicalEntityModel.findOne({ _id: id, tenantId });
     if (!entity) {
-      throw new CanonicalEntityNotFoundException(`Canonical entity '${id}' not found`);
+      throw new CanonicalEntityNotFoundException(`Alias group '${id}' not found`);
     }
 
     if (updates.canonicalName !== undefined) {
@@ -368,7 +368,7 @@ export class CanonicalEntityService {
     } catch (error) {
       if (this.isDuplicateKeyError(error)) {
         throw new CanonicalEntityNameConflictException(
-          `A canonical entity named '${entity.canonicalName}' already exists for this tenant`,
+          `An alias group named '${entity.canonicalName}' already exists for this tenant`,
           error,
         );
       }
@@ -392,12 +392,12 @@ export class CanonicalEntityService {
    *  this row resolved its entity keeps grouping under the name that was canonical then. */
   async remove(id: string, tenantId: string, actorId: string): Promise<void> {
     if (!Types.ObjectId.isValid(id)) {
-      throw new CanonicalEntityNotFoundException(`Canonical entity '${id}' not found`);
+      throw new CanonicalEntityNotFoundException(`Alias group '${id}' not found`);
     }
 
     const entity = await this.canonicalEntityModel.findOneAndDelete({ _id: id, tenantId });
     if (!entity) {
-      throw new CanonicalEntityNotFoundException(`Canonical entity '${id}' not found`);
+      throw new CanonicalEntityNotFoundException(`Alias group '${id}' not found`);
     }
 
     await this.auditService.record({
@@ -724,12 +724,12 @@ export class CanonicalEntityService {
     actorId: string,
   ): Promise<CanonicalEntityResult> {
     if (!Types.ObjectId.isValid(id)) {
-      throw new CanonicalEntityNotFoundException(`Canonical entity '${id}' not found`);
+      throw new CanonicalEntityNotFoundException(`Alias group '${id}' not found`);
     }
 
     const entity = await this.canonicalEntityModel.findOne({ _id: id, tenantId });
     if (!entity) {
-      throw new CanonicalEntityNotFoundException(`Canonical entity '${id}' not found`);
+      throw new CanonicalEntityNotFoundException(`Alias group '${id}' not found`);
     }
 
     const aliasNormalized = normalizeEntityName(alias);
@@ -738,7 +738,7 @@ export class CanonicalEntityService {
     );
     if (!harvested) {
       throw new HarvestedAliasNotFoundException(
-        `Canonical entity '${id}' has no harvested alias '${alias}'`,
+        `Alias group '${id}' has no harvested alias '${alias}'`,
       );
     }
 
@@ -784,12 +784,12 @@ export class CanonicalEntityService {
     actorId: string,
   ): Promise<CanonicalEntityResult> {
     if (!Types.ObjectId.isValid(id)) {
-      throw new CanonicalEntityNotFoundException(`Canonical entity '${id}' not found`);
+      throw new CanonicalEntityNotFoundException(`Alias group '${id}' not found`);
     }
 
     const entity = await this.canonicalEntityModel.findOne({ _id: id, tenantId });
     if (!entity) {
-      throw new CanonicalEntityNotFoundException(`Canonical entity '${id}' not found`);
+      throw new CanonicalEntityNotFoundException(`Alias group '${id}' not found`);
     }
 
     const aliasNormalized = normalizeEntityName(alias);
@@ -798,13 +798,13 @@ export class CanonicalEntityService {
     );
     if (!harvested) {
       throw new HarvestedAliasNotFoundException(
-        `Canonical entity '${id}' has no harvested alias '${alias}'`,
+        `Alias group '${id}' has no harvested alias '${alias}'`,
       );
     }
 
     if (harvested.status !== 'proposed') {
       throw new HarvestedAliasNotProposedException(
-        `Harvested alias '${alias}' on canonical entity '${id}' is '${harvested.status}', not 'proposed'`,
+        `Harvested alias '${alias}' on alias group '${id}' is '${harvested.status}', not 'proposed'`,
       );
     }
 
@@ -820,7 +820,7 @@ export class CanonicalEntityService {
     });
     if (conflictingRow) {
       throw new HarvestedAliasAmbiguousException(
-        `Harvested alias '${alias}' on canonical entity '${id}' now also names canonical entity '${conflictingRow._id.toString()}'; applying it would resolve to neither`,
+        `Harvested alias '${alias}' on alias group '${id}' now also names alias group '${conflictingRow._id.toString()}'; applying it would resolve to neither`,
       );
     }
 

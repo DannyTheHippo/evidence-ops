@@ -10,6 +10,8 @@ import {
 export interface MenuItem {
   label: ReactNode;
   onSelect?: () => void;
+  // Renders the danger modifier for an item whose action removes or revokes something.
+  tone?: 'danger';
 }
 
 interface MenuProps {
@@ -151,7 +153,7 @@ export default function Menu({ trigger, items }: MenuProps) {
               }}
               type="button"
               role="menuitem"
-              className="menu-item"
+              className={item.tone === 'danger' ? 'menu-item menu-item--danger' : 'menu-item'}
               tabIndex={-1}
               aria-disabled={item.onSelect ? undefined : true}
               onClick={() => handleSelect(item)}

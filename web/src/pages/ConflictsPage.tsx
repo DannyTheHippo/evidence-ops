@@ -11,10 +11,12 @@ import {
 } from '../api/client';
 import ConflictValueCompare from '../components/ConflictValueCompare';
 import { IconAlertTriangle } from '../components/icons';
+import QueueList from '../components/QueueList';
 import RecordListPage, { type RecordListStatus } from '../components/RecordListPage';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
+import DescriptionList from '../components/ui/DescriptionList';
 import EmptyState from '../components/ui/EmptyState';
 import FilterBar from '../components/ui/FilterBar';
 import Pager from '../components/ui/Pager';
@@ -65,41 +67,15 @@ function statusTone(status: ConflictStatus): 'caution' | 'verified' | 'neutral' 
   return 'neutral';
 }
 
-function ConflictQueueItem({
-  conflict,
-  metricLabelText,
-  isSelected,
-  onSelect,
-}: {
-  conflict: Conflict;
-  metricLabelText: string;
-  isSelected: boolean;
-  onSelect: (id: string) => void;
-}) {
+// A pane offers at most one primary action, never exactly one: promoting a value the policy did
+// not actually recommend — no rule fired, or the recommended source has since been withdrawn —
+// would manufacture a recommendation the system did not make.
+function isPrimaryValue(conflict: Conflict, value: ConflictValue): boolean {
   return (
-    <li>
-      <button
-        type="button"
-        className={isSelected ? 'card queue-item is-active' : 'card queue-item'}
-        aria-current={isSelected ? 'true' : undefined}
-        onClick={() => onSelect(conflict.id)}
-      >
-        <div className="card-head">
-          <span className="card-title">{conflict.factKey.entity}</span>
-          <Badge tone={statusTone(conflict.status)}>{conflict.status}</Badge>
-        </div>
-        <p className="cell-sub">
-          <span>{metricLabelText}</span> · {conflict.factKey.period}
-        </p>
-        <p className="cell-sub">
-          <span className="mono">
-            spread {conflict.magnitude} {conflict.magnitudeUnit}
-          </span>{' '}
-          · <Timestamp value={conflict.createdAt} />
-        </p>
-        {conflict.stale && <Badge tone="caution">Stale</Badge>}
-      </button>
-    </li>
+    !!conflict.ruleFired &&
+    conflict.ruleFired !== 'none' &&
+    value.factId === conflict.proposedWinnerFactId &&
+    !value.withdrawn
   );
 }
 
@@ -126,38 +102,48 @@ function ConflictDetailPane({
     );
   }
 
+  const detailItems = [
+    {
+      term: 'Metric',
+      description: `${metricLabelText} · ${conflict.factKey.period}`,
+    },
+    {
+      term: 'Spread',
+      description: (
+        <span className="mono">
+          {conflict.magnitude} {conflict.magnitudeUnit}
+        </span>
+      ),
+    },
+    { term: 'Created', description: <Timestamp value={conflict.createdAt} /> },
+    // Stale and unscorable both gate whether action is even possible, so their reasons render
+    // untruncated rather than behind `.cell-truncate`'s hover-only title.
+    ...(conflict.stale
+      ? [
+          {
+            term: 'Stale',
+            description: <p className="notice notice--warn">{conflict.staleReason}</p>,
+          },
+        ]
+      : []),
+    ...(conflict.unscorable
+      ? [
+          {
+            term: 'Unscorable',
+            description: <p className="notice notice--warn">{conflict.unscorableReason}</p>,
+          },
+        ]
+      : []),
+  ];
+
   return (
     <div className="card">
       <div className="card-head">
         <h2 className="card-title">{conflict.factKey.entity}</h2>
         <Badge tone={statusTone(conflict.status)}>{conflict.status}</Badge>
       </div>
-      <p className="cell-sub">
-        <span>{metricLabelText}</span> · {conflict.factKey.period} ·{' '}
-        <span className="mono">
-          spread {conflict.magnitude} {conflict.magnitudeUnit}
-        </span>
-      </p>
 
-      {conflict.stale && (
-        <p className="cell-sub">
-          <Badge tone="caution">Stale</Badge>{' '}
-          {conflict.staleReason && (
-            <span className="cell-truncate" title={conflict.staleReason}>
-              {conflict.staleReason}
-            </span>
-          )}
-        </p>
-      )}
-
-      {conflict.unscorable && (
-        <p className="cell-sub">
-          <Badge tone="rejected">Unscorable</Badge>{' '}
-          <span className="cell-truncate" title={conflict.unscorableReason}>
-            {conflict.unscorableReason}
-          </span>
-        </p>
-      )}
+      <DescriptionList columns={2} items={detailItems} />
 
       <ConflictValueCompare
         values={conflict.values}
@@ -169,7 +155,7 @@ function ConflictDetailPane({
           conflict.status === 'open'
             ? (value) => (
                 <Button
-                  variant="secondary"
+                  variant={isPrimaryValue(conflict, value) ? 'primary' : 'secondary'}
                   size="sm"
                   disabled={resolvingFactId === value.factId}
                   onClick={() => onRequestResolution(conflict, value)}
@@ -305,21 +291,6 @@ export default function ConflictsPage() {
   let status: RecordListStatus;
   if (conflicts === null) {
     status = error ? { kind: 'blank' } : { kind: 'loading', label: 'Loading conflicts…' };
-  } else if (conflicts.length === 0) {
-    status = hasFilter
-      ? {
-          kind: 'empty',
-          icon: <IconAlertTriangle size={24} />,
-          title: 'No conflicts match this filter',
-          description: 'Clear or adjust the status filter above.',
-        }
-      : {
-          kind: 'empty',
-          icon: <IconAlertTriangle size={24} />,
-          title: 'No conflicts',
-          description:
-            'The evidence corpus currently agrees with itself — every extracted fact has a single value.',
-        };
   } else {
     status = { kind: 'ready' };
   }
@@ -364,26 +335,63 @@ export default function ConflictsPage() {
         )
       }
     >
+      {conflicts && conflicts.length === 0 && !hasFilter && (
+        <EmptyState
+          className="empty-state--zero"
+          icon={<IconAlertTriangle size={24} />}
+          title="No conflicts"
+          description="The evidence corpus currently agrees with itself — every extracted fact has a single value."
+        />
+      )}
+
+      {conflicts && conflicts.length === 0 && hasFilter && (
+        <EmptyState
+          icon={<IconAlertTriangle size={24} />}
+          title="No conflicts match this filter"
+          description="Clear or adjust the status filter above."
+          action={
+            <Button variant="secondary" onClick={handleClear}>
+              Show all
+            </Button>
+          }
+        />
+      )}
+
       {conflicts && conflicts.length > 0 && (
         <SplitView
           ratio="queue"
           primaryLabel="Conflicts queue"
           secondaryLabel="Conflict detail"
           primary={
-            <ul
-              className="queue-list"
-              aria-label="Conflicting facts extracted from the evidence corpus"
-            >
-              {conflicts.map((conflict) => (
-                <ConflictQueueItem
-                  key={conflict.id}
-                  conflict={conflict}
-                  metricLabelText={metricLabel(conflict.factKey.metric, metricLabels)}
-                  isSelected={conflict.id === selectedConflict?.id}
-                  onSelect={handleSelect}
-                />
-              ))}
-            </ul>
+            <QueueList
+              items={conflicts}
+              selectedId={selectedConflict?.id ?? null}
+              onSelect={handleSelect}
+              ariaLabel="Conflicting facts extracted from the evidence corpus"
+              renderItem={(conflict) => ({
+                identity: (
+                  <>
+                    <h2 className="card-title cell-truncate">{conflict.factKey.entity}</h2>
+                    <Badge tone={statusTone(conflict.status)}>{conflict.status}</Badge>
+                  </>
+                ),
+                quantifier: (
+                  <>
+                    <span>{metricLabel(conflict.factKey.metric, metricLabels)}</span> ·{' '}
+                    {conflict.factKey.period} ·{' '}
+                    <span className="mono">
+                      spread {conflict.magnitude} {conflict.magnitudeUnit}
+                    </span>
+                  </>
+                ),
+                age: (
+                  <>
+                    <Timestamp value={conflict.createdAt} />
+                    {conflict.stale && <Badge tone="caution">Stale</Badge>}
+                  </>
+                ),
+              })}
+            />
           }
           secondary={
             <ConflictDetailPane

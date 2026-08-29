@@ -111,6 +111,19 @@ function renderPage(initialEntries: string[] = ['/sources'], pollIntervalMs = 5)
   );
 }
 
+// Opens the create dialog and fills the three required fields, leaving `tracked` at its default
+// ('Synced by a connector') and the interval field untouched — every create test starts from here.
+function openCreateDialog() {
+  fireEvent.click(screen.getByRole('button', { name: 'New source' }));
+  return screen.getByRole('dialog', { name: 'New source' });
+}
+
+function fillRequiredFields(name: string, owner: string, path: string) {
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: name } });
+  fireEvent.change(screen.getByLabelText('Owner'), { target: { value: owner } });
+  fireEvent.change(screen.getByLabelText('Folder path'), { target: { value: path } });
+}
+
 describe('SourcesPage', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -159,6 +172,18 @@ describe('SourcesPage', () => {
     expect(inventoryButton).toHaveAttribute('aria-pressed', 'true');
   });
 
+  it('shows the segment counts as aria-hidden, so the accessible name stays just the label', async () => {
+    stubFetch({
+      [TRACKED_URL]: () => jsonResponse({ docs: [makeSource()], count: 1 }),
+    });
+
+    renderPage();
+    await screen.findByText('Deal Room Inbox');
+
+    const trackedButton = screen.getByRole('button', { name: 'Tracked sources' });
+    expect(trackedButton).toHaveTextContent('(1)');
+  });
+
   it('shows an error when the active (tracked) list fails to load', async () => {
     stubFetch({
       [TRACKED_URL]: () => jsonResponse({ message: 'Failed to load sources' }, 500),
@@ -169,12 +194,11 @@ describe('SourcesPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load sources');
   });
 
-  it('lists a populated source with its status, interval, owner, reach, class, last sync, and created date', async () => {
+  it('lists a populated source with its status, reach, cadence, created date and file count', async () => {
     const source = makeSource({
-      enabled: false,
+      enabled: true,
       intervalMs: 300_000,
       lastSyncAt: '2026-08-01T12:00:00.000Z',
-      lastSyncStatus: 'failed',
       lastSyncError: 'ENOENT: no such directory',
       fileCount: 7,
       owner: 'Jane Doe, IT',
@@ -199,17 +223,18 @@ describe('SourcesPage', () => {
     expect(screen.getByText('deal-room')).toBeInTheDocument();
     expect(screen.getByText('Jane Doe, IT')).toBeInTheDocument();
     expect(screen.getByText('Every 5 minutes')).toBeInTheDocument();
-    expect(screen.getByText('disabled')).toBeInTheDocument();
+    // Status reads 'failed' from the carried sync error, since the source is enabled.
+    expect(screen.getByText('failed')).toBeInTheDocument();
+    expect(screen.getByText('ENOENT: no such directory')).toBeInTheDocument();
     expect(
       screen.getByText(formatRelativeTimestamp(source.lastSyncAt as string)),
     ).toBeInTheDocument();
     expect(screen.getByText(formatRelativeTimestamp(source.createdAt))).toBeInTheDocument();
-    expect(screen.getByText('failed')).toBeInTheDocument();
-    expect(screen.getByText('ENOENT: no such directory')).toBeInTheDocument();
     expect(screen.getByText('7')).toBeInTheDocument();
     expect(screen.getByText('possible')).toBeInTheDocument();
-    expect(screen.getByText('export-only')).toBeInTheDocument();
-    expect(screen.getByText('crm-export')).toBeInTheDocument();
+    // Reach's sub-line folds connectivity and class together — the tracked table has no separate
+    // Class column.
+    expect(screen.getByText('export-only · crm-export')).toBeInTheDocument();
   });
 
   it('renders Unassigned as muted text, not a badge, when a source has no owner', async () => {
@@ -290,7 +315,7 @@ describe('SourcesPage', () => {
 
     renderPage();
 
-    expect(await screen.findByText('25 total')).toBeInTheDocument();
+    expect(await screen.findByText('1–20 of 25')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
     const next = screen.getByRole('button', { name: 'Next' });
     expect(next).not.toBeDisabled();
@@ -338,8 +363,7 @@ describe('SourcesPage', () => {
     expect(screen.getByText('prohibited')).toBeInTheDocument();
     expect(screen.getByText('manual')).toBeInTheDocument();
     expect(screen.getByText('memo')).toBeInTheDocument();
-    // Inventory rows carry no sync-status, interval or file-count vocabulary.
-    expect(screen.queryByText('Interval')).not.toBeInTheDocument();
+    // Inventory rows carry no sync-status or file-count vocabulary.
     expect(screen.queryByRole('button', { name: 'Sync now' })).not.toBeInTheDocument();
   });
 
@@ -362,7 +386,7 @@ describe('SourcesPage', () => {
     expect(await screen.findByText('Legacy Share')).toBeInTheDocument();
   });
 
-  it('an admin creates a tracked source, which reloads and appears in the (already active) tracked view', async () => {
+  it('an admin creates a tracked source through the New source dialog, which reloads the (already active) tracked view', async () => {
     const created = makeSource({
       id: 'source-2',
       name: 'New Source',
@@ -385,15 +409,14 @@ describe('SourcesPage', () => {
     });
 
     renderPage();
-
     await screen.findByText('No sources yet');
 
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New Source' } });
-    fireEvent.change(screen.getByLabelText('Owner'), { target: { value: 'Jane Doe, IT' } });
-    fireEvent.change(screen.getByLabelText('Folder path'), { target: { value: 'new-folder' } });
+    openCreateDialog();
+    fillRequiredFields('New Source', 'Jane Doe, IT', 'new-folder');
     fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
 
     expect(await screen.findByText('New Source')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 
     const createCall = fetchMock.mock.calls.find(
       ([url, init]) => url === '/api/v1/sources' && init?.method === 'POST',
@@ -407,11 +430,10 @@ describe('SourcesPage', () => {
       owner: 'Jane Doe, IT',
       tracked: true,
     });
-    expect(screen.queryByLabelText('Name')).toHaveValue('');
     expect(trackedCall).toBe(2);
   });
 
-  it('an admin creates an inventory-only source from the tracked view, which switches to and reloads the inventory view', async () => {
+  it('an admin creates an inventory-only source by choosing Catalogued only, which switches to and reloads the inventory view', async () => {
     const created = makeSource({
       id: 'source-3',
       name: 'Export Drop',
@@ -436,10 +458,9 @@ describe('SourcesPage', () => {
     renderPage();
     await screen.findByText('No sources yet');
 
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Export Drop' } });
-    fireEvent.change(screen.getByLabelText('Owner'), { target: { value: 'Ops Team' } });
-    fireEvent.change(screen.getByLabelText('Folder path'), { target: { value: 'export-drop' } });
-    fireEvent.change(screen.getByLabelText('Tracked'), { target: { value: 'false' } });
+    openCreateDialog();
+    fillRequiredFields('Export Drop', 'Ops Team', 'export-drop');
+    fireEvent.click(screen.getByRole('radio', { name: 'Catalogued only' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
 
     // The page switched itself to the inventory view — the created source is visible without a
@@ -450,6 +471,22 @@ describe('SourcesPage', () => {
       'true',
     );
     expect(inventoryCall).toBe(2);
+  });
+
+  it('offers the sync interval only while Tracked is set to Synced by a connector', async () => {
+    stubFetch();
+
+    renderPage();
+    await screen.findByText('No sources yet');
+    openCreateDialog();
+
+    expect(screen.getByLabelText(/Sync interval \(ms\)/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Catalogued only' }));
+    expect(screen.queryByLabelText(/Sync interval \(ms\)/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Synced by a connector' }));
+    expect(screen.getByLabelText(/Sync interval \(ms\)/)).toBeInTheDocument();
   });
 
   it('names the Name field on a source-name conflict, not the page-level error', async () => {
@@ -464,21 +501,30 @@ describe('SourcesPage', () => {
     });
 
     renderPage();
-
     await screen.findByText('No sources yet');
 
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Deal Room Inbox' } });
-    fireEvent.change(screen.getByLabelText('Owner'), { target: { value: 'Jane Doe, IT' } });
-    fireEvent.change(screen.getByLabelText('Folder path'), { target: { value: 'deal-room' } });
+    openCreateDialog();
+    fillRequiredFields('Deal Room Inbox', 'Jane Doe, IT', 'deal-room');
     fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
+    // The error is no longer announced via role="alert" — that announcement now happens by
+    // moving focus to the error summary, and keeping the role here would double-announce. The
+    // association through aria-describedby and aria-invalid is the part that still matters. The
+    // same message also appears as a link in the error summary above the field — `selector: 'p'`
+    // picks out the inline field error specifically, since that is the one aria-describedby names.
+    const errorEl = await screen.findByText(
       "A source named 'Deal Room Inbox' already exists for this tenant",
+      { exact: false, selector: 'p' },
     );
-    expect(screen.getByLabelText('Name')).toHaveAttribute('aria-invalid', 'true');
+    expect(errorEl).toHaveTextContent('Error:');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    const nameInput = screen.getByLabelText('Name');
+    expect(nameInput).toHaveAttribute('aria-invalid', 'true');
+    expect(nameInput.getAttribute('aria-describedby')).toContain(errorEl.id);
   });
 
-  it('shows a failed source creation as a page-level error, leaving the Name field unmarked', async () => {
+  it('shows a failed source creation in the error summary, leaving the Name field unmarked', async () => {
     stubFetch({
       '/api/v1/sources': (init) =>
         init?.method === 'POST'
@@ -487,16 +533,16 @@ describe('SourcesPage', () => {
     });
 
     renderPage();
-
     await screen.findByText('No sources yet');
 
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Deal Room Inbox' } });
-    fireEvent.change(screen.getByLabelText('Owner'), { target: { value: 'Jane Doe, IT' } });
-    fireEvent.change(screen.getByLabelText('Folder path'), { target: { value: 'deal-room' } });
+    openCreateDialog();
+    fillRequiredFields('Deal Room Inbox', 'Jane Doe, IT', 'deal-room');
     fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to create source');
+    expect(await screen.findByText('Failed to create source')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Name')).not.toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
   it('guards against a double submit between the click and the button becoming disabled', async () => {
@@ -518,9 +564,8 @@ describe('SourcesPage', () => {
     renderPage();
     await screen.findByText('No sources yet');
 
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Deal Room Inbox' } });
-    fireEvent.change(screen.getByLabelText('Owner'), { target: { value: 'Jane Doe, IT' } });
-    fireEvent.change(screen.getByLabelText('Folder path'), { target: { value: 'deal-room' } });
+    openCreateDialog();
+    fillRequiredFields('Deal Room Inbox', 'Jane Doe, IT', 'deal-room');
     const button = screen.getByRole('button', { name: 'Add source' });
     fireEvent.click(button);
     fireEvent.click(button);
@@ -532,6 +577,22 @@ describe('SourcesPage', () => {
         ([url, init]) => url === '/api/v1/sources' && init?.method === 'POST',
       ),
     ).toHaveLength(1);
+  });
+
+  it('closes the dialog and discards its values when Cancel is clicked', async () => {
+    stubFetch();
+
+    renderPage();
+    await screen.findByText('No sources yet');
+
+    openCreateDialog();
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Discarded' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    openCreateDialog();
+    expect(screen.getByLabelText('Name')).toHaveValue('');
   });
 
   it('toggles a source from enabled to disabled', async () => {
@@ -611,11 +672,12 @@ describe('SourcesPage', () => {
     expect(screen.getByRole('button', { name: 'Sync now' })).not.toBeDisabled();
   });
 
-  it('filters the tracked list by name, path or owner on the currently loaded page', async () => {
-    const first = makeSource({ id: 'source-1', name: 'Deal Room Inbox', path: 'deal-room' });
-    const second = makeSource({ id: 'source-2', name: 'Diligence Drive', path: 'diligence' });
+  it('re-fetches the tracked list from the server on an applied search, matching the pager to the filtered total', async () => {
+    const filtered = makeSource({ id: 'source-2', name: 'Diligence Drive', path: 'diligence' });
     stubFetch({
-      [TRACKED_URL]: () => jsonResponse({ docs: [first, second], count: 2 }),
+      [TRACKED_URL]: () => jsonResponse({ docs: [makeSource()], count: 1 }),
+      [`${TRACKED_URL}&q=diligence`]: () => jsonResponse({ docs: [filtered], count: 1 }),
+      [`${INVENTORY_URL}&q=diligence`]: () => jsonResponse({ docs: [], count: 0 }),
     });
 
     renderPage();
@@ -626,14 +688,16 @@ describe('SourcesPage', () => {
 
     expect(await screen.findByText('Diligence Drive')).toBeInTheDocument();
     expect(screen.queryByText('Deal Room Inbox')).not.toBeInTheDocument();
-    // The Pager keeps reporting the server's total — the filter only hides rows already on screen.
-    expect(screen.getByText('2 total')).toBeInTheDocument();
+    // The Pager's count is the server's filtered total, not the combined tenant total.
+    expect(screen.getByText('1–1 of 1')).toBeInTheDocument();
   });
 
   it('shows a search-specific empty state distinct from "no sources yet", and clears back to the full list', async () => {
     const source = makeSource();
     stubFetch({
       [TRACKED_URL]: () => jsonResponse({ docs: [source], count: 1 }),
+      [`${TRACKED_URL}&q=nonexistent`]: () => jsonResponse({ docs: [], count: 0 }),
+      [`${INVENTORY_URL}&q=nonexistent`]: () => jsonResponse({ docs: [], count: 0 }),
     });
 
     renderPage();
@@ -662,7 +726,9 @@ describe('SourcesPage', () => {
     await screen.findByText('Deal Room Inbox');
 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-    await screen.findByText('30 total');
+    // The skip=20 request this triggers is unstubbed and rejects, so the count stays the stale
+    // 30 from the initial load while the skip the Pager renders from has already advanced.
+    await screen.findByText('21–30 of 30');
 
     fireEvent.click(screen.getByRole('button', { name: 'Sort by Owner' }));
 
@@ -718,17 +784,15 @@ describe('SourcesPage', () => {
     expect(screen.queryByRole('button', { name: /Sort by Last sync/ })).not.toBeInTheDocument();
   });
 
-  it('reproduces a deep-linked view, search, sort and page, and keeps the URL clean at defaults', async () => {
+  it('reproduces a deep-linked view, search, sort and page, sending q to the server', async () => {
     const source = makeSource({ id: 'source-3', name: 'Export Drop', tracked: false });
     stubFetch({
-      '/api/v1/sources?skip=20&limit=20&tracked=false&sort=owner&sortDir=asc': () =>
+      '/api/v1/sources?skip=20&limit=20&tracked=false&sort=owner&sortDir=asc&q=export': () =>
         jsonResponse({ docs: [source], count: 30 }),
     });
 
     renderPage(['/sources?view=inventory&q=export&sort=owner&sortDir=asc&skip=0&invSkip=20']);
 
-    // The deep link carries a `q` the URL round-trip preserves, but the fetch itself never sends
-    // `q` — the filter is client-side, so only skip/tracked/sort/sortDir reach the server.
     await screen.findByText('Export Drop');
     expect(screen.getByLabelText('Search')).toHaveValue('export');
     expect(screen.getByRole('button', { name: 'Repository inventory' })).toHaveAttribute(
@@ -757,15 +821,13 @@ describe('SourcesPage', () => {
     });
   });
 
-  it('a member sees why they cannot add or manage sources, and cannot reach the create form', async () => {
+  it('a member cannot reach the create dialog — the New source action does not render at all', async () => {
     stubFetch({}, () => jsonResponse(member));
 
     renderPage();
 
-    expect(
-      await screen.findByText('Adding and configuring sources requires an admin.'),
-    ).toBeInTheDocument();
-    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
+    await screen.findByText('No sources yet');
+    expect(screen.queryByRole('button', { name: 'New source' })).not.toBeInTheDocument();
   });
 
   it('a member does not see the enable/disable toggle, but still sees Sync now', async () => {
@@ -784,7 +846,7 @@ describe('SourcesPage', () => {
     expect(screen.getByRole('button', { name: 'Sync now' })).toBeInTheDocument();
   });
 
-  it('withholds the admin-only notice until the session probe resolves, then admits the admin', async () => {
+  it('withholds the New source action until the session probe resolves, then admits the admin', async () => {
     let resolveMe: (res: Response) => void;
     const pendingMe = new Promise<Response>((resolve) => {
       resolveMe = resolve;
@@ -794,18 +856,12 @@ describe('SourcesPage', () => {
     renderPage();
 
     await screen.findByText('No sources yet');
-    expect(
-      screen.queryByText('Adding and configuring sources requires an admin.'),
-    ).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New source' })).not.toBeInTheDocument();
 
     act(() => {
       resolveMe!(jsonResponse(admin));
     });
 
-    expect(await screen.findByLabelText('Name')).toBeInTheDocument();
-    expect(
-      screen.queryByText('Adding and configuring sources requires an admin.'),
-    ).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'New source' })).toBeInTheDocument();
   });
 });

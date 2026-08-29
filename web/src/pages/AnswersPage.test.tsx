@@ -126,6 +126,38 @@ describe('AnswersPage', () => {
       'href',
       '/answers/answer-1',
     );
+
+    // A trailing result count in the toolbar's end slot, plural for more than one answer.
+    expect(screen.getByText('3 answers')).toBeInTheDocument();
+  });
+
+  it('states the result count in the singular for exactly one answer', async () => {
+    stubFetch({
+      '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc': () =>
+        jsonResponse({ docs: [answered], count: 1 }),
+    });
+
+    renderPage();
+
+    await screen.findByText(answered.questionText);
+    expect(screen.getByText('1 answer')).toBeInTheDocument();
+  });
+
+  it('renders the claim-coverage meter as decorative, with the percentage text carrying the value', async () => {
+    stubFetch({
+      '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc': () =>
+        jsonResponse({ docs: [answered], count: 1 }),
+    });
+
+    renderPage();
+
+    const row = (await screen.findByText(answered.questionText)).closest('tr');
+    if (!row) throw new Error('row not found');
+    const meter = row.querySelector('.coverage-meter');
+    expect(meter).toHaveAttribute('aria-hidden', 'true');
+    // 0.875 rounds to the 9th decile of ten, not the 8th the raw percentage would suggest.
+    expect(meter).toHaveClass('coverage-meter--9');
+    expect(within(row).getByText('88%')).toBeInTheDocument();
   });
 
   it('shows the run status, not an outcome, for an answer that has not completed', async () => {
@@ -276,12 +308,12 @@ describe('AnswersPage', () => {
     expect(screen.getByRole('status', { name: 'current search' })).toBeEmptyDOMElement();
 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-    await screen.findByText('30 total');
+    await screen.findByText('26–30 of 30');
 
     fireEvent.change(screen.getByLabelText('Run status'), { target: { value: 'failed' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
 
-    await screen.findByText('1 total');
+    await screen.findByText('1–1 of 1');
 
     // The filter landed and paging reset to the first page in the same patch — the URL carries
     // only the non-default `runStatus`, never a leftover `skip`.
@@ -362,7 +394,7 @@ describe('AnswersPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 
-    await screen.findByText('30 total');
+    await screen.findByText('26–30 of 30');
     expect(
       fetchMock.mock.calls.some(
         ([url]) => url === '/api/v1/answers?skip=25&limit=25&sort=createdAt&sortDir=desc',

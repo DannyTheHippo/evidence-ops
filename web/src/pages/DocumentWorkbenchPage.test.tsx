@@ -130,7 +130,10 @@ describe('DocumentWorkbenchPage', () => {
       'src',
       'blob:mock-1',
     );
-    expect(screen.getByText('completed')).toBeInTheDocument();
+    // Rendered twice by design: once as the header's at-a-glance badge, once as the detail rail's
+    // labelled "Status" row.
+    expect(screen.getAllByText('completed')).toHaveLength(2);
+    expect(screen.getByText(/^Version 1 · uploaded /)).toBeInTheDocument();
     const downloadLink = screen.getByRole('link', { name: 'Download' });
     expect(downloadLink).toHaveAttribute('href', '/api/v1/documents/versions/version-1/content');
     expect(

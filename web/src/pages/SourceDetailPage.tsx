@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   ApiError,
@@ -7,6 +7,7 @@ import {
   getSourceClassDrift,
   updateSource,
   type DocumentSourceClass,
+  type Source,
   type SourceClassDrift,
   type SourceConnectivity,
   type SourceReachability,
@@ -15,28 +16,68 @@ import {
 import { IconDatabase } from '../components/icons';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
-import Dialog from '../components/ui/Dialog';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
+import DescriptionList from '../components/ui/DescriptionList';
 import EmptyState from '../components/ui/EmptyState';
-import Field from '../components/ui/Field';
+import ErrorSummary from '../components/ui/ErrorSummary';
+import Input from '../components/ui/Input';
+import LinkButton from '../components/ui/LinkButton';
+import PageHeader from '../components/ui/PageHeader';
+import RadioGroup, { type RadioOption } from '../components/ui/RadioGroup';
 import Select from '../components/ui/Select';
 import Skeleton from '../components/ui/Skeleton';
+import Stat from '../components/ui/Stat';
 import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
 import Timestamp from '../components/ui/Timestamp';
 import { notify } from '../components/ui/toast';
 import { formatInterval } from '../lib/format-interval';
+import { useFormSubmit } from '../lib/use-form-submit';
 import { syncRunLabel, useSourceSync } from '../lib/use-source-sync';
 import { useSession } from '../lib/use-session';
 
-const CONNECTIVITY_OPTIONS: { value: SourceConnectivity; label: string }[] = [
-  { value: 'connector', label: 'Connector' },
-  { value: 'export-only', label: 'Export-only' },
-  { value: 'manual', label: 'Manual' },
+const CONNECTIVITY_OPTIONS: RadioOption[] = [
+  {
+    value: 'connector',
+    label: 'Connector',
+    hint: 'This system syncs bytes directly from the source.',
+  },
+  {
+    value: 'export-only',
+    label: 'Export-only',
+    hint: 'Someone exports files by hand; this system only reads what lands.',
+  },
+  {
+    value: 'manual',
+    label: 'Manual',
+    hint: 'Nothing syncs automatically — catalogued by hand only.',
+  },
 ];
 
-const REACHABILITY_OPTIONS: { value: SourceReachability; label: string }[] = [
-  { value: 'live', label: 'Live' },
-  { value: 'possible', label: 'Possible' },
-  { value: 'prohibited', label: 'Prohibited' },
+const REACHABILITY_OPTIONS: RadioOption[] = [
+  { value: 'live', label: 'Live', hint: 'This system can reach the source right now.' },
+  {
+    value: 'possible',
+    label: 'Possible',
+    hint: 'Reachable in principle, but access is not yet set up.',
+  },
+  {
+    value: 'prohibited',
+    label: 'Prohibited',
+    hint: 'Policy blocks this system from reaching the source.',
+  },
+];
+
+const TRACKED_OPTIONS: RadioOption[] = [
+  {
+    value: 'true',
+    label: 'Synced by a connector',
+    hint: 'The sync loop may run for this source.',
+  },
+  {
+    value: 'false',
+    label: 'Catalogued only',
+    hint: 'An inventory record only — the sync loop never runs for it.',
+  },
 ];
 
 const CLASS_OPTIONS: { value: DocumentSourceClass; label: string }[] = [
@@ -48,10 +89,10 @@ const CLASS_OPTIONS: { value: DocumentSourceClass; label: string }[] = [
   { value: 'unclassified', label: 'Unclassified' },
 ];
 
-const TRACKED_OPTIONS = [
-  { value: 'true', label: 'Synced by a connector' },
-  { value: 'false', label: 'Catalogued only' },
-];
+// The DTO property names `updateSource` accepts — not the state variable names, which is what
+// lets a server field-validation error land on the right control instead of falling through to
+// `formError` unmatched.
+type InventoryField = 'owner' | 'connectivity' | 'reachability' | 'tracked' | 'sourceClass';
 
 interface SourceDetailPageProps {
   // Overridable so tests can poll on a short interval instead of stubbing timers. Forwarded to
@@ -76,21 +117,28 @@ export default function SourceDetailPage({ pollIntervalMs }: SourceDetailPagePro
   const [error, setError] = useState<string | null>(null);
   const [toggling, setToggling] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
-  const { run, isPolling, starting, syncError, startSync } = useSourceSync(pollIntervalMs);
   const [drift, setDrift] = useState<SourceClassDrift | null>(null);
   const [driftError, setDriftError] = useState<string | null>(null);
   const [applyDialogOpen, setApplyDialogOpen] = useState(false);
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
 
-  const [inventoryOwner, setInventoryOwner] = useState('');
-  const [inventoryConnectivity, setInventoryConnectivity] =
-    useState<SourceConnectivity>('connector');
-  const [inventoryReachability, setInventoryReachability] = useState<SourceReachability>('live');
-  const [inventoryClass, setInventoryClass] = useState<DocumentSourceClass>('unclassified');
-  const [inventoryTracked, setInventoryTracked] = useState('true');
-  const [updatingInventory, setUpdatingInventory] = useState(false);
-  const [inventoryError, setInventoryError] = useState<string | null>(null);
+  const [owner, setOwner] = useState('');
+  const [connectivity, setConnectivity] = useState<SourceConnectivity>('connector');
+  const [reachability, setReachability] = useState<SourceReachability>('live');
+  const [sourceClass, setSourceClass] = useState<DocumentSourceClass>('unclassified');
+  const [tracked, setTracked] = useState('true');
+
+  // Seeds the editable inventory fields from the server's own values — called from the initial
+  // load below and again after a successful save, so a trimmed-to-empty owner or a class the
+  // server itself normalizes never leaves the form showing something it didn't actually store.
+  const seedInventoryFields = useCallback((result: Source) => {
+    setOwner(result.owner ?? '');
+    setConnectivity(result.connectivity);
+    setReachability(result.reachability);
+    setSourceClass(result.sourceClass);
+    setTracked(String(result.tracked));
+  }, []);
 
   useEffect(() => {
     if (!id) return;
@@ -99,16 +147,11 @@ export default function SourceDetailPage({ pollIntervalMs }: SourceDetailPagePro
         setSource(result);
         setNotFound(false);
         setError(null);
-        // Seeds the editable fields from the server's own values on load — inside the same
-        // async callback that sets `source`, not a separate effect keyed on it, so this never
-        // trips `react-hooks/set-state-in-effect`'s ban on a synchronous setState in an effect
-        // body (an async `.then()` callback is exempt; it never runs during the render pass the
-        // rule protects against).
-        setInventoryOwner(result.owner ?? '');
-        setInventoryConnectivity(result.connectivity);
-        setInventoryReachability(result.reachability);
-        setInventoryClass(result.sourceClass);
-        setInventoryTracked(String(result.tracked));
+        // Inside the same async callback that sets `source`, not a separate effect keyed on it,
+        // so this never trips `react-hooks/set-state-in-effect`'s ban on a synchronous setState in
+        // an effect body (an async `.then()` callback is exempt; it never runs during the render
+        // pass the rule protects against).
+        seedInventoryFields(result);
       })
       .catch((err: unknown) => {
         if (err instanceof ApiError && err.status === 404) {
@@ -117,7 +160,7 @@ export default function SourceDetailPage({ pollIntervalMs }: SourceDetailPagePro
         }
         setError(err instanceof Error ? err.message : 'Failed to load source');
       });
-  }, [id]);
+  }, [id, seedInventoryFields]);
 
   // Reused by the initial load below and by a successful apply, so the card and its count always
   // reflect what the server reports right now rather than a value patched in locally. Returns the
@@ -139,6 +182,29 @@ export default function SourceDetailPage({ pollIntervalMs }: SourceDetailPagePro
     if (!id) return;
     void loadDrift(id);
   }, [id, loadDrift]);
+
+  // `useSourceSync`'s `onSettled` fires once a sync run reaches a terminal state, which is the
+  // only signal this page gets that `lastSyncAt`/`lastSyncError` or the drift count may have moved
+  // — without it, both stay exactly as they were pre-sync until a manual reload. A background
+  // refresh's own failure is swallowed rather than replacing an already-rendered source with the
+  // initial load's error or not-found UI.
+  const reloadAfterSync = useCallback(() => {
+    if (!id) return;
+    getSourceById(id)
+      .then((result) => {
+        setSource(result);
+        seedInventoryFields(result);
+      })
+      .catch(() => {
+        // Swallowed — see the comment above.
+      });
+    void loadDrift(id);
+  }, [id, loadDrift, seedInventoryFields]);
+
+  const { run, isPolling, starting, syncError, startSync } = useSourceSync(
+    pollIntervalMs,
+    reloadAfterSync,
+  );
 
   async function handleApplyDrift() {
     if (!source) return;
@@ -175,30 +241,38 @@ export default function SourceDetailPage({ pollIntervalMs }: SourceDetailPagePro
     }
   }
 
-  // The card this creates drift, so a successful edit re-runs the drift load in the same handler —
-  // otherwise a class change would only surface its own drift card on the next navigation.
-  async function handleUpdateInventory(e: FormEvent<HTMLFormElement>) {
-    if (!source) return;
-    e.preventDefault();
-    setUpdatingInventory(true);
-    setInventoryError(null);
-    try {
+  // The class this edit sets can itself create drift, so a successful save re-runs the drift load
+  // in the same submit — otherwise a class change would only surface its own drift card on the
+  // next navigation. `useFormSubmit` supplies the in-flight guard this page otherwise lacks: a
+  // second click before the button's own `disabled` re-render lands is a no-op rather than a
+  // second concurrent PATCH.
+  const {
+    pending: updatingInventory,
+    formError: inventoryFormError,
+    onSubmit: onInventorySubmit,
+    fieldProps: inventoryFieldProps,
+    // Destructured straight out of `summary` here rather than kept as one object and read via
+    // `.ref`/`.errors` in the JSX below — the latter shape trips `react-hooks/refs` (the object
+    // carries a ref, so any property read off it downstream reads as a ref access) even though
+    // `errors` itself is not one.
+    summary: { ref: inventorySummaryRef, errors: inventorySummaryErrors },
+  } = useFormSubmit<InventoryField>({
+    validate: () => ({}),
+    submit: async () => {
+      if (!source) return;
       const updated = await updateSource(source.id, {
-        owner: inventoryOwner.trim() || undefined,
-        connectivity: inventoryConnectivity,
-        reachability: inventoryReachability,
-        tracked: inventoryTracked === 'true',
-        sourceClass: inventoryClass,
+        owner: owner.trim() || undefined,
+        connectivity,
+        reachability,
+        tracked: tracked === 'true',
+        sourceClass,
       });
       setSource((current) => (current ? { ...current, ...updated } : current));
       notify('success', 'Updated inventory details.');
       await loadDrift(updated.id);
-    } catch (err: unknown) {
-      setInventoryError(err instanceof Error ? err.message : 'Failed to update inventory details');
-    } finally {
-      setUpdatingInventory(false);
-    }
-  }
+      seedInventoryFields(updated);
+    },
+  });
 
   // A carried lastSyncError under the "enabled" label reads as caution, not verified-green — the
   // same register the list page's combined status carries for the same state, so the badge here
@@ -212,16 +286,16 @@ export default function SourceDetailPage({ pollIntervalMs }: SourceDetailPagePro
 
   return (
     <div className="view">
-      <div className="page-head">
-        <div>
-          <span className="eyebrow">Evidence</span>
-          <h1 className="page-title">{source ? source.name : 'Source'}</h1>
-          <p className="page-sub">Per-file sync state for this source.</p>
-        </div>
-        <Link to="/sources" className="btn btn--secondary btn--sm">
-          Back to sources
-        </Link>
-      </div>
+      <PageHeader
+        eyebrow="Evidence"
+        title={source ? source.name : 'Source'}
+        description="Per-file sync state for this source."
+        actions={
+          <LinkButton to="/sources" variant="secondary" size="sm">
+            Back to sources
+          </LinkButton>
+        }
+      />
 
       {error && (
         <p className="error error--page" role="alert">
@@ -242,35 +316,30 @@ export default function SourceDetailPage({ pollIntervalMs }: SourceDetailPagePro
       {source && (
         <>
           {/*
-            Leads with health and drift — the state this source is in, and whether it has
-            diverged — rather than its filesystem path, which is metadata further down.
+            Leads with health — a Stat row plus, when it applies, the loudest thing on the page —
+            rather than the filesystem path or creation date, which are metadata further down.
           */}
           <section className="card">
             <div className="card-head">
               <h2 className="card-title">Sync health</h2>
               <Badge tone={status.tone}>{status.label}</Badge>
             </div>
-            <p className="cell-sub">
-              {source.lastSyncAt ? (
-                <>
-                  Last synced <Timestamp value={source.lastSyncAt} />
-                </>
-              ) : (
-                'Never synced'
-              )}
-            </p>
+            <div className="stat-row">
+              <Stat
+                label="Last sync"
+                value={source.lastSyncAt ? <Timestamp value={source.lastSyncAt} /> : 'Never synced'}
+              />
+              <Stat label="Cadence" value={formatInterval(source.intervalMs)} />
+              <Stat
+                label="Pending drift"
+                value={drift ? drift.count : '—'}
+                tone={drift && drift.count > 0 ? 'caution' : 'neutral'}
+              />
+              <Stat label="Files" value={source.fileCount} />
+            </div>
             {source.lastSyncError && (
               <p className="notice notice--warn">Last sync failed: {source.lastSyncError}</p>
             )}
-            {drift && (
-              <p className="cell-sub">
-                {drift.count > 0
-                  ? `${drift.count} document${drift.count === 1 ? '' : 's'} pending class drift.`
-                  : 'No class drift.'}
-              </p>
-            )}
-            <p className="cell-sub mono">{source.path}</p>
-            <p className="cell-sub">{formatInterval(source.intervalMs)}</p>
             <div className="form-actions">
               {canManage && (
                 <Button
@@ -309,6 +378,14 @@ export default function SourceDetailPage({ pollIntervalMs }: SourceDetailPagePro
             )}
           </section>
 
+          <DescriptionList
+            columns={2}
+            items={[
+              { term: 'Path', description: <span className="mono cell-sub">{source.path}</span> },
+              { term: 'Created', description: <Timestamp value={source.createdAt} /> },
+            ]}
+          />
+
           <section className="card">
             <div className="card-head">
               <h2 className="card-title">Inventory</h2>
@@ -317,41 +394,47 @@ export default function SourceDetailPage({ pollIntervalMs }: SourceDetailPagePro
               <p className="cell-sub">Editing inventory details requires an admin.</p>
             )}
             {canManage && (
-              <form onSubmit={(e) => void handleUpdateInventory(e)} className="form">
-                <Field label="Owner">
-                  {(inputProps) => (
-                    <input
-                      type="text"
-                      value={inventoryOwner}
-                      onChange={(e) => setInventoryOwner(e.target.value)}
-                      placeholder="Jane Doe, IT"
-                      {...inputProps}
-                    />
-                  )}
-                </Field>
-                <Select
-                  label="Connectivity"
+              <form onSubmit={onInventorySubmit} className="form" noValidate>
+                <ErrorSummary
+                  ref={inventorySummaryRef}
+                  errors={inventorySummaryErrors}
+                  formError={inventoryFormError ?? undefined}
+                />
+                <Input
+                  {...inventoryFieldProps('owner')}
+                  label="Owner"
+                  optional
+                  value={owner}
+                  onChange={setOwner}
+                  placeholder="Jane Doe, IT"
+                />
+                <RadioGroup
+                  {...inventoryFieldProps('connectivity')}
+                  legend="Connectivity"
                   options={CONNECTIVITY_OPTIONS}
-                  value={inventoryConnectivity}
-                  onChange={(value) => setInventoryConnectivity(value as SourceConnectivity)}
+                  value={connectivity}
+                  onChange={(value) => setConnectivity(value as SourceConnectivity)}
                 />
-                <Select
-                  label="Reachability"
+                <RadioGroup
+                  {...inventoryFieldProps('reachability')}
+                  legend="Reachability"
                   options={REACHABILITY_OPTIONS}
-                  value={inventoryReachability}
-                  onChange={(value) => setInventoryReachability(value as SourceReachability)}
+                  value={reachability}
+                  onChange={(value) => setReachability(value as SourceReachability)}
                 />
-                <Select
-                  label="Tracked"
+                <RadioGroup
+                  {...inventoryFieldProps('tracked')}
+                  legend="Tracked"
                   options={TRACKED_OPTIONS}
-                  value={inventoryTracked}
-                  onChange={setInventoryTracked}
+                  value={tracked}
+                  onChange={setTracked}
                 />
                 <Select
+                  {...inventoryFieldProps('sourceClass')}
                   label="Class"
                   options={CLASS_OPTIONS}
-                  value={inventoryClass}
-                  onChange={(value) => setInventoryClass(value as DocumentSourceClass)}
+                  value={sourceClass}
+                  onChange={(value) => setSourceClass(value as DocumentSourceClass)}
                 />
                 <div className="form-actions">
                   <Button type="submit" disabled={updatingInventory}>
@@ -359,11 +442,6 @@ export default function SourceDetailPage({ pollIntervalMs }: SourceDetailPagePro
                   </Button>
                 </div>
               </form>
-            )}
-            {inventoryError && (
-              <p className="error" role="alert">
-                {inventoryError}
-              </p>
             )}
           </section>
 
@@ -378,10 +456,21 @@ export default function SourceDetailPage({ pollIntervalMs }: SourceDetailPagePro
               <div className="card-head">
                 <h2 className="card-title">Class drift</h2>
               </div>
-              <p className="notice notice--warn">
-                {drift.count} document{drift.count === 1 ? '' : 's'} still carr
-                {drift.count === 1 ? 'ies' : 'y'} the previous class ({drift.previousClass}).
-              </p>
+              <DescriptionList
+                columns={2}
+                items={[
+                  {
+                    term: 'Previous → Current class',
+                    description: `${drift.previousClass} → ${source.sourceClass}`,
+                  },
+                  {
+                    term: 'Documents affected',
+                    description: `${drift.count} document${drift.count === 1 ? '' : 's'} still carr${
+                      drift.count === 1 ? 'ies' : 'y'
+                    } the previous class (${drift.previousClass}).`,
+                  },
+                ]}
+              />
               {sessionResolved && !canManage && (
                 <p className="cell-sub">Applying class drift requires an admin.</p>
               )}
@@ -399,40 +488,27 @@ export default function SourceDetailPage({ pollIntervalMs }: SourceDetailPagePro
                       Apply current class to {drift.count} document{drift.count === 1 ? '' : 's'}
                     </Button>
                   </div>
-                  <Dialog
+                  <ConfirmDialog
                     open={applyDialogOpen}
                     onClose={() => setApplyDialogOpen(false)}
                     title={`Apply current class to ${drift.count} document${
                       drift.count === 1 ? '' : 's'
                     }?`}
-                  >
-                    <p>
-                      {drift.count} document{drift.count === 1 ? '' : 's'} still carr
-                      {drift.count === 1 ? 'ies' : 'y'} the previous class ({drift.previousClass}).
-                      This applies {source.sourceClass} to every document still carrying{' '}
-                      {drift.previousClass} at the moment you confirm — the number actually changed
-                      can differ from {drift.count} if a sync completes before then.
-                    </p>
-                    <div className="form-actions">
-                      <Button variant="ghost" onClick={() => setApplyDialogOpen(false)}>
-                        Cancel
-                      </Button>
-                      <Button
-                        variant="danger"
-                        disabled={applying}
-                        onClick={() => void handleApplyDrift()}
-                      >
-                        {applying
-                          ? 'Applying…'
-                          : `Apply to ${drift.count} document${drift.count === 1 ? '' : 's'}`}
-                      </Button>
-                    </div>
-                    {applyError && (
-                      <p className="error" role="alert">
-                        {applyError}
-                      </p>
-                    )}
-                  </Dialog>
+                    body={`${drift.count} document${drift.count === 1 ? '' : 's'} still carr${
+                      drift.count === 1 ? 'ies' : 'y'
+                    } the previous class (${drift.previousClass}). This applies ${
+                      source.sourceClass
+                    } to every document still carrying ${
+                      drift.previousClass
+                    } at the moment you confirm — the number actually changed can differ from ${
+                      drift.count
+                    } if a sync completes before then.`}
+                    confirmLabel={`Apply to ${drift.count} document${drift.count === 1 ? '' : 's'}`}
+                    destructive
+                    busy={applying}
+                    error={applyError ?? undefined}
+                    onConfirm={() => void handleApplyDrift()}
+                  />
                 </>
               )}
             </section>

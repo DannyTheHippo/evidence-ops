@@ -36,4 +36,24 @@ describe('Dialog', () => {
 
     expect(onClose).toHaveBeenCalledOnce();
   });
+
+  it('defaults to the medium size', () => {
+    render(
+      <Dialog open onClose={() => {}} title="Delete document">
+        <p>Irreversible.</p>
+      </Dialog>,
+    );
+
+    expect(screen.getByRole('dialog', { name: 'Delete document' })).toHaveClass('dialog--md');
+  });
+
+  it('applies the requested size modifier', () => {
+    render(
+      <Dialog open onClose={() => {}} title="Delete document" size="lg">
+        <p>Irreversible.</p>
+      </Dialog>,
+    );
+
+    expect(screen.getByRole('dialog', { name: 'Delete document' })).toHaveClass('dialog--lg');
+  });
 });

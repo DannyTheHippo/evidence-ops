@@ -138,4 +138,19 @@ describe('Menu', () => {
     expect(onSelect).toHaveBeenCalledOnce();
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
+
+  it('renders a danger-toned item with the danger modifier class', () => {
+    render(
+      <Menu
+        trigger="Account"
+        items={[{ label: 'Remove member', onSelect: vi.fn(), tone: 'danger' }]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Account' }));
+
+    expect(screen.getByRole('menuitem', { name: 'Remove member' })).toHaveClass(
+      'menu-item--danger',
+    );
+  });
 });

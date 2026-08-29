@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   listApiKeys,
   mintApiKey,
@@ -9,18 +9,20 @@ import {
   type MintedApiKey,
   type SortDirection,
 } from '../api/client';
+import SecretReveal from '../components/SecretReveal';
 import { IconKey } from '../components/icons';
 import RecordListPage, { type RecordListStatus } from '../components/RecordListPage';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
-import CopyButton from '../components/ui/CopyButton';
-import Field from '../components/ui/Field';
+import Dialog from '../components/ui/Dialog';
+import Input from '../components/ui/Input';
 import Pager from '../components/ui/Pager';
 import SortableHeaderCell from '../components/ui/SortableHeaderCell';
 import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
 import Timestamp from '../components/ui/Timestamp';
 import { notify } from '../components/ui/toast';
+import { useFormSubmit } from '../lib/use-form-submit';
 import { useUrlState } from '../lib/use-url-state';
 
 const PAGE_SIZE = 20;
@@ -32,6 +34,15 @@ const URL_DEFAULTS: Record<'sort' | 'sortDir' | 'skip', string> = {
   sortDir: 'desc',
   skip: '0',
 };
+
+/** Mirrors `CreateApiKeyRequestDto`'s `@MaxDate` bound
+ * (`src/features/platform/api-keys/dtos/request/create-api-key.request.dto.ts`) so the picker
+ * refuses an out-of-range date before a round trip. The server stays the sole authority: an
+ * expiry that slips past this check anyway — clock skew, a stale build — still comes back as its
+ * own field-validation error, which `useFormSubmit` folds onto the `expiresAt` field the same way
+ * as any other server rejection. */
+const MAX_EXPIRY_DAYS = 365;
+const MAX_EXPIRY_MS = MAX_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
 
 // The plaintext token a mint or a rotate just returned, backing the one-time panel below the
 // header. `action` only changes the panel's wording — mint and rotate share one panel because
@@ -154,6 +165,103 @@ function KeyRow({
   );
 }
 
+/** Formats a `Date` as the local-time string a `datetime-local` input's `max` attribute expects
+ * (`YYYY-MM-DDTHH:mm`) — the same local interpretation the browser gives the field's own value. */
+function toDatetimeLocalValue(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+type MintField = 'name' | 'expiresAt';
+
+interface MintKeyDialogProps {
+  onClose: () => void;
+  onMinted: (key: MintedApiKey) => void;
+}
+
+/** Create-only authoring surface for one key, mounted only while the dialog is open — its parent
+ * mounts it only while `open`, so each open starts fresh rather than replaying a prior attempt's
+ * values or server error. Two fields is too few to earn an `ErrorSummary`: a plain `formError`
+ * alert, matching `PeoplePage`'s `InviteMemberDialog`, is all a failed mint needs. */
+function MintKeyDialog({ onClose, onMinted }: MintKeyDialogProps) {
+  const [name, setName] = useState('');
+  const [expiresAt, setExpiresAt] = useState('');
+  // Adopted once, at mount, so the picker's `max` and the validation bound below judge the same
+  // instant an operator opened the dialog rather than drifting apart as they fill in the form.
+  const [maxExpiresAt] = useState(() => Date.now() + MAX_EXPIRY_MS);
+
+  function validate(): Partial<Record<MintField, string>> {
+    const errors: Partial<Record<MintField, string>> = {};
+    if (!name.trim()) errors.name = 'Name is required.';
+    if (expiresAt) {
+      const parsed = new Date(expiresAt).getTime();
+      if (Number.isNaN(parsed)) {
+        errors.expiresAt = 'Enter a valid date and time.';
+      } else if (parsed <= Date.now()) {
+        errors.expiresAt = 'Expiry must be in the future.';
+      } else if (parsed > maxExpiresAt) {
+        errors.expiresAt = 'Expiry cannot be more than 365 days out.';
+      }
+    }
+    return errors;
+  }
+
+  async function submit() {
+    const key = await mintApiKey(
+      name.trim(),
+      expiresAt ? new Date(expiresAt).toISOString() : undefined,
+    );
+    onMinted(key);
+  }
+
+  const { pending, formError, onSubmit, fieldProps } = useFormSubmit<MintField>({
+    validate,
+    submit,
+    onSuccess: onClose,
+  });
+
+  const nameField = fieldProps('name');
+  const expiresField = fieldProps('expiresAt');
+
+  return (
+    <Dialog open onClose={onClose} title="Mint a key" size="sm">
+      <form onSubmit={onSubmit} className="form" noValidate>
+        {formError && (
+          <p className="error" role="alert">
+            {formError}
+          </p>
+        )}
+        <Input
+          {...nameField}
+          label="Name"
+          value={name}
+          onChange={setName}
+          placeholder="CI integration"
+          hint="So you can tell this key apart from your others later."
+        />
+        <Input
+          {...expiresField}
+          label="Expires"
+          optional
+          type="datetime-local"
+          max={toDatetimeLocalValue(new Date(maxExpiresAt))}
+          value={expiresAt}
+          onChange={setExpiresAt}
+          hint="Leave blank and the platform applies its own default expiry, or set a date up to 365 days out."
+        />
+        <div className="form-actions">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={pending}>
+            {pending ? 'Minting…' : 'Mint'}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
 export default function ApiKeysPage() {
   const [urlState, setUrlState] = useUrlState(URL_DEFAULTS);
   const sort = urlState.sort as ApiKeySortField;
@@ -163,18 +271,19 @@ export default function ApiKeysPage() {
   const [keys, setKeys] = useState<ApiKey[] | null>(null);
   const [count, setCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [name, setName] = useState('');
-  const [expiresAt, setExpiresAt] = useState('');
-  const [minting, setMinting] = useState(false);
-  const [mintError, setMintError] = useState<string | null>(null);
+  const [mintOpen, setMintOpen] = useState(false);
   // The page's only copy of a plaintext token, backing the one-time panel. `keys` is populated
   // solely by re-fetching the list endpoint, whose response never carries a token, so dismissing
   // the panel, starting another mint or rotate, or leaving the page destroys the only copy that
   // exists, matching the server's one-time delivery.
   const [oneTimeToken, setOneTimeToken] = useState<OneTimeToken | null>(null);
-  // Blocks a double mint between the click and the re-render that disables the submit button —
-  // `disabled={minting}` alone only takes effect once React has committed it.
-  const mintInFlightRef = useRef(false);
+  const secretRevealRef = useRef<HTMLElement>(null);
+
+  // Moves focus to the panel every time a mint or a rotate replaces it — both land here, so both
+  // need the same focus move.
+  useEffect(() => {
+    if (oneTimeToken) secretRevealRef.current?.focus();
+  }, [oneTimeToken]);
 
   // The plaintext token above is the only copy that will ever exist; closing the tab or reloading
   // while the panel holds one destroys it exactly as if the operator had never seen it. In-app
@@ -206,28 +315,10 @@ export default function ApiKeysPage() {
     void load();
   }, [load]);
 
-  async function handleMint(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (mintInFlightRef.current) return;
-    mintInFlightRef.current = true;
-    setMinting(true);
-    setMintError(null);
-    // The previous token's panel goes with the previous attempt; a failed mint must not leave it
-    // on screen beside the new error.
-    setOneTimeToken(null);
-    try {
-      const key = await mintApiKey(name, expiresAt ? new Date(expiresAt).toISOString() : undefined);
-      setOneTimeToken({ key, action: 'minted' });
-      void load();
-      setName('');
-      setExpiresAt('');
-      notify('success', `Minted "${key.name}".`);
-    } catch (err: unknown) {
-      setMintError(err instanceof Error ? err.message : 'Failed to mint API key');
-    } finally {
-      setMinting(false);
-      mintInFlightRef.current = false;
-    }
+  function handleMinted(key: MintedApiKey) {
+    setOneTimeToken({ key, action: 'minted' });
+    void load();
+    notify('success', `Minted "${key.name}".`);
   }
 
   function handleRevoked(id: string) {
@@ -270,145 +361,103 @@ export default function ApiKeysPage() {
   }
 
   return (
-    <RecordListPage
-      eyebrow="Admin"
-      title="API Keys"
-      description="Tokens an MCP client uses to authenticate as you."
-      filters={
-        <>
-          {oneTimeToken && (
-            <section className="card">
-              <div className="card-head">
-                <h2 className="card-title">{oneTimeToken.key.name}</h2>
-              </div>
-              <p className="notice notice--warn">
-                {oneTimeToken.action === 'rotated'
+    <>
+      <RecordListPage
+        eyebrow="Account"
+        title="API Keys"
+        description="Tokens an MCP client uses to authenticate as you."
+        actions={
+          <Button type="button" variant="primary" onClick={() => setMintOpen(true)}>
+            Mint key
+          </Button>
+        }
+        filters={
+          oneTimeToken && (
+            <SecretReveal
+              ref={secretRevealRef}
+              secret={oneTimeToken.key.token}
+              expiresAt={oneTimeToken.key.expiresAt ?? ''}
+              notice={
+                oneTimeToken.action === 'rotated'
                   ? 'This is the only time the new token is shown, and it cannot be retrieved again. The previous token has already stopped working — copy this one now.'
-                  : 'This is the only time this token is shown. It cannot be retrieved again — copy it now or mint a new key later.'}
-              </p>
-              <p className="mono">{oneTimeToken.key.token}</p>
-              <div className="form-actions">
-                <CopyButton text={oneTimeToken.key.token} />
-                <Button variant="ghost" size="sm" onClick={() => setOneTimeToken(null)}>
-                  Dismiss
-                </Button>
-              </div>
-            </section>
-          )}
-
-          <section className="card">
-            <div className="card-head">
-              <h2 className="card-title">Mint a key</h2>
-            </div>
-            <form onSubmit={(e) => void handleMint(e)} className="form">
-              <Field label="Name">
-                {(inputProps) => (
-                  <input
-                    type="text"
-                    required
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="CI integration"
-                    {...inputProps}
+                  : 'This is the only time this token is shown. It cannot be retrieved again — copy it now or mint a new key later.'
+              }
+              onDismiss={() => setOneTimeToken(null)}
+            />
+          )
+        }
+        error={error ?? undefined}
+        status={status}
+        footer={
+          keys && (
+            <Pager
+              count={count}
+              skip={skip}
+              pageSize={PAGE_SIZE}
+              onSkipChange={(next) => setUrlState({ skip: String(next) })}
+            />
+          )
+        }
+      >
+        {keys && keys.length > 0 && (
+          <section
+            className="panel"
+            tabIndex={0}
+            role="region"
+            aria-label="API keys that authenticate an MCP client as you"
+          >
+            <Table caption="API keys that authenticate an MCP client as you.">
+              <thead>
+                <tr>
+                  <SortableHeaderCell<ApiKeySortField>
+                    field="name"
+                    label="Name"
+                    sort={sort}
+                    direction={sortDir}
+                    onSort={handleSort}
                   />
-                )}
-              </Field>
-              <Field
-                label="Expires (optional)"
-                hint="Leave blank and the platform applies its own default expiry. Set a date to choose a different one."
-              >
-                {(inputProps) => (
-                  <input
-                    type="datetime-local"
-                    value={expiresAt}
-                    onChange={(e) => setExpiresAt(e.target.value)}
-                    {...inputProps}
+                  <TableHeaderCell>Prefix</TableHeaderCell>
+                  <TableHeaderCell>Status</TableHeaderCell>
+                  <SortableHeaderCell<ApiKeySortField>
+                    field="createdAt"
+                    label="Created"
+                    sort={sort}
+                    direction={sortDir}
+                    onSort={handleSort}
                   />
-                )}
-              </Field>
-              <div className="form-actions">
-                <Button type="submit" variant="primary" disabled={minting}>
-                  {minting ? 'Minting…' : 'Mint key'}
-                </Button>
-              </div>
-            </form>
-            {mintError && (
-              <p className="error" role="alert">
-                {mintError}
-              </p>
-            )}
+                  <SortableHeaderCell<ApiKeySortField>
+                    field="expiresAt"
+                    label="Expires"
+                    sort={sort}
+                    direction={sortDir}
+                    onSort={handleSort}
+                  />
+                  <SortableHeaderCell<ApiKeySortField>
+                    field="lastUsedAt"
+                    label="Last used"
+                    sort={sort}
+                    direction={sortDir}
+                    onSort={handleSort}
+                  />
+                  <TableHeaderCell>Actions</TableHeaderCell>
+                </tr>
+              </thead>
+              <tbody>
+                {keys.map((key) => (
+                  <KeyRow
+                    key={key.id}
+                    apiKey={key}
+                    onRevoked={handleRevoked}
+                    onRotated={handleRotated}
+                  />
+                ))}
+              </tbody>
+            </Table>
           </section>
-        </>
-      }
-      error={error ?? undefined}
-      status={status}
-      footer={
-        keys && (
-          <Pager
-            count={count}
-            skip={skip}
-            pageSize={PAGE_SIZE}
-            onSkipChange={(next) => setUrlState({ skip: String(next) })}
-          />
-        )
-      }
-    >
-      {keys && keys.length > 0 && (
-        <section
-          className="panel"
-          tabIndex={0}
-          role="region"
-          aria-label="API keys that authenticate an MCP client as you"
-        >
-          <Table caption="API keys that authenticate an MCP client as you.">
-            <thead>
-              <tr>
-                <SortableHeaderCell<ApiKeySortField>
-                  field="name"
-                  label="Name"
-                  sort={sort}
-                  direction={sortDir}
-                  onSort={handleSort}
-                />
-                <TableHeaderCell>Prefix</TableHeaderCell>
-                <TableHeaderCell>Status</TableHeaderCell>
-                <SortableHeaderCell<ApiKeySortField>
-                  field="createdAt"
-                  label="Created"
-                  sort={sort}
-                  direction={sortDir}
-                  onSort={handleSort}
-                />
-                <SortableHeaderCell<ApiKeySortField>
-                  field="expiresAt"
-                  label="Expires"
-                  sort={sort}
-                  direction={sortDir}
-                  onSort={handleSort}
-                />
-                <SortableHeaderCell<ApiKeySortField>
-                  field="lastUsedAt"
-                  label="Last used"
-                  sort={sort}
-                  direction={sortDir}
-                  onSort={handleSort}
-                />
-                <TableHeaderCell>Actions</TableHeaderCell>
-              </tr>
-            </thead>
-            <tbody>
-              {keys.map((key) => (
-                <KeyRow
-                  key={key.id}
-                  apiKey={key}
-                  onRevoked={handleRevoked}
-                  onRotated={handleRotated}
-                />
-              ))}
-            </tbody>
-          </Table>
-        </section>
-      )}
-    </RecordListPage>
+        )}
+      </RecordListPage>
+
+      {mintOpen && <MintKeyDialog onClose={() => setMintOpen(false)} onMinted={handleMinted} />}
+    </>
   );
 }

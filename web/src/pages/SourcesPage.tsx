@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ApiError,
@@ -13,17 +13,22 @@ import {
 import { IconDatabase } from '../components/icons';
 import Badge, { type BadgeTone } from '../components/ui/Badge';
 import Button from '../components/ui/Button';
+import Dialog from '../components/ui/Dialog';
 import EmptyState from '../components/ui/EmptyState';
-import Field from '../components/ui/Field';
+import ErrorSummary from '../components/ui/ErrorSummary';
 import FilterBar from '../components/ui/FilterBar';
 import Input from '../components/ui/Input';
 import Pager from '../components/ui/Pager';
-import Select from '../components/ui/Select';
+import PageHeader from '../components/ui/PageHeader';
+import RadioGroup from '../components/ui/RadioGroup';
+import SegmentedControl from '../components/ui/SegmentedControl';
 import Skeleton from '../components/ui/Skeleton';
 import SortableHeaderCell from '../components/ui/SortableHeaderCell';
 import Table, { RowLink, TableCell, TableHeaderCell, TableRow } from '../components/ui/Table';
 import Timestamp from '../components/ui/Timestamp';
+import Toolbar from '../components/ui/Toolbar';
 import { notify } from '../components/ui/toast';
+import { useFormSubmit } from '../lib/use-form-submit';
 import { formatInterval } from '../lib/format-interval';
 import { syncRunLabel, useSourceSync } from '../lib/use-source-sync';
 import { useSession } from '../lib/use-session';
@@ -75,19 +80,6 @@ function sourceStatusTone(source: Source, isPolling: boolean): { tone: BadgeTone
   return { tone: 'verified', label: 'enabled' };
 }
 
-// Client-side only: `ListSourcesRequestDto` has no free-text parameter, so this filters whatever
-// page is already on screen rather than the whole list — the `Pager`'s count still reflects the
-// server total for that reason.
-function matchesSearch(source: Source, query: string): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  return (
-    source.name.toLowerCase().includes(q) ||
-    source.path.toLowerCase().includes(q) ||
-    (source.owner ?? '').toLowerCase().includes(q)
-  );
-}
-
 function SourceRow({
   source,
   pollIntervalMs,
@@ -122,30 +114,28 @@ function SourceRow({
     <TableRow to={`/sources/${source.id}`}>
       <TableCell label="Name">
         <RowLink to={`/sources/${source.id}`}>{source.name}</RowLink>
-      </TableCell>
-      <TableCell label="Path" className="cell-sub mono">
-        <span className="cell-truncate" title={source.path}>
-          {source.path}
-        </span>
+        <div className="cell-sub mono">
+          <span className="cell-truncate" title={source.path}>
+            {source.path}
+          </span>
+        </div>
       </TableCell>
       <TableCell label="Owner">
         {source.owner ?? <span className="cell-sub">Unassigned</span>}
       </TableCell>
-      <TableCell label="Interval" className="cell-sub">
-        {formatInterval(source.intervalMs)}
-      </TableCell>
       <TableCell label="Status">
         <Badge tone={status.tone}>{status.label}</Badge>
+        {source.lastSyncError && <div className="cell-sub">{source.lastSyncError}</div>}
       </TableCell>
       <TableCell label="Reach">
         <Badge tone={reachTone(source.reachability)}>{source.reachability}</Badge>
-        <div className="cell-sub">{source.connectivity}</div>
+        <div className="cell-sub">
+          {source.connectivity} · {source.sourceClass}
+        </div>
       </TableCell>
-      <TableCell label="Class">{source.sourceClass}</TableCell>
       <TableCell label="Last sync" className="cell-sub">
         {source.lastSyncAt ? <Timestamp value={source.lastSyncAt} /> : 'Never synced'}
-        {source.lastSyncStatus && <div>{source.lastSyncStatus}</div>}
-        {source.lastSyncError && <div>{source.lastSyncError}</div>}
+        <div>{formatInterval(source.intervalMs)}</div>
       </TableCell>
       <TableCell label="Created" className="cell-sub">
         <Timestamp value={source.createdAt} />
@@ -195,18 +185,20 @@ function SourceRow({
   );
 }
 
-// Inventory-only rows carry no sync state at all — no interval, status, last-sync or file count —
-// so this stays a separate, narrower row rather than SourceRow with half its cells blank.
+// Inventory-only rows carry no sync state at all — no status, last-sync or file count — so this
+// stays a separate, narrower row rather than SourceRow with half its cells blank. Class stays its
+// own column here, unlike the tracked table's Reach sub-line, because nothing else on this row
+// competes with it for space.
 function InventoryRow({ source }: { source: Source }) {
   return (
     <TableRow to={`/sources/${source.id}`}>
       <TableCell label="Name">
         <RowLink to={`/sources/${source.id}`}>{source.name}</RowLink>
-      </TableCell>
-      <TableCell label="Path" className="cell-sub mono">
-        <span className="cell-truncate" title={source.path}>
-          {source.path}
-        </span>
+        <div className="cell-sub mono">
+          <span className="cell-truncate" title={source.path}>
+            {source.path}
+          </span>
+        </div>
       </TableCell>
       <TableCell label="Owner">
         {source.owner ?? <span className="cell-sub">Unassigned</span>}
@@ -220,6 +212,145 @@ function InventoryRow({ source }: { source: Source }) {
         <Timestamp value={source.createdAt} />
       </TableCell>
     </TableRow>
+  );
+}
+
+type CreateSourceField = 'name' | 'owner' | 'path' | 'tracked' | 'intervalMs';
+
+interface CreateSourceDialogProps {
+  onClose: () => void;
+  // Runs once the source is created, before the dialog closes — the caller reloads whichever list
+  // the new row landed in and switches the view to it.
+  onCreated: (created: Source) => void;
+}
+
+/** Create-only authoring surface for one source, always open — its parent mounts it only while
+ * the dialog is open, so each open starts fresh rather than replaying a prior open's values or
+ * server error. Field names are the `createSource` DTO's own property names, which is what lets a
+ * server field error land on the right control. */
+function CreateSourceDialog({ onClose, onCreated }: CreateSourceDialogProps) {
+  const [name, setName] = useState('');
+  const [owner, setOwner] = useState('');
+  const [path, setPath] = useState('');
+  const [tracked, setTracked] = useState('true');
+  const [intervalMs, setIntervalMs] = useState('');
+
+  function validate(): Partial<Record<CreateSourceField, string>> {
+    const errors: Partial<Record<CreateSourceField, string>> = {};
+    if (!name.trim()) errors.name = 'Name is required.';
+    if (!owner.trim()) errors.owner = 'Owner is required.';
+    if (!path.trim()) errors.path = 'Folder path is required.';
+    if (tracked === 'true' && intervalMs.trim()) {
+      const parsed = Number(intervalMs);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        errors.intervalMs = 'Enter a sync interval greater than zero.';
+      }
+    }
+    return errors;
+  }
+
+  async function submit() {
+    const created = await createSource({
+      name: name.trim(),
+      kind: 'local-folder',
+      path: path.trim(),
+      owner: owner.trim(),
+      tracked: tracked === 'true',
+      intervalMs: tracked === 'true' && intervalMs.trim() ? Number(intervalMs) : undefined,
+    });
+    notify('success', `Added ${created.name}.`);
+    onCreated(created);
+  }
+
+  // The create route documents exactly one 409: the unique {tenantId, name} index
+  // (sources.service.ts's `create`) — a domain exception, not a field-validation error, so it never
+  // arrives through `ApiError.fields`. Naming it on `name` here is what makes the field itself, not
+  // just a page-level message, tell a caller which value collided.
+  function mapServerError(err: ApiError): Partial<Record<CreateSourceField, string>> | null {
+    return err.status === 409 ? { name: err.message } : null;
+  }
+
+  const {
+    pending,
+    formError,
+    onSubmit,
+    fieldProps,
+    // Destructured here rather than passed on as `summary.ref`/`summary.errors` below — a plain
+    // identifier reads unambiguously as a ref, where a member expression on a hook-returned object
+    // does not.
+    summary: { ref: summaryRef, errors: summaryErrors },
+  } = useFormSubmit<CreateSourceField>({
+    validate,
+    submit,
+    mapServerError,
+    onSuccess: onClose,
+  });
+
+  // Called in the form's visual order — `fieldProps` registers each name the first time it runs,
+  // and that registration order is what `summary`/focus-on-failure walk, so calling it out of
+  // visual order here would list or focus fields in an order the form doesn't render them in.
+  const nameField = fieldProps('name');
+  const ownerField = fieldProps('owner');
+  const pathField = fieldProps('path');
+  const trackedField = fieldProps('tracked');
+  const intervalField = fieldProps('intervalMs');
+
+  return (
+    <Dialog open onClose={onClose} title="New source" size="md">
+      <form onSubmit={onSubmit} className="form" noValidate>
+        <ErrorSummary ref={summaryRef} errors={summaryErrors} formError={formError ?? undefined} />
+        <Input
+          {...nameField}
+          label="Name"
+          value={name}
+          onChange={setName}
+          placeholder="Deal Room Inbox"
+        />
+        <Input
+          {...ownerField}
+          label="Owner"
+          value={owner}
+          onChange={setOwner}
+          placeholder="Jane Doe, IT"
+        />
+        <Input
+          {...pathField}
+          label="Folder path"
+          value={path}
+          onChange={setPath}
+          placeholder="deal-room"
+        />
+        <RadioGroup
+          id={trackedField.id}
+          legend="Tracked"
+          error={trackedField.error}
+          onBlur={trackedField.onBlur}
+          options={TRACKED_OPTIONS}
+          value={tracked}
+          onChange={setTracked}
+        />
+        {tracked === 'true' && (
+          <Input
+            {...intervalField}
+            label="Sync interval (ms)"
+            optional
+            type="number"
+            min={1}
+            value={intervalMs}
+            onChange={setIntervalMs}
+            placeholder="60000"
+          />
+        )}
+        <div className="form-actions">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={pending}>
+            {pending ? 'Adding…' : 'Add source'}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
 
@@ -241,12 +372,10 @@ interface SourcesPageProps {
 export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
   const session = useSession();
   // Fails CLOSED on the still-loading probe too, matching DocumentDetail.tsx's canDelete — a
-  // member (or a session that hasn't resolved yet) never sees the create form or a toggle flash in
-  // before the check lands. The server's RolesGuard on POST/PATCH /sources is the actual boundary.
+  // member (or a session that hasn't resolved yet) never sees the "New source" action or a toggle
+  // flash in before the check lands. The server's RolesGuard on POST/PATCH /sources is the actual
+  // boundary.
   const canManage = session.status === 'authed' && session.me.role === 'admin';
-  // The notice states an absence of permission, so it waits for the probe to land — an admin is
-  // never told they are not one while the session resolves.
-  const sessionResolved = session.status !== 'loading';
 
   const [urlState, setUrlState] = useUrlState(URL_DEFAULTS);
   const view = urlState.view as SourceView;
@@ -256,8 +385,8 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
   const trackedSkip = Number(urlState.skip);
   const inventorySkip = Number(urlState.invSkip);
 
-  // Only this, not the search input's own value, drives the client-side filter — search applies
-  // on submit, not on every keystroke, matching every other list page's filter bar.
+  // Only this, not the search input's own value, drives a fetch — search applies on submit, not on
+  // every keystroke, matching every other list page's filter bar.
   const [draftQ, setDraftQ] = useState(appliedQ);
 
   const [trackedSources, setTrackedSources] = useState<Source[] | null>(null);
@@ -268,25 +397,20 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
   const [inventoryCount, setInventoryCount] = useState(0);
   const [inventoryError, setInventoryError] = useState<string | null>(null);
 
-  const [name, setName] = useState('');
-  const [path, setPath] = useState('');
-  const [owner, setOwner] = useState('');
-  const [tracked, setTracked] = useState('true');
-  const [intervalMs, setIntervalMs] = useState('');
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
-  // A name conflict names the Name field specifically (the unique {tenantId, name} index behind
-  // it), so it renders on that field rather than in the page-level createError below.
-  const [nameError, setNameError] = useState<string | null>(null);
-  // Blocks a double submit between the click and the re-render that disables the submit button —
-  // `disabled={creating}` alone only takes effect once React has committed it.
-  const createInFlightRef = useRef(false);
+  const [createOpen, setCreateOpen] = useState(false);
 
-  // Both lists load regardless of which one is on screen — the create form below reloads
-  // whichever list a new source actually lands in, and that logic stays correct only if both
-  // stay live rather than one going stale while it is switched away from.
+  // Both lists load regardless of which one is on screen — a create reloads whichever list the new
+  // source actually lands in, and that logic stays correct only if both stay live rather than one
+  // going stale while it is switched away from.
   const loadTracked = useCallback(() => {
-    return listSources({ tracked: true, skip: trackedSkip, limit: PAGE_SIZE, sort, sortDir })
+    return listSources({
+      tracked: true,
+      skip: trackedSkip,
+      limit: PAGE_SIZE,
+      sort,
+      sortDir,
+      q: appliedQ || undefined,
+    })
       .then(({ docs, count: total }) => {
         setTrackedSources(docs);
         setTrackedCount(total);
@@ -295,14 +419,21 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
       .catch((err: unknown) => {
         setTrackedError(err instanceof Error ? err.message : 'Failed to load sources');
       });
-  }, [trackedSkip, sort, sortDir]);
+  }, [trackedSkip, sort, sortDir, appliedQ]);
 
   useEffect(() => {
     void loadTracked();
   }, [loadTracked]);
 
   const loadInventory = useCallback(() => {
-    return listSources({ tracked: false, skip: inventorySkip, limit: PAGE_SIZE, sort, sortDir })
+    return listSources({
+      tracked: false,
+      skip: inventorySkip,
+      limit: PAGE_SIZE,
+      sort,
+      sortDir,
+      q: appliedQ || undefined,
+    })
       .then(({ docs, count: total }) => {
         setInventorySources(docs);
         setInventoryCount(total);
@@ -311,56 +442,22 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
       .catch((err: unknown) => {
         setInventoryError(err instanceof Error ? err.message : 'Failed to load inventory sources');
       });
-  }, [inventorySkip, sort, sortDir]);
+  }, [inventorySkip, sort, sortDir, appliedQ]);
 
   useEffect(() => {
     void loadInventory();
   }, [loadInventory]);
 
-  async function handleCreate(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (createInFlightRef.current) return;
-    createInFlightRef.current = true;
-    setCreating(true);
-    setCreateError(null);
-    setNameError(null);
-    try {
-      const created = await createSource({
-        name,
-        kind: 'local-folder',
-        path,
-        owner,
-        tracked: tracked === 'true',
-        intervalMs: intervalMs.trim() ? Number(intervalMs) : undefined,
-      });
-      // A source created untracked belongs in the inventory list, not the synced one — switch the
-      // page to whichever list the new row actually landed in and reload it from the server,
-      // rather than prepending it optimistically into the wrong one.
-      if (created.tracked) {
-        if (trackedSkip === 0) void loadTracked();
-        setUrlState({ view: 'tracked', skip: URL_DEFAULTS.skip });
-      } else {
-        if (inventorySkip === 0) void loadInventory();
-        setUrlState({ view: 'inventory', invSkip: URL_DEFAULTS.invSkip });
-      }
-      notify('success', `Added ${created.name}.`);
-      setName('');
-      setPath('');
-      setOwner('');
-      setTracked('true');
-      setIntervalMs('');
-    } catch (err: unknown) {
-      // The create route documents exactly one 409: the unique {tenantId, name} index
-      // (sources.service.ts's `create`) — every other failure (validation, auth, transport, 500)
-      // stays page-level, since nothing else here identifies a single field.
-      if (err instanceof ApiError && err.status === 409) {
-        setNameError(err.message);
-      } else {
-        setCreateError(err instanceof Error ? err.message : 'Failed to create source');
-      }
-    } finally {
-      setCreating(false);
-      createInFlightRef.current = false;
+  function handleCreated(created: Source) {
+    // A source created untracked belongs in the inventory list, not the synced one — switch the
+    // page to whichever list the new row actually landed in and reload it from the server, rather
+    // than prepending it optimistically into the wrong one.
+    if (created.tracked) {
+      if (trackedSkip === 0) void loadTracked();
+      setUrlState({ view: 'tracked', skip: URL_DEFAULTS.skip });
+    } else {
+      if (inventorySkip === 0) void loadInventory();
+      setUrlState({ view: 'inventory', invSkip: URL_DEFAULTS.invSkip });
     }
   }
 
@@ -409,15 +506,13 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
   const activeCount = view === 'tracked' ? trackedCount : inventoryCount;
   const activeError = view === 'tracked' ? trackedError : inventoryError;
   const activeSkip = view === 'tracked' ? trackedSkip : inventorySkip;
-  const filteredSources =
-    activeSources?.filter((source) => matchesSearch(source, appliedQ)) ?? null;
 
   let status: ListStatus;
   if (activeSources === null) {
     status = activeError
       ? { kind: 'blank' }
       : { kind: 'loading', label: view === 'tracked' ? 'Loading sources…' : 'Loading inventory…' };
-  } else if (filteredSources && filteredSources.length === 0) {
+  } else if (activeSources.length === 0) {
     status = hasFilter
       ? {
           kind: 'empty',
@@ -432,8 +527,8 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
           title: view === 'tracked' ? 'No sources yet' : 'No inventory-only repositories yet',
           description:
             view === 'tracked'
-              ? 'A source is a watched folder that keeps this data room current — use the form above to add one.'
-              : 'A repository with no connector still belongs in the estate map — add one and leave it catalogued only.',
+              ? 'A source is a watched folder that keeps this data room current — add one with New source.'
+              : 'A repository with no connector still belongs in the estate map — add one with New source and leave it catalogued only.',
         };
   } else {
     status = { kind: 'ready' };
@@ -441,123 +536,52 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
 
   return (
     <div className="view">
-      <div className="page-head">
-        <div>
-          <span className="eyebrow">Evidence</span>
-          <h1 className="page-title">Sources</h1>
-          <p className="page-sub">Point at a folder and watch it sync documents in.</p>
-        </div>
-      </div>
+      <PageHeader
+        eyebrow="Evidence"
+        title="Sources"
+        description="Point at a folder and watch it sync documents in."
+        actions={
+          canManage && (
+            <Button type="button" variant="primary" onClick={() => setCreateOpen(true)}>
+              New source
+            </Button>
+          )
+        }
+      />
 
-      <section className="card">
-        <div className="card-head">
-          <h2 className="card-title">Add a source</h2>
-        </div>
-        {sessionResolved && !canManage && (
-          <p className="cell-sub">Adding and configuring sources requires an admin.</p>
-        )}
-        {canManage && (
-          <form onSubmit={(e) => void handleCreate(e)} className="form">
-            <Field label="Name" error={nameError ?? undefined}>
-              {(inputProps) => (
-                <input
-                  type="text"
-                  required
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Deal Room Inbox"
-                  {...inputProps}
-                />
-              )}
-            </Field>
-            <Field label="Owner">
-              {(inputProps) => (
-                <input
-                  type="text"
-                  required
-                  value={owner}
-                  onChange={(e) => setOwner(e.target.value)}
-                  placeholder="Jane Doe, IT"
-                  {...inputProps}
-                />
-              )}
-            </Field>
-            <Field label="Folder path">
-              {(inputProps) => (
-                <input
-                  type="text"
-                  required
-                  value={path}
-                  onChange={(e) => setPath(e.target.value)}
-                  placeholder="deal-room"
-                  {...inputProps}
-                />
-              )}
-            </Field>
-            <Select
-              label="Tracked"
-              options={TRACKED_OPTIONS}
-              value={tracked}
-              onChange={setTracked}
-            />
-            <Field label="Sync interval (ms, optional)">
-              {(inputProps) => (
-                <input
-                  type="number"
-                  min={1}
-                  value={intervalMs}
-                  onChange={(e) => setIntervalMs(e.target.value)}
-                  placeholder="60000"
-                  {...inputProps}
-                />
-              )}
-            </Field>
-            <div className="form-actions">
-              <Button type="submit" disabled={creating}>
-                {creating ? 'Adding…' : 'Add source'}
-              </Button>
+      {createOpen && (
+        <CreateSourceDialog onClose={() => setCreateOpen(false)} onCreated={handleCreated} />
+      )}
+
+      <Toolbar
+        start={
+          <>
+            <div className="sources-segmented">
+              <SegmentedControl<SourceView>
+                aria-label="Source list"
+                options={[
+                  { value: 'tracked', label: 'Tracked sources', count: trackedCount },
+                  { value: 'inventory', label: 'Repository inventory', count: inventoryCount },
+                ]}
+                value={view}
+                onChange={handleSwitchView}
+              />
             </div>
-          </form>
-        )}
-        {createError && (
-          <p className="error" role="alert">
-            {createError}
-          </p>
-        )}
-      </section>
-
-      {/*
-        Two independently paginated lists behind one switch, not `RecordListPage` — that scaffold
-        carries exactly one status region and one footer, and this page needs one of each per list
-        rather than stacking both lists' regions on screen at once.
-      */}
-      <div className="control-row" role="group" aria-label="Source list">
-        <Button
-          type="button"
-          variant={view === 'tracked' ? 'primary' : 'secondary'}
-          aria-pressed={view === 'tracked'}
-          onClick={() => handleSwitchView('tracked')}
-        >
-          Tracked sources
-        </Button>
-        <Button
-          type="button"
-          variant={view === 'inventory' ? 'primary' : 'secondary'}
-          aria-pressed={view === 'inventory'}
-          onClick={() => handleSwitchView('inventory')}
-        >
-          Repository inventory
-        </Button>
-      </div>
-
-      <FilterBar onApply={handleApplySearch} onClear={handleClearSearch} hasFilter={hasFilter}>
-        <Input
-          label="Search"
-          value={draftQ}
-          onChange={setDraftQ}
-          placeholder="Name, path or owner"
-        />
-      </FilterBar>
+            <FilterBar
+              onApply={handleApplySearch}
+              onClear={handleClearSearch}
+              hasFilter={hasFilter}
+            >
+              <Input
+                label="Search"
+                value={draftQ}
+                onChange={setDraftQ}
+                placeholder="Name, path or owner"
+              />
+            </FilterBar>
+          </>
+        }
+      />
 
       {activeError && (
         <p className="error error--page" role="alert">
@@ -575,7 +599,7 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
         />
       )}
 
-      {status.kind === 'ready' && filteredSources && view === 'tracked' && (
+      {status.kind === 'ready' && activeSources && view === 'tracked' && (
         <section
           className="panel"
           tabIndex={0}
@@ -592,7 +616,6 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
                   direction={sortDir}
                   onSort={handleSort}
                 />
-                <TableHeaderCell>Path</TableHeaderCell>
                 <SortableHeaderCell<SourceSortField>
                   field="owner"
                   label="Owner"
@@ -600,10 +623,8 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
                   direction={sortDir}
                   onSort={handleSort}
                 />
-                <TableHeaderCell>Interval</TableHeaderCell>
                 <TableHeaderCell>Status</TableHeaderCell>
                 <TableHeaderCell>Reach</TableHeaderCell>
-                <TableHeaderCell>Class</TableHeaderCell>
                 <SortableHeaderCell<SourceSortField>
                   field="lastSyncAt"
                   label="Last sync"
@@ -623,7 +644,7 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
               </tr>
             </thead>
             <tbody>
-              {filteredSources.map((source) => (
+              {activeSources.map((source) => (
                 <SourceRow
                   key={source.id}
                   source={source}
@@ -637,7 +658,7 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
         </section>
       )}
 
-      {status.kind === 'ready' && filteredSources && view === 'inventory' && (
+      {status.kind === 'ready' && activeSources && view === 'inventory' && (
         <section
           className="panel"
           tabIndex={0}
@@ -654,7 +675,6 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
                   direction={sortDir}
                   onSort={handleSort}
                 />
-                <TableHeaderCell>Path</TableHeaderCell>
                 <SortableHeaderCell<SourceSortField>
                   field="owner"
                   label="Owner"
@@ -674,7 +694,7 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
               </tr>
             </thead>
             <tbody>
-              {filteredSources.map((source) => (
+              {activeSources.map((source) => (
                 <InventoryRow key={source.id} source={source} />
               ))}
             </tbody>

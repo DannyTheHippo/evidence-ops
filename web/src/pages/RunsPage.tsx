@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import {
   listWorkflowRuns,
   type SortDirection,
@@ -12,8 +11,11 @@ import { IconActivity } from '../components/icons';
 import RecordListPage, { type RecordListStatus } from '../components/RecordListPage';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
+import EmptyState from '../components/ui/EmptyState';
 import FilterBar from '../components/ui/FilterBar';
+import LinkButton from '../components/ui/LinkButton';
 import Pager from '../components/ui/Pager';
+import Panel from '../components/ui/Panel';
 import Select from '../components/ui/Select';
 import SortableHeaderCell from '../components/ui/SortableHeaderCell';
 import Table, { RowLink, TableCell, TableRow } from '../components/ui/Table';
@@ -120,34 +122,12 @@ export default function RunsPage() {
 
   const hasFilter = appliedStatus !== '' || appliedWorkflowType !== '';
 
+  // Zero rows still resolves to `ready` rather than RecordListPage's own `empty` kind — that kind's
+  // EmptyState carries no `className`, and the unfiltered case needs `empty-state--zero`, matching
+  // ApprovalsPage's identical split between an earned-zero state and a filtered-empty one.
   let status: RecordListStatus;
   if (runs === null) {
     status = error ? { kind: 'blank' } : { kind: 'loading', label: 'Loading workflow runs…' };
-  } else if (runs.length === 0) {
-    status = hasFilter
-      ? {
-          kind: 'empty',
-          icon: <IconActivity size={24} />,
-          title: 'No runs match this filter',
-          description: 'Clear or adjust the status or type filter above.',
-          action: (
-            <Button variant="secondary" onClick={handleClear}>
-              Show all runs
-            </Button>
-          ),
-        }
-      : {
-          kind: 'empty',
-          icon: <IconActivity size={24} />,
-          title: 'No runs yet',
-          description:
-            'Runs appear here once a question, ingestion, sync, or conflict resolution starts.',
-          action: (
-            <Link className="btn btn--primary" to="/ask">
-              Ask a question
-            </Link>
-          ),
-        };
   } else {
     status = { kind: 'ready' };
   }
@@ -186,13 +166,31 @@ export default function RunsPage() {
         )
       }
     >
+      {runs && runs.length === 0 && hasFilter && (
+        <EmptyState
+          icon={<IconActivity size={24} />}
+          title="No runs match this filter"
+          description="Clear or adjust the status or type filter above."
+          action={
+            <Button variant="secondary" onClick={handleClear}>
+              Show all runs
+            </Button>
+          }
+        />
+      )}
+
+      {runs && runs.length === 0 && !hasFilter && (
+        <EmptyState
+          className="empty-state--zero"
+          icon={<IconActivity size={24} />}
+          title="No runs yet"
+          description="Runs appear here once a question, ingestion, sync, or conflict resolution starts."
+          action={<LinkButton to="/ask">Ask a question</LinkButton>}
+        />
+      )}
+
       {runs && runs.length > 0 && (
-        <section
-          className="panel"
-          tabIndex={0}
-          role="region"
-          aria-label="Workflow runs, most recent first"
-        >
+        <Panel aria-label="Workflow runs, most recent first">
           <Table caption="Workflow runs, most recent first">
             <thead>
               <tr>
@@ -250,7 +248,7 @@ export default function RunsPage() {
               ))}
             </tbody>
           </Table>
-        </section>
+        </Panel>
       )}
     </RecordListPage>
   );

@@ -90,7 +90,7 @@ describe('CanonicalEntitiesPage', () => {
     expect(screen.getByText('No aliases')).toBeInTheDocument();
 
     expect(
-      screen.getByRole('region', { name: 'Registered canonical entities and their aliases' }),
+      screen.getByRole('region', { name: 'Alias groups and the names they resolve to' }),
     ).toHaveAttribute('tabindex', '0');
   });
 
@@ -102,7 +102,7 @@ describe('CanonicalEntitiesPage', () => {
 
     renderPage();
 
-    expect(await screen.findByText('No canonical entities registered yet')).toBeInTheDocument();
+    expect(await screen.findByText('No alias groups registered yet')).toBeInTheDocument();
   });
 
   it('shows a load error verbatim, but leaves an already-loaded row on screen on a later refresh failure', async () => {
@@ -117,9 +117,7 @@ describe('CanonicalEntitiesPage', () => {
         url ===
         '/api/v1/canonical-entities?skip=0&limit=25&sort=canonicalNameNormalized&sortDir=desc'
       ) {
-        return Promise.resolve(
-          jsonResponse({ message: 'Canonical entity registry unavailable' }, 500),
-        );
+        return Promise.resolve(jsonResponse({ message: 'Alias registry unavailable' }, 500));
       }
       return Promise.reject(new Error(`Unhandled fetch: ${url}`));
     });
@@ -134,9 +132,7 @@ describe('CanonicalEntitiesPage', () => {
       screen.getByRole('button', { name: 'Sort by Canonical name, sorted ascending' }),
     );
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Canonical entity registry unavailable',
-    );
+    expect(await screen.findByRole('alert')).toHaveTextContent('Alias registry unavailable');
     // `RecordListPage` takes `error` separately from `status` — a failed refresh leaves the rows
     // already on screen rather than blanking them.
     expect(screen.getByText('Northgate Plaza')).toBeInTheDocument();
@@ -145,14 +141,12 @@ describe('CanonicalEntitiesPage', () => {
   it('shows a blank error state, with no rows, on a first-load failure', async () => {
     stubFetch({
       '/api/v1/canonical-entities?skip=0&limit=25&sort=canonicalNameNormalized&sortDir=asc': () =>
-        jsonResponse({ message: 'Canonical entity registry unavailable' }, 500),
+        jsonResponse({ message: 'Alias registry unavailable' }, 500),
     });
 
     renderPage();
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Canonical entity registry unavailable',
-    );
+    expect(await screen.findByRole('alert')).toHaveTextContent('Alias registry unavailable');
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
@@ -182,12 +176,14 @@ describe('CanonicalEntitiesPage', () => {
     await screen.findByText('Northgate Plaza');
 
     fireEvent.click(screen.getByRole('button', { name: 'Add entity' }));
-    const dialog = screen.getByRole('dialog', { name: 'Add canonical entity' });
+    const dialog = screen.getByRole('dialog', { name: 'Add alias group' });
 
     fireEvent.change(screen.getByLabelText('Canonical name'), {
       target: { value: 'Riverside Tower' },
     });
-    fireEvent.change(screen.getByLabelText('Aliases'), { target: { value: 'Riverside' } });
+    fireEvent.change(screen.getByLabelText('Aliases (optional)'), {
+      target: { value: 'Riverside' },
+    });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add entity' }));
 
     expect(await screen.findByText('Riverside Tower')).toBeInTheDocument();
@@ -236,10 +232,7 @@ describe('CanonicalEntitiesPage', () => {
       }
       if (url === '/api/v1/canonical-entities' && init?.method === 'POST') {
         return Promise.resolve(
-          jsonResponse(
-            { message: 'A canonical entity named "Northgate Plaza" already exists' },
-            409,
-          ),
+          jsonResponse({ message: 'An alias group named "Northgate Plaza" already exists' }, 409),
         );
       }
       return Promise.reject(new Error(`Unhandled fetch: ${url}`));
@@ -250,14 +243,14 @@ describe('CanonicalEntitiesPage', () => {
     await screen.findByText('Northgate Plaza');
 
     fireEvent.click(screen.getByRole('button', { name: 'Add entity' }));
-    const dialog = screen.getByRole('dialog', { name: 'Add canonical entity' });
+    const dialog = screen.getByRole('dialog', { name: 'Add alias group' });
     fireEvent.change(screen.getByLabelText('Canonical name'), {
       target: { value: 'Northgate Plaza' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add entity' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'A canonical entity named "Northgate Plaza" already exists',
+      'An alias group named "Northgate Plaza" already exists',
     );
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     // The list stays untouched by the rejected create — still just the one seeded row.
@@ -416,7 +409,7 @@ describe('CanonicalEntitiesPage', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Canonical Entities' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Aliases' })).toBeInTheDocument();
   });
 
   it('bounces a member away from the route wrapped in RequireAdmin', async () => {
@@ -441,6 +434,6 @@ describe('CanonicalEntitiesPage', () => {
     );
 
     expect(await screen.findByText('home probe')).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Canonical Entities' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Aliases' })).not.toBeInTheDocument();
   });
 });

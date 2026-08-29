@@ -112,6 +112,9 @@ describe('DocumentList', () => {
           name: 'Documents uploaded to the data room, with their ingestion status',
         }),
       ).toHaveAttribute('tabindex', '0');
+      // No EventSource is stubbed in this describe block, so the stream falls back to polling
+      // immediately — the status line says so instead of silently claiming to be live.
+      expect(screen.getByRole('status')).toHaveTextContent('3 documents · polling');
     });
 
     it('shows the pager total and disables Previous on the first page when the list is truncated', async () => {
@@ -140,7 +143,7 @@ describe('DocumentList', () => {
 
       renderList();
 
-      expect(await screen.findByText('25 total')).toBeInTheDocument();
+      expect(await screen.findByText('1–20 of 25')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
       expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
     });
@@ -442,6 +445,100 @@ describe('DocumentList', () => {
       });
     });
 
+    it('keeps the entered title and source class after a failed upload instead of discarding them', async () => {
+      const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          return Promise.resolve(jsonResponse({ message: 'Disk full' }, 500));
+        }
+        return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      renderList();
+      await screen.findByText('No documents yet');
+
+      fireEvent.change(screen.getByLabelText('Title', { exact: false }), {
+        target: { value: 'Q3 Rent Roll' },
+      });
+      fireEvent.change(screen.getByLabelText('Source class'), { target: { value: 'memo' } });
+      fireEvent.change(screen.getByLabelText('File', { exact: false }), {
+        target: { files: [new File(['a'], 'rent-roll.pdf', { type: 'application/pdf' })] },
+      });
+      const form = screen.getByRole('button', { name: 'Upload' }).closest('form');
+      if (!form) throw new Error('Upload form not found');
+      fireEvent.submit(form);
+
+      expect(await screen.findByText('Disk full')).toBeInTheDocument();
+      // Discarding what was typed the moment the batch turns out to have failed would force a
+      // retry to start from a blank form — the reset only runs once at least one file in the
+      // batch has actually uploaded, never before the outcome is known.
+      expect(screen.getByLabelText('Title', { exact: false })).toHaveValue('Q3 Rent Roll');
+      expect(screen.getByLabelText('Source class')).toHaveValue('memo');
+      expect(getToasts()).toHaveLength(0);
+    });
+
+    it('drops an oversize or wrong-type file straight into the queue as failed, without blocking the rest of the batch', async () => {
+      const uploaded = {
+        id: 'doc-7',
+        title: 'memo.pdf',
+        sourceKind: 'pdf',
+        mimeType: 'application/pdf',
+        currentVersion: {
+          id: 'v-7',
+          versionNumber: 1,
+          sha256: 'g'.repeat(64),
+          sizeBytes: 50,
+          ingestionStatus: 'pending',
+          createdAt: new Date().toISOString(),
+        },
+        createdAt: new Date().toISOString(),
+      };
+
+      const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          return Promise.resolve(jsonResponse(uploaded));
+        }
+        return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      renderList();
+      await screen.findByText('No documents yet');
+
+      const dropZone = screen.getByRole('heading', { name: 'Upload' }).closest('section');
+      if (!dropZone) throw new Error('Upload drop zone not found');
+
+      const wrongTypeFile = new File(['a'], 'rogue.exe', { type: 'application/octet-stream' });
+      const oversizeFile = new File([''], 'huge.pdf', { type: 'application/pdf' });
+      Object.defineProperty(oversizeFile, 'size', { value: 60 * 1024 * 1024 });
+      const goodFile = new File(['a'], 'memo.pdf', { type: 'application/pdf' });
+
+      // `accept` is never consulted for a drop, so this client pre-check is the only thing
+      // standing between either bad file and a doomed request.
+      fireEvent.drop(dropZone, {
+        dataTransfer: { files: [wrongTypeFile, oversizeFile, goodFile] },
+      });
+
+      expect(screen.getByText('rogue.exe')).toBeInTheDocument();
+      expect(screen.getByText('Unsupported file type.')).toBeInTheDocument();
+      expect(screen.getByText('huge.pdf')).toBeInTheDocument();
+      expect(screen.getByText('File exceeds the 50 MB limit.')).toBeInTheDocument();
+      expect(screen.getByText('memo.pdf')).toBeInTheDocument();
+      expect(screen.getByText('Queued')).toBeInTheDocument();
+      expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+
+      const form = screen.getByRole('button', { name: 'Upload' }).closest('form');
+      if (!form) throw new Error('Upload form not found');
+      fireEvent.submit(form);
+
+      await waitFor(() => {
+        const uploadCalls = fetchMock.mock.calls.filter(
+          ([, init]) => init?.method === 'POST' && init.body instanceof FormData,
+        );
+        expect(uploadCalls).toHaveLength(1);
+      });
+    });
+
     it('shows a filter-specific empty state when the ingestion status filter matches nothing', async () => {
       const completedDoc = {
         id: 'doc-1',
@@ -566,6 +663,11 @@ describe('DocumentList', () => {
             '/api/v1/documents?skip=0&limit=20&ingestionStatus=needs-ocr&sort=createdAt&sortDir=desc',
         ),
       ).toBe(true);
+      // A filter disables the stream (see the component's own isDefaultView comment); the status
+      // line says so instead of quietly reading as still live.
+      expect(screen.getByRole('status')).toHaveTextContent(
+        '1 document · updates paused — filter or sort applied',
+      );
     });
 
     it('offers facts-failed as its own filter and badges it as a caution, not a rejection', async () => {
@@ -704,6 +806,9 @@ describe('DocumentList', () => {
       });
 
       expect(await screen.findByText('Q3 Rent Roll')).toBeInTheDocument();
+      // A frame landed on a stubbed EventSource, so the stream is genuinely live — the status
+      // line says so rather than the 'polling' it would read without the stub.
+      expect(screen.getByRole('status')).toHaveTextContent('1 document · live');
     });
 
     it('does not treat a heartbeat frame as a document list', async () => {

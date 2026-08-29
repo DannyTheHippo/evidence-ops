@@ -11,6 +11,8 @@ import {
 import { IconClipboard, IconSearch } from '../components/icons';
 import RecordListPage, { type RecordListStatus } from '../components/RecordListPage';
 import Badge from '../components/ui/Badge';
+import Button from '../components/ui/Button';
+import CopyButton from '../components/ui/CopyButton';
 import FilterBar from '../components/ui/FilterBar';
 import IconButton from '../components/ui/IconButton';
 import Input from '../components/ui/Input';
@@ -89,6 +91,14 @@ const URL_DEFAULTS: Record<
   skip: '0',
 };
 
+// The keys a chip can remove — every filter URL_DEFAULTS carries except sort/sortDir/skip, which
+// no chip ever touches.
+type FilterKey = 'action' | 'entityType' | 'entityId' | 'origin' | 'refusalReason';
+
+function originLabel(origin: AuditEventOrigin | ''): string {
+  return ORIGIN_OPTIONS.find((option) => option.value === origin)?.label ?? origin;
+}
+
 function AuditSubject({
   subject,
   onFilterToEntity,
@@ -117,6 +127,36 @@ function AuditSubject({
         onClick={() => onFilterToEntity(subject)}
       />
     </>
+  );
+}
+
+/** One applied filter, echoing what a submitted `FilterBar` — or the row shortcut that fills
+ * `entityType`/`entityId` directly — actually did. Its remove control is a real labelled button
+ * rather than the chip itself being clickable, so the accessible name states which filter it
+ * clears without relying on visual position. */
+function FilterChip({
+  label,
+  value,
+  onRemove,
+}: {
+  label: string;
+  value: string;
+  onRemove: () => void;
+}) {
+  return (
+    <li className="filter-chip">
+      <span>
+        {label}: {value}
+      </span>
+      <IconButton
+        icon={<span aria-hidden="true">×</span>}
+        aria-label={`Remove ${label} filter`}
+        variant="ghost"
+        size="sm"
+        className="filter-chip-remove"
+        onClick={onRemove}
+      />
+    </li>
   );
 }
 
@@ -210,6 +250,20 @@ export default function AuditEventsPage() {
     });
   }
 
+  // A chip clears one applied filter — both the URL (what the fetch reads) and the matching draft
+  // (what the form shows), so a later "Apply filters" cannot silently resurrect the value the
+  // chip just removed.
+  function handleRemoveFilter(key: FilterKey) {
+    if (key === 'action') setDraftAction('');
+    else if (key === 'entityType') setDraftEntityType('');
+    else if (key === 'entityId') setDraftEntityId('');
+    else if (key === 'origin') setDraftOrigin('');
+    else setDraftRefusalReason('');
+    const patch: Partial<typeof URL_DEFAULTS> = { skip: URL_DEFAULTS.skip };
+    patch[key] = '';
+    setUrlState(patch);
+  }
+
   function handleSort(field: AuditEventSortField) {
     // Switching to a different column always starts it at `desc`; clicking the active column
     // toggles direction. A per-field default direction would make a URL written by one column
@@ -219,12 +273,23 @@ export default function AuditEventsPage() {
     setUrlState({ sort: field, sortDir: nextDir, skip: URL_DEFAULTS.skip });
   }
 
-  const hasFilter =
-    urlState.action !== '' ||
-    urlState.entityType !== '' ||
-    urlState.entityId !== '' ||
-    appliedOrigin !== '' ||
-    urlState.refusalReason !== '';
+  const chips: { key: FilterKey; label: string; value: string }[] = [
+    urlState.action ? { key: 'action' as const, label: 'Action', value: urlState.action } : null,
+    urlState.entityType
+      ? { key: 'entityType' as const, label: 'Entity type', value: urlState.entityType }
+      : null,
+    urlState.entityId
+      ? { key: 'entityId' as const, label: 'Entity id', value: shortId(urlState.entityId) }
+      : null,
+    appliedOrigin
+      ? { key: 'origin' as const, label: 'Origin', value: originLabel(appliedOrigin) }
+      : null,
+    urlState.refusalReason
+      ? { key: 'refusalReason' as const, label: 'Refusal reason', value: urlState.refusalReason }
+      : null,
+  ].filter((chip): chip is { key: FilterKey; label: string; value: string } => chip !== null);
+
+  const hasFilter = chips.length > 0;
 
   let status: RecordListStatus;
   if (events === null) {
@@ -237,6 +302,15 @@ export default function AuditEventsPage() {
       description: hasFilter
         ? 'Clear or adjust the filters above.'
         : 'Actions recorded by the API and MCP surfaces appear here.',
+      // Not "Clear filters" — `FilterBar` already renders a button with that exact name
+      // whenever `hasFilter` is true, and this empty state renders only in that same condition,
+      // so identical wording would leave two controls with the same accessible name on screen at
+      // once. `RunsPage`'s own filtered-empty action makes the same call for the same reason.
+      action: hasFilter ? (
+        <Button variant="secondary" onClick={handleClear}>
+          Show all events
+        </Button>
+      ) : undefined,
     };
   } else {
     status = { kind: 'ready' };
@@ -244,43 +318,57 @@ export default function AuditEventsPage() {
 
   return (
     <RecordListPage
-      eyebrow="Admin"
+      eyebrow="Organisation"
       title="Audit Log"
       description="Every recorded action, filterable by action, entity type, id, origin or refusal reason."
       filters={
-        <FilterBar onApply={handleApply} onClear={handleClear} hasFilter={hasFilter}>
-          <Input
-            label="Action"
-            value={draftAction}
-            onChange={setDraftAction}
-            placeholder="document.deleted"
-          />
-          <Select
-            label="Entity type"
-            options={ENTITY_TYPE_OPTIONS}
-            value={draftEntityType}
-            onChange={setDraftEntityType}
-          />
-          <Input
-            label="Entity id"
-            value={draftEntityId}
-            onChange={setDraftEntityId}
-            placeholder="65f1c2e4a1b2c3d4e5f6a7b8"
-            hint="Or click the search icon beside a subject below to filter to it directly."
-          />
-          <Select
-            label="Origin"
-            options={ORIGIN_OPTIONS}
-            value={draftOrigin}
-            onChange={(value) => setDraftOrigin(value as AuditEventOrigin | '')}
-          />
-          <Select
-            label="Refusal reason"
-            options={REFUSAL_REASON_OPTIONS}
-            value={draftRefusalReason}
-            onChange={setDraftRefusalReason}
-          />
-        </FilterBar>
+        <div className="audit-filters">
+          <FilterBar onApply={handleApply} onClear={handleClear} hasFilter={hasFilter}>
+            <Input
+              label="Action"
+              value={draftAction}
+              onChange={setDraftAction}
+              placeholder="document.deleted"
+            />
+            <Select
+              label="Entity type"
+              options={ENTITY_TYPE_OPTIONS}
+              value={draftEntityType}
+              onChange={setDraftEntityType}
+            />
+            <Input
+              label="Entity id"
+              value={draftEntityId}
+              onChange={setDraftEntityId}
+              placeholder="65f1c2e4a1b2c3d4e5f6a7b8"
+              hint="Or click the search icon beside a subject below to filter to it directly."
+            />
+            <Select
+              label="Origin"
+              options={ORIGIN_OPTIONS}
+              value={draftOrigin}
+              onChange={(value) => setDraftOrigin(value as AuditEventOrigin | '')}
+            />
+            <Select
+              label="Refusal reason"
+              options={REFUSAL_REASON_OPTIONS}
+              value={draftRefusalReason}
+              onChange={setDraftRefusalReason}
+            />
+          </FilterBar>
+          {hasFilter && (
+            <ul className="filter-chip-row" aria-label="Applied filters">
+              {chips.map((chip) => (
+                <FilterChip
+                  key={chip.key}
+                  label={chip.label}
+                  value={chip.value}
+                  onRemove={() => handleRemoveFilter(chip.key)}
+                />
+              ))}
+            </ul>
+          )}
+        </div>
       }
       error={error ?? undefined}
       status={status}
@@ -339,13 +427,6 @@ export default function AuditEventsPage() {
                   </TableCell>
                   <TableCell label="Action">
                     {event.action}
-                    {event.refusalReason && (
-                      <div>
-                        <span className="cell-truncate" title={event.refusalReason}>
-                          {event.refusalReason}
-                        </span>
-                      </div>
-                    )}
                     {event.modifiedCount !== undefined && (
                       <div className="cell-sub">{event.modifiedCount} documents modified</div>
                     )}
@@ -353,12 +434,9 @@ export default function AuditEventsPage() {
                   <TableCell label="Subject" className="cell-sub">
                     <AuditSubject subject={event.subject} onFilterToEntity={handleFilterToEntity} />
                   </TableCell>
-                  <TableCell
-                    label="Correlation"
-                    className="cell-sub mono"
-                    title={event.correlationId}
-                  >
-                    {shortId(event.correlationId)}
+                  <TableCell label="Correlation" className="cell-sub mono">
+                    <span title={event.correlationId}>{shortId(event.correlationId)}</span>
+                    <CopyButton text={event.correlationId} label="Copy correlation id" iconOnly />
                   </TableCell>
                   <TableCell label="Recorded" className="cell-sub">
                     <Timestamp value={event.createdAt} />
@@ -372,7 +450,12 @@ export default function AuditEventsPage() {
                     {event.origin === 'mcp' ? (
                       <>
                         <Badge tone="info">MCP</Badge>
-                        {event.toolName && <div className="cell-sub">{event.toolName}</div>}
+                        {event.toolName && <div className="cell-sub mono">{event.toolName}</div>}
+                        {event.refusalReason && (
+                          <div className="cell-sub">
+                            <Badge tone="caution">{event.refusalReason}</Badge>
+                          </div>
+                        )}
                       </>
                     ) : (
                       <span className="cell-sub">api</span>

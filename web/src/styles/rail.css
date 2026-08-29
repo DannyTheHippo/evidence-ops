@@ -66,6 +66,7 @@
 
 .apparatus-claim {
   margin: 0 0 var(--space-2);
+  max-width: var(--measure-reading);
   font-size: var(--text-md);
   font-weight: 600;
   line-height: var(--leading-tight);
@@ -117,6 +118,21 @@
   margin: var(--space-2) 0 0;
   max-width: var(--measure-reading);
 }
+/* A `<details>` element toggles its content between `none` and its normal display outright, with
+   no intermediate state for a `transition` to animate between — an `animation` is what replays on
+   every reveal instead, since the browser restarts it each time the element leaves `display:
+   none`. */
+@keyframes apparatus-quote-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.apparatus-quote-disclosure[open] > .apparatus-quote {
+  animation: apparatus-quote-in var(--motion-enter-sm) var(--ease-out);
+}
 .apparatus-meta {
   display: flex;
   align-items: center;
@@ -142,6 +158,14 @@
   padding: 0 var(--space-1);
   overflow-wrap: anywhere;
   transition: background var(--motion-row-hover) ease;
+}
+/* A linked chip navigates into the workbench; the glyph says so at rest, before a reader has to
+   hover to discover it. `\2197` (↗) rather than the literal character, matching this codebase's
+   convention of writing a non-ASCII glyph as an escape rather than a raw byte in a source file. A
+   non-link chip (no resolved document version) never renders this — it goes nowhere. */
+a.trace-chip::after {
+  content: '\2197';
+  margin-left: var(--space-1);
 }
 /* --surface-3 is the same next step .btn--secondary:hover takes off --surface-2, so a hovered
    chip darkens in step with every other surface-2 control that gains a hover state. */

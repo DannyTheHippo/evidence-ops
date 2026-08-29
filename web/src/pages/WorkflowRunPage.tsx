@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import {
   ApiError,
   decideApproval,
@@ -15,10 +15,13 @@ import {
 import ApprovalDecisionDialog from '../components/ApprovalDecisionDialog';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
+import CopyButton from '../components/ui/CopyButton';
+import LinkButton from '../components/ui/LinkButton';
+import PageHeader from '../components/ui/PageHeader';
 import Skeleton from '../components/ui/Skeleton';
 import Timestamp from '../components/ui/Timestamp';
 import { notify } from '../components/ui/toast';
-import { useEventStream } from '../lib/use-event-stream';
+import { useEventStream, type StreamState } from '../lib/use-event-stream';
 import { shortId, workflowTypeLabel } from '../lib/identifiers';
 import { useSession } from '../lib/use-session';
 import { isTerminalRun } from '../lib/workflow-runs';
@@ -41,10 +44,22 @@ const STATUS_TONE: Record<WorkflowRunStatus, 'verified' | 'info' | 'neutral' | '
 // none this page reads. `onEvent`/`isTerminal` narrow on `eventName` before touching `data`.
 type WorkflowStreamPayload = WorkflowRun | WithCount<Approval>;
 
-function stepClassName(active: boolean, done: boolean): string {
-  return ['timeline-step', active && 'is-active', !active && done && 'is-done']
-    .filter(Boolean)
-    .join(' ');
+// The rail marker states a step can carry: idle (unreached, hollow), active (in motion, pulsing),
+// done (reached and settled), rejected (reached and failed). Never more than one step reads
+// `active` at once, and none does once the whole run is terminal — the pulse is a claim about
+// something still moving, not a decoration a finished run keeps wearing.
+type RunStepState = 'idle' | 'active' | 'done' | 'rejected';
+
+function runStepClassName(state: RunStepState): string {
+  return state === 'idle' ? 'run-step' : `run-step run-step--${state}`;
+}
+
+// Names the transport, never the data: "Streaming"/"Polling" describe which channel is carrying
+// updates, not whether the run itself is moving. `connecting`/`live`/`stale`/`idle` all still read
+// as "the stream is the channel in use" from a caller's point of view — only `fallback` means the
+// page has actually dropped to polling.
+function connectionChipLabel(streamState: StreamState): 'Streaming' | 'Polling' {
+  return streamState === 'fallback' ? 'Polling' : 'Streaming';
 }
 
 // Renders a step's real timestamp when one is known, or says plainly that none is — never a
@@ -200,20 +215,60 @@ export default function WorkflowRunPage({
 
   const isTerminal = !!runStatus && isTerminalRun(runStatus);
   const isPaused = !!pendingApproval;
-  const isResumed = everPaused && isTerminal;
+  const isFailed = runStatus === 'failed';
+
+  // The approval step: `active` while genuinely parked on a decision, `done` once it was paused
+  // and has since moved on (decided or timed out), `idle` when this run never paused at all. Once
+  // the run is terminal the pulse never survives it — only `done`/`idle` remain live options.
+  const approvalStepState: RunStepState = isTerminal
+    ? everPaused
+      ? 'done'
+      : 'idle'
+    : isPaused
+      ? 'active'
+      : everPaused
+        ? 'done'
+        : 'idle';
+
+  // The resume/finish step only ever resolves once the run is terminal — there is no reliable
+  // signal for "resumed and now executing toward completion" distinct from "still on the way to
+  // the approval gate", so this stays honestly idle rather than guessing which.
+  const resumeStepState: RunStepState = isTerminal ? (isFailed ? 'rejected' : 'done') : 'idle';
+
+  // sync-source has no approval gate to park on, so its second step is the run's one ongoing
+  // activity — it pulses for as long as the run is in flight.
+  const syncStepState: RunStepState = isTerminal ? (isFailed ? 'rejected' : 'done') : 'active';
 
   return (
     <div className="view">
-      <div className="page-head">
-        <div>
-          <span className="eyebrow">Review</span>
-          <h1 className="page-title">Run timeline</h1>
-          <p className="page-sub">Watch a run pause for a human decision and resume after it.</p>
-        </div>
-        <Link to="/workflow-runs" className="btn btn--secondary btn--sm">
-          Back to runs
-        </Link>
-      </div>
+      <PageHeader
+        eyebrow="Review"
+        title={run ? workflowTypeLabel(run.workflowType) : 'Run timeline'}
+        description="Watch a run pause for a human decision and resume after it."
+        actions={
+          <LinkButton to="/workflow-runs" variant="secondary" size="sm">
+            Back to runs
+          </LinkButton>
+        }
+      />
+
+      {run && (
+        <p className="answer-detail-meta">
+          <span className="mono" title={run.workflowId}>
+            {shortId(run.workflowId)}
+          </span>
+          <CopyButton text={run.workflowId} label="Copy id" iconOnly />
+          {/* `WorkflowRun.subjectId`/`subjectType` are written together or not at all
+              (client.ts's own doc comment) — a resolve-conflict run carries both, sync-source
+              carries neither, so presence alone is enough to gate this without guessing a
+              target for the pair that's missing one. */}
+          {run.subjectId && run.subjectType && (
+            <LinkButton to={`/conflicts?selected=${run.subjectId}`} variant="ghost" size="sm">
+              View conflict
+            </LinkButton>
+          )}
+        </p>
+      )}
 
       {error && (
         <p className="error error--page" role="alert">
@@ -233,14 +288,19 @@ export default function WorkflowRunPage({
 
       {run && (
         <section className="card">
-          <div className="card-head">
-            <div>
-              <h2 className="card-title">{workflowTypeLabel(run.workflowType)}</h2>
-              <p className="cell-sub mono" title={run.workflowId}>
-                {shortId(run.workflowId)}
-              </p>
-            </div>
+          <div className="form-actions">
             <Badge tone={STATUS_TONE[run.status]}>{run.status}</Badge>
+            {!isTerminal && (
+              <span
+                className={
+                  streamState === 'fallback'
+                    ? 'connection-chip connection-chip--polling'
+                    : 'connection-chip'
+                }
+              >
+                {connectionChipLabel(streamState)}
+              </span>
+            )}
           </div>
 
           {/* This page refreshes status over a 1.5s SSE stream that falls back to polling, but
@@ -249,8 +309,13 @@ export default function WorkflowRunPage({
               several seconds even while the connection itself reads as live. */}
           <p className="cell-sub">Status refreshes periodically and may lag the live run.</p>
 
-          {run.status === 'failed' && run.errorMessage && (
-            <p className="cell-sub">{run.errorMessage}</p>
+          {/* Rendered once, here, rather than a second time inside whichever step actually
+              failed — a failure is the one thing on this page that should never compete with
+              itself for a reader's attention. */}
+          {isFailed && run.errorMessage && (
+            <p className="error" role="alert">
+              {run.errorMessage}
+            </p>
           )}
 
           {/* `sync-source` never parks on a human approval (`sync-source.workflow.ts` loops the
@@ -260,36 +325,35 @@ export default function WorkflowRunPage({
               is unknown, and the approval step only ever lights up when `pendingApproval` is
               actually found, so rendering it for a legacy sync-source row stays inert. */}
           {run.workflowType === 'sync-source' ? (
-            <ol className="timeline">
-              <li className={stepClassName(!isTerminal, true)}>
+            <ol className="run-rail">
+              <li className={runStepClassName('done')}>
                 <span className="timeline-step-label">Started</span>
                 <Timestamp value={run.createdAt} />
               </li>
-              <li className={stepClassName(false, isTerminal)}>
+              <li className={runStepClassName(syncStepState)}>
                 <span className="timeline-step-label">
                   {isTerminal ? `Finished — ${run.status}` : 'Syncing'}
                 </span>
                 {/* `WorkflowRun` carries no completion timestamp — only `createdAt` — so a
                     finished sync-source run can say what it ended in but not exactly when. */}
                 {isTerminal && <TimelineWhen value={null} />}
-                {run.errorMessage && <p className="cell-sub">{run.errorMessage}</p>}
               </li>
             </ol>
           ) : (
-            <ol className="timeline">
-              <li className={stepClassName(!isPaused && !isTerminal, true)}>
+            <ol className="run-rail">
+              <li className={runStepClassName('done')}>
                 <span className="timeline-step-label">Started</span>
                 <Timestamp value={run.createdAt} />
               </li>
 
-              <li className={stepClassName(isPaused, everPaused)}>
+              <li className={runStepClassName(approvalStepState)}>
                 <span className="timeline-step-label">
                   {isPaused ? 'Paused — awaiting approval' : 'Awaiting approval'}
                 </span>
                 {everPaused && <TimelineWhen value={pausedAt} />}
                 {pendingApproval && (
-                  <div className="notice notice--info">
-                    <p>{pendingApproval.summary}</p>
+                  <div className="approval-action-card">
+                    <p className="approval-action-card-summary">{pendingApproval.summary}</p>
                     {pendingApproval.requestedBy && (
                       <p className="cell-sub">Requested by {pendingApproval.requestedBy}</p>
                     )}
@@ -326,12 +390,11 @@ export default function WorkflowRunPage({
                 )}
               </li>
 
-              <li className={stepClassName(false, isResumed)}>
+              <li className={runStepClassName(resumeStepState)}>
                 <span className="timeline-step-label">
                   {isTerminal ? `Resumed — ${run.status}` : 'Not yet resumed'}
                 </span>
                 {isTerminal && <TimelineWhen value={resumedAt} />}
-                {run.errorMessage && <p className="cell-sub">{run.errorMessage}</p>}
               </li>
             </ol>
           )}

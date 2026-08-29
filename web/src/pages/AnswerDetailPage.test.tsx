@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clearSession } from '../lib/auth';
+import { getBreadcrumbTrail } from '../lib/breadcrumbs';
 import { FakeEventSource } from '../test/fake-event-source';
 import AnswerDetailPage from './AnswerDetailPage';
 
@@ -64,7 +65,10 @@ describe('AnswerDetailPage', () => {
     resolveAnswer!(jsonResponse(completedAnswer));
 
     expect(await screen.findByText('No document mentions the cap rate.')).toBeInTheDocument();
-    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    // The loading skeleton itself is gone — a CopyButton's own visually-hidden announcement
+    // region also carries `role="status"` once the answer's meta row mounts, so this checks for
+    // the loading label specifically rather than the absence of every status role.
+    expect(screen.queryByText('Loading answer…')).not.toBeInTheDocument();
   });
 
   it('renders a completed answer through AnswerView', async () => {
@@ -244,5 +248,92 @@ describe('AnswerDetailPage', () => {
     });
 
     expect(await screen.findByText('No document mentions the vacancy rate.')).toBeInTheDocument();
+  });
+
+  it('renders the asked timestamp, short id, and a copy control once the answer loads', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(completedAnswer)));
+
+    renderAt('answer-1');
+
+    expect(await screen.findByText(/Asked/)).toBeInTheDocument();
+    expect(screen.getByText('answer-1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy id' })).toBeInTheDocument();
+  });
+
+  it('offers Back to answers and Ask a follow-up from the header actions', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(completedAnswer)));
+
+    renderAt('answer-1');
+    await screen.findByText('No document mentions the cap rate.');
+
+    expect(screen.getByRole('link', { name: 'Back to answers' })).toHaveAttribute(
+      'href',
+      '/answers',
+    );
+    expect(screen.getByRole('link', { name: 'Ask a follow-up' })).toHaveAttribute('href', '/ask');
+  });
+
+  it('offers a link back to the list from the not-found empty state', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse({ message: "Answer 'answer-1' not found" }, 404)),
+    );
+
+    renderAt('answer-1');
+
+    expect(await screen.findByText('Answer not found.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'View all answers' })).toHaveAttribute(
+      'href',
+      '/answers',
+    );
+  });
+
+  it('publishes the Ask › Answers › question breadcrumb trail once the answer loads', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(completedAnswer)));
+
+    renderAt('answer-1');
+    await screen.findByText('No document mentions the cap rate.');
+
+    expect(getBreadcrumbTrail()).toEqual([
+      { label: 'Ask', to: '/ask' },
+      { label: 'Answers', to: '/answers' },
+      { label: 'What is the cap rate?' },
+    ]);
+  });
+
+  it('offers to ask a failed run again, carrying the original question as router state', async () => {
+    const failedAnswer = {
+      id: 'answer-1',
+      questionText: 'What is the cap rate?',
+      runStatus: 'failed',
+      citations: [],
+      conflictIds: [],
+      createdAt: new Date().toISOString(),
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(failedAnswer)));
+
+    function LocationProbe() {
+      const location = useLocation();
+      return (
+        <output aria-label="current location">
+          {location.pathname}::{JSON.stringify(location.state)}
+        </output>
+      );
+    }
+
+    render(
+      <MemoryRouter initialEntries={['/answers/answer-1']}>
+        <Routes>
+          <Route path="/answers/:id" element={<AnswerDetailPage />} />
+        </Routes>
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('link', { name: 'Ask this question again' }));
+
+    expect(screen.getByRole('status', { name: 'current location' })).toHaveTextContent(
+      `/ask::${JSON.stringify({ questionText: 'What is the cap rate?' })}`,
+    );
   });
 });

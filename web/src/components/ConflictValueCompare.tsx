@@ -46,17 +46,25 @@ interface ConflictValueCompareProps {
   explanation?: string;
   documentIndex: Map<string, ResolvedVersion>;
   /** Per-value trailing slot — the conflict review queue renders a "Request resolution" button
-   *  here; a reader with no action to offer (the answer apparatus) omits it. */
+   *  here; a reader with no action to offer (the answer apparatus) omits it. Which value, if any,
+   *  gets a primary-styled action is the caller's call — this component states the recommendation,
+   *  it does not decide what a caller does about it. */
   renderAction?: (value: ConflictValue) => ReactNode;
 }
 
-/** Side-by-side comparison of a conflict's competing values, each showing its source passage
- *  (document title, locator, and source chunk), its own unit and magnitude, and whether it is
- *  withdrawn. The value matching `proposedWinnerFactId` additionally carries the rule that
- *  produced it and the policy's explanation; `ruleFired === 'none'` renders that explanation once,
- *  ahead of the list, in place of a per-value badge. Layout is `.value-compare`'s existing
- *  flex-wrap, not a fixed two-column grid — the shape that keeps three or more values readable
- *  instead of forcing a pair. */
+/**
+ * Side-by-side comparison of a conflict's competing values. A `.policy-strip` states the policy
+ * outcome once, above the grid — the rule that fired plus its explanation, or the
+ * no-recommendation sentence when `ruleFired` is `'none'` — so the recommendation reads as a fact
+ * about the conflict rather than something buried inside one card. `ruleFired === undefined` (an
+ * unscorable conflict, where no survivorship policy ran at all) renders no strip.
+ *
+ * Each value is its own card in a responsive grid, leading with its value and unit as a mono
+ * tabular figure, then its source passage and trace chip. The value matching
+ * `proposedWinnerFactId` additionally carries a "Recommended · rule" band and signal-tinted
+ * treatment. A withdrawn value dims through `--ink-dim` and a badge rather than `opacity`, which
+ * would composite its text under the AA contrast floor along with everything else in the card.
+ */
 export default function ConflictValueCompare({
   values,
   proposedWinnerFactId,
@@ -67,32 +75,39 @@ export default function ConflictValueCompare({
 }: ConflictValueCompareProps) {
   return (
     <>
-      {ruleFired === 'none' && (
-        <p className="cell-sub">
-          <span
-            className="cell-truncate"
-            title={`Policy has no recommendation for this conflict — ${explanation}`}
-          >
-            Policy has no recommendation for this conflict — {explanation}
-          </span>
-        </p>
+      {ruleFired && (
+        <div className="policy-strip">
+          {ruleFired === 'none' ? (
+            <span>Policy has no recommendation for this conflict — {explanation}</span>
+          ) : (
+            <>
+              <span className="policy-strip-label">Recommended · {ruleFired}</span>
+              {explanation && <span className="policy-strip-reason">{explanation}</span>}
+            </>
+          )}
+        </div>
       )}
 
       <ul className="value-compare" aria-label="Competing values for this conflict">
         {values.map((value) => {
           const resolved = documentIndex.get(value.documentVersionId);
           const title = resolved?.documentTitle ?? 'Unknown document';
-          const isRecommended = value.factId === proposedWinnerFactId;
+          const isRecommended =
+            !!ruleFired && ruleFired !== 'none' && value.factId === proposedWinnerFactId;
+          const itemClassName = [
+            'value-compare-item',
+            isRecommended ? 'value-compare-item--recommended' : null,
+            value.withdrawn ? 'value-compare-item--withdrawn' : null,
+          ]
+            .filter(Boolean)
+            .join(' ');
+
           return (
-            <li
-              key={value.factId}
-              className={
-                isRecommended
-                  ? 'value-compare-item value-compare-item--recommended'
-                  : 'value-compare-item'
-              }
-            >
-              <span className="mono">
+            <li key={value.factId} className={itemClassName}>
+              {isRecommended && (
+                <span className="value-compare-band">Recommended · {ruleFired}</span>
+              )}
+              <span className="value-compare-figure mono">
                 {value.value} {value.unit}
               </span>
               <span className="cell-sub">
@@ -100,19 +115,7 @@ export default function ConflictValueCompare({
               </span>
               <ValueTraceChip value={value} resolved={resolved} />
               {value.withdrawn && <Badge tone="caution">Source withdrawn</Badge>}
-              {isRecommended && ruleFired && ruleFired !== 'none' && (
-                <>
-                  <Badge tone="info">recommended · {ruleFired}</Badge>
-                  {explanation && (
-                    <p className="cell-sub">
-                      <span className="cell-truncate" title={explanation}>
-                        {explanation}
-                      </span>
-                    </p>
-                  )}
-                </>
-              )}
-              {renderAction?.(value)}
+              {renderAction && <div className="value-compare-action">{renderAction(value)}</div>}
             </li>
           );
         })}

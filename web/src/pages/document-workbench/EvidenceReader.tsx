@@ -35,6 +35,12 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** "1 chunk" or "N chunks" — shared by a group's own count and the search status line so the two
+ * never drift into different pluralization rules. */
+function chunkCountLabel(count: number): string {
+  return `${count} chunk${count === 1 ? '' : 's'}`;
+}
+
 // Wraps every case-insensitive occurrence of `query` in `text` with a `<mark>`, matching
 // SearchPage's own result highlighting. Renders `text` unchanged for an empty or whitespace-only
 // query.
@@ -96,6 +102,10 @@ function EvidenceChunkItem({ chunk, query, isTarget }: EvidenceChunkItemProps) {
 
 interface EvidenceReaderProps {
   versionId: string;
+  // 'reading' widens the measure and line-height for sustained reading — the primary surface for
+  // every non-PDF source kind. 'rail' is the unchanged, denser layout for the sidebar beside a PDF
+  // pane. Defaults to 'rail', matching this component's shape before either variant existed.
+  variant?: 'reading' | 'rail';
   // Reports the PDF page the `?chunk=` target resolves to, so the caller can jump its own PDF
   // pane there — `null` once the target is known not to be a `pdf-page` locator, or once there is
   // no target at all. Omitted entirely by a non-PDF caller, which has no PDF pane to jump.
@@ -108,7 +118,11 @@ interface EvidenceReaderProps {
  * roles in the workbench: the detail rail beside the PDF pane, and the primary reading surface for
  * every non-PDF source kind, which has no inline byte preview to fall back to.
  */
-export default function EvidenceReader({ versionId, onTargetPageChange }: EvidenceReaderProps) {
+export default function EvidenceReader({
+  versionId,
+  variant = 'rail',
+  onTargetPageChange,
+}: EvidenceReaderProps) {
   const [searchParams] = useSearchParams();
   const targetChunkId = searchParams.get('chunk') ?? undefined;
 
@@ -177,9 +191,19 @@ export default function EvidenceReader({ versionId, onTargetPageChange }: Eviden
       ),
     }))
     .filter((group) => group.chunks.length > 0);
+  const matchCount = visibleGroups.reduce((total, group) => total + group.chunks.length, 0);
+
+  // Exactly one of the two ever renders — a search either turned up something to report a count
+  // for, or it did not, never both at once.
+  const searchStatus =
+    groups.length === 0 || trimmedQuery.length === 0
+      ? null
+      : visibleGroups.length === 0
+        ? `No chunks match “${trimmedQuery}”.`
+        : `${chunkCountLabel(matchCount)} match${matchCount === 1 ? 'es' : ''}`;
 
   return (
-    <div className="evidence-reader">
+    <div className={`evidence-reader evidence-reader--${variant}`}>
       <Input
         label="Search this document"
         placeholder="Search chunk text…"
@@ -199,8 +223,10 @@ export default function EvidenceReader({ versionId, onTargetPageChange }: Eviden
         <p className="cell-sub">No evidence chunks are stored for this version.</p>
       )}
 
-      {groups.length > 0 && trimmedQuery.length > 0 && visibleGroups.length === 0 && (
-        <p className="cell-sub">No chunks match &ldquo;{trimmedQuery}&rdquo;.</p>
+      {searchStatus && (
+        <p className="cell-sub" role="status" aria-live="polite">
+          {searchStatus}
+        </p>
       )}
 
       {visibleGroups.map((group) => (
@@ -209,7 +235,10 @@ export default function EvidenceReader({ versionId, onTargetPageChange }: Eviden
           className="evidence-group"
           open={group.key === firstGroupKey || group.key === targetGroupKey}
         >
-          <summary>{group.label}</summary>
+          <summary>
+            <span>{group.label}</span>
+            <span className="mono">{chunkCountLabel(group.chunks.length)}</span>
+          </summary>
           <ul className="evidence-chunk-list" role="list">
             {group.chunks.map((chunk) => (
               <EvidenceChunkItem

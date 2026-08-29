@@ -1,3 +1,4 @@
+import type { DocumentSourceClass } from '../../../../database/schemas/evidence/document/document.schema';
 import type { EvidenceLocator } from '../../../../database/schemas/evidence/evidence-chunk/evidence-locator.type';
 
 /**
@@ -16,8 +17,10 @@ export interface RetrievedChunk {
   readonly locator: EvidenceLocator;
   // Optional here, not on `RetrievedChunkResponseDto`: grounding never reads these, so a fixture
   // built for `GroundingGateService`/`SynthesisService` coverage is not obligated to carry them.
-  // `EvidenceRetrievalService.retrieve` always populates all three.
+  // `EvidenceRetrievalService.retrieve` always populates all five.
   readonly score?: number;
   readonly documentId?: string;
   readonly documentTitle?: string;
+  readonly sourceClass?: DocumentSourceClass;
+  readonly documentCreatedAt?: Date;
 }

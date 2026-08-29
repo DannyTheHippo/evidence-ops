@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
-import { Link, Navigate, Route, Routes } from 'react-router-dom';
-import { IconInfoSquare } from './components/icons';
-import EmptyState from './components/ui/EmptyState';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import Button from './components/ui/Button';
+import LinkButton from './components/ui/LinkButton';
 import { useSession } from './lib/use-session';
 import AnswerDetailPage from './pages/AnswerDetailPage';
 import AnswersPage from './pages/AnswersPage';
@@ -23,17 +23,24 @@ import SourcesPage from './pages/SourcesPage';
 import WorkflowRunPage from './pages/WorkflowRunPage';
 
 function NotFoundView() {
+  const location = useLocation();
+  const navigate = useNavigate();
+
   return (
-    <EmptyState
-      icon={<IconInfoSquare size={24} />}
-      title="Page not found"
-      description="The page you're looking for doesn't exist. Head back to somewhere that does."
-      action={
-        <Link to="/" className="btn btn--primary">
-          Go to Home
-        </Link>
-      }
-    />
+    <div className="fault">
+      <p className="fault-eyebrow mono">HTTP 404</p>
+      <p className="fault-title">Page not found</p>
+      <p className="fault-description">
+        The page you&apos;re looking for doesn&apos;t exist. Head back to somewhere that does.
+      </p>
+      <p className="fault-detail mono">{location.pathname}</p>
+      <div className="fault-actions">
+        <LinkButton to="/">Go to Home</LinkButton>
+        <Button variant="ghost" onClick={() => void navigate(-1)}>
+          Go back
+        </Button>
+      </div>
+    </div>
   );
 }
 

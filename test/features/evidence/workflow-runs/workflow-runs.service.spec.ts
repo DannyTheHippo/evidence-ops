@@ -93,6 +93,41 @@ describe('WorkflowRunsService', () => {
       });
     });
 
+    it('should persist and project a subjectId/subjectType pair when the caller names one', async () => {
+      const id = new Types.ObjectId();
+      const conflictId = new Types.ObjectId();
+      const createdAt = new Date('2026-07-01T00:00:00.000Z');
+      mockWorkflowRunModel.create.mockResolvedValueOnce({
+        _id: id,
+        workflowId: 'wf-2',
+        workflowType: 'resolve-conflict',
+        status: 'running',
+        subjectId: conflictId,
+        subjectType: 'Conflict',
+        createdAt,
+      });
+
+      const result = await service.create({
+        workflowId: 'wf-2',
+        workflowType: 'resolve-conflict',
+        status: 'running',
+        tenantId: 'acme-corp',
+        subjectId: conflictId.toString(),
+        subjectType: 'Conflict',
+      });
+
+      expect(mockWorkflowRunModel.create).toHaveBeenCalledWith({
+        workflowId: 'wf-2',
+        workflowType: 'resolve-conflict',
+        status: 'running',
+        tenantId: 'acme-corp',
+        subjectId: conflictId,
+        subjectType: 'Conflict',
+      });
+      expect(result.subjectId).toBe(conflictId.toString());
+      expect(result.subjectType).toBe('Conflict');
+    });
+
     it('should project a row written before workflowType existed with an undefined type', async () => {
       const id = new Types.ObjectId();
       const createdAt = new Date('2026-07-01T00:00:00.000Z');
@@ -180,17 +215,18 @@ describe('WorkflowRunsService', () => {
   });
 
   describe('listByWorkflowId', () => {
-    it('should page runs by workflowId, never refreshing from the live engine, and record an audit event scoped to the actor, projecting a subject reference from answerId', async () => {
+    it('should page runs by workflowId, never refreshing from the live engine, and record an audit event scoped to the actor, projecting a subject reference from subjectId/subjectType', async () => {
       const actorId = new Types.ObjectId().toString();
       const id = new Types.ObjectId();
-      const answerId = new Types.ObjectId();
+      const subjectId = new Types.ObjectId();
       const run = {
         _id: id,
         workflowId: 'wf-1',
         workflowType: 'resolve-conflict',
         status: 'running',
         errorMessage: undefined,
-        answerId,
+        subjectId,
+        subjectType: 'Conflict',
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
       };
       mockWorkflowRunModel.find.mockResolvedValueOnce([run]);
@@ -227,8 +263,8 @@ describe('WorkflowRunsService', () => {
             workflowType: 'resolve-conflict',
             status: 'running',
             errorMessage: undefined,
-            subjectId: answerId.toString(),
-            subjectType: 'Answer',
+            subjectId: subjectId.toString(),
+            subjectType: 'Conflict',
             createdAt: run.createdAt,
           },
         ],

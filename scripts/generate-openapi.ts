@@ -3,6 +3,10 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { AppModule } from '../src/app.module';
+import {
+  FieldValidationErrorResponseDto,
+  ValidationErrorResponseDto,
+} from '../src/shared/dtos/response/validation-error.response.dto';
 import packageJSON from '../package.json';
 
 /**
@@ -30,6 +34,7 @@ const generate = async (): Promise<void> => {
       .setTitle('Evidence Ops API')
       .setDescription('Evidence Ops API specification')
       .build(),
+    { extraModels: [ValidationErrorResponseDto, FieldValidationErrorResponseDto] },
   );
 
   writeFileSync(OUTPUT_PATH, `${JSON.stringify(document, null, 2)}\n`);

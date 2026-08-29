@@ -57,6 +57,53 @@ describe('Table', () => {
     expect(row).not.toHaveClass('row--linked');
   });
 
+  it('adds row--selected when selected is true, and omits it otherwise', () => {
+    const { rerender } = render(
+      <MemoryRouter>
+        <Table caption="Sources">
+          <tbody>
+            <TableRow selected>
+              <td>Contracts</td>
+            </TableRow>
+          </tbody>
+        </Table>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('Contracts').closest('tr')).toHaveClass('row--selected');
+
+    rerender(
+      <MemoryRouter>
+        <Table caption="Sources">
+          <tbody>
+            <TableRow selected={false}>
+              <td>Contracts</td>
+            </TableRow>
+          </tbody>
+        </Table>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('Contracts').closest('tr')).not.toHaveClass('row--selected');
+  });
+
+  it('combines row--selected with row--linked and a caller className', () => {
+    render(
+      <MemoryRouter>
+        <Table caption="Sources">
+          <tbody>
+            <TableRow to="/sources/abc" selected className="highlight">
+              <td>Contracts</td>
+            </TableRow>
+          </tbody>
+        </Table>
+      </MemoryRouter>,
+    );
+
+    const row = screen.getByText('Contracts').closest('tr');
+    expect(row).toHaveClass('row--linked', 'row--selected', 'highlight');
+  });
+
   it('renders the RowLink as a real, keyboard-reachable link that is the row destination', () => {
     render(
       <MemoryRouter initialEntries={['/sources']}>

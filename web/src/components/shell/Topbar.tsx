@@ -86,9 +86,9 @@ export default function Topbar({ breadcrumbFallback, onOpenMenu, onLogout }: Top
             </>
           ),
         },
-        { label: 'Logout', onSelect: onLogout },
+        { label: 'Logout', onSelect: onLogout, tone: 'danger' as const },
       ]
-    : [{ label: 'Logout', onSelect: onLogout }];
+    : [{ label: 'Logout', onSelect: onLogout, tone: 'danger' as const }];
 
   return (
     <header className="topbar">
