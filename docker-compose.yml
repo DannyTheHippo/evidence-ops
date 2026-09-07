@@ -474,9 +474,10 @@ services:
       # every version already ingested — enable it deliberately, with conflict counts measured
       # before and after.
       EXTRACTION_ALIAS_HARVEST_AUTO_APPLY: ${EXTRACTION_ALIAS_HARVEST_AUTO_APPLY:-false}
-      # Off, an unmatched numeric spreadsheet column mints nothing during extraction; on, it
-      # proposes a measure held for admin confirmation instead of being dropped.
-      EXTRACTION_HEADER_PROPOSALS: ${EXTRACTION_HEADER_PROPOSALS:-false}
+      # Header inference proposes a measure for an unmatched numeric column; proposals wait in the
+      # measures queue and change no conflict or ledger answer until an admin confirms one. The
+      # zod default stays false, so the host dev loop and the test suites keep the inert behaviour.
+      EXTRACTION_HEADER_PROPOSALS: ${EXTRACTION_HEADER_PROPOSALS:-true}
       # Container-relative, and nothing mounts a host directory onto it: the local-folder connector
       # reads this path inside the container, so a pilot ingesting from the host needs a bind mount
       # added here as well as a matching path.
