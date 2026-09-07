@@ -364,23 +364,29 @@ export class MeasuresService {
    * transition and version bump — a human's decision is done. This method's own outcome, success
    * or thrown, is recorded on `doc.lastRescan` and saved, never rolled back and never rethrown to
    * the caller, so a conflict scan that happens to fail can never take the confirmation down with
-   * it. `runRescan`'s only failure a caller sees is a bug in this method itself, before the
-   * try/catch is reached.
+   * it. This method throws nothing: every database call it makes — the fact restamp, the follow-up
+   * read, the scan, and the write that records the outcome — is inside a catch.
    */
   private async runRescan(doc: MeasureDocument, tenantId: string): Promise<void> {
-    await this.extractedFactModel.updateMany(
-      { tenantId, measureId: doc._id },
-      { $set: { measureStatus: 'confirmed' } },
-    );
-    const facts = await this.extractedFactModel.find(
-      { tenantId, measureId: doc._id },
-      { factKey: 1 },
-    );
-    const factKeys = facts.map((fact) => fact.factKey);
-
     const startedAt = Date.now();
     try {
-      const scan = await this.conflictsService.scanForConflicts(tenantId, factKeys);
+      // Every database call the rescan makes sits inside this block. Leaving the fact restamp or
+      // its follow-up read outside it would break the guarantee above in the worst way: the
+      // confirmation is already persisted, so a throw here would surface to the caller while the
+      // measure's own facts stayed `proposed` forever — and `confirm` refuses a measure that is no
+      // longer `proposed`, so there would be no path to retry it.
+      await this.extractedFactModel.updateMany(
+        { tenantId, measureId: doc._id },
+        { $set: { measureStatus: 'confirmed' } },
+      );
+      const facts = await this.extractedFactModel.find(
+        { tenantId, measureId: doc._id },
+        { factKey: 1 },
+      );
+      const scan = await this.conflictsService.scanForConflicts(
+        tenantId,
+        facts.map((fact) => fact.factKey),
+      );
       doc.lastRescan = {
         at: new Date(),
         status: 'completed',
@@ -400,6 +406,14 @@ export class MeasuresService {
       };
     }
 
-    await doc.save();
+    try {
+      await doc.save();
+    } catch (error) {
+      // Recording the outcome is itself best-effort: the confirmation was persisted before this
+      // method ran, so losing the `lastRescan` note costs visibility, never the human decision.
+      this.logger.warn(
+        `Recording the rescan outcome failed for measure '${doc._id.toString()}' in tenant '${tenantId}': ${String(error)}`,
+      );
+    }
   }
 }

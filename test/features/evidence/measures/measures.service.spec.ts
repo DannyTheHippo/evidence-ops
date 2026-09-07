@@ -435,6 +435,49 @@ describe('MeasuresService', () => {
       expect(result).toBe(doc);
     });
 
+    // The fail-open guarantee has to cover every database call the rescan makes, not just the scan.
+    // With the restamp outside the catch, a database error here surfaced to the caller while the
+    // measure was already confirmed — leaving its facts `proposed` permanently, since `confirm`
+    // refuses a measure that is no longer `proposed` and there is no other path to retry it.
+    it('still confirms when the fact restamp throws, without rethrowing', async () => {
+      const doc = buildMeasureDoc({ status: 'proposed', version: 1 });
+      const restampError = new Error('connection reset');
+      mockMeasureModel.findOne.mockResolvedValueOnce(doc);
+      mockExtractedFactModel.updateMany.mockRejectedValueOnce(restampError);
+
+      const result = await service.confirm(VALID_ID, DEFAULT_TENANT_ID, {}, actorId);
+
+      expect(result).toBe(doc);
+      expect(doc.status).toBe('confirmed');
+      expect(doc.lastRescan).toEqual(
+        expect.objectContaining({ status: 'failed', error: String(restampError) }),
+      );
+      // The decision is auditable even though the measurement behind it failed.
+      expect(mockAuditService.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'measures.confirmed' }),
+      );
+      expect(mockConflictsService.scanForConflicts).not.toHaveBeenCalled();
+    });
+
+    // The outcome write is best-effort for the same reason: the confirmation was persisted before
+    // the rescan began, so losing the note costs visibility, never the human decision.
+    it('still confirms when recording the rescan outcome itself throws', async () => {
+      const doc = buildMeasureDoc({ status: 'proposed', version: 1 });
+      doc.save.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('write concern'));
+      mockMeasureModel.findOne.mockResolvedValueOnce(doc);
+      mockExtractedFactModel.updateMany.mockResolvedValueOnce({});
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+      mockConflictsService.scanForConflicts.mockResolvedValueOnce({
+        conflictsCreated: 0,
+        skippedFactCount: 0,
+      });
+
+      const result = await service.confirm(VALID_ID, DEFAULT_TENANT_ID, {}, actorId);
+
+      expect(result).toBe(doc);
+      expect(doc.status).toBe('confirmed');
+    });
+
     it('still confirms when the rescan itself throws, recording the failure on the row', async () => {
       const doc = buildMeasureDoc({ status: 'proposed', version: 1 });
       mockMeasureModel.findOne.mockResolvedValueOnce(doc);

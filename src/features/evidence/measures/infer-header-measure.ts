@@ -14,6 +14,18 @@ import { DEFAULT_TOLERANCE_BY_VALUE_TYPE, DEFAULT_UNITS_BY_VALUE_TYPE } from './
  * traces back to the uploaded workbook and is bounded accordingly — see `deriveMeasureSlug` and
  * `buildHeaderProposal` below for exactly where those bounds are enforced.
  */
+/**
+ * The most distinct measures one document's headers may propose. A workbook is caller-supplied and
+ * its column count is bounded only by the format (16,384 per sheet, times its sheets), so without
+ * this every unmatched numeric column in a wide or hostile upload becomes a `Measure` row an admin
+ * has to decide on — a queue no human can clear, filled by one file.
+ *
+ * Fails CLOSED: columns past the cap mint no proposal and therefore no facts, the same outcome an
+ * unmatched column already has with `proposeFromHeaders` off. The bound is per document, so a
+ * tenant's total across many documents is not bounded by it.
+ */
+export const MAX_HEADER_PROPOSALS_PER_DOCUMENT = 200;
+
 export interface HeaderMeasureProposal {
   readonly slug: string;
   readonly label: string;

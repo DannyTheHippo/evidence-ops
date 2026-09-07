@@ -15,6 +15,7 @@ import { parseHeaderUnitMarker, resolveHeaderRow } from '../ingestion/sheet-head
 import {
   buildHeaderProposal,
   deriveMeasureSlug,
+  MAX_HEADER_PROPOSALS_PER_DOCUMENT,
   type HeaderMeasureProposal,
 } from '../measures/infer-header-measure';
 import { wordLookup } from '../qa/extract-numeric-tokens';
@@ -463,6 +464,15 @@ function extractSheetFacts(
     }
     if (
       !context.proposeFromHeaders ||
+      // The same gate the slug fallback above carries, and for the same reason — a header naming
+      // its own percent/ratio unit while `strictPercentUnitResolution` is off cannot be read
+      // honestly. Without it this branch is a second route to the outcome that gate exists to
+      // prevent, and a worse one: `deriveMeasureSlug` strips the marker, the derived slug collides
+      // with an existing confirmed measure, and `proposeMany` stamps the column's cells
+      // `confirmed` against that measure while they were parsed under a synthetic definition with
+      // a different unit table. A markerless `5.25` would enter the ledger as `5.25 ratio` — 525%
+      // — with no proposal for an admin to see.
+      !slugFallbackAllowed ||
       isEntityHeader(header) ||
       isPeriodHeader(header) ||
       isAsOfHeader(header)
@@ -635,6 +645,7 @@ export function extractXlsxFacts(
     string,
     { proposal: HeaderMeasureProposal; candidates: FactCandidate[] }
   >();
+  const cappedSlugs = new Set<string>();
   for (const [sheetName, sheetElements] of bySheet) {
     const sheetResult = extractSheetFacts(
       sheetName,
@@ -649,13 +660,25 @@ export function extractXlsxFacts(
       const existing = proposalsBySlug.get(entry.proposal.slug);
       if (existing) {
         existing.candidates.push(...entry.candidates);
-      } else {
-        proposalsBySlug.set(entry.proposal.slug, {
-          proposal: entry.proposal,
-          candidates: [...entry.candidates],
-        });
+        continue;
       }
+      // The cap counts distinct slugs across the whole workbook, not per sheet, so a wide document
+      // cannot multiply it by splitting columns over sheets. Dropping the entry drops its
+      // candidates with it — see `MAX_HEADER_PROPOSALS_PER_DOCUMENT` for the failure direction.
+      if (proposalsBySlug.size >= MAX_HEADER_PROPOSALS_PER_DOCUMENT) {
+        cappedSlugs.add(entry.proposal.slug);
+        continue;
+      }
+      proposalsBySlug.set(entry.proposal.slug, {
+        proposal: entry.proposal,
+        candidates: [...entry.candidates],
+      });
     }
+  }
+  if (cappedSlugs.size > 0) {
+    reducedFidelityReasons.push(
+      `Header measure proposals capped at ${MAX_HEADER_PROPOSALS_PER_DOCUMENT} per document; ${cappedSlugs.size} further column(s) contributed no measure and no facts`,
+    );
   }
   return {
     accepted,

@@ -173,13 +173,30 @@ and untouched by this phase.
 markerless cell as the metric's factor-1 unit whenever `strictPercentUnitResolution` is off, which
 is the default, so a bare `5.25` under a column headed `Cap Rate (%)` would record `5.25 ratio` —
 a value 100× the intended `5.25 percent`. The header states the unit unambiguously and the parser
-ignores it, consulting `parseHeaderUnitMarker` only when the flag is on. Header inference does not
-widen that exposure: the slug fallback that resolves `Cap Rate (%)` to `cap_rate` is gated on
-`strictPercentUnitResolution || parseHeaderUnitMarker(header).unit === undefined`, so a
-marker-carrying header still resolves to nothing while the flag is off, exactly as before. Making
-the marker authoritative regardless of the flag is the better reading — a stated unit is evidence,
-not a guess — but it changes flag-off behaviour for existing corpora and is therefore left to a
-cycle that can measure the change against a real one.
+ignores it, consulting `parseHeaderUnitMarker` only when the flag is on. Header inference is held
+to the same bound rather than widening it: **both** of the extractor's two routes out of a header —
+the slug fallback that would resolve `Cap Rate (%)` to `cap_rate`, and the proposal path that would
+mint a new measure from it — are gated on the same predicate,
+`strictPercentUnitResolution || parseHeaderUnitMarker(header).unit === undefined`. A marker-carrying
+header therefore resolves to nothing *and* proposes nothing while the flag is off, so the column is
+skipped outright instead of being recorded at the wrong scale. Gating only the match route would be
+worse than the original exposure: `deriveMeasureSlug` strips the parenthetical, so `Cap Rate (%)`
+derives the slug `cap_rate`, which is already a confirmed seed. The proposal path would find that
+row and stamp the column's cells `confirmed` against it on the spot — no proposal row, no queue
+entry, nothing for an admin to review — while the cells themselves were parsed under a synthetic
+definition with a different unit table. Making the marker authoritative regardless of the flag is
+the better reading — a stated unit is evidence, not a guess — but it changes flag-off behaviour for
+existing corpora and is therefore left to a cycle that can measure the change against a real one.
+
+**Known bound — the proposal cap is per document, not per tenant.**
+`MAX_HEADER_PROPOSALS_PER_DOCUMENT` (200) bounds how many distinct measures one workbook's headers
+may propose, counted across its sheets so splitting columns over sheets cannot multiply it. Columns
+past the cap mint no proposal and no facts, and the document's `reducedFidelityReasons` names how
+many were skipped. What this does not bound is a tenant's running total: 200 uploads of 200 novel
+headers each still fill the confirmation queue with 40,000 rows. A tenant-wide bound needs a policy
+decision about what happens when it is reached — refuse the ingest, or accept it and stop proposing
+— and neither is obviously right for an estate that is genuinely still discovering its vocabulary,
+so it is left to the cycle that can watch a real queue.
 
 ## Falsifiable signal (WATCH)
 

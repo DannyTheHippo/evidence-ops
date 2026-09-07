@@ -9,6 +9,7 @@ import {
   extractXlsxFacts,
   type XlsxExtractionContext,
 } from '../../../../src/features/evidence/facts/xlsx-fact-extractor';
+import { MAX_HEADER_PROPOSALS_PER_DOCUMENT } from '../../../../src/features/evidence/measures/infer-header-measure';
 import { CsvParser } from '../../../../src/features/evidence/ingestion/parsers/csv.parser';
 import { XlsxParser } from '../../../../src/features/evidence/ingestion/parsers/xlsx.parser';
 import type { ParsedElement } from '../../../../src/features/evidence/ingestion/parsers/parsed-element.type';
@@ -449,8 +450,32 @@ describe('extractXlsxFacts — strictPercentUnitResolution', () => {
     const markerHeader = ['Property Name', 'Cap Rate (%)'] as const;
     const elements = buildRow('Sheet1', markerHeader, ['Acme Tower', '5.25'], 2);
 
-    const { accepted, rejected } = extractXlsxFacts(elements, extractionContext());
+    const { accepted, rejected, proposals } = extractXlsxFacts(elements, extractionContext());
 
+    expect(accepted).toEqual([]);
+    expect(rejected).toEqual([]);
+    // Asserting `accepted` alone is not enough to pin inertness: a header proposal's candidates
+    // are returned under `proposals[].candidates`, not `accepted`, so this suite stayed green
+    // while the column was in fact minting facts down that path.
+    expect(proposals).toEqual([]);
+  });
+
+  // The proposal path is the second route out of this header, and it must be gated exactly as the
+  // slug fallback is. Ungated it is the worse of the two: `deriveMeasureSlug` strips the marker to
+  // `cap_rate`, which collides with a seeded confirmed measure, so the column's cells are stamped
+  // `confirmed` against that measure while having been parsed under a synthetic definition with a
+  // different unit table — `5.25` entering the ledger as `5.25 ratio`, 525%, with no proposal for
+  // an admin to review.
+  it('should propose nothing for a "(%)" header while strict percent resolution is off', () => {
+    const markerHeader = ['Property Name', 'Cap Rate (%)'] as const;
+    const elements = buildRow('Sheet1', markerHeader, ['Acme Tower', '5.25'], 2);
+
+    const { accepted, rejected, proposals } = extractXlsxFacts(
+      elements,
+      extractionContext(METRIC_ONTOLOGY, true),
+    );
+
+    expect(proposals).toEqual([]);
     expect(accepted).toEqual([]);
     expect(rejected).toEqual([]);
   });
@@ -712,6 +737,65 @@ describe('extractXlsxFacts — header-inferred measure proposals', () => {
       tolerance: 0,
     },
   ];
+
+  // The cap is a property of the whole document, not of a sheet, so this builds one sheet per
+  // proposal: if it were enforced per sheet instead, every one of these columns would pass. It is
+  // parameterized on the constant so the bound can be retuned without rewriting the test, and it
+  // asserts the excess column contributes no facts by either route — neither `accepted` nor a
+  // proposal's own `candidates`.
+  it('should cap distinct header proposals per document, across sheets, and say so', () => {
+    const overCap = MAX_HEADER_PROPOSALS_PER_DOCUMENT + 1;
+    const elements = Array.from({ length: overCap }, (_unused, index) =>
+      buildRow(
+        `Sheet${index}`,
+        ['Property Name', `Bespoke Measure ${index}`],
+        ['Acme Tower', '1234'],
+        2,
+      ),
+    ).flat();
+
+    const { accepted, proposals, reducedFidelityReasons } = extractXlsxFacts(
+      elements,
+      extractionContext(METRIC_ONTOLOGY, true),
+    );
+
+    expect(proposals).toHaveLength(MAX_HEADER_PROPOSALS_PER_DOCUMENT);
+    expect(new Set(proposals.map((entry) => entry.proposal.slug)).size).toBe(
+      MAX_HEADER_PROPOSALS_PER_DOCUMENT,
+    );
+    // Fails closed: the one column past the cap mints nothing down either route.
+    const mintedSlugs = new Set([
+      ...accepted.map((candidate) => candidate.factKey.metric),
+      ...proposals.flatMap((entry) =>
+        entry.candidates.map((candidate) => candidate.factKey.metric),
+      ),
+    ]);
+    expect(mintedSlugs.has(`bespoke_measure_${MAX_HEADER_PROPOSALS_PER_DOCUMENT}`)).toBe(false);
+    expect(reducedFidelityReasons).toContainEqual(
+      expect.stringContaining(
+        `Header measure proposals capped at ${MAX_HEADER_PROPOSALS_PER_DOCUMENT} per document`,
+      ),
+    );
+  });
+
+  it('should propose every column of a document sitting exactly at the cap', () => {
+    const elements = Array.from({ length: MAX_HEADER_PROPOSALS_PER_DOCUMENT }, (_unused, index) =>
+      buildRow(
+        `Sheet${index}`,
+        ['Property Name', `Bespoke Measure ${index}`],
+        ['Acme Tower', '1234'],
+        2,
+      ),
+    ).flat();
+
+    const { proposals, reducedFidelityReasons } = extractXlsxFacts(
+      elements,
+      extractionContext(METRIC_ONTOLOGY, true),
+    );
+
+    expect(proposals).toHaveLength(MAX_HEADER_PROPOSALS_PER_DOCUMENT);
+    expect(reducedFidelityReasons).toEqual([]);
+  });
 
   it.each(BASE_UNIT_ONTOLOGY)(
     'should mint a bare "1,234" cell in the factor-1 unit for a $valueType metric',
