@@ -81,6 +81,7 @@
     "jszip": "^3.10.1",
     "migrate-mongo": "^14.0.7",
     "mongoose": "^9.9.2",
+    "parse5": "^8.0.1",
     "pdfjs-dist": "^6.2.108",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
