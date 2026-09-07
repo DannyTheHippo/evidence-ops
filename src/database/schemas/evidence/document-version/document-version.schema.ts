@@ -53,7 +53,7 @@ export class DocumentVersion extends AuditableDocument {
 
   // What a citation pins: a re-upload of changed bytes is a new version with a new sha256, so an
   // existing citation stays honest about exactly which bytes it referred to, even after the
-  // document's current version moves on. Indexed uniquely per document — see the migration that
+  // document's current version moves on. Indexed uniquely per tenant — see the migration that
   // owns this schema's indexes, not a `@Prop({ index: true })` (`rules/mongoose.md`).
   @Prop({ type: String, required: true, minlength: 64, maxlength: 64, lowercase: true })
   sha256: string;
@@ -162,4 +162,17 @@ DocumentVersionSchema.index(
     name: 'document_versions_ingestionStatus_updatedAt',
     partialFilterExpression: { ingestionStatus: 'pending' },
   },
+);
+
+/**
+ * Declared here as well as in `migrations/0001-baseline.ts`, with the same keys, options and
+ * name — same reasoning as the indexes above. Backs `DocumentsService.uploadVersion`'s tenant-wide
+ * dedupe lookup and closes the race it guards against: within a tenant, one sha256 identifies
+ * exactly one `DocumentVersion`, so a concurrent upload of the same bytes loses this index's
+ * duplicate-key check rather than minting a second version, and the losing writer's retry takes
+ * the dedupe branch instead.
+ */
+DocumentVersionSchema.index(
+  { tenantId: 1, sha256: 1 },
+  { name: 'document_versions_tenantId_sha256_unique', unique: true },
 );

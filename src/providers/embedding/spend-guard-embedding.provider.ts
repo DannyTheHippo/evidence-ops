@@ -62,6 +62,13 @@ export class SpendGuardEmbeddingProvider implements EmbeddingProvider {
     // ingest embeds against the full `dailyLimitUsd`, same as before this parameter existed.
     // `query` embeds always reserve against `dailyLimitUsd`.
     private readonly ingestDailyLimitUsd?: number,
+    // Defaults to Voyage's pricing table so every existing caller is unaffected; a delegate priced
+    // outside that table (the OpenAI-compatible provider's configured per-token rate) supplies its
+    // own function instead of forcing an unrelated model id into `VOYAGE_PRICING`.
+    private readonly computeCostUsd: (
+      model: string,
+      totalTokens: number,
+    ) => number = computeVoyageCostUsd,
   ) {}
 
   get info(): EmbeddingProviderInfo {
@@ -78,7 +85,7 @@ export class SpendGuardEmbeddingProvider implements EmbeddingProvider {
       throw new EmbeddingRequestMissingTenantError(request.inputType);
     }
 
-    const estimatedCostUsd = computeVoyageCostUsd(
+    const estimatedCostUsd = this.computeCostUsd(
       this.inner.info.model,
       estimateEmbeddingTokens(request.inputs),
     );
@@ -93,7 +100,7 @@ export class SpendGuardEmbeddingProvider implements EmbeddingProvider {
       throw error;
     }
 
-    const actualCostUsd = computeVoyageCostUsd(this.inner.info.model, result.usage.totalTokens);
+    const actualCostUsd = this.computeCostUsd(this.inner.info.model, result.usage.totalTokens);
     await this.spendService.settle(tenantId, windowStart, estimatedCostUsd, actualCostUsd);
     return result;
   }

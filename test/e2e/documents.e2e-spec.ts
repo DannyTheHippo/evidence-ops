@@ -1,5 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
+import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -60,6 +61,12 @@ interface DocumentVersionBody {
   createdAt: string;
 }
 
+interface DocumentLocationBody {
+  path: string;
+  sourceId?: string;
+  firstSeenAt: string;
+}
+
 interface DocumentBody {
   id: string;
   title: string;
@@ -67,6 +74,7 @@ interface DocumentBody {
   mimeType: string;
   sourceClass: string;
   currentVersion: DocumentVersionBody;
+  locations: DocumentLocationBody[];
   createdAt: string;
 }
 
@@ -121,6 +129,17 @@ describe('Documents (e2e)', () => {
     memo = await readFile(path.join(FIXTURES, 'valuation-memo.pdf'));
   });
 
+  // `PreAuthThrottlerGuard` keys its bucket per controller-handler-IP, and `setup-env.ts` lowers
+  // the e2e limit to 40. This suite drives more than 40 requests through `POST /documents`'s single
+  // bucket from one address, so without a reset the last uploads answer 429 and the assertions read
+  // that error body as a document. Cleared per test rather than in `create-test-app`, because
+  // `health.e2e-spec.ts` proves the opposite property — a bucket exhausted in one test must still
+  // be blocked in the next — and a shared reset would erase it.
+  beforeEach(() => {
+    const storage = app.get<ThrottlerStorageService>(ThrottlerStorage);
+    storage.storage.clear();
+  });
+
   afterAll(async () => {
     await closeTestApp(app);
   });
@@ -148,6 +167,18 @@ describe('Documents (e2e)', () => {
     }
 
     return req.attach('file', body, { filename, contentType: mime });
+  };
+
+  // Content-addressed dedupe is now tenant-wide: two uploads of byte-identical content anywhere in
+  // this suite's shared tenant resolve to the same document. Every fixture below that needs its own
+  // document appends a counter-stamped trailer so its sha256 never collides with another test's
+  // upload — trailing bytes never reach `contentMatchesDeclaredKind`'s leading-signature sniff. The
+  // handful of tests that deliberately re-upload identical bytes (idempotent re-upload, version 2)
+  // call this once and reuse the result across both of their uploads instead.
+  let uniqueByteSuffix = 0;
+  const withUniqueBytes = (body: Buffer): Buffer => {
+    uniqueByteSuffix += 1;
+    return Buffer.concat([body, Buffer.from(`\nfixture-${uniqueByteSuffix.toString()}`)]);
   };
 
   // Direct model writes, following the seeding pattern in `qa.e2e-spec.ts`'s conflicts block —
@@ -211,7 +242,7 @@ describe('Documents (e2e)', () => {
   });
 
   it('titles a new document from the uploaded filename when title is omitted', async () => {
-    const response = await upload(comps, 'comps.xlsx', XLSX_MIME, {});
+    const response = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {});
     const body = response.body as DocumentBody;
 
     expect(response.status).toBe(201);
@@ -219,7 +250,9 @@ describe('Documents (e2e)', () => {
   });
 
   it('stores an upload and pins the version to the sha256 of the bytes', async () => {
-    const response = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Comparables' });
+    const response = await upload(comps, 'comps.xlsx', XLSX_MIME, {
+      title: 'Comparables',
+    });
     const body = response.body as DocumentBody;
 
     expect(response.status).toBe(201);
@@ -242,6 +275,7 @@ describe('Documents (e2e)', () => {
         'mimeType',
         'sourceClass',
         'currentVersion',
+        'locations',
         'createdAt',
       ].sort(),
     );
@@ -274,7 +308,7 @@ describe('Documents (e2e)', () => {
   });
 
   it('exposes ingestionFailureReason only once a version is actually marked failed, with the exact key set at each state', async () => {
-    const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, {
+    const uploaded = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
       title: 'Ingestion Failure Reason',
     });
     const documentId = (uploaded.body as DocumentBody).id;
@@ -368,7 +402,7 @@ describe('Documents (e2e)', () => {
   });
 
   it('exposes reducedFidelityReasons — empty by default, populated once ingestion records a fidelity loss', async () => {
-    const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, {
+    const uploaded = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
       title: 'Reduced Fidelity Reasons',
     });
     const documentId = (uploaded.body as DocumentBody).id;
@@ -398,12 +432,40 @@ describe('Documents (e2e)', () => {
     ]);
   });
 
+  // Tenant-wide content dedupe: the same bytes, uploaded under a different filename with no
+  // `documentId`, resolve to the existing document instead of minting a new one. A same-filename
+  // re-upload (the next test) can never observe a second location, since the location key is the
+  // filename — this is the one that actually grows `locations`.
+  it('resolves bytes already held elsewhere in the tenant to the existing document, recording a second location', async () => {
+    const bytes = withUniqueBytes(comps);
+    const first = await upload(bytes, 'comps.xlsx', XLSX_MIME, { title: 'Comps A' });
+    const firstBody = first.body as DocumentBody;
+
+    const startedBeforeDedupe = fakeWorkflowEngine.started.length;
+    const second = await upload(bytes, 'comps-copy.xlsx', XLSX_MIME, { title: 'Comps B' });
+    const secondBody = second.body as DocumentBody;
+
+    expect(second.status).toBe(201);
+    expect(secondBody.id).toBe(firstBody.id);
+    expect(secondBody.title).toBe('Comps A');
+    expect(secondBody.currentVersion.id).toBe(firstBody.currentVersion.id);
+    expect(secondBody.locations).toHaveLength(2);
+    expect(secondBody.locations.map((location) => location.path).sort()).toEqual(
+      ['comps-copy.xlsx', 'comps.xlsx'].sort(),
+    );
+    // Content-addressed dedupe: no new bytes were stored, so no new ingestion starts.
+    expect(fakeWorkflowEngine.started).toHaveLength(startedBeforeDedupe);
+  });
+
   it('does not create a second version when the same bytes are re-uploaded', async () => {
-    const first = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Idempotent' });
+    const bytes = withUniqueBytes(comps);
+    const first = await upload(bytes, 'comps.xlsx', XLSX_MIME, {
+      title: 'Idempotent',
+    });
     const documentId = (first.body as DocumentBody).id;
 
     const startedBeforeReupload = fakeWorkflowEngine.started.length;
-    const again = await upload(comps, 'comps.xlsx', XLSX_MIME, { documentId });
+    const again = await upload(bytes, 'comps.xlsx', XLSX_MIME, { documentId });
     const body = again.body as DocumentBody;
 
     expect(body.currentVersion.versionNumber).toBe(1);
@@ -419,7 +481,10 @@ describe('Documents (e2e)', () => {
   });
 
   it('creates version 2 when different bytes are uploaded to the same document', async () => {
-    const first = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Versioned' });
+    const bytes = withUniqueBytes(comps);
+    const first = await upload(bytes, 'comps.xlsx', XLSX_MIME, {
+      title: 'Versioned',
+    });
     const documentId = (first.body as DocumentBody).id;
 
     const second = await upload(memo, 'valuation-memo.pdf', 'application/pdf', { documentId });
@@ -438,7 +503,7 @@ describe('Documents (e2e)', () => {
     // which bytes it referred to, which is the entire point of content addressing.
     expect(versions.map((v) => v.versionNumber).sort()).toEqual([1, 2]);
     expect(versions.find((v) => v.versionNumber === 1)?.sha256).toBe(
-      createHash('sha256').update(comps).digest('hex'),
+      createHash('sha256').update(bytes).digest('hex'),
     );
   });
 
@@ -495,9 +560,29 @@ describe('Documents (e2e)', () => {
     expect(response.status).toBe(400);
   });
 
+  it('accepts an HTML upload declared text/html', async () => {
+    const response = await upload(
+      Buffer.from('<html><body><p>Rent roll</p></body></html>'),
+      'page.html',
+      'text/html',
+      { title: 'Rent Roll' },
+    );
+    const body = response.body as DocumentBody;
+
+    expect(response.status).toBe(201);
+    expect(body.sourceKind).toBe('html');
+    expect(body.mimeType).toBe('text/html');
+  });
+
+  it('rejects an XLSX-signed buffer declared text/html — the content-sniff half of the gate', async () => {
+    const response = await upload(comps, 'page.html', 'text/html', { title: 'Disguised XLSX' });
+
+    expect(response.status).toBe(400);
+  });
+
   describe('POST /documents sourceClass', () => {
     it('round-trips a valid sourceClass on a newly created document', async () => {
-      const response = await upload(comps, 'comps.xlsx', XLSX_MIME, {
+      const response = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
         title: 'Classified Upload',
         sourceClass: 'crm-export',
       });
@@ -511,7 +596,7 @@ describe('Documents (e2e)', () => {
     // 'unclassified' because that means no authority information was recorded, not the lowest
     // rank — accepting the word here as an explicit value would be a second way to say nothing.
     it('refuses an explicit sourceClass of unclassified', async () => {
-      const response = await upload(comps, 'comps.xlsx', XLSX_MIME, {
+      const response = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
         title: 'Explicit Unclassified',
         sourceClass: 'unclassified',
       });
@@ -520,7 +605,7 @@ describe('Documents (e2e)', () => {
     });
 
     it('refuses a sourceClass outside the declared enum', async () => {
-      const response = await upload(comps, 'comps.xlsx', XLSX_MIME, {
+      const response = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
         title: 'Bogus Class',
         sourceClass: 'bogus-class',
       });
@@ -531,7 +616,9 @@ describe('Documents (e2e)', () => {
     // Absent means unclassified, and unclassified means no proposal for this document's facts —
     // this is the ungated default the field's addition must never change.
     it('still succeeds with no sourceClass, defaulting to unclassified', async () => {
-      const response = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'No Class Given' });
+      const response = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
+        title: 'No Class Given',
+      });
       const body = response.body as DocumentBody;
 
       expect(response.status).toBe(201);
@@ -544,7 +631,7 @@ describe('Documents (e2e)', () => {
     // classified counterpart fact in the same conflict WOULD win a proposal if this document's
     // default were anything other than 'unclassified'.
     it("carries the uploaded document's unclassified default through to a conflict, refusing a proposal for it", async () => {
-      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, {
+      const uploaded = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
         title: 'Unclassified NOI Source',
       });
       const uploadedVersionId = (uploaded.body as DocumentBody).currentVersion.id;
@@ -887,7 +974,9 @@ describe('Documents (e2e)', () => {
     }
 
     it('rejects an unauthenticated request', async () => {
-      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Lookup Auth' });
+      const uploaded = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
+        title: 'Lookup Auth',
+      });
       const versionId = (uploaded.body as DocumentBody).currentVersion.id;
 
       const response = await request(getTestServer(app))
@@ -898,7 +987,9 @@ describe('Documents (e2e)', () => {
     });
 
     it('resolves a requested version id to its document, exposing the exact key set of all six fields', async () => {
-      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Lookup Resolved' });
+      const uploaded = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
+        title: 'Lookup Resolved',
+      });
       const documentBody = uploaded.body as DocumentBody;
       const versionId = documentBody.currentVersion.id;
 
@@ -935,7 +1026,9 @@ describe('Documents (e2e)', () => {
     });
 
     it('resolves both the comma-separated and repeated-param forms of versionIds identically', async () => {
-      const first = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Lookup Multi A' });
+      const first = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
+        title: 'Lookup Multi A',
+      });
       const second = await upload(memo, 'valuation-memo.pdf', 'application/pdf', {
         title: 'Lookup Multi B',
       });
@@ -960,7 +1053,9 @@ describe('Documents (e2e)', () => {
     });
 
     it('resolves a soft-withdrawn version with withdrawn: true rather than dropping it', async () => {
-      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Lookup Withdrawn' });
+      const uploaded = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
+        title: 'Lookup Withdrawn',
+      });
       const versionId = (uploaded.body as DocumentBody).currentVersion.id;
 
       await documentVersionModel.updateOne(
@@ -982,10 +1077,12 @@ describe('Documents (e2e)', () => {
     // whole page of citations, and a cross-tenant id must stay indistinguishable from a
     // nonexistent one — 200 with a shorter `docs` array, never a 404.
     it('silently omits an unknown id and a cross-tenant id — 200 with fewer docs than requested, never a 404', async () => {
-      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Lookup Partial' });
+      const uploaded = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
+        title: 'Lookup Partial',
+      });
       const resolvableVersionId = (uploaded.body as DocumentBody).currentVersion.id;
 
-      const crossTenantUploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, {
+      const crossTenantUploaded = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
         title: 'Lookup Cross Tenant',
       });
       const crossTenantVersionId = (crossTenantUploaded.body as DocumentBody).currentVersion.id;
@@ -1030,7 +1127,9 @@ describe('Documents (e2e)', () => {
 
   describe('GET /documents/versions/:versionId/content', () => {
     it('rejects an unauthenticated request', async () => {
-      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Content Auth' });
+      const uploaded = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
+        title: 'Content Auth',
+      });
       const versionId = (uploaded.body as DocumentBody).currentVersion.id;
 
       const response = await request(getTestServer(app)).get(
@@ -1041,7 +1140,10 @@ describe('Documents (e2e)', () => {
     });
 
     it('round-trips the exact uploaded bytes and reports both headers', async () => {
-      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Content Roundtrip' });
+      const bytes = withUniqueBytes(comps);
+      const uploaded = await upload(bytes, 'comps.xlsx', XLSX_MIME, {
+        title: 'Content Roundtrip',
+      });
       const versionId = (uploaded.body as DocumentBody).currentVersion.id;
 
       const response = await request(getTestServer(app))
@@ -1056,11 +1158,13 @@ describe('Documents (e2e)', () => {
       );
       // The response body must match the uploaded bytes exactly — a truncated or re-encoded
       // buffer would still pass a status/header-only assertion.
-      expect(Buffer.compare(response.body as Buffer, comps)).toBe(0);
+      expect(Buffer.compare(response.body as Buffer, bytes)).toBe(0);
     });
 
     it('returns 404, not 403, for a version belonging to another tenant', async () => {
-      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Content Tenant' });
+      const uploaded = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
+        title: 'Content Tenant',
+      });
       const versionId = (uploaded.body as DocumentBody).currentVersion.id;
 
       // The cross-tenant row is produced the same way `approvals.e2e-spec.ts` does: flip the
@@ -1097,7 +1201,9 @@ describe('Documents (e2e)', () => {
     }
 
     it('rejects an unauthenticated request', async () => {
-      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Chunks Auth' });
+      const uploaded = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
+        title: 'Chunks Auth',
+      });
       const versionId = (uploaded.body as DocumentBody).currentVersion.id;
 
       const response = await request(getTestServer(app)).get(
@@ -1116,7 +1222,9 @@ describe('Documents (e2e)', () => {
     });
 
     it('returns 404, not 403, for a version belonging to another tenant', async () => {
-      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Chunks Tenant' });
+      const uploaded = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
+        title: 'Chunks Tenant',
+      });
       const versionId = (uploaded.body as DocumentBody).currentVersion.id;
 
       await documentVersionModel.updateOne({ _id: versionId }, { tenantId: 'other-tenant' });
@@ -1129,7 +1237,9 @@ describe('Documents (e2e)', () => {
     });
 
     it("returns chunks in locator order, exposes the exact key set with embedding absent, and excludes another version's chunks", async () => {
-      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Chunks Order' });
+      const uploaded = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
+        title: 'Chunks Order',
+      });
       const versionId = (uploaded.body as DocumentBody).currentVersion.id;
 
       const otherUploaded = await upload(memo, 'valuation-memo.pdf', 'application/pdf', {
@@ -1166,7 +1276,9 @@ describe('Documents (e2e)', () => {
 
   describe('DELETE /documents/:id', () => {
     it('rejects an unauthenticated request', async () => {
-      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Delete Auth' });
+      const uploaded = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
+        title: 'Delete Auth',
+      });
       const documentId = (uploaded.body as DocumentBody).id;
 
       const response = await request(getTestServer(app)).delete(`/api/v1/documents/${documentId}`);
@@ -1175,7 +1287,9 @@ describe('Documents (e2e)', () => {
     });
 
     it('returns 403 when the caller is not an admin — deleting evidence is the second irreversible boundary in the product', async () => {
-      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Delete Forbidden' });
+      const uploaded = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
+        title: 'Delete Forbidden',
+      });
       const documentId = (uploaded.body as DocumentBody).id;
 
       const response = await request(getTestServer(app))
@@ -1203,7 +1317,9 @@ describe('Documents (e2e)', () => {
     });
 
     it('cascades the full delete — versions, GridFS bytes, chunks, and facts gone; a referencing conflict resolved as superseded, not deleted; an audit row written', async () => {
-      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, { title: 'Delete Cascade' });
+      const uploaded = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
+        title: 'Delete Cascade',
+      });
       const documentBody = uploaded.body as DocumentBody;
       const documentId = documentBody.id;
       const versionId = documentBody.currentVersion.id;
@@ -1318,7 +1434,7 @@ describe('Documents (e2e)', () => {
     });
 
     it("keeps a 3-fact conflict 'open' with the two surviving factIds when only one of its facts' documents is deleted — the old behaviour resolved the whole conflict on one deletion, silently dropping a still-live disagreement between the two survivors", async () => {
-      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, {
+      const uploaded = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
         title: 'Delete Cascade — 3-Fact Conflict',
       });
       const documentBody = uploaded.body as DocumentBody;
@@ -1430,7 +1546,7 @@ describe('Documents (e2e)', () => {
     // conflict's `factIds` is kept in sync with the facts the cascade deletes exactly as an
     // `open` one's is, so its recorded outcome is never left pointing at deleted evidence.
     it("prunes a 'resolved' conflict's factIds too when one of its facts is deleted by a later document deletion, leaving its recorded outcome untouched", async () => {
-      const uploaded = await upload(comps, 'comps.xlsx', XLSX_MIME, {
+      const uploaded = await upload(withUniqueBytes(comps), 'comps.xlsx', XLSX_MIME, {
         title: 'Delete Cascade — Resolved Conflict',
       });
       const documentBody = uploaded.body as DocumentBody;

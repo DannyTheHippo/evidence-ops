@@ -108,8 +108,18 @@ export class FactsService {
    * `EvidenceChunk`s (both as the unit of text sent to the model and as the required
    * `ExtractedFact.chunkId` reference), so a version with no ingested chunks yet is a precondition
    * failure, not an empty result.
+   *
+   * `abortSignal`, when given, is checked before every chunk's model call on the prose path
+   * (`buildProseCandidates`'s `mapWithConcurrency` callback) — an already-aborted signal rejects
+   * before any chunk in flight starts a new call, and an abort mid-run stops further calls from
+   * starting while calls already in flight still finish. The spreadsheet path makes no model call
+   * and never checks it.
    */
-  async extractFacts(documentVersionId: string, tenantId: string): Promise<FactsExtractionResult> {
+  async extractFacts(
+    documentVersionId: string,
+    tenantId: string,
+    abortSignal?: AbortSignal,
+  ): Promise<FactsExtractionResult> {
     if (!Types.ObjectId.isValid(documentVersionId)) {
       throw new DocumentVersionNotFoundException(
         `Document version '${documentVersionId}' not found`,
@@ -207,6 +217,7 @@ export class FactsService {
         parsed.elements,
         tenantId,
         context,
+        abortSignal,
       );
       candidates = prose.candidates;
       skippedChunkCount = prose.skippedChunkCount;
@@ -504,6 +515,7 @@ export class FactsService {
     elements: readonly ParsedElement[],
     tenantId: string,
     context: ExtractionMeasureContext,
+    abortSignal?: AbortSignal,
   ): Promise<{
     readonly candidates: CanonicalizedCandidate[];
     readonly skippedChunkCount: number;
@@ -524,8 +536,12 @@ export class FactsService {
     const results = await mapWithConcurrency<EvidenceChunkDocument, ProseFactExtractionResult>(
       chunks,
       this.config.extraction.chunkConcurrency,
-      (chunk) =>
-        extractProseFacts({
+      (chunk) => {
+        // Checked before every chunk's model call, not only once up front: `mapWithConcurrency`
+        // starts new calls as earlier ones settle, so an abort mid-run must still stop calls that
+        // have not started yet, not only the ones already in flight when it fires.
+        abortSignal?.throwIfAborted();
+        return extractProseFacts({
           chunkText: chunk.text,
           chunkLocator: chunk.locator,
           sourceElements: elements,
@@ -534,7 +550,8 @@ export class FactsService {
           tenantId,
           resolveEntities: (rawNames) =>
             this.canonicalEntityService.resolveMany(rawNames, tenantId),
-        }),
+        });
+      },
     );
 
     const candidates: CanonicalizedCandidate[] = [];

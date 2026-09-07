@@ -1,8 +1,13 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
 import { NestFactory } from '@nestjs/core';
 import { Module } from '@nestjs/common';
+import { MongooseModule } from '@nestjs/mongoose';
 import { z } from 'zod/v4';
 
 import { AppConfigModule } from '../src/config/config.module';
+import { mongooseModuleOptions } from '../src/config/mongo.config';
+import type { AlsContext } from '../src/shared/types/als-context.type';
 import { SharedModule } from '../src/shared/shared.module';
 import { ProvidersModule } from '../src/providers/providers.module';
 import {
@@ -23,7 +28,18 @@ import {
  *
  *   npm run smoke:providers
  */
-@Module({ imports: [AppConfigModule, SharedModule, ProvidersModule] })
+// `MongooseModule.forRootAsync` for the same reason `app.module.ts`, `worker.module.ts` and
+// `mcp.module.ts` all carry it: `ProvidersModule`'s spend guard and audit trail resolve
+// Mongoose models, so the graph does not build without a `DatabaseConnection`. This script
+// therefore needs Mongo reachable, the same as every other process in the stack.
+@Module({
+  imports: [
+    AppConfigModule,
+    MongooseModule.forRootAsync(mongooseModuleOptions),
+    SharedModule,
+    ProvidersModule,
+  ],
+})
 class SmokeModule {}
 
 // This script runs outside any real tenant's request scope, but `SpendGuardModelProvider` still
@@ -71,7 +87,7 @@ async function main(): Promise<void> {
       tenantId: SMOKE_TENANT_ID,
     });
 
-    console.log('\n— anthropic —');
+    console.log(`\n— ${model.info.provider} —`);
     console.log(`parsed:  ${JSON.stringify(answer.output)}`);
     console.log(
       `usage:   in=${answer.usage.inputTokens} out=${answer.usage.outputTokens} ` +
@@ -79,23 +95,29 @@ async function main(): Promise<void> {
     );
     console.log(`cost:    $${answer.costUsd.toFixed(6)}`);
 
-    const vectors = await embedding.embed({
-      inputs: ['cap rate for the subject property', 'lease expiry schedule by tenant'],
-      inputType: 'document',
-    });
+    // `embed` carries no `tenantId` of its own — `SpendGuardEmbeddingProvider` reads the tenant
+    // from AsyncLocalStorage and fails CLOSED without one, so the call opens the same scope
+    // `activities.ts` opens around every tenant-carrying activity.
+    const als = app.get<AsyncLocalStorage<AlsContext>>(AsyncLocalStorage);
+    const vectors = await als.run({ 'correlation-id': randomUUID(), tenant: SMOKE_TENANT_ID }, () =>
+      embedding.embed({
+        inputs: ['cap rate for the subject property', 'lease expiry schedule by tenant'],
+        inputType: 'document',
+      }),
+    );
 
     const [first] = vectors.embeddings;
     if (!first) {
-      fail('Voyage returned no embeddings');
+      fail(`${embedding.info.provider} returned no embeddings`);
     }
     if (first.length !== embedding.info.dimensions) {
       fail(
-        `Voyage returned ${first.length}d vectors but info.dimensions reports ${embedding.info.dimensions} — ` +
+        `${embedding.info.provider} returned ${first.length}d vectors but info.dimensions reports ${embedding.info.dimensions} — ` +
           'index creation reads info.dimensions, so this mismatch would produce an unusable vector index',
       );
     }
 
-    console.log('\n— voyage —');
+    console.log(`\n— ${embedding.info.provider} —`);
     console.log(`vectors: ${vectors.embeddings.length} x ${first.length}d`);
     console.log(`usage:   ${vectors.usage.totalTokens} tokens`);
     console.log('\n✓ both providers responded and reported usage');

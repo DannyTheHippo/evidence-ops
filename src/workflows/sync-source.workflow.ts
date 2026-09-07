@@ -1,5 +1,7 @@
 import { continueAsNew, proxyActivities, sleep } from '@temporalio/workflow';
 import type { Activities } from '../worker/activities';
+import { SYNC_SOURCE_START_TO_CLOSE_TIMEOUT_MS } from './activity-heartbeat-policy';
+import { INGEST_HEARTBEAT_TIMEOUT_MS } from './ingest-retry-policy';
 import type { SyncSourceWorkflowInput } from './types';
 
 /**
@@ -16,8 +18,12 @@ import type { SyncSourceWorkflowInput } from './types';
  * no-model-call activity.
  */
 const syncActivities = proxyActivities<Pick<Activities, 'runSourceSync'>>({
-  startToCloseTimeout: '2 minutes',
+  startToCloseTimeout: SYNC_SOURCE_START_TO_CLOSE_TIMEOUT_MS,
   scheduleToCloseTimeout: '5 minutes',
+  // Paired with the heartbeats `runSourceSync` (`src/worker/activities.ts`) emits — a heartbeat
+  // with no timeout declared here is inert, and a timeout with no heartbeats fails every healthy
+  // sweep. See `ingest-retry-policy.ts`'s own `INGEST_HEARTBEAT_TIMEOUT_MS` doc comment.
+  heartbeatTimeout: INGEST_HEARTBEAT_TIMEOUT_MS,
   retry: { maximumAttempts: 5 },
 });
 

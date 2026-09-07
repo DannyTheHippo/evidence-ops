@@ -21,6 +21,7 @@ describe('resolveUploadKind', () => {
       ['text/csv', 'anything.bin', 'csv'],
       ['text/tab-separated-values', 'anything.bin', 'tsv'],
       ['text/markdown', 'anything.bin', 'md'],
+      ['text/html', 'anything.bin', 'html'],
     ])('resolves %s to %s', (mimetype, filename, expected) => {
       expect(resolveUploadKind(mimetype, filename)).toBe(expected);
     });
@@ -36,6 +37,8 @@ describe('resolveUploadKind', () => {
       ['application/octet-stream', 'report.pdf', 'pdf'],
       ['application/octet-stream', 'deck.pptx', 'pptx'],
       ['', 'notes.docx', 'docx'],
+      ['text/plain', 'page.htm', 'html'],
+      ['text/plain', 'page.HTML', 'html'],
     ])('resolves %s + %s to %s', (mimetype, filename, expected) => {
       expect(resolveUploadKind(mimetype, filename)).toBe(expected);
     });
@@ -102,7 +105,7 @@ describe('contentMatchesDeclaredKind', () => {
     expect(contentMatchesDeclaredKind(plainTextBytes, 'xlsx')).toBe(false);
   });
 
-  it.each([['txt'], ['md'], ['csv'], ['tsv']] as const)(
+  it.each([['txt'], ['md'], ['csv'], ['tsv'], ['html']] as const)(
     'matches ordinary text bytes declared as %s — no binary signature to contradict them',
     (sourceKind) => {
       expect(contentMatchesDeclaredKind(plainTextBytes, sourceKind)).toBe(true);
@@ -111,6 +114,10 @@ describe('contentMatchesDeclaredKind', () => {
 
   it('rejects a declared text kind whose bytes actually carry a PDF signature', () => {
     expect(contentMatchesDeclaredKind(pdfBytes, 'csv')).toBe(false);
+  });
+
+  it('rejects a PDF-signed buffer declared as html', () => {
+    expect(contentMatchesDeclaredKind(pdfBytes, 'html')).toBe(false);
   });
 
   it('rejects a declared text kind whose bytes actually carry a ZIP signature', () => {

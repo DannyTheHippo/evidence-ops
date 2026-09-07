@@ -6,11 +6,13 @@ import type {
   AppConfig,
   AuthConfig,
   CorsConfig,
+  EmbeddingConfig,
   EnvironmentConfig,
   ExtractionConfig,
   McpConfig,
   ModelConfig,
   MongoConfig,
+  OpenAiCompatibleConfig,
   OpenAiConfig,
   RetrievalConfig,
   SourcesConfig,
@@ -57,6 +59,12 @@ export class TypedConfigService {
   }
   get voyage(): VoyageConfig {
     return this.config.get('voyage', { infer: true });
+  }
+  get embedding(): EmbeddingConfig {
+    return this.config.get('embedding', { infer: true });
+  }
+  get openaiCompatible(): OpenAiCompatibleConfig {
+    return this.config.get('openaiCompatible', { infer: true });
   }
   get temporal(): TemporalConfig {
     return this.config.get('temporal', { infer: true });

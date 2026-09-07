@@ -24,6 +24,7 @@ import type { RetrievedChunk } from '../../src/features/evidence/qa/types/retrie
 import { SourcesService } from '../../src/features/evidence/sources/sources.service';
 import { APPROVAL_CHANNEL } from '../../src/providers/approval-channel/approval-channel.interface';
 import type { AlsContext } from '../../src/shared/types/als-context.type';
+import type { Activities } from '../../src/worker/activities';
 import { createActivities } from '../../src/worker/activities';
 import { INGEST_HEARTBEAT_INTERVAL_MS } from '../../src/workflows/ingest-retry-policy';
 import { getMockTypedConfig } from '../utils/get-mock-typed-config';
@@ -36,20 +37,27 @@ import { getMockTypedConfig } from '../utils/get-mock-typed-config';
  * `activityContext` below.
  */
 jest.mock('@temporalio/activity', () => {
-  const state = { heartbeat: jest.fn(), controller: new AbortController() };
+  const state = { heartbeat: jest.fn(), controller: new AbortController(), absent: false };
   return {
     Context: {
-      current: () => ({
-        heartbeat: state.heartbeat,
-        cancellationSignal: state.controller.signal,
-      }),
+      current: () => {
+        // The real `Context.current()` throws outside an activity execution; `absent` reproduces
+        // that so the fail-open path can be exercised.
+        if (state.absent) {
+          throw new Error('Activity context not initialized');
+        }
+        return {
+          heartbeat: state.heartbeat,
+          cancellationSignal: state.controller.signal,
+        };
+      },
     },
     __state: state,
   };
 });
 
 const activityContext = jest.requireMock('@temporalio/activity') as unknown as {
-  __state: { heartbeat: jest.Mock; controller: AbortController };
+  __state: { heartbeat: jest.Mock; controller: AbortController; absent: boolean };
 };
 
 /**
@@ -250,36 +258,130 @@ describe('createActivities', () => {
     expect(result).toEqual({ chunksCreated: 3, alreadyIngested: false });
   });
 
-  // A heartbeat is what keeps Temporal's `heartbeatTimeout` from firing on a healthy long ingest,
-  // and the pump must not outlive the activity that owns it.
-  it('should heartbeat on a timer while ingestDocumentVersion runs and clear it once the ingest settles', async () => {
-    // The timer globals are restored by assignment, not by `mockRestore`/`useRealTimers`: in this
-    // environment both leave `setInterval` undefined for every later test in the file.
-    const realSetInterval = global.setInterval;
-    const realClearInterval = global.clearInterval;
-    const setIntervalSpy = jest.spyOn(global, 'setInterval');
-    const clearIntervalSpy = jest.spyOn(global, 'clearInterval');
+  // A heartbeat is what keeps Temporal's `heartbeatTimeout` from firing on a healthy long-running
+  // activity, and the pump must not outlive the activity that owns it. Asserted as a class over
+  // every activity `HEARTBEATING_ACTIVITIES` names rather than on one of them: the property is
+  // "each of these pumps and clears", and a per-activity test would go on passing while a sibling
+  // added later silently pumped nothing until its own timeout fired in production.
+  it.each<[string, () => Parameters<typeof buildApp>[0], (a: Activities) => Promise<unknown>]>([
+    [
+      'ingestDocumentVersion',
+      () => ({
+        ingestVersion: jest.fn().mockResolvedValue({ chunksCreated: 3, alreadyIngested: false }),
+      }),
+      (a) => a.ingestDocumentVersion('doc-1', 'acme-corp'),
+    ],
+    [
+      'extractFacts',
+      () => ({ extractFacts: jest.fn().mockResolvedValue({ factsCreated: 1 }) }),
+      (a) => a.extractFacts('version-1', 'acme-corp'),
+    ],
+    [
+      // `findTenantIdForSync` must resolve a tenant: with none, the activity short-circuits to a
+      // disabled result before `withHeartbeat` is ever entered, and the assertions below would
+      // pass against a pump that never started.
+      'runSourceSync',
+      () => ({
+        findTenantIdForSync: jest.fn().mockResolvedValue('acme-corp'),
+        runSync: jest.fn().mockResolvedValue({ disabled: false, intervalMs: null }),
+      }),
+      (a) => a.runSourceSync('source-1'),
+    ],
+    [
+      'synthesizeAnswer',
+      () => ({
+        synthesizeAnswer: jest.fn().mockResolvedValue({
+          contract: { kind: 'insufficient_evidence', reason: 'none' },
+          usage: { promptTokens: 1, completionTokens: 1, costUsd: 0 },
+        }),
+      }),
+      (a) => a.synthesizeAnswer({ questionText: 'q', chunks: [], tenantId: 'acme-corp' }),
+    ],
+    [
+      'decomposeClaims',
+      () => ({ decompose: jest.fn().mockResolvedValue({ kind: 'unavailable' }) }),
+      (a) =>
+        a.decomposeClaims({
+          outcome: { kind: 'answered', claims: [] },
+          tenantId: 'acme-corp',
+        }),
+    ],
+    [
+      'checkContradictions',
+      () => ({ check: jest.fn().mockResolvedValue({ kind: 'unavailable' }) }),
+      (a) =>
+        a.checkContradictions({
+          outcome: { kind: 'answered', claims: [] },
+          atoms: [],
+          retrievedChunks: [],
+          tenantId: 'acme-corp',
+        }),
+    ],
+  ])(
+    'should heartbeat on a timer while %s runs and clear it once the activity settles',
+    async (_name, buildOverrides, invoke) => {
+      // The timer globals are restored by assignment, not by `mockRestore`/`useRealTimers`: in this
+      // environment both leave `setInterval` undefined for every later test in the file.
+      const realSetInterval = global.setInterval;
+      const realClearInterval = global.clearInterval;
+      const setIntervalSpy = jest.spyOn(global, 'setInterval');
+      const clearIntervalSpy = jest.spyOn(global, 'clearInterval');
+      try {
+        const activities = createActivities(buildApp(buildOverrides()));
+
+        await invoke(activities);
+
+        expect(setIntervalSpy).toHaveBeenCalledWith(
+          expect.any(Function),
+          INGEST_HEARTBEAT_INTERVAL_MS,
+        );
+        const [pump] = setIntervalSpy.mock.calls[0];
+        pump();
+        expect(activityContext.__state.heartbeat).toHaveBeenCalledTimes(1);
+        expect(clearIntervalSpy).toHaveBeenCalledWith(setIntervalSpy.mock.results[0].value);
+      } finally {
+        global.setInterval = realSetInterval;
+        global.clearInterval = realClearInterval;
+      }
+    },
+  );
+
+  // `eval/run.ts` calls these functions in-process with no worker, so `Context.current()` throws.
+  // A heartbeat reports on the work rather than gating it, so its absence must not stop the work —
+  // refusing here took the whole eval harness down at `synthesizeAnswer`.
+  it('should run the activity unheartbeaten when there is no activity context, rather than refusing', async () => {
+    const synthesizeAnswer = jest.fn().mockResolvedValue({
+      contract: { kind: 'insufficient_evidence', reason: 'none' },
+      usage: { promptTokens: 1, completionTokens: 1, costUsd: 0 },
+    });
+    const activities = createActivities(buildApp({ synthesizeAnswer }));
+    activityContext.__state.absent = true;
+
     try {
-      const mockIngestVersion = jest
-        .fn()
-        .mockResolvedValue({ chunksCreated: 3, alreadyIngested: false });
-      const app = buildApp({ ingestVersion: mockIngestVersion });
-      const activities = createActivities(app);
-
-      await activities.ingestDocumentVersion('doc-1', 'acme-corp');
-
-      expect(setIntervalSpy).toHaveBeenCalledWith(
-        expect.any(Function),
-        INGEST_HEARTBEAT_INTERVAL_MS,
-      );
-      const [pump] = setIntervalSpy.mock.calls[0];
-      pump();
-      expect(activityContext.__state.heartbeat).toHaveBeenCalledTimes(1);
-      expect(clearIntervalSpy).toHaveBeenCalledWith(setIntervalSpy.mock.results[0].value);
+      await expect(
+        activities.synthesizeAnswer({ questionText: 'q', chunks: [], tenantId: 'acme-corp' }),
+      ).resolves.toBeDefined();
+      expect(activityContext.__state.heartbeat).not.toHaveBeenCalled();
     } finally {
-      global.setInterval = realSetInterval;
-      global.clearInterval = realClearInterval;
+      activityContext.__state.absent = false;
     }
+  });
+
+  // The signal is what turns a Temporal cancellation into a stopped model loop. Passing the
+  // context's own controller signal — not a fresh one — is the whole mechanism: `FactsService`
+  // checks it before each chunk's model call, so a signal that is not the activity's own would
+  // never fire and the loop would run to completion after the workflow gave up on it.
+  it("should pass the activity context's cancellation signal into extractFacts as its third argument", async () => {
+    const mockExtractFacts = jest.fn().mockResolvedValue({ factsCreated: 0 });
+    const activities = createActivities(buildApp({ extractFacts: mockExtractFacts }));
+
+    await activities.extractFacts('version-1', 'acme-corp');
+
+    expect(mockExtractFacts).toHaveBeenCalledWith(
+      'version-1',
+      'acme-corp',
+      activityContext.__state.controller.signal,
+    );
   });
 
   it('should delegate recordFactExtractionFailure to IngestionService, returning nothing to the workflow', async () => {
@@ -377,7 +479,14 @@ describe('createActivities', () => {
     const activities = createActivities(app);
     const result = await activities.extractFacts('version-1', 'acme-corp');
 
-    expect(mockExtractFacts).toHaveBeenCalledWith('version-1', 'acme-corp');
+    // The third argument is the activity's cancellation signal, asserted by identity in its own
+    // test below; here it is only checked to be present, so this test keeps asserting delegation
+    // rather than doubling as a second signal test.
+    expect(mockExtractFacts).toHaveBeenCalledWith(
+      'version-1',
+      'acme-corp',
+      expect.any(AbortSignal),
+    );
     expect(result).toEqual({ factsCreated: 2, alreadyExtracted: false });
   });
 

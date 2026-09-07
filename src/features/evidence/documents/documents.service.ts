@@ -28,6 +28,7 @@ import {
 } from '../../../database/schemas/evidence/conflict/conflict.schema';
 import type {
   DocumentEmailOrigin,
+  DocumentLocation,
   DocumentSourceClass,
   DocumentSourceKind,
 } from '../../../database/schemas/evidence/document/document.schema';
@@ -84,6 +85,7 @@ import {
   type ListDocumentsRequestDto,
 } from './dtos/request/list-documents.request.dto';
 import { UploadDocumentRequestDto } from './dtos/request/upload-document.request.dto';
+import { DocumentLocationResponseDto } from './dtos/response/document-location.response.dto';
 import { DocumentResponseDto } from './dtos/response/document.response.dto';
 import { DocumentVersionLookupResponseDto } from './dtos/response/document-version-lookup.response.dto';
 import { DocumentVersionResponseDto } from './dtos/response/document-version.response.dto';
@@ -109,12 +111,14 @@ export interface DocumentVersionContent {
   filename: string;
 }
 
-interface UploadResult {
+/** Raw documents, not DTOs — `upload()` maps this through `toDocumentDto`, and Phase 3B's
+ * `submit_evidence` reads `currentVersion._id` and `isNewVersion` directly off it. */
+export interface UploadOutcome {
   document: DocumentDocument;
   currentVersion: DocumentVersionDocument;
-  /** False on the content-addressed dedupe path (`addVersion` reusing an existing sha256) —
-   * distinguishes "no new bytes were stored" from every path that actually created a version, so
-   * `upload()` only ever starts ingestion for a version that needs it. */
+  /** False on the content-addressed dedupe path (`uploadVersion` reusing an existing sha256,
+   * tenant-wide) — distinguishes "no new bytes were stored" from every path that actually created
+   * a version, so `upload()` only ever starts ingestion for a version that needs it. */
   isNewVersion: boolean;
 }
 
@@ -128,6 +132,20 @@ interface UploadSourceOptions {
   /** Set only by `EmailAttachmentService`, which creates a document out of a part it unwrapped from
    * an `.eml`. Recorded on the document as provenance — see `DocumentEmailOrigin`. */
   emailOrigin?: DocumentEmailOrigin;
+  /** Where these bytes were seen: a connector's relative path (`SourcesService.syncOneFile`) or an
+   * attachment's filename (`EmailAttachmentService`). Falls back to `file.originalname` when
+   * absent — a browser upload's own filename is its location. */
+  path?: string;
+}
+
+/** The fields that identify one `DocumentLocation` — everything but when it was first seen. */
+type DocumentLocationKey = Omit<DocumentLocation, 'firstSeenAt'>;
+
+/** A concurrent writer won the tenant-wide `document_versions_tenantId_sha256_unique` index
+ * between `uploadVersion`'s dedupe check and this write — the driver's own duplicate-key code,
+ * not a Mongoose validation error. */
+function isDuplicateKeyError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: number }).code === 11000;
 }
 
 /**
@@ -187,6 +205,20 @@ export class DocumentsService {
     tenantId: string,
     source?: UploadSourceOptions,
   ): Promise<DocumentResponseDto> {
+    const outcome = await this.uploadVersion(file, dto, tenantId, source);
+    return this.toDocumentDto(outcome.document, outcome.currentVersion);
+  }
+
+  /**
+   * Everything `upload()` does, minus the response mapping — Phase 3B's `submit_evidence` calls
+   * this directly for the version id and `isNewVersion`, neither of which survives `toDocumentDto`.
+   */
+  async uploadVersion(
+    file: UploadedFileLike | undefined,
+    dto: UploadDocumentRequestDto,
+    tenantId: string,
+    source?: UploadSourceOptions,
+  ): Promise<UploadOutcome> {
     if (!file) {
       throw new MissingFileException('A file is required');
     }
@@ -227,18 +259,53 @@ export class DocumentsService {
     const canonicalMimeType = SOURCE_KIND_TO_MIME_TYPE[sourceKind];
 
     const sha256 = createHash('sha256').update(file.buffer).digest('hex');
+    const callerLocation: DocumentLocationKey = {
+      path: source?.path ?? file.originalname,
+      sourceId: source?.sourceId,
+      emailOrigin: source?.emailOrigin,
+    };
 
-    const { document, currentVersion, isNewVersion } = dto.documentId
-      ? await this.addVersion(dto.documentId, sha256, file, canonicalMimeType, tenantId)
-      : await this.createDocument(
-          dto,
-          sourceKind,
-          sha256,
-          file,
-          canonicalMimeType,
-          tenantId,
-          source,
-        );
+    // Resolved once, up front, whenever the caller names a target — both the dedupe check below
+    // and `addVersion` need it, and a cross-tenant/unknown id must 404 before any write regardless
+    // of whether the uploaded bytes turn out to be a tenant-wide duplicate.
+    const callerDocument = dto.documentId
+      ? await this.requireDocument(dto.documentId, tenantId)
+      : undefined;
+
+    // Content-addressed within the tenant, not just the target document: bytes already carried by
+    // any document of this tenant resolve to that document rather than minting a new version
+    // anywhere. Checked before either write path below, since a hit takes neither.
+    const dedupe = await this.resolveTenantWideDuplicate(
+      sha256,
+      callerLocation,
+      callerDocument,
+      tenantId,
+    );
+
+    const { document, currentVersion, isNewVersion } =
+      dedupe ??
+      (callerDocument
+        ? await this.addVersion(
+            callerDocument,
+            dto,
+            sourceKind,
+            sha256,
+            file,
+            canonicalMimeType,
+            tenantId,
+            source,
+            callerLocation,
+          )
+        : await this.createDocument(
+            dto,
+            sourceKind,
+            sha256,
+            file,
+            canonicalMimeType,
+            tenantId,
+            source,
+            callerLocation,
+          ));
 
     // Fire-and-forget, mirroring `QaService.startQuestion`: a slow parse/embed must never block
     // the upload response, which is the entire point of running ingestion as a durable workflow
@@ -267,7 +334,7 @@ export class DocumentsService {
       `Document '${document._id.toString()}' upload resolved to version '${currentVersion._id.toString()}'`,
     );
 
-    return this.toDocumentDto(document, currentVersion);
+    return { document, currentVersion, isNewVersion };
   }
 
   async list(
@@ -786,37 +853,174 @@ export class DocumentsService {
     this.logger.debug(`Deleted document '${document._id.toString()}' and its cascade`);
   }
 
-  private async addVersion(
-    documentId: string,
-    sha256: string,
-    file: UploadedFileLike,
-    canonicalMimeType: string,
-    tenantId: string,
-  ): Promise<UploadResult> {
+  // The cross-tenant attach this scoping exists to close: `documentId` arrives in the upload body
+  // from the caller, so without the tenant predicate here a caller could attach a new version to
+  // another tenant's document. `findOne` with the predicate, not `findById` plus a separate
+  // ownership check, keeps a cross-tenant id indistinguishable from a missing one.
+  private async requireDocument(documentId: string, tenantId: string): Promise<DocumentDocument> {
     if (!Types.ObjectId.isValid(documentId)) {
       throw new DocumentNotFoundException(`Document '${documentId}' not found`);
     }
-
-    // The cross-tenant attach this scoping exists to close: `documentId` arrives in the upload
-    // body from the caller, so without the tenant predicate here a caller could attach a new
-    // version to another tenant's document. `findOne` with the predicate, not `findById` plus a
-    // separate ownership check, keeps a cross-tenant id indistinguishable from a missing one.
     const document = await this.documentModel.findOne({ _id: documentId, tenantId });
     if (!document) {
       throw new DocumentNotFoundException(`Document '${documentId}' not found`);
     }
+    return document;
+  }
 
-    const existingVersion = await this.documentVersionModel.findOne({
-      documentId: document._id,
-      sha256,
-      tenantId,
-    });
-    if (existingVersion) {
-      // Content-addressed no-op: unchanged bytes never inflate the version chain, and the
-      // response returns that existing version as-is. If the matched version predates the
-      // document's actual current version (stale bytes re-uploaded), this does NOT move the
-      // current pointer back — only a genuinely new hash ever advances `currentVersionId`.
-      return { document, currentVersion: existingVersion, isNewVersion: false };
+  /**
+   * The tenant-wide half of the dedupe invariant: within a tenant, one sha256 identifies exactly
+   * one `DocumentVersion`, so a hit here always wins over either write path. `callerDocument` is
+   * the document the caller named via `dto.documentId` (`undefined` on a browser upload creating a
+   * new document, or when re-run after an `addVersion`/`createDocument` race lost the unique
+   * index).
+   *
+   * A hit records the caller's location on the owning document and reinstates it if withdrawn.
+   * When the caller named a different document than the owner — the caller's document converges
+   * onto bytes another document already holds — the caller's location is forgotten there instead,
+   * and that document withdrawn once no location of its own remains.
+   */
+  private async resolveTenantWideDuplicate(
+    sha256: string,
+    callerLocation: DocumentLocationKey,
+    callerDocument: DocumentDocument | undefined,
+    tenantId: string,
+  ): Promise<UploadOutcome | undefined> {
+    const existing = await this.documentVersionModel.findOne({ tenantId, sha256 });
+    if (!existing) {
+      return undefined;
+    }
+
+    const owner =
+      callerDocument && callerDocument._id.equals(existing.documentId)
+        ? callerDocument
+        : await this.documentModel.findOne({ _id: existing.documentId, tenantId });
+    if (!owner) {
+      // A version whose owning document does not resolve is corruption, not a normal miss — same
+      // reasoning as `lookupVersions`' identical join.
+      throw new InternalServerErrorException(
+        `Document version '${existing._id.toString()}' references document '${existing.documentId.toString()}', which no longer exists`,
+      );
+    }
+
+    // `recordLocation` writes through the driver, bypassing `owner`'s in-memory copy — the caller's
+    // location must be visible on the document this method returns, so `owner` is re-read rather
+    // than trusted stale, the same corruption reasoning as the lookup above.
+    await this.recordLocation(owner._id, callerLocation, tenantId);
+    const refreshedOwner = await this.documentModel.findOne({ _id: owner._id, tenantId });
+    if (!refreshedOwner) {
+      throw new InternalServerErrorException(
+        `Document '${owner._id.toString()}' no longer exists after recording a dedupe location`,
+      );
+    }
+
+    if (existing.withdrawnAt) {
+      await this.reinstateVersions([refreshedOwner._id], tenantId);
+    }
+
+    if (callerDocument && !callerDocument._id.equals(refreshedOwner._id)) {
+      const remaining = await this.forgetLocation(callerDocument._id, callerLocation, tenantId);
+      if (remaining === 0) {
+        await this.withdrawVersions([callerDocument._id], 'source-file-absent', tenantId);
+      }
+    }
+
+    return { document: refreshedOwner, currentVersion: existing, isNewVersion: false };
+  }
+
+  /**
+   * Records a sighting of `location` on `documentId`, unless one already carries the same key —
+   * see {@link locationKeyMatch}. Single atomic `updateOne`: the query's `$not: { $elemMatch }`
+   * clause only matches when no element already carries the key, so a second call with the same
+   * key is a no-op rather than a duplicate push.
+   */
+  async recordLocation(
+    documentId: Types.ObjectId,
+    location: DocumentLocationKey,
+    tenantId: string,
+  ): Promise<void> {
+    await this.documentModel.updateOne(
+      {
+        _id: documentId,
+        tenantId,
+        locations: { $not: { $elemMatch: this.locationKeyMatch(location) } },
+      },
+      { $push: { locations: { ...location, firstSeenAt: new Date() } } },
+    );
+  }
+
+  /** Removes the location matching `key` from `documentId`'s `locations`, and returns how many
+   * remain — `resolveTenantWideDuplicate`'s converge branch and `SourcesService.runSync`'s
+   * withdrawal guard both read this count to decide whether the document has anywhere left it was
+   * seen. */
+  async forgetLocation(
+    documentId: Types.ObjectId,
+    key: DocumentLocationKey,
+    tenantId: string,
+  ): Promise<number> {
+    const document = await this.documentModel.findOneAndUpdate(
+      { _id: documentId, tenantId },
+      { $pull: { locations: this.locationKeyMatch(key) } },
+      { returnDocument: 'after' },
+    );
+    if (!document) {
+      throw new DocumentNotFoundException(`Document '${documentId.toString()}' not found`);
+    }
+    return document.locations.length;
+  }
+
+  // Identifies one `DocumentLocation` by `(path, sourceId?, emailOrigin.parentVersionId+partIndex)`
+  // — `messageId`/`from`/`sentAt`/`attachmentFilename` are provenance, not identity, so they play
+  // no part in the match. `$exists: false` on an absent field, rather than omitting it: an omitted
+  // key constrains nothing, which would let a sourced location match a sourceless one sharing the
+  // same path.
+  private locationKeyMatch(location: DocumentLocationKey): Record<string, unknown> {
+    return {
+      path: location.path,
+      ...(location.sourceId ? { sourceId: location.sourceId } : { sourceId: { $exists: false } }),
+      ...(location.emailOrigin
+        ? {
+            'emailOrigin.parentVersionId': location.emailOrigin.parentVersionId,
+            'emailOrigin.partIndex': location.emailOrigin.partIndex,
+          }
+        : { emailOrigin: { $exists: false } }),
+    };
+  }
+
+  /**
+   * Adds a version to `document`, or — invariant: a document is withdrawn exactly when its last
+   * known location is gone — mints a whole new document instead when `document` has more than one
+   * location. A location shared with another only because both once held identical bytes stops
+   * being a copy the moment one of them changes, so the caller's location is forgotten off
+   * `document` and re-created on a fresh document carrying the new bytes through `createDocument`
+   * (same `source`). The `> 1` precondition guarantees at least one location survives the forget,
+   * so `document` itself is never withdrawn by this branch — only `resolveTenantWideDuplicate`'s
+   * converge branch and `SourcesService.runSync`'s absence handling ever withdraw on the last
+   * location.
+   */
+  private async addVersion(
+    document: DocumentDocument,
+    dto: UploadDocumentRequestDto,
+    sourceKind: DocumentSourceKind,
+    sha256: string,
+    file: UploadedFileLike,
+    canonicalMimeType: string,
+    tenantId: string,
+    source: UploadSourceOptions | undefined,
+    callerLocation: DocumentLocationKey,
+  ): Promise<UploadOutcome> {
+    if (document.locations.length > 1) {
+      await this.forgetLocation(document._id, callerLocation, tenantId);
+      return this.createDocument(
+        dto,
+        sourceKind,
+        sha256,
+        file,
+        canonicalMimeType,
+        tenantId,
+        source,
+        callerLocation,
+      );
     }
 
     const versionCount = await this.documentVersionModel.countDocuments({
@@ -835,14 +1039,35 @@ export class DocumentsService {
       metadata: { tenantId },
     });
 
-    const version = await this.documentVersionModel.create({
-      documentId: document._id,
-      versionNumber: versionCount + 1,
-      sha256,
-      sizeBytes: file.size,
-      storageKey: stored.id,
-      tenantId,
-    });
+    let version: DocumentVersionDocument;
+    try {
+      version = await this.documentVersionModel.create({
+        documentId: document._id,
+        versionNumber: versionCount + 1,
+        sha256,
+        sizeBytes: file.size,
+        storageKey: stored.id,
+        tenantId,
+      });
+    } catch (error) {
+      // A concurrent upload of the same bytes can win the tenant-wide unique index between
+      // `uploadVersion`'s dedupe check and this create — the losing writer's stored bytes are
+      // orphaned and must go, then this re-takes the dedupe branch its rival just created.
+      if (!isDuplicateKeyError(error)) {
+        throw error;
+      }
+      await this.documentStore.delete(stored.id);
+      const dedupe = await this.resolveTenantWideDuplicate(
+        sha256,
+        callerLocation,
+        document,
+        tenantId,
+      );
+      if (!dedupe) {
+        throw error;
+      }
+      return dedupe;
+    }
 
     document.currentVersionId = version._id;
     await document.save();
@@ -857,8 +1082,9 @@ export class DocumentsService {
     file: UploadedFileLike,
     canonicalMimeType: string,
     tenantId: string,
-    source?: UploadSourceOptions,
-  ): Promise<UploadResult> {
+    source: UploadSourceOptions | undefined,
+    callerLocation: DocumentLocationKey,
+  ): Promise<UploadOutcome> {
     const title = dto.title ?? file.originalname;
     if (!title.trim()) {
       throw new BadRequestException('title is required when creating a new document');
@@ -879,6 +1105,7 @@ export class DocumentsService {
       ...(source?.sourceClass ? { sourceClass: source.sourceClass } : {}),
       ...(source?.sourceId ? { sourceId: source.sourceId } : {}),
       ...(source?.emailOrigin ? { emailOrigin: source.emailOrigin } : {}),
+      locations: [{ ...callerLocation, firstSeenAt: new Date() }],
     });
 
     // See the identical GridFS metadata comment in `addVersion` above.
@@ -888,14 +1115,36 @@ export class DocumentsService {
       metadata: { tenantId },
     });
 
-    const version = await this.documentVersionModel.create({
-      documentId: document._id,
-      versionNumber: 1,
-      sha256,
-      sizeBytes: file.size,
-      storageKey: stored.id,
-      tenantId,
-    });
+    let version: DocumentVersionDocument;
+    try {
+      version = await this.documentVersionModel.create({
+        documentId: document._id,
+        versionNumber: 1,
+        sha256,
+        sizeBytes: file.size,
+        storageKey: stored.id,
+        tenantId,
+      });
+    } catch (error) {
+      // Same race as `addVersion`'s catch, one step earlier: this document row was just created
+      // for bytes that turned out to already exist elsewhere in the tenant, so it — not only the
+      // stored bytes — is the orphan to clean up.
+      if (!isDuplicateKeyError(error)) {
+        throw error;
+      }
+      await this.documentStore.delete(stored.id);
+      await this.documentModel.deleteOne({ _id: document._id, tenantId });
+      const dedupe = await this.resolveTenantWideDuplicate(
+        sha256,
+        callerLocation,
+        undefined,
+        tenantId,
+      );
+      if (!dedupe) {
+        throw error;
+      }
+      return dedupe;
+    }
 
     document.currentVersionId = version._id;
     await document.save();
@@ -930,7 +1179,20 @@ export class DocumentsService {
       mimeType: document.mimeType,
       sourceClass: document.sourceClass,
       currentVersion: this.toVersionDto(currentVersion),
+      locations: document.locations.map((location) => this.toLocationDto(location)),
       createdAt: document.createdAt,
+    };
+  }
+
+  private toLocationDto(location: DocumentLocation): DocumentLocationResponseDto {
+    return {
+      path: location.path,
+      // Key omitted, not `undefined`-assigned, when absent — an `undefined`-valued key still
+      // shows up in an object-key-set assertion (`Object.keys`), which the serialization e2e for
+      // this shape checks; the version DTO's `ingestionFailureReason` field takes the assignment
+      // form instead because nothing there checks its key set the same way.
+      ...(location.sourceId ? { sourceId: location.sourceId.toString() } : {}),
+      firstSeenAt: location.firstSeenAt,
     };
   }
 

@@ -1,4 +1,10 @@
+import {
+  CHECK_CONTRADICTIONS_START_TO_CLOSE_TIMEOUT_MS,
+  DECOMPOSE_CLAIMS_START_TO_CLOSE_TIMEOUT_MS,
+  SYNTHESIZE_ANSWER_START_TO_CLOSE_TIMEOUT_MS,
+} from '../../src/workflows/activity-heartbeat-policy';
 import { answerQuestion } from '../../src/workflows/answer-question.workflow';
+import { INGEST_HEARTBEAT_TIMEOUT_MS } from '../../src/workflows/ingest-retry-policy';
 import type { AnswerQuestionInput } from '../../src/workflows/types';
 
 interface ActivityStubs {
@@ -11,6 +17,8 @@ interface ActivityStubs {
 }
 
 interface ProxyActivitiesOptions {
+  readonly startToCloseTimeout?: number | string;
+  readonly heartbeatTimeout?: number | string;
   readonly retry?: { readonly nonRetryableErrorTypes?: readonly string[] };
 }
 
@@ -303,5 +311,44 @@ describe('proxyActivities retry configuration', () => {
   it('should mark a missing tenantId non-retryable for persistAnswer', () => {
     const [persistOptions] = proxyActivitiesCalls[5];
     expect(persistOptions.retry?.nonRetryableErrorTypes).toEqual(['MissingTenantId']);
+  });
+
+  // The three model-calling groups each budget longer than the heartbeat timeout, so each must
+  // declare one — a group that runs past `heartbeatTimeout` without pumping is failed by Temporal
+  // as unresponsive while it is in fact working.
+  it.each<[string, number, number]>([
+    ['synthesis', 1, SYNTHESIZE_ANSWER_START_TO_CLOSE_TIMEOUT_MS],
+    ['decomposition', 2, DECOMPOSE_CLAIMS_START_TO_CLOSE_TIMEOUT_MS],
+    ['contradiction', 3, CHECK_CONTRADICTIONS_START_TO_CLOSE_TIMEOUT_MS],
+  ])(
+    'should declare a heartbeat timeout for the %s group, under its startToCloseTimeout',
+    (_name, index, expectedStartToClose) => {
+      const [options] = proxyActivitiesCalls[index];
+      expect(options.startToCloseTimeout).toBe(expectedStartToClose);
+      expect(options.heartbeatTimeout).toBe(INGEST_HEARTBEAT_TIMEOUT_MS);
+    },
+  );
+
+  // The property every group in this file must hold, not just the three named above: a numeric
+  // `startToCloseTimeout` strictly greater than `INGEST_HEARTBEAT_TIMEOUT_MS` must declare a
+  // `heartbeatTimeout`, and a group that still expresses its budget as a Temporal duration string
+  // must keep that budget at or under the heartbeat timeout — the shape the cheap, pure-Mongo
+  // groups in this workflow use. Stated as a sweep so a group added later is covered on arrival.
+  it('should keep every captured proxyActivities group consistent with the heartbeat-timeout property', () => {
+    const durationPattern = /^(\d+) (seconds?|minutes?)$/;
+    for (const [options] of proxyActivitiesCalls) {
+      const { startToCloseTimeout, heartbeatTimeout } = options;
+      if (typeof startToCloseTimeout === 'number') {
+        if (startToCloseTimeout > INGEST_HEARTBEAT_TIMEOUT_MS) {
+          expect(heartbeatTimeout).toBeDefined();
+        }
+        continue;
+      }
+      const match = durationPattern.exec(startToCloseTimeout ?? '');
+      expect(match).not.toBeNull();
+      const [, amount, unit] = match as RegExpExecArray;
+      const ms = Number(amount) * (unit.startsWith('minute') ? 60_000 : 1_000);
+      expect(ms).toBeLessThanOrEqual(INGEST_HEARTBEAT_TIMEOUT_MS);
+    }
   });
 });

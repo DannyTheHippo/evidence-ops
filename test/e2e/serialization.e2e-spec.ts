@@ -13,6 +13,10 @@ import {
   ConflictDocument,
 } from '../../src/database/schemas/evidence/conflict/conflict.schema';
 import {
+  Document,
+  DocumentDocument,
+} from '../../src/database/schemas/evidence/document/document.schema';
+import {
   DocumentVersion,
   DocumentVersionDocument,
 } from '../../src/database/schemas/evidence/document-version/document-version.schema';
@@ -99,6 +103,58 @@ describe('Serialization (e2e)', () => {
     expect(body.owner).toBe('Jane Doe, IT');
     expect(body.tracked).toBe(false);
     expect(body.sourceClass).toBe('crm-export');
+  });
+
+  // Regression for the `Document.locations` dedupe field (3A.4): `DocumentLocationResponseDto` is
+  // a nested DTO, so a top-level `locations.length` assertion proves nothing about its own
+  // fields' @Expose() — this asserts `path`/`firstSeenAt`/`sourceId` each arrive over HTTP, and
+  // that a location with no `sourceId` carries no such key at all rather than an `undefined` one.
+  it('exposes every DocumentLocation field on the document detail response, including sourceId for a synced location', async () => {
+    const { cookie, tenantId } = await registerTestUser(app, {
+      email: 'serialization-document-locations-e2e@example.com',
+      password: 'correct-horse-battery',
+    });
+
+    const documentModel = app.get<Model<DocumentDocument>>(getModelToken(Document.name));
+    const documentVersionModel = app.get<Model<DocumentVersionDocument>>(
+      getModelToken(DocumentVersion.name),
+    );
+    const sourceId = new Types.ObjectId();
+    const document = await documentModel.create({
+      title: 'Serialization Locations',
+      sourceKind: 'txt',
+      mimeType: 'text/plain',
+      tenantId,
+      locations: [
+        { path: 'rent-roll.txt', firstSeenAt: new Date('2026-07-01T00:00:00.000Z') },
+        { path: 'sync/rent-roll.txt', sourceId, firstSeenAt: new Date('2026-07-02T00:00:00.000Z') },
+      ],
+    });
+    const version = await documentVersionModel.create({
+      documentId: document._id,
+      versionNumber: 1,
+      sha256: 'c'.repeat(64),
+      sizeBytes: 10,
+      storageKey: 'serialization-document-locations-e2e',
+      tenantId,
+    });
+    document.currentVersionId = version._id;
+    await document.save();
+
+    const response = await request(getTestServer(app))
+      .get(`/api/v1/documents/${document._id.toString()}`)
+      .set('Cookie', cookie);
+    const body = response.body as { locations: Array<Record<string, unknown>> };
+
+    expect(response.status).toBe(200);
+    expect(body.locations).toHaveLength(2);
+    expect(body.locations[0].path).toBe('rent-roll.txt');
+    expect(body.locations[0].firstSeenAt).toBe('2026-07-01T00:00:00.000Z');
+    expect(Object.keys(body.locations[0]).sort()).toEqual(['firstSeenAt', 'path']);
+    expect(body.locations[1].path).toBe('sync/rent-roll.txt');
+    expect(body.locations[1].sourceId).toBe(sourceId.toString());
+    expect(body.locations[1].firstSeenAt).toBe('2026-07-02T00:00:00.000Z');
+    expect(Object.keys(body.locations[1]).sort()).toEqual(['firstSeenAt', 'path', 'sourceId']);
   });
 
   // Regression for the write-only audit fields (M1, plus modifiedCount found in the same class of

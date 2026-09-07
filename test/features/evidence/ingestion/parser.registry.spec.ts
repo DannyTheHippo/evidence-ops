@@ -2,6 +2,7 @@ import { SOURCE_KIND_TO_MIME_TYPE } from '../../../../src/features/evidence/docu
 import { UnsupportedMimeTypeException } from '../../../../src/features/evidence/ingestion/exceptions/ingestion.exception';
 import { buildDocumentParsers } from '../../../../src/features/evidence/ingestion/ingestion.module';
 import { ParserRegistry } from '../../../../src/features/evidence/ingestion/parser.registry';
+import { HtmlParser } from '../../../../src/features/evidence/ingestion/parsers/html.parser';
 import type {
   DocumentParser,
   ParsedDocument,
@@ -75,6 +76,10 @@ describe('ParserRegistry', () => {
       const registered = buildDocumentParsers().flatMap((parser) => [...parser.supports]);
 
       expect(registered.filter((mimeType) => !canonical.has(mimeType))).toEqual([]);
+    });
+
+    it('should route text/html to HtmlParser', () => {
+      expect(registry.resolve('text/html')).toBeInstanceOf(HtmlParser);
     });
   });
 });

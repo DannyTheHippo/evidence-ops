@@ -1224,6 +1224,24 @@ export interface components {
        */
       createdAt: string;
     };
+    DocumentLocationResponseDto: {
+      /**
+       * @description Where this document's current-version bytes were seen — an upload filename or a connector relative path.
+       * @example rent-rolls/q3.xlsx
+       */
+      path: string;
+      /**
+       * @description The connector this location was synced from, absent for a browser upload.
+       * @example 65f1c2e4a1b2c3d4e5f6a7ba
+       */
+      sourceId?: string;
+      /**
+       * Format: date-time
+       * @description When this location was first recorded.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      firstSeenAt: string;
+    };
     DocumentResponseDto: {
       /**
        * @description Document identifier.
@@ -1240,7 +1258,7 @@ export interface components {
        * @example xlsx
        * @enum {string}
        */
-      sourceKind: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv' | 'tsv' | 'txt' | 'md' | 'eml';
+      sourceKind: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv' | 'tsv' | 'txt' | 'md' | 'eml' | 'html';
       /**
        * @description Raw content type as uploaded.
        * @example application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
@@ -1253,6 +1271,8 @@ export interface components {
        */
       sourceClass: 'crm-export' | 'pm-export' | 'spreadsheet' | 'memo' | 'report' | 'unclassified';
       currentVersion: components['schemas']['DocumentVersionResponseDto'];
+      /** @description Every place this document's current-version bytes have been seen, tenant-wide. */
+      locations: components['schemas']['DocumentLocationResponseDto'][];
       /**
        * Format: date-time
        * @description Document creation timestamp.
@@ -1276,7 +1296,7 @@ export interface components {
        * @example xlsx
        * @enum {string}
        */
-      sourceKind: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv' | 'tsv' | 'txt' | 'md' | 'eml';
+      sourceKind: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv' | 'tsv' | 'txt' | 'md' | 'eml' | 'html';
       /**
        * @description Raw content type as uploaded.
        * @example application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
@@ -1289,6 +1309,8 @@ export interface components {
        */
       sourceClass: 'crm-export' | 'pm-export' | 'spreadsheet' | 'memo' | 'report' | 'unclassified';
       currentVersion: components['schemas']['DocumentVersionResponseDto'];
+      /** @description Every place this document's current-version bytes have been seen, tenant-wide. */
+      locations: components['schemas']['DocumentLocationResponseDto'][];
       /**
        * Format: date-time
        * @description Document creation timestamp.
@@ -1324,7 +1346,7 @@ export interface components {
        * @example xlsx
        * @enum {string}
        */
-      sourceKind: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv' | 'tsv' | 'txt' | 'md' | 'eml';
+      sourceKind: 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv' | 'tsv' | 'txt' | 'md' | 'eml' | 'html';
       /**
        * @description True when this version is soft-withdrawn — it still resolves, but is stale.
        * @example false
@@ -3639,7 +3661,7 @@ export interface operations {
       };
     };
     responses: {
-      /** @description Document uploaded. Unchanged bytes for an existing document return the existing version. */
+      /** @description Document uploaded. Unchanged bytes for an existing document return the existing version. Bytes matching a version anywhere else in the tenant resolve to that document instead, with this upload recorded as a new location on it. */
       201: {
         headers: {
           [name: string]: unknown;

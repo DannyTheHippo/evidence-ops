@@ -52,6 +52,7 @@ async function run(): Promise<void> {
       taskQueue: config.temporal.taskQueue,
       workflowsPath: require.resolve('../workflows'),
       activities: createActivities(app),
+      maxConcurrentActivityTaskExecutions: config.temporal.maxConcurrentActivityTaskExecutions,
     });
 
     Logger.log(

@@ -14,8 +14,11 @@ import {
   EMBEDDING_PROVIDER,
   type EmbeddingProvider,
 } from './embedding/embedding-provider.interface';
+import { OpenAiCompatibleEmbeddingProvider } from './embedding/openai-compatible-embedding.provider';
 import { SpendGuardEmbeddingProvider } from './embedding/spend-guard-embedding.provider';
+import { VectorIndexDimensionGuard } from './embedding/vector-index-dimension.guard';
 import { VoyageEmbeddingProvider } from './embedding/voyage-embedding.provider';
+import { computeVoyageCostUsd } from './embedding/voyage-pricing.table';
 import { AnthropicModelProvider } from './model/anthropic-model.provider';
 import {
   CachingModelProvider,
@@ -24,6 +27,10 @@ import {
 } from './model/caching-model.provider';
 import { MetricsModelProvider } from './model/metrics-model.provider';
 import { MODEL_PROVIDER, type ModelProvider } from './model/model-provider.interface';
+import {
+  assertCompatiblePricesConfigured,
+  OpenAiCompatibleModelProvider,
+} from './model/openai-compatible-model.provider';
 import { OpenAiModelProvider } from './model/openai-model.provider';
 import { SpendGuardModelProvider } from './model/spend-guard-model.provider';
 import { TenantSpendService } from './model/spend/tenant-spend.service';
@@ -75,9 +82,9 @@ const MODEL_CACHE_DEFAULT_OPTIONS: CachingModelProviderOptions = {
  * `CachingModelProvider`, `MetricsModelProvider`, and `SpendGuardModelProvider` take a
  * `ModelProvider`/`Telemetry` interface positionally rather than an `@Inject()`-tagged
  * constructor param, so Nest's reflection-based `useClass` can't resolve them — they're
- * assembled by hand here instead. `AnthropicModelProvider` and `OpenAiModelProvider` both have
- * concrete, decorated constructors, so they stay normal class providers and are only referenced
- * here via their `inject` tokens.
+ * assembled by hand here instead. `AnthropicModelProvider`, `OpenAiModelProvider` and
+ * `OpenAiCompatibleModelProvider` all have concrete, decorated constructors, so they stay normal
+ * class providers and are only referenced here via their `inject` tokens.
  *
  * Extracted as a plain, exported function (rather than inlined into the `MODEL_PROVIDER`
  * factory below) so the base selection and the chain order are unit-testable without booting
@@ -86,12 +93,22 @@ const MODEL_CACHE_DEFAULT_OPTIONS: CachingModelProviderOptions = {
 export function createModelProvider(
   anthropic: ModelProvider,
   openai: ModelProvider,
+  openaiCompatible: ModelProvider,
   spendService: TenantSpendService,
   cacheOptions: CachingModelProviderOptions,
   telemetry: Telemetry,
   config: TypedConfigService,
 ): ModelProvider {
-  const base = config.model.provider === 'openai' ? openai : anthropic;
+  if (config.model.provider === 'openai-compatible') {
+    assertCompatiblePricesConfigured(config);
+  }
+
+  const base =
+    config.model.provider === 'openai'
+      ? openai
+      : config.model.provider === 'openai-compatible'
+        ? openaiCompatible
+        : anthropic;
 
   return new CachingModelProvider(
     new MetricsModelProvider(
@@ -108,32 +125,61 @@ export function createModelProvider(
 }
 
 /**
- * Wraps the real `VoyageEmbeddingProvider` in `SpendGuardEmbeddingProvider` — production has no
- * embedding cache to order the guard against (unlike the model chain's
- * `Caching(Metrics(SpendGuard(base)))`); the only `CachingEmbeddingProvider` in the tree is
- * `eval/providers/caching-embedding.provider.ts`, which replaces this token wholesale via
- * `overrideProvider` rather than decorating it, so the eval's free-replay property already holds
- * with no spend guard in that path at all.
+ * Wraps the selected base `EmbeddingProvider` (`config.embedding.provider`, independent of
+ * `config.model.provider`) in `SpendGuardEmbeddingProvider` — production has no embedding cache to
+ * order the guard against (unlike the model chain's `Caching(Metrics(SpendGuard(base)))`); the
+ * only `CachingEmbeddingProvider` in the tree is `eval/providers/caching-embedding.provider.ts`,
+ * which replaces this token wholesale via `overrideProvider` rather than decorating it, so the
+ * eval's free-replay property already holds with no spend guard in that path at all.
  *
  * Reuses `config.spend.dailyLimitUsd`/`config.spend.ingestDailyLimitUsd` and `TenantSpendService`
  * — one combined ledger per tenant across model and embedding spend, not a second one; see
  * `SpendGuardEmbeddingProvider`'s own doc comment for how the ingest sub-ceiling applies within it.
+ *
+ * `computeVoyageCostUsd` prices the voyage base from its own table; the compatible base has no
+ * table entry (its model id is neither vendor's), so its cost is the configured
+ * `OPENAI_COMPATIBLE_EMBEDDING_PRICE_USD_PER_MTOK` rate applied to the real `totalTokens` Voyage
+ * and the compatible endpoint both report post-call — `environment.config.ts`'s `superRefine`
+ * guarantees that price is set whenever `EMBEDDING_PROVIDER=openai-compatible` selects this base,
+ * so an undefined value reaching here means that refusal was bypassed rather than a normal runtime
+ * state — fails CLOSED at construction rather than pricing every embed at $0.
  *
  * Extracted as a plain, exported function for the same unit-testability reason
  * `createModelProvider` is.
  */
 export function createEmbeddingProvider(
   voyage: EmbeddingProvider,
+  openaiCompatible: EmbeddingProvider,
   spendService: TenantSpendService,
   als: AsyncLocalStorage<AlsContext>,
   config: TypedConfigService,
 ): EmbeddingProvider {
+  if (config.embedding.provider === 'openai-compatible') {
+    const priceUsdPerMtok = config.openaiCompatible.embeddingPriceUsdPerMtok;
+    if (priceUsdPerMtok === undefined) {
+      throw new Error(
+        'OPENAI_COMPATIBLE_EMBEDDING_PRICE_USD_PER_MTOK is required once ' +
+          'EMBEDDING_PROVIDER=openai-compatible selects this provider',
+      );
+    }
+
+    return new SpendGuardEmbeddingProvider(
+      openaiCompatible,
+      spendService,
+      config.spend.dailyLimitUsd,
+      als,
+      config.spend.ingestDailyLimitUsd,
+      (_model, totalTokens) => (totalTokens * priceUsdPerMtok) / 1_000_000,
+    );
+  }
+
   return new SpendGuardEmbeddingProvider(
     voyage,
     spendService,
     config.spend.dailyLimitUsd,
     als,
     config.spend.ingestDailyLimitUsd,
+    computeVoyageCostUsd,
   );
 }
 
@@ -147,7 +193,9 @@ export function createEmbeddingProvider(
   providers: [
     AnthropicModelProvider,
     OpenAiModelProvider,
+    OpenAiCompatibleModelProvider,
     VoyageEmbeddingProvider,
+    OpenAiCompatibleEmbeddingProvider,
     TenantSpendService,
     { provide: TELEMETRY, useClass: LoggerTelemetry },
     { provide: MODEL_CACHE_OPTIONS, useValue: MODEL_CACHE_DEFAULT_OPTIONS },
@@ -156,6 +204,7 @@ export function createEmbeddingProvider(
       inject: [
         AnthropicModelProvider,
         OpenAiModelProvider,
+        OpenAiCompatibleModelProvider,
         TenantSpendService,
         MODEL_CACHE_OPTIONS,
         TELEMETRY,
@@ -165,9 +214,18 @@ export function createEmbeddingProvider(
     },
     {
       provide: EMBEDDING_PROVIDER,
-      inject: [VoyageEmbeddingProvider, TenantSpendService, AsyncLocalStorage, TypedConfigService],
+      inject: [
+        VoyageEmbeddingProvider,
+        OpenAiCompatibleEmbeddingProvider,
+        TenantSpendService,
+        AsyncLocalStorage,
+        TypedConfigService,
+      ],
       useFactory: createEmbeddingProvider,
     },
+    // Runs its `OnApplicationBootstrap` hook once the module graph above is assembled, so
+    // `EMBEDDING_PROVIDER` already resolves to whichever base `config.embedding.provider` selected.
+    VectorIndexDimensionGuard,
     { provide: SOURCE_CONNECTOR, useClass: LocalFolderSourceConnector },
 
     // RETRIEVAL_STORE, DOCUMENT_STORE, WORKFLOW_ENGINE, and now APPROVAL_CHANNEL bind their real

@@ -175,4 +175,51 @@ describe('SpendGuardEmbeddingProvider', () => {
     );
     expect(spendService.reserve).toHaveBeenCalledWith('tenant-a', estimatedCostUsd, 50);
   });
+
+  describe('computeCostUsd parameter', () => {
+    it('should use a supplied computeCostUsd for both the reservation and the settlement', async () => {
+      const computeCostUsd = jest.fn((_model: string, totalTokens: number) => totalTokens * 0.001);
+      const provider = new SpendGuardEmbeddingProvider(
+        inner,
+        spendService as unknown as TenantSpendService,
+        50,
+        als as unknown as AsyncLocalStorage<AlsContext>,
+        undefined,
+        computeCostUsd,
+      );
+      inner.embed.mockResolvedValue({ embeddings: [[0, 0]], usage: { totalTokens: 1_000 } });
+
+      await provider.embed(request);
+
+      const estimatedTokens = estimateEmbeddingTokens(request.inputs);
+      expect(spendService.reserve).toHaveBeenCalledWith('tenant-a', estimatedTokens * 0.001, 50);
+      expect(spendService.settle).toHaveBeenCalledWith(
+        'tenant-a',
+        windowStart,
+        estimatedTokens * 0.001,
+        1,
+      );
+      expect(computeCostUsd).toHaveBeenCalledWith('voyage-4', estimatedTokens);
+      expect(computeCostUsd).toHaveBeenCalledWith('voyage-4', 1_000);
+    });
+
+    it('should price with Voyage pricing when computeCostUsd is omitted, as before this parameter existed', async () => {
+      const provider = buildProvider(50);
+      inner.embed.mockResolvedValue({ embeddings: [[0, 0]], usage: { totalTokens: 1_000_000 } });
+
+      await provider.embed(request);
+
+      const estimatedCostUsd = computeVoyageCostUsd(
+        'voyage-4',
+        estimateEmbeddingTokens(request.inputs),
+      );
+      expect(spendService.reserve).toHaveBeenCalledWith('tenant-a', estimatedCostUsd, 50);
+      expect(spendService.settle).toHaveBeenCalledWith(
+        'tenant-a',
+        windowStart,
+        estimatedCostUsd,
+        computeVoyageCostUsd('voyage-4', 1_000_000),
+      );
+    });
+  });
 });

@@ -13,6 +13,7 @@ export const MIME_TYPE_TO_SOURCE_KIND: Readonly<Record<string, DocumentSourceKin
   'text/tab-separated-values': 'tsv',
   'text/markdown': 'md',
   'message/rfc822': 'eml',
+  'text/html': 'html',
 };
 
 // The canonical MIME stored on a document/version for each kind — the inverse of
@@ -29,6 +30,7 @@ export const SOURCE_KIND_TO_MIME_TYPE: Readonly<Record<DocumentSourceKind, strin
   txt: 'text/plain',
   md: 'text/markdown',
   eml: 'message/rfc822',
+  html: 'text/html',
 };
 
 // MIME types a browser/OS is known to misreport for at least one format this project accepts.
@@ -47,7 +49,7 @@ export const AMBIGUOUS_UPLOAD_MIME_TYPES: ReadonlySet<string> = new Set([
 
 // Extension allowlist consulted only for a MIME in `AMBIGUOUS_UPLOAD_MIME_TYPES` — never for one
 // that already resolved through `MIME_TYPE_TO_SOURCE_KIND`. Deliberately closed to exactly the
-// nine kinds this project supports; `.xls` is NOT here, so `application/vnd.ms-excel` + `.xls`
+// ten kinds this project supports; `.xls` is NOT here, so `application/vnd.ms-excel` + `.xls`
 // fails CLOSED instead of being guessed as a spreadsheet, and `.msg` is not here either — Outlook's
 // CFB-container mail format has no parser, and an allowlist entry with no parser is an upload the
 // gate accepts and the ingest can only fail on.
@@ -66,6 +68,8 @@ export const UPLOAD_EXTENSION_ALLOWLIST: ReadonlyMap<string, DocumentSourceKind>
   ['txt', 'txt'],
   ['md', 'md'],
   ['eml', 'eml'],
+  ['html', 'html'],
+  ['htm', 'html'],
 ]);
 
 // No dot, a dot with nothing after it ("report."), and no extension at all all collapse to
@@ -138,11 +142,12 @@ function sniffContentFamily(buffer: Buffer): SniffedContentFamily | undefined {
 }
 
 // The family each binary `DocumentSourceKind` must sniff to. A kind absent here
-// (csv/tsv/txt/md/eml) carries no signature of its own — an RFC 5322 message is header text, so
-// `eml` belongs with the text kinds and a ZIP or PDF renamed `.eml` is refused for showing a binary
-// signature. `contentMatchesDeclaredKind` treats "no signature recognized"
-// as the passing case for those, since a plain-text format can only ever be contradicted by a
-// binary signature it can never legitimately produce, not positively confirmed by one.
+// (csv/tsv/txt/md/eml/html) carries no signature of its own — an RFC 5322 message is header text
+// and an HTML document is markup text, so `eml` and `html` belong with the text kinds and a ZIP or
+// PDF renamed to either extension is refused for showing a binary signature.
+// `contentMatchesDeclaredKind` treats "no signature recognized" as the passing case for those,
+// since a plain-text format can only ever be contradicted by a binary signature it can never
+// legitimately produce, not positively confirmed by one.
 const SOURCE_KIND_TO_CONTENT_FAMILY: Partial<Record<DocumentSourceKind, SniffedContentFamily>> = {
   pdf: 'pdf',
   docx: 'zip',

@@ -8,6 +8,7 @@ import {
   DOCUMENT_SOURCE_CLASSES,
   DOCUMENT_SOURCE_KINDS,
 } from '../../../../../database/schemas/evidence/document/document.schema';
+import { DocumentLocationResponseDto } from './document-location.response.dto';
 import { DocumentVersionResponseDto } from './document-version.response.dto';
 
 export class DocumentResponseDto {
@@ -48,6 +49,14 @@ export class DocumentResponseDto {
   @Type(() => DocumentVersionResponseDto)
   @ApiProperty({ type: () => DocumentVersionResponseDto })
   currentVersion: DocumentVersionResponseDto;
+
+  @Expose()
+  @Type(() => DocumentLocationResponseDto)
+  @ApiProperty({
+    type: () => [DocumentLocationResponseDto],
+    description: "Every place this document's current-version bytes have been seen, tenant-wide.",
+  })
+  locations: DocumentLocationResponseDto[];
 
   @Expose()
   @ApiProperty({ example: '2026-07-01T00:00:00.000Z', description: 'Document creation timestamp.' })

@@ -6,6 +6,7 @@ import {
   workflowInfo,
 } from '@temporalio/workflow';
 import type { Activities } from '../worker/activities';
+import { EXTRACT_FACTS_START_TO_CLOSE_TIMEOUT_MS } from './activity-heartbeat-policy';
 import {
   EXTRACT_FACTS_NON_RETRYABLE_ERROR_TYPES,
   INGEST_HEARTBEAT_TIMEOUT_MS,
@@ -54,8 +55,12 @@ const ingestActivities = proxyActivities<Pick<Activities, 'ingestDocumentVersion
 // idempotent by existence check, so a *whole-activity* retry after a full success is a cheap
 // no-op; the caveat is only about a retry racing an in-flight, uncommitted model call.)
 const factsActivities = proxyActivities<Pick<Activities, 'extractFacts'>>({
-  startToCloseTimeout: '5 minutes',
+  startToCloseTimeout: EXTRACT_FACTS_START_TO_CLOSE_TIMEOUT_MS,
   scheduleToCloseTimeout: '10 minutes',
+  // Paired with the heartbeats `extractFacts` (`src/worker/activities.ts`) emits — see
+  // `ingestActivities`'s own comment above for what a heartbeat with no timeout, or a timeout with
+  // no heartbeat, each do wrong.
+  heartbeatTimeout: INGEST_HEARTBEAT_TIMEOUT_MS,
   retry: {
     maximumAttempts: 2,
     // Classification and its reasoning live in `ingest-retry-policy.ts`.

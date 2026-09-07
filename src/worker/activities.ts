@@ -442,6 +442,43 @@ async function withTenantScope<T>(
   return als.run({ 'correlation-id': randomUUID(), tenant }, fn);
 }
 
+/** Handed to `run` when there is no activity context to cancel from; never aborts. */
+const NEVER_CANCELLED = new AbortController().signal;
+
+/**
+ * Pumps a Temporal heartbeat every `INGEST_HEARTBEAT_INTERVAL_MS` for as long as `run` is in
+ * flight, clearing the pump whether `run` resolves or rejects. Every activity in
+ * `HEARTBEATING_ACTIVITIES` (`../workflows/activity-heartbeat-policy`) wraps its body in exactly
+ * one call of this, at its own outermost scope, which is what gives that activity's declared
+ * `heartbeatTimeout` an effect: without a heartbeat, Temporal only notices a stalled attempt at the
+ * far later `startToCloseTimeout`, and — because cancellation reaches a running activity on the
+ * heartbeat response — never delivers it in the meantime. `run` receives the context's own
+ * `cancellationSignal` so it can observe that cancellation itself; a caller with nothing to cancel
+ * is free to ignore the parameter.
+ *
+ * Fails OPEN when there is no activity context: `Context.current()` throws outside a Temporal
+ * activity execution, and these functions are also called directly — `eval/run.ts` drives the
+ * answer path in-process with no worker at all. A heartbeat is liveness reporting about the work,
+ * not a gate on it, so its absence runs the work unheartbeaten rather than refusing to run it.
+ * There is nothing to report to and nothing to cancel from, so the signal is one that never aborts.
+ */
+function withHeartbeat<T>(run: (cancellationSignal: AbortSignal) => Promise<T>): Promise<T> {
+  let context: Context;
+  try {
+    context = Context.current();
+  } catch {
+    return run(NEVER_CANCELLED);
+  }
+
+  const heartbeats = setInterval(() => {
+    context.heartbeat();
+  }, INGEST_HEARTBEAT_INTERVAL_MS);
+
+  return run(context.cancellationSignal).finally(() => {
+    clearInterval(heartbeats);
+  });
+}
+
 /**
  * Activities are thin closures over services resolved from the worker's own Nest application
  * context (`worker.module.ts`, booted in `main.ts`) — the same DI graph the API process uses, per
@@ -467,28 +504,29 @@ export function createActivities(app: INestApplicationContext): Activities {
   const als = app.get<AsyncLocalStorage<AlsContext>>(AsyncLocalStorage);
 
   return {
-    // The only activity here that heartbeats, because it is the only one that can run for minutes
-    // over bytes of unknown size. `INGEST_HEARTBEAT_TIMEOUT_MS`
-    // (`ingest-document-version.workflow.ts`'s `heartbeatTimeout`) is what gives these heartbeats
-    // an effect: without it Temporal never fails a stalled attempt early, and — because
-    // cancellation reaches a running activity on the heartbeat response — never tells this one it
-    // has been abandoned. `cancellationSignal` carries that news into `ingestVersion`, whose catch
-    // records the version `failed` instead of leaving it `pending` with a live lease.
-    ingestDocumentVersion: (documentVersionId, tenantId) => {
-      const context = Context.current();
-      const heartbeats = setInterval(() => {
-        context.heartbeat();
-      }, INGEST_HEARTBEAT_INTERVAL_MS);
+    // Every activity below that calls `withHeartbeat` is listed in `HEARTBEATING_ACTIVITIES`
+    // (`../workflows/activity-heartbeat-policy`), and its matching `proxyActivities` group declares
+    // `heartbeatTimeout: INGEST_HEARTBEAT_TIMEOUT_MS` — see `withHeartbeat`'s own doc comment for
+    // what the pairing does. `ingestDocumentVersion`'s `cancellationSignal` carries an abandoned
+    // attempt into `ingestVersion`, whose catch records the version `failed` instead of leaving it
+    // `pending` with a live lease.
+    ingestDocumentVersion: (documentVersionId, tenantId) =>
+      withHeartbeat((cancellationSignal) =>
+        withTenantScope(als, tenantId, () =>
+          ingestionService.ingestVersion(documentVersionId, tenantId, cancellationSignal),
+        ),
+      ),
 
-      return withTenantScope(als, tenantId, () =>
-        ingestionService.ingestVersion(documentVersionId, tenantId, context.cancellationSignal),
-      ).finally(() => {
-        clearInterval(heartbeats);
-      });
-    },
-
+    // `cancellationSignal` is threaded into `extractFacts` (as `abortSignal`) rather than ignored
+    // like the other heartbeating activities below: it is checked before each chunk's model call
+    // (`FactsService.extractFacts`'s own doc comment), so a heartbeat-timeout cancellation stops the
+    // loop from spending further model calls on an attempt Temporal has already abandoned.
     extractFacts: (documentVersionId, tenantId) =>
-      withTenantScope(als, tenantId, () => factsService.extractFacts(documentVersionId, tenantId)),
+      withHeartbeat((cancellationSignal) =>
+        withTenantScope(als, tenantId, () =>
+          factsService.extractFacts(documentVersionId, tenantId, cancellationSignal),
+        ),
+      ),
 
     recordFactExtractionFailure: (documentVersionId, tenantId, reason) =>
       withTenantScope(als, tenantId, async () => {
@@ -507,55 +545,60 @@ export function createActivities(app: INestApplicationContext): Activities {
     // needs the same ALS scope every other tenant-carrying activity opens, or its `createdBy`/
     // `updatedBy` stamp nothing.
     synthesizeAnswer: (input) =>
-      withTenantScope(als, input.tenantId, async () => {
-        // Zero retrieved chunks means no claim the model could produce would cite anything real —
-        // `groundingCheck` below would drop every claim and degrade `outcomeKind` to
-        // `insufficient_evidence` regardless of what synthesis returns, so this reaches that same
-        // outcome without spending a model call synthesis can never ground. No `reasonCode`: this
-        // abstention happens before the model is ever asked, so it is the server's own, not a
-        // model-authored one — same distinction `insufficientEvidenceOutcomeSchema`'s doc comment
-        // draws, which is what `ProvenanceRail` (SPA) keys its degraded-state rendering on.
-        if (input.chunks.length === 0) {
-          return {
-            contract: {
-              kind: 'insufficient_evidence' as const,
-              reason:
-                'No evidence was retrieved for this question, so there is nothing to ground an answer in.',
-            },
-            usage: { promptTokens: 0, completionTokens: 0, costUsd: 0 },
-          };
-        }
-        return synthesisService.synthesizeAnswer({
-          question: input.questionText,
-          chunks: input.chunks,
-          tenantId: input.tenantId,
-        });
-      }),
+      withHeartbeat(() =>
+        withTenantScope(als, input.tenantId, async () => {
+          // Zero retrieved chunks means no claim the model could produce would cite anything real —
+          // `groundingCheck` below would drop every claim and degrade `outcomeKind` to
+          // `insufficient_evidence` regardless of what synthesis returns, so this reaches that same
+          // outcome without spending a model call synthesis can never ground. No `reasonCode`: this
+          // abstention happens before the model is ever asked, so it is the server's own, not a
+          // model-authored one — same distinction `insufficientEvidenceOutcomeSchema`'s doc comment
+          // draws, which is what `ProvenanceRail` (SPA) keys its degraded-state rendering on.
+          if (input.chunks.length === 0) {
+            return {
+              contract: {
+                kind: 'insufficient_evidence' as const,
+                reason:
+                  'No evidence was retrieved for this question, so there is nothing to ground an answer in.',
+              },
+              usage: { promptTokens: 0, completionTokens: 0, costUsd: 0 },
+            };
+          }
+          return synthesisService.synthesizeAnswer({
+            question: input.questionText,
+            chunks: input.chunks,
+            tenantId: input.tenantId,
+          });
+        }),
+      ),
 
     // Runs between synthesis and grounding, mirroring `ClaimVerificationService.verifyOneClaim`'s
     // own decompose-before-verify ordering. A non-`answered` outcome has no claims to decompose.
     // Sequential per claim, never `Promise.all`, matching every other per-claim model-call loop in
     // this codebase (`ClaimVerificationService.verifyClaims`'s own doc comment states why).
     decomposeClaims: (input) =>
-      withTenantScope(als, input.tenantId, async () => {
-        if (input.outcome.kind !== 'answered') {
-          return { atoms: [] };
-        }
-        const atoms: ClaimAtoms[] = [];
-        for (const [claimIndex, claim] of input.outcome.claims.entries()) {
-          // The sanitized/collapsed form, never the model's raw claim statement — same prompt-side
-          // division `ClaimVerificationService.verifyOneClaim` draws for the identical call.
-          const sanitized = formatPromptLabel(sanitizeEvidenceText(claim.statement));
-          const decomposition = await claimDecompositionService.decompose({
-            statement: sanitized,
-            tenantId: input.tenantId,
-          });
-          if (decomposition.kind === 'decomposed') {
-            atoms.push({ claimIndex, statement: claim.statement, atoms: decomposition.atoms });
+      withHeartbeat(() =>
+        withTenantScope(als, input.tenantId, async () => {
+          if (input.outcome.kind !== 'answered') {
+            return { atoms: [] };
           }
-        }
-        return { atoms };
-      }),
+          const atoms: ClaimAtoms[] = [];
+          for (const [claimIndex, claim] of input.outcome.claims.entries()) {
+            // The sanitized/collapsed form, never the model's raw claim statement — same
+            // prompt-side division `ClaimVerificationService.verifyOneClaim` draws for the
+            // identical call.
+            const sanitized = formatPromptLabel(sanitizeEvidenceText(claim.statement));
+            const decomposition = await claimDecompositionService.decompose({
+              statement: sanitized,
+              tenantId: input.tenantId,
+            });
+            if (decomposition.kind === 'decomposed') {
+              atoms.push({ claimIndex, statement: claim.statement, atoms: decomposition.atoms });
+            }
+          }
+          return { atoms };
+        }),
+      ),
 
     // Applied only to claims the gate will otherwise let survive — see `ContradictionCheckService`'s
     // own doc comment on why this must run on survivors only; the gate itself hasn't run yet at
@@ -564,44 +607,46 @@ export function createActivities(app: INestApplicationContext): Activities {
     // before any lookup — no model spend, no citation resolution — matching
     // `ClaimVerificationService.verifyOneClaim`'s identical gate on the same flag.
     checkContradictions: (input) =>
-      withTenantScope(als, input.tenantId, async () => {
-        if (!config.verifier.contradictionCheck) {
-          return { contradictedClaimIndexes: [] };
-        }
-        if (input.outcome.kind !== 'answered') {
-          return { contradictedClaimIndexes: [] };
-        }
-        const atomsByClaimIndex = new Map(
-          input.atoms.map((entry) => [entry.claimIndex, entry.atoms] as const),
-        );
-        const contradictedClaimIndexes: number[] = [];
-        for (const [claimIndex, claim] of input.outcome.claims.entries()) {
-          const citedChunkIds = new Set(claim.citations.map((citation) => citation.chunkId));
-          const citedChunks = input.retrievedChunks.filter((chunk) =>
-            citedChunkIds.has(chunk.chunkId),
-          );
-          if (citedChunks.length === 0) {
-            continue;
+      withHeartbeat(() =>
+        withTenantScope(als, input.tenantId, async () => {
+          if (!config.verifier.contradictionCheck) {
+            return { contradictedClaimIndexes: [] };
           }
-          // Sanitized, never the claim's raw statement: the atoms are already sanitized by
-          // construction (`decomposeClaims` feeds `claimDecompositionService.decompose` the
-          // sanitized form), and this fallback must not be the one path handing raw caller text to
-          // a model.
-          const sanitizedStatement = formatPromptLabel(sanitizeEvidenceText(claim.statement));
-          for (const atom of atomsByClaimIndex.get(claimIndex) ?? [sanitizedStatement]) {
-            const result = await contradictionCheckService.check({
-              atom,
-              evidence: citedChunks,
-              tenantId: input.tenantId,
-            });
-            if (result.kind === 'checked' && result.contradicted) {
-              contradictedClaimIndexes.push(claimIndex);
-              break;
+          if (input.outcome.kind !== 'answered') {
+            return { contradictedClaimIndexes: [] };
+          }
+          const atomsByClaimIndex = new Map(
+            input.atoms.map((entry) => [entry.claimIndex, entry.atoms] as const),
+          );
+          const contradictedClaimIndexes: number[] = [];
+          for (const [claimIndex, claim] of input.outcome.claims.entries()) {
+            const citedChunkIds = new Set(claim.citations.map((citation) => citation.chunkId));
+            const citedChunks = input.retrievedChunks.filter((chunk) =>
+              citedChunkIds.has(chunk.chunkId),
+            );
+            if (citedChunks.length === 0) {
+              continue;
+            }
+            // Sanitized, never the claim's raw statement: the atoms are already sanitized by
+            // construction (`decomposeClaims` feeds `claimDecompositionService.decompose` the
+            // sanitized form), and this fallback must not be the one path handing raw caller text
+            // to a model.
+            const sanitizedStatement = formatPromptLabel(sanitizeEvidenceText(claim.statement));
+            for (const atom of atomsByClaimIndex.get(claimIndex) ?? [sanitizedStatement]) {
+              const result = await contradictionCheckService.check({
+                atom,
+                evidence: citedChunks,
+                tenantId: input.tenantId,
+              });
+              if (result.kind === 'checked' && result.contradicted) {
+                contradictedClaimIndexes.push(claimIndex);
+                break;
+              }
             }
           }
-        }
-        return { contradictedClaimIndexes };
-      }),
+          return { contradictedClaimIndexes };
+        }),
+      ),
 
     // `GroundingGateService.verify`'s input type only accepts the `answered` branch of
     // `AnswerContract` (see its own doc comment) — the model itself already said there was
@@ -878,14 +923,17 @@ export function createActivities(app: INestApplicationContext): Activities {
     // `sourceId` names no tenant of its own (`SyncSourceWorkflowInput` carries only that), so the
     // tenant to scope by is loaded fresh here via `findTenantIdForSync` before `runSync` runs.
     // Absent (the source no longer exists) short-circuits to the same `{ disabled: true, intervalMs:
-    // null }` result `runSync` itself would produce, rather than opening a scope with no tenant.
+    // null }` result `runSync` itself would produce, rather than opening a scope with no tenant —
+    // and without ever starting the heartbeat pump around a sweep that was never going to run.
     runSourceSync: async (sourceId) => {
       const tenantId = await sourcesService.findTenantIdForSync(sourceId);
       if (!tenantId) {
         return { disabled: true, intervalMs: null };
       }
-      return withTenantScope(als, tenantId, () =>
-        sourcesService.runSync(sourceId, new Types.ObjectId()),
+      return withHeartbeat(() =>
+        withTenantScope(als, tenantId, () =>
+          sourcesService.runSync(sourceId, new Types.ObjectId()),
+        ),
       );
     },
   };

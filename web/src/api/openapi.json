@@ -1084,7 +1084,7 @@
         },
         "responses": {
           "201": {
-            "description": "Document uploaded. Unchanged bytes for an existing document return the existing version.",
+            "description": "Document uploaded. Unchanged bytes for an existing document return the existing version. Bytes matching a version anywhere else in the tenant resolve to that document instead, with this upload recorded as a new location on it.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1106,6 +1106,12 @@
                         "sizeBytes": 245760,
                         "createdAt": "2026-07-01T00:00:00.000Z"
                       },
+                      "locations": [
+                        {
+                          "path": "Q3 Rent Roll.xlsx",
+                          "firstSeenAt": "2026-07-01T00:00:00.000Z"
+                        }
+                      ],
                       "createdAt": "2026-07-01T00:00:00.000Z"
                     }
                   }
@@ -1260,6 +1266,12 @@
                             "sizeBytes": 245760,
                             "createdAt": "2026-07-01T00:00:00.000Z"
                           },
+                          "locations": [
+                            {
+                              "path": "Q3 Rent Roll.xlsx",
+                              "firstSeenAt": "2026-07-01T00:00:00.000Z"
+                            }
+                          ],
                           "createdAt": "2026-07-01T00:00:00.000Z"
                         }
                       ],
@@ -1380,6 +1392,12 @@
                         "sizeBytes": 245760,
                         "createdAt": "2026-07-01T00:00:00.000Z"
                       },
+                      "locations": [
+                        {
+                          "path": "Q3 Rent Roll.xlsx",
+                          "firstSeenAt": "2026-07-01T00:00:00.000Z"
+                        }
+                      ],
                       "createdAt": "2026-07-01T00:00:00.000Z",
                       "versions": [
                         {
@@ -6439,6 +6457,31 @@
           "createdAt"
         ]
       },
+      "DocumentLocationResponseDto": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "example": "rent-rolls/q3.xlsx",
+            "description": "Where this document's current-version bytes were seen — an upload filename or a connector relative path."
+          },
+          "sourceId": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7ba",
+            "description": "The connector this location was synced from, absent for a browser upload."
+          },
+          "firstSeenAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "When this location was first recorded."
+          }
+        },
+        "required": [
+          "path",
+          "firstSeenAt"
+        ]
+      },
       "DocumentResponseDto": {
         "type": "object",
         "properties": {
@@ -6464,7 +6507,8 @@
               "tsv",
               "txt",
               "md",
-              "eml"
+              "eml",
+              "html"
             ],
             "description": "Extractor pipeline kind."
           },
@@ -6489,6 +6533,13 @@
           "currentVersion": {
             "$ref": "#/components/schemas/DocumentVersionResponseDto"
           },
+          "locations": {
+            "description": "Every place this document's current-version bytes have been seen, tenant-wide.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DocumentLocationResponseDto"
+            }
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string",
@@ -6503,6 +6554,7 @@
           "mimeType",
           "sourceClass",
           "currentVersion",
+          "locations",
           "createdAt"
         ]
       },
@@ -6531,7 +6583,8 @@
               "tsv",
               "txt",
               "md",
-              "eml"
+              "eml",
+              "html"
             ],
             "description": "Extractor pipeline kind."
           },
@@ -6556,6 +6609,13 @@
           "currentVersion": {
             "$ref": "#/components/schemas/DocumentVersionResponseDto"
           },
+          "locations": {
+            "description": "Every place this document's current-version bytes have been seen, tenant-wide.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DocumentLocationResponseDto"
+            }
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string",
@@ -6577,6 +6637,7 @@
           "mimeType",
           "sourceClass",
           "currentVersion",
+          "locations",
           "createdAt",
           "versions"
         ]
@@ -6616,7 +6677,8 @@
               "tsv",
               "txt",
               "md",
-              "eml"
+              "eml",
+              "html"
             ],
             "description": "Extractor pipeline kind, for choosing a PDF pane vs. the chunk reader."
           },

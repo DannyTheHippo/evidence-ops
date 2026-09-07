@@ -20,6 +20,7 @@ const exampleDocument = {
   mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   sourceClass: 'unclassified',
   currentVersion: exampleVersion,
+  locations: [{ path: 'Q3 Rent Roll.xlsx', firstSeenAt: '2026-07-01T00:00:00.000Z' }],
   createdAt: '2026-07-01T00:00:00.000Z',
 };
 
@@ -27,7 +28,9 @@ export const documentsApiExamples: Record<string, ApiResponseOptions> = {
   uploaded: {
     status: HttpStatus.CREATED,
     description:
-      'Document uploaded. Unchanged bytes for an existing document return the existing version.',
+      'Document uploaded. Unchanged bytes for an existing document return the existing version. ' +
+      'Bytes matching a version anywhere else in the tenant resolve to that document instead, ' +
+      'with this upload recorded as a new location on it.',
     type: DocumentResponseDto,
     examples: {
       example: {

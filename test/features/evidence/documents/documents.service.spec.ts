@@ -86,6 +86,7 @@ describe('DocumentsService', () => {
     sourceKind: 'xlsx',
     mimeType: XLSX_MIME,
     currentVersionId: versionId,
+    locations: [],
     createdAt: new Date('2026-07-01T00:00:00.000Z'),
     save: jest.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -448,7 +449,10 @@ describe('DocumentsService', () => {
 
     it('should not write a new version when the sha256 already exists for the document', async () => {
       const mockDocument = buildMockDocument();
-      mockDocumentModel.findOne.mockResolvedValueOnce(mockDocument);
+      // The dedupe hit's owner lookup, then its post-`recordLocation` re-read.
+      mockDocumentModel.findOne
+        .mockResolvedValueOnce(mockDocument)
+        .mockResolvedValueOnce(mockDocument);
       const existingVersion = buildMockVersion();
       mockDocumentVersionModel.findOne.mockResolvedValueOnce(existingVersion);
       const file = buildFile();
@@ -505,6 +509,438 @@ describe('DocumentsService', () => {
         documentTitle: 'Q3 Rent Roll',
         tenantId: 'tenant-a',
       });
+    });
+
+    it('should forget the caller’s location and mint a new document when new bytes diverge from a document shared by multiple locations', async () => {
+      const sharedDocument = buildMockDocument({
+        locations: [
+          { path: 'rent-roll.xlsx', firstSeenAt: new Date('2026-07-01T00:00:00.000Z') },
+          {
+            path: 'sync/rent-roll.xlsx',
+            sourceId: new Types.ObjectId(),
+            firstSeenAt: new Date('2026-07-02T00:00:00.000Z'),
+          },
+        ],
+      });
+      mockDocumentModel.findOne.mockResolvedValueOnce(sharedDocument); // requireDocument
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(null); // no tenant-wide dedupe hit
+      mockDocumentModel.findOneAndUpdate.mockResolvedValueOnce(
+        buildMockDocument({
+          locations: [
+            {
+              path: 'sync/rent-roll.xlsx',
+              sourceId: new Types.ObjectId(),
+              firstSeenAt: new Date('2026-07-02T00:00:00.000Z'),
+            },
+          ],
+        }),
+      );
+      const newDocumentId = new Types.ObjectId();
+      const newVersionId = new Types.ObjectId();
+      mockDocumentModel.create.mockResolvedValueOnce(buildMockDocument({ _id: newDocumentId }));
+      mockDocumentVersionModel.create.mockResolvedValueOnce(
+        buildMockVersion({ _id: newVersionId, documentId: newDocumentId, versionNumber: 1 }),
+      );
+      mockDocumentStore.put.mockResolvedValueOnce({
+        id: 'gridfs-id-diverge',
+        content: Buffer.alloc(0),
+        contentType: XLSX_MIME,
+        metadata: {},
+      });
+      const file = buildFile({
+        buffer: Buffer.concat([ZIP_MAGIC_BYTES, Buffer.from('diverged-bytes')]),
+      });
+
+      const result = await service.upload(file, { documentId: documentId.toString() }, 'tenant-a');
+
+      expect(mockDocumentModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: documentId, tenantId: 'tenant-a' },
+        {
+          $pull: {
+            locations: {
+              path: file.originalname,
+              sourceId: { $exists: false },
+              emailOrigin: { $exists: false },
+            },
+          },
+        },
+        { returnDocument: 'after' },
+      );
+      expect(mockDocumentModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: file.originalname,
+          locations: [expect.objectContaining({ path: file.originalname })],
+        }),
+      );
+      expect(result.id).toBe(newDocumentId.toString());
+      // The shared document keeps at least one location after the forget (the `> 1` precondition),
+      // so it is never withdrawn by this branch.
+      expect(mockDocumentVersionModel.updateMany).not.toHaveBeenCalled();
+      expect(mockWorkflowEngine.start).toHaveBeenCalledWith(
+        'ingestDocumentVersion',
+        expect.objectContaining({ documentVersionId: newVersionId.toString() }),
+      );
+    });
+  });
+
+  describe('uploadVersion — tenant-wide dedupe (resolveTenantWideDuplicate)', () => {
+    it('should throw InternalServerErrorException when the matched version references a document that no longer exists', async () => {
+      const orphanedVersion = buildMockVersion({ documentId: new Types.ObjectId() });
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(orphanedVersion);
+      mockDocumentModel.findOne.mockResolvedValueOnce(null);
+      const file = buildFile();
+
+      await expect(service.upload(file, {}, 'tenant-a')).rejects.toBeInstanceOf(
+        InternalServerErrorException,
+      );
+      expect(mockDocumentStore.put).not.toHaveBeenCalled();
+    });
+
+    it('should throw InternalServerErrorException when the owning document disappears between recording the location and re-reading it', async () => {
+      const owner = buildMockDocument();
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(buildMockVersion());
+      mockDocumentModel.findOne
+        .mockResolvedValueOnce(owner) // owner lookup
+        .mockResolvedValueOnce(null); // post-recordLocation re-read finds it gone
+      const file = buildFile();
+
+      await expect(service.upload(file, {}, 'tenant-a')).rejects.toBeInstanceOf(
+        InternalServerErrorException,
+      );
+    });
+
+    it('should reinstate a withdrawn match and map every recorded location into the response, omitting sourceId where absent', async () => {
+      const sourceId = new Types.ObjectId();
+      const owner = buildMockDocument({
+        locations: [
+          { path: 'rent-roll.xlsx', firstSeenAt: new Date('2026-07-01T00:00:00.000Z') },
+          {
+            path: 'sync/rent-roll.xlsx',
+            sourceId,
+            firstSeenAt: new Date('2026-07-02T00:00:00.000Z'),
+          },
+        ],
+      });
+      const withdrawnVersion = buildMockVersion({
+        withdrawnAt: new Date('2026-07-03T00:00:00.000Z'),
+      });
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(withdrawnVersion);
+      // The owner lookup, then its post-`recordLocation` re-read — both return the same document
+      // here since the mock model doesn't actually persist the `$push`.
+      mockDocumentModel.findOne.mockResolvedValueOnce(owner).mockResolvedValueOnce(owner);
+      mockDocumentVersionModel.updateMany.mockResolvedValueOnce({ modifiedCount: 1 });
+      const file = buildFile();
+
+      const result = await service.upload(file, {}, 'tenant-a');
+
+      expect(mockDocumentVersionModel.updateMany).toHaveBeenCalledWith(
+        { documentId: { $in: [documentId] }, tenantId: 'tenant-a', withdrawnAt: { $exists: true } },
+        { $unset: { withdrawnAt: '', withdrawnReason: '' } },
+      );
+      expect(result.locations).toEqual([
+        { path: 'rent-roll.xlsx', firstSeenAt: new Date('2026-07-01T00:00:00.000Z') },
+        {
+          path: 'sync/rent-roll.xlsx',
+          sourceId: sourceId.toString(),
+          firstSeenAt: new Date('2026-07-02T00:00:00.000Z'),
+        },
+      ]);
+      // A key omitted, not `undefined`-assigned: `toLocationDto` conditionally spreads `sourceId`
+      // rather than always assigning it, so a browser-upload location carries no `sourceId` key at all.
+      expect(Object.keys(result.locations[0])).toEqual(['path', 'firstSeenAt']);
+    });
+
+    it('should forget the converging document’s location and withdraw it once none remain, re-pointing to the true owner', async () => {
+      const ownerDocumentId = new Types.ObjectId();
+      const callerDoc = buildMockDocument();
+      const owner = buildMockDocument({ _id: ownerDocumentId, title: 'Existing Comps' });
+      mockDocumentModel.findOne
+        .mockResolvedValueOnce(callerDoc) // requireDocument resolves dto.documentId
+        .mockResolvedValueOnce(owner) // resolveTenantWideDuplicate's owner lookup
+        .mockResolvedValueOnce(owner); // its post-`recordLocation` re-read
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
+        buildMockVersion({ documentId: ownerDocumentId }),
+      );
+      mockDocumentModel.findOneAndUpdate.mockResolvedValueOnce(
+        buildMockDocument({ locations: [] }),
+      );
+      mockDocumentVersionModel.updateMany.mockResolvedValueOnce({ modifiedCount: 1 });
+      const file = buildFile();
+
+      const result = await service.upload(file, { documentId: documentId.toString() }, 'tenant-a');
+
+      expect(mockDocumentModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: documentId, tenantId: 'tenant-a' },
+        {
+          $pull: {
+            locations: {
+              path: file.originalname,
+              sourceId: { $exists: false },
+              emailOrigin: { $exists: false },
+            },
+          },
+        },
+        { returnDocument: 'after' },
+      );
+      expect(mockDocumentVersionModel.updateMany).toHaveBeenCalledWith(
+        {
+          documentId: { $in: [documentId] },
+          tenantId: 'tenant-a',
+          withdrawnAt: { $exists: false },
+        },
+        { $set: { withdrawnAt: expect.any(Date) as Date, withdrawnReason: 'source-file-absent' } },
+      );
+      expect(result.id).toBe(ownerDocumentId.toString());
+    });
+
+    it('should forget the converging document’s location but never withdraw it while another location remains', async () => {
+      const ownerDocumentId = new Types.ObjectId();
+      const callerDoc = buildMockDocument();
+      const owner = buildMockDocument({ _id: ownerDocumentId });
+      mockDocumentModel.findOne
+        .mockResolvedValueOnce(callerDoc)
+        .mockResolvedValueOnce(owner)
+        .mockResolvedValueOnce(owner); // post-`recordLocation` re-read
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
+        buildMockVersion({ documentId: ownerDocumentId }),
+      );
+      mockDocumentModel.findOneAndUpdate.mockResolvedValueOnce(
+        buildMockDocument({ locations: [{ path: 'still-here.xlsx', firstSeenAt: new Date() }] }),
+      );
+      const file = buildFile();
+
+      await service.upload(file, { documentId: documentId.toString() }, 'tenant-a');
+
+      expect(mockDocumentVersionModel.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('addVersion — E11000 race on the tenant-wide unique index', () => {
+    it('should rethrow a non-duplicate-key error from version creation without touching storage', async () => {
+      mockDocumentModel.findOne.mockResolvedValueOnce(buildMockDocument());
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(null);
+      mockDocumentVersionModel.countDocuments.mockResolvedValueOnce(1);
+      mockDocumentStore.put.mockResolvedValueOnce({
+        id: 'gridfs-id-race-1',
+        content: Buffer.alloc(0),
+        contentType: XLSX_MIME,
+        metadata: {},
+      });
+      // A thrown non-object value is never mistaken for the driver's `{ code: 11000 }` shape.
+      mockDocumentVersionModel.create.mockRejectedValueOnce('mongo write conflict');
+      const file = buildFile({
+        buffer: Buffer.concat([ZIP_MAGIC_BYTES, Buffer.from('non-dup-error-bytes')]),
+      });
+
+      await expect(
+        service.upload(file, { documentId: documentId.toString() }, 'tenant-a'),
+      ).rejects.toBe('mongo write conflict');
+      expect(mockDocumentStore.delete).not.toHaveBeenCalled();
+    });
+
+    it('should clean up the losing write and re-take the dedupe branch when a rival wins the race on the same document', async () => {
+      const callerDoc = buildMockDocument();
+      mockDocumentModel.findOne
+        .mockResolvedValueOnce(callerDoc) // requireDocument
+        .mockResolvedValueOnce(callerDoc); // resolveTenantWideDuplicate's post-recordLocation re-read
+      mockDocumentVersionModel.findOne
+        .mockResolvedValueOnce(null) // uploadVersion's own upfront dedupe check: no existing version yet
+        .mockResolvedValueOnce(buildMockVersion({ documentId, versionNumber: 2 })); // the rival's write, re-checked in the catch
+      mockDocumentVersionModel.countDocuments.mockResolvedValueOnce(1);
+      mockDocumentStore.put.mockResolvedValueOnce({
+        id: 'gridfs-id-race-2',
+        content: Buffer.alloc(0),
+        contentType: XLSX_MIME,
+        metadata: {},
+      });
+      mockDocumentVersionModel.create.mockRejectedValueOnce({ code: 11000 });
+      const file = buildFile({
+        buffer: Buffer.concat([ZIP_MAGIC_BYTES, Buffer.from('race-bytes')]),
+      });
+
+      const result = await service.upload(file, { documentId: documentId.toString() }, 'tenant-a');
+
+      expect(mockDocumentStore.delete).toHaveBeenCalledWith('gridfs-id-race-2');
+      expect(result.currentVersion.versionNumber).toBe(2);
+      expect(mockWorkflowEngine.start).not.toHaveBeenCalled();
+    });
+
+    it('should clean up storage and rethrow a duplicate-key error the re-check cannot explain', async () => {
+      mockDocumentModel.findOne.mockResolvedValueOnce(buildMockDocument());
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null); // the re-check also misses — the race left no trace to resolve to
+      mockDocumentVersionModel.countDocuments.mockResolvedValueOnce(1);
+      mockDocumentStore.put.mockResolvedValueOnce({
+        id: 'gridfs-id-race-3',
+        content: Buffer.alloc(0),
+        contentType: XLSX_MIME,
+        metadata: {},
+      });
+      const dupError = { code: 11000, message: 'E11000 duplicate key' };
+      mockDocumentVersionModel.create.mockRejectedValueOnce(dupError);
+      const file = buildFile({
+        buffer: Buffer.concat([ZIP_MAGIC_BYTES, Buffer.from('unexplained-race-bytes')]),
+      });
+
+      await expect(
+        service.upload(file, { documentId: documentId.toString() }, 'tenant-a'),
+      ).rejects.toBe(dupError);
+      expect(mockDocumentStore.delete).toHaveBeenCalledWith('gridfs-id-race-3');
+    });
+  });
+
+  describe('createDocument — E11000 race on the tenant-wide unique index', () => {
+    it('should rethrow a non-duplicate-key error from version creation without deleting the orphan document', async () => {
+      const orphanDoc = buildMockDocument({ _id: new Types.ObjectId() });
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(null);
+      mockDocumentModel.create.mockResolvedValueOnce(orphanDoc);
+      mockDocumentStore.put.mockResolvedValueOnce({
+        id: 'gridfs-id-race-4',
+        content: Buffer.alloc(0),
+        contentType: XLSX_MIME,
+        metadata: {},
+      });
+      // `null` is a legal thrown value and is never mistaken for the driver's duplicate-key shape.
+      mockDocumentVersionModel.create.mockRejectedValueOnce(null);
+      const file = buildFile();
+
+      await expect(service.upload(file, { title: 'Q3 Rent Roll' }, 'tenant-a')).rejects.toBeNull();
+      expect(mockDocumentStore.delete).not.toHaveBeenCalled();
+      expect(mockDocumentModel.deleteOne).not.toHaveBeenCalled();
+    });
+
+    it('should delete the stored bytes and the orphan row, then re-resolve to the true owner, on a duplicate-key race', async () => {
+      const orphanId = new Types.ObjectId();
+      const orphanDoc = buildMockDocument({ _id: orphanId });
+      const ownerId = new Types.ObjectId();
+      const ownerDoc = buildMockDocument({ _id: ownerId, title: 'Existing Comps' });
+      mockDocumentVersionModel.findOne
+        .mockResolvedValueOnce(null) // uploadVersion's own upfront dedupe check
+        .mockResolvedValueOnce(buildMockVersion({ documentId: ownerId })); // the race's true owner
+      mockDocumentModel.create.mockResolvedValueOnce(orphanDoc);
+      mockDocumentModel.findOne
+        .mockResolvedValueOnce(ownerDoc) // resolveTenantWideDuplicate's owner lookup
+        .mockResolvedValueOnce(ownerDoc); // its post-recordLocation re-read
+      mockDocumentStore.put.mockResolvedValueOnce({
+        id: 'gridfs-id-race-5',
+        content: Buffer.alloc(0),
+        contentType: XLSX_MIME,
+        metadata: {},
+      });
+      mockDocumentVersionModel.create.mockRejectedValueOnce({ code: 11000 });
+      const file = buildFile();
+
+      const result = await service.upload(file, { title: 'Q3 Rent Roll' }, 'tenant-a');
+
+      expect(mockDocumentStore.delete).toHaveBeenCalledWith('gridfs-id-race-5');
+      expect(mockDocumentModel.deleteOne).toHaveBeenCalledWith({
+        _id: orphanId,
+        tenantId: 'tenant-a',
+      });
+      expect(result.id).toBe(ownerId.toString());
+      expect(mockWorkflowEngine.start).not.toHaveBeenCalled();
+    });
+
+    it('should delete the stored bytes and the orphan row, then rethrow, when the re-check cannot explain the race', async () => {
+      const orphanId = new Types.ObjectId();
+      const orphanDoc = buildMockDocument({ _id: orphanId });
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null); // the re-check also misses
+      mockDocumentModel.create.mockResolvedValueOnce(orphanDoc);
+      mockDocumentStore.put.mockResolvedValueOnce({
+        id: 'gridfs-id-race-6',
+        content: Buffer.alloc(0),
+        contentType: XLSX_MIME,
+        metadata: {},
+      });
+      const dupError = { code: 11000 };
+      mockDocumentVersionModel.create.mockRejectedValueOnce(dupError);
+      const file = buildFile();
+
+      await expect(service.upload(file, { title: 'Q3 Rent Roll' }, 'tenant-a')).rejects.toBe(
+        dupError,
+      );
+      expect(mockDocumentStore.delete).toHaveBeenCalledWith('gridfs-id-race-6');
+      expect(mockDocumentModel.deleteOne).toHaveBeenCalledWith({
+        _id: orphanId,
+        tenantId: 'tenant-a',
+      });
+    });
+  });
+
+  describe('forgetLocation', () => {
+    it('should $pull the matching location and return how many remain', async () => {
+      mockDocumentModel.findOneAndUpdate.mockResolvedValueOnce(
+        buildMockDocument({ locations: [{ path: 'still-here.xlsx', firstSeenAt: new Date() }] }),
+      );
+
+      const remaining = await service.forgetLocation(documentId, { path: 'gone.xlsx' }, 'tenant-a');
+
+      expect(mockDocumentModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: documentId, tenantId: 'tenant-a' },
+        {
+          $pull: {
+            locations: {
+              path: 'gone.xlsx',
+              sourceId: { $exists: false },
+              emailOrigin: { $exists: false },
+            },
+          },
+        },
+        { returnDocument: 'after' },
+      );
+      expect(remaining).toBe(1);
+    });
+
+    it('should throw DocumentNotFoundException when the document does not exist', async () => {
+      mockDocumentModel.findOneAndUpdate.mockResolvedValueOnce(null);
+
+      await expect(
+        service.forgetLocation(documentId, { path: 'gone.xlsx' }, 'tenant-a'),
+      ).rejects.toBeInstanceOf(DocumentNotFoundException);
+    });
+
+    it('should match by sourceId, not $exists: false, when the key carries one', async () => {
+      const sourceId = new Types.ObjectId();
+      mockDocumentModel.findOneAndUpdate.mockResolvedValueOnce(
+        buildMockDocument({ locations: [] }),
+      );
+
+      await service.forgetLocation(documentId, { path: 'gone.xlsx', sourceId }, 'tenant-a');
+
+      expect(mockDocumentModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: documentId, tenantId: 'tenant-a' },
+        { $pull: { locations: { path: 'gone.xlsx', sourceId, emailOrigin: { $exists: false } } } },
+        { returnDocument: 'after' },
+      );
+    });
+
+    it('should match by the email origin identity, not $exists: false, when the key carries one', async () => {
+      const emailOrigin = {
+        parentVersionId: new Types.ObjectId(),
+        parentDocumentId: new Types.ObjectId(),
+        partIndex: 2,
+        attachmentFilename: 'comps.xlsx',
+        messageId: 'q3-comps@example',
+      };
+      mockDocumentModel.findOneAndUpdate.mockResolvedValueOnce(
+        buildMockDocument({ locations: [] }),
+      );
+
+      await service.forgetLocation(documentId, { path: 'comps.xlsx', emailOrigin }, 'tenant-a');
+
+      expect(mockDocumentModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: documentId, tenantId: 'tenant-a' },
+        {
+          $pull: {
+            locations: {
+              path: 'comps.xlsx',
+              sourceId: { $exists: false },
+              'emailOrigin.parentVersionId': emailOrigin.parentVersionId,
+              'emailOrigin.partIndex': emailOrigin.partIndex,
+            },
+          },
+        },
+        { returnDocument: 'after' },
+      );
     });
   });
 

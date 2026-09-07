@@ -39,7 +39,9 @@ const CSV_SHEET_NAME = 'CSV';
  * follow it. */
 type FieldState = 'start' | 'unquoted' | 'quoted' | 'closed';
 
-function columnLetter(index: number): string {
+// Exported for `html.parser.ts`'s well-formed table flattening, which reuses this exact
+// column-lettering scheme for its own `xlsx-cell` coordinates rather than inventing a second one.
+export function columnLetter(index: number): string {
   let n = index + 1;
   let letters = '';
   while (n > 0) {

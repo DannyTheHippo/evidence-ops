@@ -198,6 +198,8 @@ describe('validateEnvironment', () => {
           'anthropic',
           'openai',
           'voyage',
+          'embedding',
+          'openaiCompatible',
           'temporal',
           'retrieval',
           'telemetry',
@@ -229,9 +231,21 @@ describe('validateEnvironment', () => {
       expect(result.voyage.model).toBe('voyage-4');
       expect(result.voyage.dimensions).toBe(1024);
       expect(result.voyage.requestTimeoutMs).toBe(30000);
+      expect(result.embedding.provider).toBe('voyage');
+      expect(result.embedding.dimensions).toBe(1024);
+      expect(result.openaiCompatible.apiKey).toBeUndefined();
+      expect(result.openaiCompatible.baseUrl).toBe('http://localhost:11434/v1');
+      expect(result.openaiCompatible.model).toBe('llama3.1:8b');
+      expect(result.openaiCompatible.embeddingModel).toBe('mxbai-embed-large');
+      expect(result.openaiCompatible.timeoutMs).toBe(60000);
+      expect(result.openaiCompatible.structuredOutput).toBe('json_schema');
+      expect(result.openaiCompatible.priceInputUsdPerMtok).toBeUndefined();
+      expect(result.openaiCompatible.priceOutputUsdPerMtok).toBeUndefined();
+      expect(result.openaiCompatible.embeddingPriceUsdPerMtok).toBeUndefined();
       expect(result.temporal.address).toBe('localhost:7233');
       expect(result.temporal.namespace).toBe('default');
       expect(result.temporal.taskQueue).toBe('evidence-ops');
+      expect(result.temporal.maxConcurrentActivityTaskExecutions).toBe(4);
       expect(result.retrieval.fusion).toBe('server');
       expect(result.retrieval.limit).toBe(12);
       // Ships inert: the real value comes from a deferred corpus run. Asserted against the
@@ -289,7 +303,13 @@ describe('validateEnvironment', () => {
 
     it('accepts each legal Matryoshka dimension', () => {
       for (const dimensions of [256, 512, 1024, 2048]) {
-        const result = validateEnvironment({ ...validEnv, VOYAGE_DIMENSIONS: String(dimensions) });
+        const result = validateEnvironment({
+          ...validEnv,
+          VOYAGE_DIMENSIONS: String(dimensions),
+          // EMBEDDING_DIMENSIONS must agree with VOYAGE_DIMENSIONS under the default
+          // EMBEDDING_PROVIDER ('voyage') — see the EMBEDDING_DIMENSIONS describe block below.
+          EMBEDDING_DIMENSIONS: String(dimensions),
+        });
 
         expect(result.voyage.dimensions).toBe(dimensions);
       }
@@ -366,6 +386,133 @@ describe('validateEnvironment', () => {
 
       expect(result.model.provider).toBe('openai');
       expect(result.openai.baseUrl).toBe('https://openai.internal.example/v1');
+    });
+  });
+
+  describe('EMBEDDING_PROVIDER / EMBEDDING_DIMENSIONS / OPENAI_COMPATIBLE_* / TEMPORAL_MAX_CONCURRENT_ACTIVITY_TASKS', () => {
+    it('rejects an unknown EMBEDDING_PROVIDER value', () => {
+      const env: Record<string, unknown> = { ...validEnv, EMBEDDING_PROVIDER: 'azure' };
+
+      expect(() => validateEnvironment(env)).toThrow(/Invalid environment configuration/);
+      expect(() => validateEnvironment(env)).toThrow(/EMBEDDING_PROVIDER/);
+    });
+
+    it('refuses when EMBEDDING_DIMENSIONS disagrees with VOYAGE_DIMENSIONS under the voyage embedding provider', () => {
+      const env: Record<string, unknown> = {
+        ...validEnv,
+        EMBEDDING_PROVIDER: 'voyage',
+        VOYAGE_DIMENSIONS: '1024',
+        EMBEDDING_DIMENSIONS: '512',
+      };
+
+      expect(() => validateEnvironment(env)).toThrow(/Invalid environment configuration/);
+      expect(() => validateEnvironment(env)).toThrow(/EMBEDDING_DIMENSIONS/);
+    });
+
+    it('accepts EMBEDDING_DIMENSIONS equal to VOYAGE_DIMENSIONS', () => {
+      const result = validateEnvironment({
+        ...validEnv,
+        EMBEDDING_PROVIDER: 'voyage',
+        VOYAGE_DIMENSIONS: '2048',
+        EMBEDDING_DIMENSIONS: '2048',
+      });
+
+      expect(result.embedding.dimensions).toBe(2048);
+    });
+
+    it('rejects a non-integer EMBEDDING_DIMENSIONS', () => {
+      const env: Record<string, unknown> = { ...validEnv, EMBEDDING_DIMENSIONS: '3.5' };
+
+      expect(() => validateEnvironment(env)).toThrow(/Invalid environment configuration/);
+      expect(() => validateEnvironment(env)).toThrow(/EMBEDDING_DIMENSIONS/);
+    });
+
+    it('rejects a non-URL OPENAI_COMPATIBLE_BASE_URL', () => {
+      const env: Record<string, unknown> = { ...validEnv, OPENAI_COMPATIBLE_BASE_URL: 'not-a-url' };
+
+      expect(() => validateEnvironment(env)).toThrow(/Invalid environment configuration/);
+      expect(() => validateEnvironment(env)).toThrow(/OPENAI_COMPATIBLE_BASE_URL/);
+    });
+
+    it('rejects a zero TEMPORAL_MAX_CONCURRENT_ACTIVITY_TASKS', () => {
+      const env: Record<string, unknown> = {
+        ...validEnv,
+        TEMPORAL_MAX_CONCURRENT_ACTIVITY_TASKS: '0',
+      };
+
+      expect(() => validateEnvironment(env)).toThrow(/Invalid environment configuration/);
+      expect(() => validateEnvironment(env)).toThrow(/TEMPORAL_MAX_CONCURRENT_ACTIVITY_TASKS/);
+    });
+
+    it('coerces TEMPORAL_MAX_CONCURRENT_ACTIVITY_TASKS from string to number', () => {
+      const result = validateEnvironment({
+        ...validEnv,
+        TEMPORAL_MAX_CONCURRENT_ACTIVITY_TASKS: '8',
+      });
+
+      expect(result.temporal.maxConcurrentActivityTaskExecutions).toBe(8);
+    });
+
+    describe('MODEL_PROVIDER=openai-compatible model price refusal', () => {
+      it('refuses to boot without OPENAI_COMPATIBLE_PRICE_INPUT_USD_PER_MTOK/…_OUTPUT_…', () => {
+        const env: Record<string, unknown> = { ...validEnv, MODEL_PROVIDER: 'openai-compatible' };
+
+        expect(() => validateEnvironment(env)).toThrow(/Invalid environment configuration/);
+        expect(() => validateEnvironment(env)).toThrow(
+          /OPENAI_COMPATIBLE_PRICE_INPUT_USD_PER_MTOK/,
+        );
+        expect(() => validateEnvironment(env)).toThrow(
+          /OPENAI_COMPATIBLE_PRICE_OUTPUT_USD_PER_MTOK/,
+        );
+      });
+
+      it('accepts MODEL_PROVIDER=openai-compatible with both model prices set, including an explicit 0', () => {
+        const result = validateEnvironment({
+          ...validEnv,
+          MODEL_PROVIDER: 'openai-compatible',
+          OPENAI_COMPATIBLE_PRICE_INPUT_USD_PER_MTOK: '0',
+          OPENAI_COMPATIBLE_PRICE_OUTPUT_USD_PER_MTOK: '0.5',
+        });
+
+        expect(result.openaiCompatible.priceInputUsdPerMtok).toBe(0);
+        expect(result.openaiCompatible.priceOutputUsdPerMtok).toBe(0.5);
+      });
+
+      it('refuses a negative OPENAI_COMPATIBLE_PRICE_INPUT_USD_PER_MTOK', () => {
+        const env: Record<string, unknown> = {
+          ...validEnv,
+          OPENAI_COMPATIBLE_PRICE_INPUT_USD_PER_MTOK: '-1',
+        };
+
+        expect(() => validateEnvironment(env)).toThrow(/Invalid environment configuration/);
+        expect(() => validateEnvironment(env)).toThrow(
+          /OPENAI_COMPATIBLE_PRICE_INPUT_USD_PER_MTOK/,
+        );
+      });
+    });
+
+    describe('EMBEDDING_PROVIDER=openai-compatible embedding price refusal', () => {
+      it('refuses to boot without OPENAI_COMPATIBLE_EMBEDDING_PRICE_USD_PER_MTOK', () => {
+        const env: Record<string, unknown> = {
+          ...validEnv,
+          EMBEDDING_PROVIDER: 'openai-compatible',
+        };
+
+        expect(() => validateEnvironment(env)).toThrow(/Invalid environment configuration/);
+        expect(() => validateEnvironment(env)).toThrow(
+          /OPENAI_COMPATIBLE_EMBEDDING_PRICE_USD_PER_MTOK/,
+        );
+      });
+
+      it('accepts EMBEDDING_PROVIDER=openai-compatible with an explicit 0 embedding price', () => {
+        const result = validateEnvironment({
+          ...validEnv,
+          EMBEDDING_PROVIDER: 'openai-compatible',
+          OPENAI_COMPATIBLE_EMBEDDING_PRICE_USD_PER_MTOK: '0',
+        });
+
+        expect(result.openaiCompatible.embeddingPriceUsdPerMtok).toBe(0);
+      });
     });
   });
 

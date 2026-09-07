@@ -1,6 +1,9 @@
 import type { XlsxCellLocator } from '../../../../../src/database/schemas/evidence/evidence-chunk/evidence-locator.type';
 import { MalformedCsvException } from '../../../../../src/features/evidence/ingestion/exceptions/ingestion.exception';
-import { CsvParser } from '../../../../../src/features/evidence/ingestion/parsers/csv.parser';
+import {
+  columnLetter,
+  CsvParser,
+} from '../../../../../src/features/evidence/ingestion/parsers/csv.parser';
 import { sanitizeEvidenceText } from '../../../../../src/features/evidence/ingestion/sanitize-evidence-text';
 
 function findCellElement(
@@ -258,6 +261,20 @@ describe('CsvParser', () => {
       const result = await parser.parse(buffer);
 
       expect(result.reducedFidelityReasons).toBeUndefined();
+    });
+  });
+
+  // `columnLetter` is now exported for `html.parser.ts`'s well-formed table flattening, which
+  // reuses this exact scheme rather than a second one.
+  describe('columnLetter', () => {
+    it.each([
+      [0, 'A'],
+      [25, 'Z'],
+      [26, 'AA'],
+      [701, 'ZZ'],
+      [702, 'AAA'],
+    ])('should render column index %i as %s', (index, expected) => {
+      expect(columnLetter(index)).toBe(expected);
     });
   });
 });

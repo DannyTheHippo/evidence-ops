@@ -1101,5 +1101,57 @@ describe('Sources (e2e)', () => {
 
       await rm(emptyListingDir, { recursive: true, force: true });
     });
+
+    it('forgets one location on the second absent sweep but does not withdraw while another location for the same document remains', async () => {
+      const multiLocationSubdir = `${withdrawalFixtureSubdir}-multi-location`;
+      const multiLocationDir = join(
+        app.get(TypedConfigService).sources.inboxDir,
+        multiLocationSubdir,
+      );
+      await mkdir(multiLocationDir, { recursive: true });
+      await writeFile(join(multiLocationDir, 'shared-a.txt'), 'shared-bytes');
+      await writeFile(join(multiLocationDir, 'shared-b.txt'), 'shared-bytes');
+
+      const created = await sourceModel.create({
+        name: `Multi Location Source ${Date.now()}`,
+        kind: 'local-folder',
+        path: multiLocationSubdir,
+        tenantId,
+      });
+
+      // Sweep 1: both paths present with identical bytes — the second upload hits the tenant-wide
+      // dedupe and records a second location on the document the first created, rather than
+      // minting a second document.
+      await sourcesService.runSync(created._id.toString(), new Types.ObjectId());
+
+      const synced = await sourceModel.findById(created._id);
+      const sharedARelativePath = join(multiLocationSubdir, 'shared-a.txt');
+      const sharedBRelativePath = join(multiLocationSubdir, 'shared-b.txt');
+      const sharedAState = synced?.fileStates.find((state) => state.path === sharedARelativePath);
+      const sharedBState = synced?.fileStates.find((state) => state.path === sharedBRelativePath);
+      expect(sharedAState?.documentId).toBeDefined();
+      expect(sharedBState?.documentId?.toString()).toBe(sharedAState?.documentId?.toString());
+
+      const sharedDocument = await documentModel.findById(sharedAState?.documentId);
+      expect(sharedDocument?.locations).toHaveLength(2);
+      const sharedVersion = await documentVersionModel.findById(sharedDocument?.currentVersionId);
+
+      await rm(join(multiLocationDir, 'shared-a.txt'));
+
+      // Sweep 2: shared-a.txt absent for the first time — first strike only.
+      await sourcesService.runSync(created._id.toString(), new Types.ObjectId());
+      // Sweep 3: second consecutive absent sweep — shared-a.txt's location is forgotten, but
+      // shared-b.txt's location still names the same document, so it is never withdrawn.
+      await sourcesService.runSync(created._id.toString(), new Types.ObjectId());
+
+      const stillLiveVersion = await documentVersionModel.findById(sharedVersion?._id);
+      expect(stillLiveVersion?.withdrawnAt).toBeUndefined();
+
+      const afterForget = await documentModel.findById(sharedDocument?._id);
+      expect(afterForget?.locations).toHaveLength(1);
+      expect(afterForget?.locations[0]?.path).toBe(sharedBRelativePath);
+
+      await rm(multiLocationDir, { recursive: true, force: true });
+    });
   });
 });

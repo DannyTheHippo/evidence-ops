@@ -13,6 +13,10 @@ import {
   buildWideCellWorksheetByteBudgetXlsx,
 } from '../../scripts/fixtures/adversarial/lib/build-huge-xlsx';
 import {
+  buildOversizeHtml,
+  buildTwentyMebibyteHtml,
+} from '../../scripts/fixtures/adversarial/lib/build-html-fixtures';
+import {
   contentMatchesDeclaredKind,
   MAX_FILE_SIZE_BYTES,
   resolveUploadKind,
@@ -20,6 +24,7 @@ import {
 import {
   HostileEmailException,
   MalformedEmailException,
+  MalformedHtmlException,
 } from '../../src/features/evidence/ingestion/exceptions/ingestion.exception';
 import {
   EMAIL_CONTAINER_LIMITS,
@@ -27,6 +32,11 @@ import {
 } from '../../src/features/evidence/ingestion/parsers/email-mime';
 import { CsvParser } from '../../src/features/evidence/ingestion/parsers/csv.parser';
 import { DocxParser } from '../../src/features/evidence/ingestion/parsers/docx.parser';
+import {
+  HTML_MAX_BYTES,
+  HTML_MAX_NESTING_DEPTH,
+  HtmlParser,
+} from '../../src/features/evidence/ingestion/parsers/html.parser';
 import { HostileArchiveException } from '../../src/features/evidence/ingestion/parsers/safe-zip';
 import {
   EmptyPdfTextLayerException,
@@ -46,6 +56,7 @@ const FIXTURE_DIR = path.join(__dirname, '../../fixtures/adversarial');
 
 const csvParser = new CsvParser(',', ['text/csv']);
 const docxParser = new DocxParser();
+const htmlParser = new HtmlParser();
 const pdfParser = new PdfParser();
 const xlsxParser = new XlsxParser();
 
@@ -82,6 +93,19 @@ function summarizeParsed(parsed: ParsedDocument): string {
 
 async function readFixture(relativePath: string): Promise<Buffer> {
   return readFile(path.join(FIXTURE_DIR, relativePath));
+}
+
+function findCellElement(
+  result: ParsedDocument,
+  sheetName: string,
+  cell: string,
+): ParsedDocument['elements'][number] | undefined {
+  return result.elements.find(
+    (element) =>
+      element.locator.kind === 'xlsx-cell' &&
+      element.locator.sheetName === sheetName &&
+      element.locator.cell === cell,
+  );
 }
 
 /**
@@ -333,6 +357,141 @@ describe('adversarial fixture parser behaviour', () => {
     expect(parsed.elements.map((element) => element.text)).toEqual(
       expect.arrayContaining(['Aldercrest Consulting', 'Suite Detail', 'Suite']),
     );
+  });
+
+  it('a paragraph nested 5,000 <div> deep refuses at the depth scan, naming the cap', async () => {
+    const buffer = await readFixture('nested-tags.html');
+    const outcome = await observe('nested-tags.html', htmlParser, buffer);
+    observations.push(outcome);
+
+    expect(outcome.result).toBe('threw');
+    await expect(htmlParser.parse(buffer)).rejects.toBeInstanceOf(MalformedHtmlException);
+    await expect(htmlParser.parse(buffer)).rejects.toThrow(new RegExp(`${HTML_MAX_NESTING_DEPTH}`));
+  });
+
+  it('never-closed <li> items and a trailing never-closed <p> still recover into one block each', async () => {
+    const buffer = await readFixture('unclosed-tags.html');
+    const outcome = await observe('unclosed-tags.html', htmlParser, buffer);
+    observations.push(outcome);
+
+    const parsed = await htmlParser.parse(buffer);
+    expect(parsed.elements.map((element) => element.text)).toEqual([
+      'Suite A-100 — $1,200/mo',
+      'Suite A-101 — $1,450/mo',
+      'Suite A-102 — $1,600/mo',
+      'Figures above are unaudited.',
+    ]);
+  });
+
+  it('an unterminated <script> refuses before it can swallow the rest of the document', async () => {
+    const buffer = await readFixture('unterminated-script.html');
+    const outcome = await observe('unterminated-script.html', htmlParser, buffer);
+    observations.push(outcome);
+
+    expect(outcome.result).toBe('threw');
+    await expect(htmlParser.parse(buffer)).rejects.toBeInstanceOf(MalformedHtmlException);
+  });
+
+  it('named, decimal, and hex entities decode, and a literal </evidence> is re-escaped', async () => {
+    const buffer = await readFixture('entities.html');
+    const outcome = await observe('entities.html', htmlParser, buffer);
+    observations.push(outcome);
+
+    const parsed = await htmlParser.parse(buffer);
+    // Built from code points rather than typed as a literal: the &nbsp; token decodes to U+00A0,
+    // which is visually indistinguishable from the ordinary spaces around it.
+    const expectedEntities = ['&', '<', '>', '"', "'", "'", ' ', 'é', '€'].join(' ');
+    expect(parsed.elements[0]?.text).toBe(expectedEntities);
+    expect(parsed.elements[1]?.text).toContain('&lt;/evidence');
+    for (const element of parsed.elements) {
+      expect(element.text).not.toMatch(/<\/?evidence/i);
+    }
+  });
+
+  it('a well-formed 3x3 table drops the script/style inside its cells and excludes the hidden row', async () => {
+    const buffer = await readFixture('script-inside-table.html');
+    const outcome = await observe('script-inside-table.html', htmlParser, buffer);
+    observations.push(outcome);
+
+    const parsed = await htmlParser.parse(buffer);
+    expect(findCellElement(parsed, 'HTML-TABLE-1', 'A2')?.text).toBe('A-100');
+    expect(findCellElement(parsed, 'HTML-TABLE-1', 'A3')?.text).toBe('A-101');
+    const allText = parsed.elements.map((element) => element.text).join('\n');
+    expect(allText).not.toContain('trackView');
+    expect(allText).not.toContain('color: red');
+    expect(allText).not.toContain('INTERNAL');
+  });
+
+  it('every hidden-element signal is dropped, leaving only the visible paragraph', async () => {
+    const buffer = await readFixture('hidden-elements.html');
+    const outcome = await observe('hidden-elements.html', htmlParser, buffer);
+    observations.push(outcome);
+
+    const parsed = await htmlParser.parse(buffer);
+    expect(parsed.elements.map((element) => element.text)).toEqual([
+      'Visible ledger summary for Kestrel Point.',
+    ]);
+  });
+
+  it("a well-formed rent-roll table flattens to cells and drops the caption's colspan along with it", async () => {
+    const buffer = await readFixture('well-formed-table.html');
+    const outcome = await observe('well-formed-table.html', htmlParser, buffer);
+    observations.push(outcome);
+
+    const parsed = await htmlParser.parse(buffer);
+    expect(findCellElement(parsed, 'HTML-TABLE-1', 'A1')?.text).toBe('Suite');
+    expect(findCellElement(parsed, 'HTML-TABLE-1', 'B2')?.text).toBe('Aldercrest Consulting');
+    expect(findCellElement(parsed, 'HTML-TABLE-1', 'C6')?.text).toBe('0');
+    expect(parsed.elements.some((element) => element.text.includes('Rent Roll'))).toBe(false);
+    expect(parsed.reducedFidelityReasons).toBeUndefined();
+  });
+
+  it('a ragged table with an uneven width and a rowspan falls back to row text, not cells', async () => {
+    const buffer = await readFixture('ragged-table.html');
+    const outcome = await observe('ragged-table.html', htmlParser, buffer);
+    observations.push(outcome);
+
+    const parsed = await htmlParser.parse(buffer);
+    expect(parsed.elements.some((element) => element.locator.kind === 'xlsx-cell')).toBe(false);
+    expect(parsed.elements.map((element) => element.text)).toEqual([
+      'Suite A-100\t1,200',
+      'Occupied\tQ3 2026',
+      'Suite A-101',
+    ]);
+    expect(parsed.reducedFidelityReasons).toEqual([
+      expect.stringContaining('html-table-1-not-flattened'),
+    ]);
+  });
+
+  it('a document exactly at HTML_MAX_BYTES parses', async () => {
+    const buffer = buildTwentyMebibyteHtml();
+    expect(buffer.length).toBe(HTML_MAX_BYTES);
+    const outcome = await observe(
+      'adversarial/twenty-mebibyte.html (in-memory, not committed)',
+      htmlParser,
+      buffer,
+    );
+    observations.push(outcome);
+
+    expect(outcome.result).toBe('parsed');
+    const parsed = await htmlParser.parse(buffer);
+    expect(parsed.elements.length).toBeGreaterThan(0);
+    expect(parsed.elements.length).toBeLessThanOrEqual(2_000);
+  }, 120_000);
+
+  it('a document one byte over HTML_MAX_BYTES refuses, naming the cap', async () => {
+    const buffer = buildOversizeHtml();
+    expect(buffer.length).toBe(HTML_MAX_BYTES + 1);
+    const outcome = await observe(
+      'adversarial/oversize.html (in-memory, not committed)',
+      htmlParser,
+      buffer,
+    );
+    observations.push(outcome);
+
+    expect(outcome.result).toBe('threw');
+    await expect(htmlParser.parse(buffer)).rejects.toBeInstanceOf(MalformedHtmlException);
+    await expect(htmlParser.parse(buffer)).rejects.toThrow(new RegExp(`${HTML_MAX_BYTES}`));
   });
 });
 

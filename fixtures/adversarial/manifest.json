@@ -77,6 +77,16 @@
       "description": "A CFB-container stub, the byte shape real password-protected OOXML takes."
     },
     {
+      "path": "entities.html",
+      "sha256": "d9b650c14f1fb3fad85bf9d7bcf19584594d1d4e39965abd190f7083598a1e9d",
+      "description": "Named, decimal, and hex entities, &nbsp;, and a literal &lt;/evidence&gt;."
+    },
+    {
+      "path": "hidden-elements.html",
+      "sha256": "5dfc60aea19e9ca5005076f4b49fb66d97f1d6b2088d0472e5581b7efdbff74f",
+      "description": "A visible paragraph beside every hidden-element signal the parser honours."
+    },
+    {
       "path": "legacy-ledger.xls",
       "sha256": "ee4d0d7d9e81fc44c6c1d25536b8105ea87e9b04d103f7b70223f46c127e42be",
       "description": "A CFB-container stub standing in for a legacy Excel 97-2003 .xls file."
@@ -90,6 +100,21 @@
       "path": "mixed-scanned-text.pdf",
       "sha256": "6dec60ca94ed43080b5fa576a914dfed424e1124d2674e5f7d054b86b1fb22ae",
       "description": "Page 1 has extractable text; page 2 has none, standing in for a scanned page."
+    },
+    {
+      "path": "nested-tags.html",
+      "sha256": "b04b7d2d23e9a78f199b725f275c028f1c52525b2ab0c47a9d148e758660832c",
+      "description": "One paragraph wrapped in 5,000 levels of nested <div>."
+    },
+    {
+      "path": "ragged-table.html",
+      "sha256": "4d31becee66a2d93a81868a69f9224a037467aa0e8bf412444cfde5516e39922",
+      "description": "A table with uneven row widths and a rowspan greater than one."
+    },
+    {
+      "path": "script-inside-table.html",
+      "sha256": "d9c56cbdeb091d745c95a6c837f182603fa0949c2fda3d5ed5cecf6bc801fd1e",
+      "description": "A well-formed 3x3 table with <script>/<style> in cells and a hidden row."
     },
     {
       "path": "semicolon-export.csv",
@@ -112,9 +137,24 @@
       "description": "A repeated category band above the real field-name header row."
     },
     {
+      "path": "unclosed-tags.html",
+      "sha256": "c9e2cb6a75ea94bd190d85e67aec76c698e372b49d007dc5c62d74cfa6afcb57",
+      "description": "A <ul> of never-closed <li> items and a trailing never-closed <p>."
+    },
+    {
+      "path": "unterminated-script.html",
+      "sha256": "2c02fa410b08f0a654647bb2ac83b608ad7233bbd4834ff3ecdf32c795427468",
+      "description": "A <script> with no closing tag, following one visible paragraph."
+    },
+    {
       "path": "utf16-export.csv",
       "sha256": "64888532a76bd96a1a4f67086328ffc3291daadf4458c045de1e3b2b50997e96",
       "description": "Excel 'Unicode Text' style export: UTF-16LE with a byte-order mark."
+    },
+    {
+      "path": "well-formed-table.html",
+      "sha256": "cc9a4792caa7adb8b86f1147cd4724495c87e3343c77d75909fa2233d943321b",
+      "description": "A rent-roll style header and five data rows, with colspan on the caption only."
     },
     {
       "path": "windows-1252-export.csv",

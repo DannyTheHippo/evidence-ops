@@ -67,6 +67,8 @@ describe('SourcesService', () => {
     applySourceClassToDrifted: jest.fn(),
     withdrawVersions: jest.fn(),
     reinstateVersions: jest.fn(),
+    recordLocation: jest.fn(),
+    forgetLocation: jest.fn(),
   };
   const mockAuditService = { record: jest.fn() };
   const mockLogger = getMockLogger();
@@ -1080,12 +1082,13 @@ describe('SourcesService', () => {
         expect.objectContaining({ originalname: 'changed.pdf' }),
         { documentId: documentIdB.toString() },
         DEFAULT_TENANT_ID,
+        { path: 'changed.pdf', sourceId },
       );
       expect(mockDocumentsService.upload).toHaveBeenCalledWith(
         expect.objectContaining({ originalname: 'new.pdf' }),
         { title: 'new.pdf' },
         DEFAULT_TENANT_ID,
-        { sourceClass: 'unclassified', sourceId },
+        { sourceClass: 'unclassified', sourceId, path: 'new.pdf' },
       );
 
       const persistedFileStates = getFinalizeUpdate(1).$set.fileStates;
@@ -1206,9 +1209,16 @@ describe('SourcesService', () => {
       mockSourceConnector.listFiles.mockResolvedValueOnce([
         { relativePath: 'stays.pdf', sizeBytes: 100, mtimeMs: 1000 },
       ]);
+      // No location remains once this, the document's only known location, is forgotten.
+      mockDocumentsService.forgetLocation.mockResolvedValueOnce(0);
 
       await service.runSync(sourceId.toString(), leaseToken);
 
+      expect(mockDocumentsService.forgetLocation).toHaveBeenCalledWith(
+        goneDocumentId,
+        { path: 'gone.pdf', sourceId },
+        DEFAULT_TENANT_ID,
+      );
       // `withdrawVersions` receiving the correct `documentId` is the assertion the earlier bug
       // failed silently: a corrupted `gone.pdf` entry loses `documentId` on the first sweep, so
       // this call either never fires or fires with `undefined` in the array.
@@ -1229,6 +1239,63 @@ describe('SourcesService', () => {
       });
       expect(sweep2Gone?.withdrawnAt).toBeInstanceOf(Date);
     });
+
+    it.each([
+      { name: 'absent-twice-last-location', forgetLocationRemaining: 0, expectWithdraw: true },
+      {
+        name: 'absent-twice-other-location-remains',
+        forgetLocationRemaining: 1,
+        expectWithdraw: false,
+      },
+    ])(
+      'should withdraw a document only when forgetLocation reports no location remains ($name)',
+      async ({ forgetLocationRemaining, expectWithdraw }) => {
+        const staysDocumentId = new Types.ObjectId();
+        const goneDocumentId = new Types.ObjectId();
+        const staysState = {
+          path: 'stays.pdf',
+          sha256: 'a'.repeat(64),
+          sizeBytes: 100,
+          mtimeMs: 1000,
+          documentId: staysDocumentId,
+        };
+        // Already on its second strike — this single sweep is what pushes it over the two-strike
+        // threshold, so the forget/withdraw decision is exercised without a second `runSync` call.
+        const goneState = {
+          path: 'gone.pdf',
+          sha256: 'b'.repeat(64),
+          sizeBytes: 200,
+          mtimeMs: 1000,
+          documentId: goneDocumentId,
+          absentSweeps: 1,
+        };
+        const source = buildMockSource({ fileStates: [staysState, goneState] });
+        mockSourceModel.findOneAndUpdate
+          .mockResolvedValueOnce(source)
+          .mockResolvedValueOnce(source);
+        mockSourceConnector.listFiles.mockResolvedValueOnce([
+          { relativePath: 'stays.pdf', sizeBytes: 100, mtimeMs: 1000 },
+        ]);
+        mockDocumentsService.forgetLocation.mockResolvedValueOnce(forgetLocationRemaining);
+
+        await service.runSync(sourceId.toString(), leaseToken);
+
+        expect(mockDocumentsService.forgetLocation).toHaveBeenCalledWith(
+          goneDocumentId,
+          { path: 'gone.pdf', sourceId },
+          DEFAULT_TENANT_ID,
+        );
+        if (expectWithdraw) {
+          expect(mockDocumentsService.withdrawVersions).toHaveBeenCalledWith(
+            [goneDocumentId],
+            'source-file-absent',
+            DEFAULT_TENANT_ID,
+          );
+        } else {
+          expect(mockDocumentsService.withdrawVersions).not.toHaveBeenCalled();
+        }
+      },
+    );
 
     it('should mark a placeholder entry withdrawn on the second absent sweep without calling withdrawVersions', async () => {
       const staysDocumentId = new Types.ObjectId();
@@ -1263,8 +1330,10 @@ describe('SourcesService', () => {
 
       await service.runSync(sourceId.toString(), leaseToken);
 
-      // A placeholder was never ingested, so there is no document version to withdraw — only
-      // `stays.pdf`'s real entry could ever appear here, and it never goes absent in this test.
+      // A placeholder was never ingested, so there is no location to forget and no document
+      // version to withdraw — only `stays.pdf`'s real entry could ever appear here, and it never
+      // goes absent in this test.
+      expect(mockDocumentsService.forgetLocation).not.toHaveBeenCalled();
       expect(mockDocumentsService.withdrawVersions).not.toHaveBeenCalled();
       const sweep2FileStates = getFinalizeUpdate(3).$set.fileStates;
       const sweep2Placeholder = sweep2FileStates.find((state) => state.path === 'mystery.exe');
@@ -1478,6 +1547,14 @@ describe('SourcesService', () => {
       await service.runSync(sourceId.toString(), leaseToken);
 
       expect(mockSourceConnector.fetchFile).toHaveBeenCalledWith('restored.pdf');
+      // The location this path names was forgotten off its document by whichever earlier sweep
+      // withdrew it — re-registering it here is what a withdrawn-then-returned path requires
+      // (`syncOneFile`'s own doc comment).
+      expect(mockDocumentsService.recordLocation).toHaveBeenCalledWith(
+        withdrawnDocumentId,
+        { path: 'restored.pdf', sourceId },
+        DEFAULT_TENANT_ID,
+      );
       expect(mockDocumentsService.reinstateVersions).toHaveBeenCalledWith(
         [withdrawnDocumentId],
         DEFAULT_TENANT_ID,
@@ -1524,11 +1601,46 @@ describe('SourcesService', () => {
         expect.objectContaining({ originalname: 'changed-after-withdrawal.pdf' }),
         { documentId: withdrawnDocumentId.toString() },
         DEFAULT_TENANT_ID,
+        { path: 'changed-after-withdrawal.pdf', sourceId },
       );
       expect(mockDocumentsService.reinstateVersions).toHaveBeenCalledWith(
         [withdrawnDocumentId],
         DEFAULT_TENANT_ID,
       );
+    });
+
+    it('should re-point the fileState documentId to whatever document upload resolves to when synced bytes converge onto a different, already-existing document', async () => {
+      const trackedDocumentId = new Types.ObjectId();
+      const convergedOntoDocumentId = new Types.ObjectId();
+      const trackedState = {
+        path: 'converges.pdf',
+        sha256: 'a'.repeat(64),
+        sizeBytes: 100,
+        mtimeMs: 1000,
+        documentId: trackedDocumentId,
+      };
+      const source = buildMockSource({ fileStates: [trackedState] });
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(source).mockResolvedValueOnce(source);
+      mockSourceConnector.listFiles.mockResolvedValueOnce([
+        { relativePath: 'converges.pdf', sizeBytes: 120, mtimeMs: 2000 },
+      ]);
+      mockSourceConnector.fetchFile.mockResolvedValueOnce(
+        Buffer.from('now-matches-another-document'),
+      );
+      mockDocumentsService.upload.mockResolvedValueOnce({ id: convergedOntoDocumentId.toString() });
+
+      await service.runSync(sourceId.toString(), leaseToken);
+
+      expect(mockDocumentsService.upload).toHaveBeenCalledWith(
+        expect.objectContaining({ originalname: 'converges.pdf' }),
+        { documentId: trackedDocumentId.toString() },
+        DEFAULT_TENANT_ID,
+        { path: 'converges.pdf', sourceId },
+      );
+      const persisted = getFinalizeUpdate(1).$set.fileStates.find(
+        (state) => state.path === 'converges.pdf',
+      );
+      expect(persisted).toMatchObject({ documentId: convergedOntoDocumentId });
     });
   });
 

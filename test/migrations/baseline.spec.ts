@@ -1,7 +1,7 @@
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Db } from 'mongodb';
-import { down, up } from '../../migrations/0001-baseline';
+import { down, resolveVectorDimensions, up } from '../../migrations/0001-baseline';
 import { METRIC_IDS } from '../../src/features/evidence/facts/metric-ontology';
 
 const SCHEMAS_ROOT = join(__dirname, '..', '..', 'src', 'database', 'schemas');
@@ -242,5 +242,46 @@ describe('migrations/0001-baseline', () => {
     await down(recorder.db);
 
     expect(recorder.droppedCollections).toContain('verifications');
+  });
+});
+
+describe('resolveVectorDimensions', () => {
+  const originalEmbeddingDimensions = process.env.EMBEDDING_DIMENSIONS;
+
+  afterEach(() => {
+    if (originalEmbeddingDimensions === undefined) {
+      delete process.env.EMBEDDING_DIMENSIONS;
+    } else {
+      process.env.EMBEDDING_DIMENSIONS = originalEmbeddingDimensions;
+    }
+  });
+
+  it('defaults to 1024 when EMBEDDING_DIMENSIONS is unset', () => {
+    delete process.env.EMBEDDING_DIMENSIONS;
+    expect(resolveVectorDimensions()).toBe(1024);
+  });
+
+  it('defaults to 1024 when EMBEDDING_DIMENSIONS is blank', () => {
+    process.env.EMBEDDING_DIMENSIONS = '   ';
+    expect(resolveVectorDimensions()).toBe(1024);
+  });
+
+  it('reads a configured positive integer', () => {
+    process.env.EMBEDDING_DIMENSIONS = '768';
+    expect(resolveVectorDimensions()).toBe(768);
+  });
+
+  it('refuses 0', () => {
+    process.env.EMBEDDING_DIMENSIONS = '0';
+    expect(() => resolveVectorDimensions()).toThrow(
+      'EMBEDDING_DIMENSIONS must be a positive integer, got "0"',
+    );
+  });
+
+  it('refuses a non-numeric value', () => {
+    process.env.EMBEDDING_DIMENSIONS = 'abc';
+    expect(() => resolveVectorDimensions()).toThrow(
+      'EMBEDDING_DIMENSIONS must be a positive integer, got "abc"',
+    );
   });
 });

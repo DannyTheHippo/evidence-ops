@@ -23,6 +23,8 @@ export const getMockTypedConfig = (
     anthropic: config.anthropic,
     openai: config.openai,
     voyage: config.voyage,
+    embedding: config.embedding,
+    openaiCompatible: config.openaiCompatible,
     temporal: config.temporal,
     retrieval: config.retrieval,
     telemetry: config.telemetry,

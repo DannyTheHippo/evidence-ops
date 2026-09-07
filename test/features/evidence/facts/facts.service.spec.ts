@@ -705,6 +705,40 @@ describe('FactsService', () => {
       );
     });
 
+    // Cancellation reaches the prose path through the activity's heartbeat context, and the check
+    // sits inside `mapWithConcurrency`'s callback rather than once before the loop: the util starts
+    // new calls as earlier ones settle, so a signal that fires mid-run must stop the calls that
+    // have not begun yet. A pre-aborted signal is the observable edge of that — no model call is
+    // ever made, and the rejection carries the signal's own reason rather than a generic failure,
+    // so the workflow's catch records why it stopped.
+    it('should make no model call and reject with the signal reason when the abort signal is already aborted', async () => {
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('%PDF-1.4 fixture bytes'),
+        contentType: PDF_MIME,
+        metadata: {},
+      });
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
+        buildVersion({ storageKey: stored.id }),
+      );
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+      mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser([buildProseElement()]));
+      mockEvidenceChunkModel.find.mockResolvedValueOnce([
+        {
+          _id: 'chunk-prose-abort',
+          text: 'For Northgate Business Park the cap rate is 5.25% per the offering memo.',
+          locator: { kind: 'pdf-page', page: 1 },
+        },
+      ]);
+      const controller = new AbortController();
+      const reason = new Error('activity cancelled');
+      controller.abort(reason);
+
+      await expect(
+        service.extractFacts(versionId.toString(), 'default', controller.signal),
+      ).rejects.toBe(reason);
+      expect(fakeModelProvider.calls).toHaveLength(0);
+    });
+
     it('should accept a fact whose quote is grounded in the chunk and drop one whose quote is not', async () => {
       // The single most important guarantee of prose extraction: the model proposes, the
       // application disposes. Both an acceptable and an ungrounded candidate come back from one

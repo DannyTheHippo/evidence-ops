@@ -132,10 +132,23 @@ describe('EmailAttachmentService', () => {
 
     expect(result.created).toBe(0);
     expect(mockDocumentsService.upload).not.toHaveBeenCalled();
+    // Both arms, because a part can be recorded either way: a document created straight from the
+    // attachment carries `emailOrigin` itself, while one that later deduped onto existing content
+    // records the same part as a `locations` entry instead. Checking only the first arm would
+    // re-unwrap a deduped attachment and duplicate it — the exact thing this lookup prevents.
+    // Both key patterns are indexed, in the schema and in the baseline migration.
     expect(mockDocumentModel.findOne).toHaveBeenCalledWith({
       tenantId: 'tenant-a',
-      'emailOrigin.parentVersionId': versionId,
-      'emailOrigin.partIndex': 0,
+      $or: [
+        {
+          'emailOrigin.parentVersionId': versionId,
+          'emailOrigin.partIndex': 0,
+        },
+        {
+          'locations.emailOrigin.parentVersionId': versionId,
+          'locations.emailOrigin.partIndex': 0,
+        },
+      ],
     });
   });
 

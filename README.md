@@ -287,9 +287,12 @@ The MCP server is a fifth process serving the AI-client path, and a deployable o
 mcp:dev` for the host loop, and an `mcp` service under the `full` profile for the containerized
 stack. Nothing in the browser walkthrough needs it, so it is left out of the four terminals above.
 
-`MODEL_PROVIDER` selects the model vendor (`anthropic` or `openai`) at boot; `OPENAI_BASE_URL` is
-what points the OpenAI path at an OpenAI-compatible endpoint instead. Embeddings are Voyage on
-either path.
+`MODEL_PROVIDER` selects the model vendor (`anthropic`, `openai`, or `openai-compatible`) at boot;
+`EMBEDDING_PROVIDER` makes the same choice for embeddings (`voyage` or `openai-compatible`),
+independently of `MODEL_PROVIDER`. `OPENAI_BASE_URL` still points the `openai` path at any
+OpenAI-compatible endpoint; the dedicated `openai-compatible` provider is its own namespace
+(`OPENAI_COMPATIBLE_*`) with configured per-token prices, since a self-hosted model's cost is in
+neither vendor's pricing table.
 
 **This host-loop path is the primary development path** — fastest iteration, one process per
 terminal, against a compose-run `mongo` (`docker compose up -d mongo`, the tool's default profile).
@@ -729,9 +732,10 @@ the model/embedding version — a stale entry silently freezes old behaviour for
 did not change. `--ingest` is what spends real embedding budget, so it is opt-in rather than
 implied by `--record`.
 
-**`VOYAGE_DIMENSIONS` is baked into the vector index at migration time.** `0001-baseline.ts`
+**`EMBEDDING_DIMENSIONS` is baked into the vector index at migration time.** `0001-baseline.ts`
 reads it when building the index definition. Changing it afterwards requires re-running that
-migration, not just restarting the app.
+migration, not just restarting the app. Boot refuses to start when the live index's width and the
+configured embedding provider's width disagree.
 
 **A stale Mongo volume can wedge the replica set.** The compose service pins `hostname:
 evidence-ops-mongo` because the replica-set config persisted in the volume records that name; a

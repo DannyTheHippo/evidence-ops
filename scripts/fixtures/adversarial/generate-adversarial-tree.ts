@@ -17,6 +17,16 @@ import {
   buildTruncatedEmail,
 } from './lib/build-email-fixtures';
 import { buildAdversarialManifest } from './lib/build-manifest';
+import {
+  buildEntitiesHtml,
+  buildHiddenElementsHtml,
+  buildNestedTagsHtml,
+  buildRaggedTableHtml,
+  buildScriptInsideTableHtml,
+  buildUnclosedTagsHtml,
+  buildUnterminatedScriptHtml,
+  buildWellFormedTableHtml,
+} from './lib/build-html-fixtures';
 import { buildMixedScannedTextPdf } from './lib/build-mixed-scanned-text-pdf';
 import { buildSemicolonCsv } from './lib/build-semicolon-csv';
 import { buildTruncatedPdfSource } from './lib/build-truncated-pdf-source';
@@ -28,11 +38,11 @@ import { buildWindows1252Csv } from './lib/build-windows1252-csv';
 
 /**
  * Generates the adversarial fixture tree into `targetDir` — every condition named in this plan
- * step's own text except the 100k-row XLSX, which is deliberately never written to disk here (see
- * `lib/build-huge-xlsx.ts`'s own doc comment: it is multi-megabyte, generated fresh in memory by
- * whichever spec needs it, and never committed). Exported as a function, mirroring
- * `generate-data-room.ts`, so both `../adversarial-cli.ts` and the determinism/property specs call
- * the exact same code path.
+ * step's own text except the in-memory-only builders (the 100k-row XLSX, the wide-cell XLSX, and
+ * the two byte-cap HTML fixtures), which are deliberately never written to disk here (see
+ * `lib/build-huge-xlsx.ts`'s own doc comment: each is multi-megabyte, generated fresh by whichever
+ * spec needs it, and never committed). Exported as a function, mirroring `generate-data-room.ts`,
+ * so both `../adversarial-cli.ts` and the determinism/property specs call the exact same code path.
  */
 export async function generateAdversarialTree(targetDir: string): Promise<void> {
   await mkdir(path.join(targetDir, 'duplicates', 'folder-a'), { recursive: true });
@@ -179,6 +189,46 @@ export async function generateAdversarialTree(targetDir: string): Promise<void> 
       path: 'email-nested-message.eml',
       buffer: nestedMessageEmail,
       description: 'A message carrying another whole message as a message/rfc822 attachment.',
+    },
+    {
+      path: 'nested-tags.html',
+      buffer: buildNestedTagsHtml(),
+      description: 'One paragraph wrapped in 5,000 levels of nested <div>.',
+    },
+    {
+      path: 'unclosed-tags.html',
+      buffer: buildUnclosedTagsHtml(),
+      description: 'A <ul> of never-closed <li> items and a trailing never-closed <p>.',
+    },
+    {
+      path: 'unterminated-script.html',
+      buffer: buildUnterminatedScriptHtml(),
+      description: 'A <script> with no closing tag, following one visible paragraph.',
+    },
+    {
+      path: 'entities.html',
+      buffer: buildEntitiesHtml(),
+      description: 'Named, decimal, and hex entities, &nbsp;, and a literal &lt;/evidence&gt;.',
+    },
+    {
+      path: 'script-inside-table.html',
+      buffer: buildScriptInsideTableHtml(),
+      description: 'A well-formed 3x3 table with <script>/<style> in cells and a hidden row.',
+    },
+    {
+      path: 'hidden-elements.html',
+      buffer: buildHiddenElementsHtml(),
+      description: 'A visible paragraph beside every hidden-element signal the parser honours.',
+    },
+    {
+      path: 'well-formed-table.html',
+      buffer: buildWellFormedTableHtml(),
+      description: 'A rent-roll style header and five data rows, with colspan on the caption only.',
+    },
+    {
+      path: 'ragged-table.html',
+      buffer: buildRaggedTableHtml(),
+      description: 'A table with uneven row widths and a rowspan greater than one.',
     },
   ];
 

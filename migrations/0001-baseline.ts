@@ -20,35 +20,31 @@ const DEFAULT_TENANT_ID = 'default';
  * month of spend history available for the tenant an operator is debugging a budget complaint for. */
 const MODEL_SPEND_WINDOW_TTL_SECONDS = 30 * 24 * 60 * 60;
 
-const ALLOWED_VOYAGE_DIMENSIONS = [256, 512, 1024, 2048] as const;
-const DEFAULT_VOYAGE_DIMENSIONS: (typeof ALLOWED_VOYAGE_DIMENSIONS)[number] = 1024;
-
-function isAllowedDimension(n: number): n is (typeof ALLOWED_VOYAGE_DIMENSIONS)[number] {
-  return (ALLOWED_VOYAGE_DIMENSIONS as readonly number[]).includes(n);
-}
+const DEFAULT_EMBEDDING_DIMENSIONS = 1024;
 
 /**
  * Migrations run outside Nest's DI, so `TypedConfigService` is unavailable and
  * `environment.config.ts`'s "process.env read in exactly one file" rule (`CLAUDE.md` § Coding
  * Rules) cannot be honoured literally — this is the documented exception. Reading
- * `VOYAGE_DIMENSIONS` directly, rather than hardcoding a width, is what keeps the vector index's
- * `numDimensions` from drifting out of sync with the embedding model: a mismatched dimension
- * produces an index that builds successfully and then never matches anything, with no error
- * anywhere. Default and legal-value set mirror `environmentSchema`'s `VOYAGE_DIMENSIONS`
+ * `EMBEDDING_DIMENSIONS` directly, rather than hardcoding a width, is what keeps the vector
+ * index's `numDimensions` from drifting out of sync with the selected embedding provider: a
+ * mismatched dimension produces an index that builds successfully and then never matches
+ * anything, with no error anywhere (`VectorIndexDimensionGuard` is the boot-time check that
+ * catches this once the app starts; this function is what the index itself is built from).
+ * Default mirrors `environmentSchema`'s `EMBEDDING_DIMENSIONS`
  * (`src/config/environment/environment.config.ts`) so an unset var behaves identically here and in
- * the app.
+ * the app; the legal-value set is any positive integer, not a Voyage-only Matryoshka list, since
+ * `EMBEDDING_DIMENSIONS` also has to fit a self-hosted or third-party model's native width.
  */
 export function resolveVectorDimensions(): number {
-  const raw = process.env.VOYAGE_DIMENSIONS;
+  const raw = process.env.EMBEDDING_DIMENSIONS;
   if (raw === undefined || raw.trim() === '') {
-    return DEFAULT_VOYAGE_DIMENSIONS;
+    return DEFAULT_EMBEDDING_DIMENSIONS;
   }
 
   const parsed = Number(raw);
-  if (!isAllowedDimension(parsed)) {
-    throw new Error(
-      `VOYAGE_DIMENSIONS must be one of ${ALLOWED_VOYAGE_DIMENSIONS.join(', ')}, got "${raw}"`,
-    );
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`EMBEDDING_DIMENSIONS must be a positive integer, got "${raw}"`);
   }
 
   return parsed;
@@ -235,6 +231,20 @@ const INDEXES: readonly IndexSpec[] = [
       partialFilterExpression: { 'emailOrigin.parentVersionId': { $exists: true } },
     },
   },
+  // Not unique, unlike the index above: a converged attachment forgets its old location and
+  // grows a new one elsewhere, so two locations can carry the same `emailOrigin` part mid-transition.
+  {
+    collection: 'documents',
+    keys: {
+      tenantId: 1,
+      'locations.emailOrigin.parentVersionId': 1,
+      'locations.emailOrigin.partIndex': 1,
+    },
+    options: {
+      name: 'documents_locations_emailOrigin_part',
+      partialFilterExpression: { 'locations.emailOrigin.parentVersionId': { $exists: true } },
+    },
+  },
   // Back `ListDocumentsRequestDto`'s `title`/`sourceKind` sort fields the same way
   // `documents_tenantId_createdAt` above backs its default.
   {
@@ -265,6 +275,16 @@ const INDEXES: readonly IndexSpec[] = [
     collection: 'document_versions',
     keys: { documentId: 1, versionNumber: 1 },
     options: { unique: true, name: 'document_versions_documentId_versionNumber_unique' },
+  },
+  // Tenant-wide, not document-scoped like the two indexes above: it backs
+  // `DocumentsService.uploadVersion`'s dedupe lookup, under the invariant that one sha256
+  // identifies exactly one `DocumentVersion` per tenant. Strictly narrower than
+  // `document_versions_documentId_sha256_unique`, which stays for the same reasoning as every
+  // other index pair in this file — the schema declares both, so both are built here.
+  {
+    collection: 'document_versions',
+    keys: { tenantId: 1, sha256: 1 },
+    options: { unique: true, name: 'document_versions_tenantId_sha256_unique' },
   },
   {
     collection: 'document_versions',
@@ -571,7 +591,7 @@ const searchIndex: SearchIndexDescription = {
  * rather than filtering the result set after.
  *
  * Built as a function, not a module-level constant, so `resolveVectorDimensions()` — and the error
- * it can throw on an invalid `VOYAGE_DIMENSIONS` — only runs during `up()`. Evaluating it at module
+ * it can throw on an invalid `EMBEDDING_DIMENSIONS` — only runs during `up()`. Evaluating it at module
  * load would also run it for `down()` and `migrate-mongo status`, where a bad vector width is
  * irrelevant to the operation being performed.
  */

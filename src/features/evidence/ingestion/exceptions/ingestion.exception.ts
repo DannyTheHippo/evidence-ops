@@ -50,6 +50,21 @@ export class MalformedPptxException extends BaseException {
 }
 
 /**
+ * Thrown by `HtmlParser` — fails CLOSED on every bound it names: a document over
+ * `HTML_MAX_BYTES`, a document opening more blocks/headings/cells than
+ * `HTML_MAX_EMITTED_ELEMENTS`, an unterminated raw-text element (`<script>`/`<style>` and their
+ * kin) that would otherwise swallow the rest of the document as its own content, and non-empty
+ * decoded input that yields zero elements. Each is refused outright rather than truncated or
+ * emitted partial, because `parse5` itself never refuses malformed markup — every refusal this
+ * parser raises is its own bound, not a passthrough of one `parse5` reports.
+ */
+export class MalformedHtmlException extends BaseException {
+  constructor(message: string, cause?: unknown) {
+    super(message, HttpStatus.BAD_REQUEST, cause);
+  }
+}
+
+/**
  * Thrown by `parseEmailMessage` (`parsers/email-mime.ts`) when a message's own structure does not
  * hold together: no header block at all, a `multipart` content type declaring no boundary, or a
  * boundary that opens and never closes.

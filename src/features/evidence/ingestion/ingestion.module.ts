@@ -20,6 +20,7 @@ import { DOCUMENT_PARSERS, ParserRegistry } from './parser.registry';
 import { CsvParser } from './parsers/csv.parser';
 import { DocxParser } from './parsers/docx.parser';
 import { EmailParser } from './parsers/email.parser';
+import { HtmlParser } from './parsers/html.parser';
 import { PdfParser } from './parsers/pdf.parser';
 import type { DocumentParser } from './parsers/parsed-element.type';
 import { PptxParser } from './parsers/pptx.parser';
@@ -40,6 +41,7 @@ export const buildDocumentParsers = (): readonly DocumentParser[] => [
   new PptxParser(),
   new TextParser(),
   new EmailParser(),
+  new HtmlParser(),
   /**
    * `CsvParser` is delimiter-parameterised, so CSV and TSV are two instances of one class. The
    * MIME lists here are what `ParserRegistry` dispatches on, and must stay exactly the canonical

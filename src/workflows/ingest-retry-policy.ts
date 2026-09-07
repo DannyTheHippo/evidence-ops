@@ -56,17 +56,19 @@ export const INGEST_HEARTBEAT_INTERVAL_MS = 10 * 1000;
  * too, so listing it would make every unclassified failure — including a transient Mongo or
  * storage blip — non-retryable.
  *
- * Transient failures are absent by the same rule: `VoyageRateLimitExceededError` and
- * `VoyageRequestFailedError` describe a moment rather than an input, and retrying is exactly what
- * resolves them.
+ * Transient failures are absent by the same rule: `VoyageRateLimitExceededError`,
+ * `VoyageRequestFailedError` and `OpenAiRequestFailedError` describe a moment rather than an
+ * input, and retrying is exactly what resolves them.
  */
 export const INGEST_NON_RETRYABLE_ERROR_TYPES: readonly string[] = [
   // A missing tenantId never appears by retrying (`requireTenantId` in `activities.ts`).
   'MissingTenantId',
-  // Voyage's own deterministic refusals: no configured API key, and a response whose shape the
-  // client cannot read. Both recur unchanged on the next attempt.
+  // Voyage's and the OpenAI-compatible embedding provider's own deterministic refusals: no
+  // configured API key, and a response whose shape the client cannot read. Both recur unchanged
+  // on the next attempt.
   'VoyageApiKeyMissingError',
   'VoyageInvalidResponseError',
+  'OpenAiInvalidResponseError',
   // A version id that names no row, and a MIME type no parser claims: both are properties of the
   // request, not of the moment it ran.
   'DocumentVersionNotFoundException',
@@ -80,6 +82,7 @@ export const INGEST_NON_RETRYABLE_ERROR_TYPES: readonly string[] = [
   'MalformedDocxException',
   'MalformedPptxException',
   'MalformedXlsxException',
+  'MalformedHtmlException',
   'HostileArchiveException',
   // The email container's two terminal refusals: a message whose structure does not hold together,
   // and one whose declared shape exceeds the unwrapping limits. Both are judgements about the same

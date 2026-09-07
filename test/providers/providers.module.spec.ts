@@ -22,6 +22,7 @@ describe('createModelProvider', () => {
   let cacheDir: string;
   let anthropic: FakeModelProvider;
   let openai: FakeModelProvider;
+  let openaiCompatible: FakeModelProvider;
   let telemetry: Telemetry;
   // Held separately, and asserted on directly, rather than through `telemetry.event` — `Telemetry`
   // declares `event` with method syntax, so referencing it off `telemetry` trips
@@ -29,6 +30,20 @@ describe('createModelProvider', () => {
   let telemetryEvent: jest.Mock;
 
   const noLedgerSpendService = {} as TenantSpendService;
+
+  // `getMockTypedConfig` passes each namespace straight through, so a partial override would drop
+  // the rest of the namespace rather than merging into it.
+  const compatibleConfig = {
+    apiKey: 'compatible-key',
+    baseUrl: 'https://compatible.example/v1',
+    model: 'mixtral-8x7b',
+    embeddingModel: 'compatible-embed',
+    timeoutMs: 30_000,
+    structuredOutput: 'json_schema' as const,
+    priceInputUsdPerMtok: 0.5,
+    priceOutputUsdPerMtok: 1.5,
+    embeddingPriceUsdPerMtok: 0.02,
+  };
 
   const request: ModelRequest<undefined> = {
     taskClass: 'qa_answer',
@@ -46,6 +61,7 @@ describe('createModelProvider', () => {
     cacheDir = await mkdtemp(join(tmpdir(), 'evidence-ops-model-provider-'));
     anthropic = new FakeModelProvider();
     openai = new FakeModelProvider();
+    openaiCompatible = new FakeModelProvider();
     telemetryEvent = jest.fn();
     telemetry = { event: telemetryEvent };
     // `modelCostHistogram` is a module-scope singleton (not a fresh instance per test like
@@ -69,6 +85,7 @@ describe('createModelProvider', () => {
     const provider = createModelProvider(
       anthropic,
       openai,
+      openaiCompatible,
       noLedgerSpendService,
       cacheOptions(),
       telemetry,
@@ -91,6 +108,7 @@ describe('createModelProvider', () => {
     const provider = createModelProvider(
       anthropic,
       openai,
+      openaiCompatible,
       noLedgerSpendService,
       cacheOptions(),
       telemetry,
@@ -101,6 +119,82 @@ describe('createModelProvider', () => {
     expect(result.output).toBe('openai-answer');
     expect(openai.calls).toHaveLength(1);
     expect(anthropic.calls).toHaveLength(0);
+  });
+
+  it('routes to the openai-compatible base when MODEL_PROVIDER=openai-compatible', async () => {
+    const config = getMockTypedConfig({
+      model: { provider: 'openai-compatible' },
+      spend: { dailyLimitUsd: 0, ingestDailyLimitUsd: undefined },
+      openaiCompatible: compatibleConfig,
+    });
+    openaiCompatible.enqueueResult({ output: 'compatible-answer' });
+
+    const provider = createModelProvider(
+      anthropic,
+      openai,
+      openaiCompatible,
+      noLedgerSpendService,
+      cacheOptions(),
+      telemetry,
+      config,
+    );
+    const result = await provider.generate(request);
+
+    expect(result.output).toBe('compatible-answer');
+    expect(openaiCompatible.calls).toHaveLength(1);
+    expect(anthropic.calls).toHaveLength(0);
+    expect(openai.calls).toHaveLength(0);
+  });
+
+  // The refusal lives here, on the branch that selects the compatible base, rather than in
+  // `OpenAiCompatibleModelProvider`'s constructor: Nest builds that class on every boot regardless
+  // of `MODEL_PROVIDER`, so a constructor refusal breaks the default `anthropic` deployment, which
+  // never calls it. The pair below pins both halves of that.
+  it.each([
+    ['priceInputUsdPerMtok', 'OPENAI_COMPATIBLE_PRICE_INPUT_USD_PER_MTOK'],
+    ['priceOutputUsdPerMtok', 'OPENAI_COMPATIBLE_PRICE_OUTPUT_USD_PER_MTOK'],
+  ])('refuses to wire the compatible base when %s is unset', (field, envVar) => {
+    const config = getMockTypedConfig({
+      model: { provider: 'openai-compatible' },
+      spend: { dailyLimitUsd: 0, ingestDailyLimitUsd: undefined },
+      openaiCompatible: { ...compatibleConfig, [field]: undefined },
+    });
+
+    expect(() =>
+      createModelProvider(
+        anthropic,
+        openai,
+        openaiCompatible,
+        noLedgerSpendService,
+        cacheOptions(),
+        telemetry,
+        config,
+      ),
+    ).toThrow(envVar);
+  });
+
+  it('wires the anthropic base with no compatible prices configured at all', () => {
+    const config = getMockTypedConfig({
+      model: { provider: 'anthropic' },
+      spend: { dailyLimitUsd: 0, ingestDailyLimitUsd: undefined },
+      openaiCompatible: {
+        ...compatibleConfig,
+        priceInputUsdPerMtok: undefined,
+        priceOutputUsdPerMtok: undefined,
+      },
+    });
+
+    expect(() =>
+      createModelProvider(
+        anthropic,
+        openai,
+        openaiCompatible,
+        noLedgerSpendService,
+        cacheOptions(),
+        telemetry,
+        config,
+      ),
+    ).not.toThrow();
   });
 
   // Still `CachingModelProvider` even after adding `Metrics` to the chain — `Metrics` sits inside
@@ -114,6 +208,7 @@ describe('createModelProvider', () => {
     const provider = createModelProvider(
       anthropic,
       openai,
+      openaiCompatible,
       noLedgerSpendService,
       cacheOptions(),
       telemetry,
@@ -135,6 +230,7 @@ describe('createModelProvider', () => {
     const provider = createModelProvider(
       anthropic,
       openai,
+      openaiCompatible,
       spendService as unknown as TenantSpendService,
       cacheOptions('record'),
       telemetry,
@@ -160,6 +256,7 @@ describe('createModelProvider', () => {
     const provider = createModelProvider(
       anthropic,
       openai,
+      openaiCompatible,
       noLedgerSpendService,
       cacheOptions('record'),
       telemetry,
@@ -184,6 +281,7 @@ describe('createModelProvider', () => {
 
 describe('createEmbeddingProvider', () => {
   let voyage: { info: EmbeddingProviderInfo; embed: jest.Mock };
+  let openaiCompatible: { info: EmbeddingProviderInfo; embed: jest.Mock };
   let als: { getStore: jest.Mock };
 
   const request: EmbeddingRequest = { inputs: ['hello world'], inputType: 'document' };
@@ -191,6 +289,10 @@ describe('createEmbeddingProvider', () => {
   beforeEach(() => {
     voyage = {
       info: { provider: 'voyage', model: 'voyage-4', dimensions: 1024 },
+      embed: jest.fn().mockResolvedValue({ embeddings: [[0, 0]], usage: { totalTokens: 3 } }),
+    };
+    openaiCompatible = {
+      info: { provider: 'openai-compatible', model: 'mxbai-embed-large', dimensions: 1024 },
       embed: jest.fn().mockResolvedValue({ embeddings: [[0, 0]], usage: { totalTokens: 3 } }),
     };
     als = { getStore: jest.fn().mockReturnValue({ tenant: 'tenant-a' }) };
@@ -208,6 +310,7 @@ describe('createEmbeddingProvider', () => {
 
     const provider = createEmbeddingProvider(
       voyage,
+      openaiCompatible,
       noLedgerSpendService,
       als as unknown as AsyncLocalStorage<AlsContext>,
       config,
@@ -229,6 +332,7 @@ describe('createEmbeddingProvider', () => {
 
     const provider = createEmbeddingProvider(
       voyage,
+      openaiCompatible,
       spendService as unknown as TenantSpendService,
       als as unknown as AsyncLocalStorage<AlsContext>,
       config,
@@ -252,6 +356,7 @@ describe('createEmbeddingProvider', () => {
 
     const provider = createEmbeddingProvider(
       voyage,
+      openaiCompatible,
       spendService as unknown as TenantSpendService,
       als as unknown as AsyncLocalStorage<AlsContext>,
       config,
@@ -261,5 +366,60 @@ describe('createEmbeddingProvider', () => {
 
     expect(spendService.release).toHaveBeenCalledTimes(1);
     expect(spendService.settle).not.toHaveBeenCalled();
+  });
+
+  it('routes to the openai-compatible base on EMBEDDING_PROVIDER=openai-compatible, pricing off the configured rate', async () => {
+    const spendService: jest.Mocked<Pick<TenantSpendService, 'reserve' | 'settle' | 'release'>> = {
+      reserve: jest.fn().mockResolvedValue(new Date('2026-08-17T00:00:00.000Z')),
+      settle: jest.fn().mockResolvedValue(undefined),
+      release: jest.fn().mockResolvedValue(undefined),
+    };
+    const config = getMockTypedConfig({
+      embedding: { provider: 'openai-compatible', dimensions: 1024 },
+      openaiCompatible: {
+        apiKey: undefined,
+        baseUrl: 'http://localhost:11434/v1',
+        model: 'llama3.1:8b',
+        embeddingModel: 'mxbai-embed-large',
+        timeoutMs: 60_000,
+        structuredOutput: 'json_schema',
+        priceInputUsdPerMtok: undefined,
+        priceOutputUsdPerMtok: undefined,
+        embeddingPriceUsdPerMtok: 0.02,
+      },
+    });
+
+    const provider = createEmbeddingProvider(
+      voyage,
+      openaiCompatible,
+      spendService as unknown as TenantSpendService,
+      als as unknown as AsyncLocalStorage<AlsContext>,
+      config,
+    );
+
+    await provider.embed(request);
+
+    expect(openaiCompatible.embed).toHaveBeenCalledTimes(1);
+    expect(voyage.embed).not.toHaveBeenCalled();
+    expect(spendService.settle).toHaveBeenCalledTimes(1);
+    const actualCostUsd = spendService.settle.mock.calls[0]?.[3];
+    expect(actualCostUsd).toBeCloseTo((3 * 0.02) / 1_000_000);
+  });
+
+  it('throws when EMBEDDING_PROVIDER=openai-compatible but no embedding price is configured', () => {
+    const config = getMockTypedConfig({
+      embedding: { provider: 'openai-compatible', dimensions: 1024 },
+    });
+    const noLedgerSpendService = {} as TenantSpendService;
+
+    expect(() =>
+      createEmbeddingProvider(
+        voyage,
+        openaiCompatible,
+        noLedgerSpendService,
+        als as unknown as AsyncLocalStorage<AlsContext>,
+        config,
+      ),
+    ).toThrow('OPENAI_COMPATIBLE_EMBEDDING_PRICE_USD_PER_MTOK');
   });
 });

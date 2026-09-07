@@ -1,5 +1,11 @@
 import { proxyActivities } from '@temporalio/workflow';
 import type { Activities } from '../worker/activities';
+import {
+  CHECK_CONTRADICTIONS_START_TO_CLOSE_TIMEOUT_MS,
+  DECOMPOSE_CLAIMS_START_TO_CLOSE_TIMEOUT_MS,
+  SYNTHESIZE_ANSWER_START_TO_CLOSE_TIMEOUT_MS,
+} from './activity-heartbeat-policy';
+import { INGEST_HEARTBEAT_TIMEOUT_MS } from './ingest-retry-policy';
 import type { AnswerQuestionInput, AnswerQuestionResult } from './types';
 
 // Retrieval is a Mongo hybrid-search read plus one Voyage embedding call for the query — cheap
@@ -26,8 +32,12 @@ const retrievalActivities = proxyActivities<Pick<Activities, 'retrieveEvidence'>
 // succeeded" and "activity reported complete", so this group gets a low `maximumAttempts` and a
 // timeout budget generous enough for real model latency rather than Mongo-read speed.
 const synthesisActivities = proxyActivities<Pick<Activities, 'synthesizeAnswer'>>({
-  startToCloseTimeout: '2 minutes',
+  startToCloseTimeout: SYNTHESIZE_ANSWER_START_TO_CLOSE_TIMEOUT_MS,
   scheduleToCloseTimeout: '5 minutes',
+  // Paired with the heartbeats `synthesizeAnswer` (`src/worker/activities.ts`) emits — a heartbeat
+  // with no timeout declared here is inert, and a timeout with no heartbeats fails every healthy
+  // call. See `ingest-retry-policy.ts`'s own `INGEST_HEARTBEAT_TIMEOUT_MS` doc comment.
+  heartbeatTimeout: INGEST_HEARTBEAT_TIMEOUT_MS,
   retry: {
     maximumAttempts: 2,
     // The spend ceiling and the pricing table are facts a retry cannot change mid-workflow, and
@@ -54,8 +64,12 @@ const synthesisActivities = proxyActivities<Pick<Activities, 'synthesizeAnswer'>
 // group's retry policy exists for the budget and the `MissingTenantId` case, not because either
 // activity is expected to reject.
 const decompositionActivities = proxyActivities<Pick<Activities, 'decomposeClaims'>>({
-  startToCloseTimeout: '2 minutes',
+  startToCloseTimeout: DECOMPOSE_CLAIMS_START_TO_CLOSE_TIMEOUT_MS,
   scheduleToCloseTimeout: '5 minutes',
+  // Paired with the heartbeats `decomposeClaims` (`src/worker/activities.ts`) emits — see
+  // `synthesisActivities`'s own comment above for what a heartbeat with no timeout, or a timeout
+  // with no heartbeat, each do wrong.
+  heartbeatTimeout: INGEST_HEARTBEAT_TIMEOUT_MS,
   retry: {
     maximumAttempts: 2,
     nonRetryableErrorTypes: [
@@ -70,8 +84,11 @@ const decompositionActivities = proxyActivities<Pick<Activities, 'decomposeClaim
 });
 
 const contradictionActivities = proxyActivities<Pick<Activities, 'checkContradictions'>>({
-  startToCloseTimeout: '2 minutes',
+  startToCloseTimeout: CHECK_CONTRADICTIONS_START_TO_CLOSE_TIMEOUT_MS,
   scheduleToCloseTimeout: '5 minutes',
+  // Paired with the heartbeats `checkContradictions` (`src/worker/activities.ts`) emits — same
+  // pairing `decompositionActivities` above declares.
+  heartbeatTimeout: INGEST_HEARTBEAT_TIMEOUT_MS,
   retry: {
     maximumAttempts: 2,
     nonRetryableErrorTypes: [

@@ -470,6 +470,11 @@ export class SourcesService {
    * exactly like `finalizeCompletion`/`finalizeFailure`. A lost finalize discards this attempt's
    * results and returns `intervalMs: null` so this stale execution's loop exits without claiming
    * the source itself is disabled — see `RunSyncResult`'s own doc comment.
+   *
+   * Invariant: a document is withdrawn exactly when its last known location is gone. A path
+   * reaching the absence strike below has this location forgotten off its document, and only a
+   * forget that leaves no location behind turns into a withdrawal — a document another still-active
+   * path also names stays retrievable through that other location.
    */
   async runSync(sourceId: string, leaseToken: Types.ObjectId): Promise<RunSyncResult> {
     const source = await this.claimAttempt(new Types.ObjectId(sourceId), leaseToken);
@@ -520,7 +525,12 @@ export class SourcesService {
     const absentActive = activeKnown.filter((state) => !freshPaths.has(state.path));
 
     let withdrawalSuppressedReason: string | undefined;
-    const documentIdsToWithdraw: Types.ObjectId[] = [];
+    // Only the entries reaching the strike this sweep, not yet an id to withdraw — invariant: a
+    // document is withdrawn exactly when its last known location is gone, and this path (unlike a
+    // placeholder's, which carries no `documentId` and is only ever dropped from tracking above)
+    // holds a location on its document that must be forgotten before that can be decided. The
+    // decision itself, like the withdrawal it may lead to, waits for `finalizeSync` below.
+    const pathsReachingStrike: { path: string; documentId: Types.ObjectId }[] = [];
 
     if (files.length === 0 && activeKnown.length > 0) {
       withdrawalSuppressedReason = EMPTY_LISTING_SUPPRESSION_REASON;
@@ -535,10 +545,10 @@ export class SourcesService {
         const absentSweeps = (entry.absentSweeps ?? 0) + 1;
         if (absentSweeps >= ABSENT_SWEEPS_BEFORE_WITHDRAWAL) {
           fileStates[index] = this.cloneFileState(entry, { absentSweeps, withdrawnAt: new Date() });
-          // A placeholder entry (no `documentId`) was never ingested, so there is no document
-          // version to withdraw — only stop tracking it as active, above.
+          // A placeholder entry (no `documentId`) was never ingested, so there is no location or
+          // document version to forget/withdraw — only stop tracking it as active, above.
           if (entry.documentId !== undefined) {
-            documentIdsToWithdraw.push(entry.documentId);
+            pathsReachingStrike.push({ path: entry.path, documentId: entry.documentId });
           }
         } else {
           fileStates[index] = this.cloneFileState(entry, { absentSweeps });
@@ -561,12 +571,30 @@ export class SourcesService {
       return { disabled: false, intervalMs: null };
     }
 
-    if (documentIdsToWithdraw.length > 0) {
-      await this.documentsService.withdrawVersions(
-        documentIdsToWithdraw,
-        'source-file-absent',
-        source.tenantId,
-      );
+    // Runs only now that `finalizeSync` confirms this attempt still owns the lease — a superseded
+    // attempt forgets nothing, matching `withdrawVersions`' own placement below. Each forget can
+    // resolve independently to "this was the last location" or not, so withdrawal is decided per
+    // document from what `forgetLocation` actually finds remaining, never assumed from the strike
+    // that triggered the forget.
+    if (pathsReachingStrike.length > 0) {
+      const documentIdsToWithdraw: Types.ObjectId[] = [];
+      for (const entry of pathsReachingStrike) {
+        const remaining = await this.documentsService.forgetLocation(
+          entry.documentId,
+          { path: entry.path, sourceId: source._id },
+          source.tenantId,
+        );
+        if (remaining === 0) {
+          documentIdsToWithdraw.push(entry.documentId);
+        }
+      }
+      if (documentIdsToWithdraw.length > 0) {
+        await this.documentsService.withdrawVersions(
+          documentIdsToWithdraw,
+          'source-file-absent',
+          source.tenantId,
+        );
+      }
     }
 
     return { disabled: false, intervalMs };
@@ -594,6 +622,11 @@ export class SourcesService {
    * OPEN per file — every error below (fetch, either size check, an unresolvable kind, or the
    * `DocumentsService.upload` call itself) is caught here and recorded rather than aborting the
    * sweep, so one bad file never blocks its siblings.
+   *
+   * Every `DocumentsService.upload` call below carries this file's own path as its location, and
+   * the same-sha reappearance branch records that location explicitly — invariant: a document is
+   * withdrawn exactly when its last known location is gone, so a path this method still sees is a
+   * location that must stay registered on whatever document it currently resolves to.
    *
    * The size cap is enforced twice, not once: `file.sizeBytes` (the connector's `listFiles` stat,
    * taken before this call) rejects an oversized file before `fetchFile` ever reads it into
@@ -679,6 +712,16 @@ export class SourcesService {
           absentSweeps: undefined,
           withdrawnAt: undefined,
         });
+        // Invariant: a document is withdrawn exactly when its last known location is gone — a
+        // withdrawn-then-returned path was forgotten off its document by a prior sweep's
+        // withdrawal (`runSync`'s own doc comment), so it must re-register here rather than stay
+        // forgotten while its version is reinstated below. A no-op when the location was never
+        // forgotten in the first place (`recordLocation`'s own doc comment).
+        await this.documentsService.recordLocation(
+          existing.documentId,
+          { path: file.relativePath, sourceId },
+          tenantId,
+        );
         if (existing.withdrawnAt !== undefined) {
           await this.documentsService.reinstateVersions([existing.documentId], tenantId);
         }
@@ -692,20 +735,23 @@ export class SourcesService {
         buffer: content,
       };
 
-      // `sourceClass`/`sourceId` only matter on the document-creation branch below — `addVersion`
-      // (existing-document branch) writes bytes onto a document that already has both, unrelated
-      // to this sync attempt's source. A placeholder entry (no `documentId`) has no document to add
-      // a version to, so it takes the creation branch exactly like a brand-new path would.
+      // `path`/`sourceId` identify this location on either branch, so both calls carry them;
+      // `sourceClass` only matters on the document-creation branch below — `addVersion`
+      // (existing-document branch) writes bytes onto a document that already has one, unrelated to
+      // this sync attempt's source. A placeholder entry (no `documentId`) has no document to add a
+      // version to, so it takes the creation branch exactly like a brand-new path would.
       const response =
         existing && existing.documentId !== undefined
           ? await this.documentsService.upload(
               uploadedFile,
               { documentId: existing.documentId.toString() },
               tenantId,
+              { path: file.relativePath, sourceId },
             )
           : await this.documentsService.upload(uploadedFile, { title: filename }, tenantId, {
               sourceClass,
               sourceId,
+              path: file.relativePath,
             });
 
       const newState: SourceFileState = {

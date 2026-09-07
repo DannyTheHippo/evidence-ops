@@ -91,10 +91,22 @@ export class EmailAttachmentService {
         );
       }
 
+      // Widened to `locations.emailOrigin.*` alongside the document's own `emailOrigin.*`: a
+      // second attempt's converge branch can leave the first attempt's document created under
+      // `emailOrigin` directly while a later dedupe records this same part as a `locations` entry
+      // on a different, already-existing document — this check must find the attachment either way.
       const alreadyUnwrapped = await this.documentModel.findOne({
         tenantId: version.tenantId,
-        'emailOrigin.parentVersionId': version._id,
-        'emailOrigin.partIndex': attachment.partIndex,
+        $or: [
+          {
+            'emailOrigin.parentVersionId': version._id,
+            'emailOrigin.partIndex': attachment.partIndex,
+          },
+          {
+            'locations.emailOrigin.parentVersionId': version._id,
+            'locations.emailOrigin.partIndex': attachment.partIndex,
+          },
+        ],
       });
       if (alreadyUnwrapped) {
         this.logger.debug(
@@ -113,6 +125,7 @@ export class EmailAttachmentService {
         { title: attachment.filename },
         version.tenantId,
         {
+          path: attachment.filename,
           emailOrigin: {
             parentVersionId: version._id,
             parentDocumentId: version.documentId,

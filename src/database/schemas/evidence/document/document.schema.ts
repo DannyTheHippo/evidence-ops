@@ -3,7 +3,7 @@ import { HydratedDocument, Types, WithTimestamps } from 'mongoose';
 import { AuditableDocument } from '../../../global/auditable-document/auditable-document.schema';
 
 export type DocumentSourceKind =
-  'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv' | 'tsv' | 'txt' | 'md' | 'eml';
+  'pdf' | 'docx' | 'xlsx' | 'pptx' | 'csv' | 'tsv' | 'txt' | 'md' | 'eml' | 'html';
 
 export const DOCUMENT_SOURCE_KINDS: readonly DocumentSourceKind[] = [
   'pdf',
@@ -15,6 +15,7 @@ export const DOCUMENT_SOURCE_KINDS: readonly DocumentSourceKind[] = [
   'txt',
   'md',
   'eml',
+  'html',
 ];
 
 /**
@@ -77,6 +78,30 @@ export class DocumentEmailOrigin {
 
 export const DocumentEmailOriginSchema = SchemaFactory.createForClass(DocumentEmailOrigin);
 
+/**
+ * One place this document's current-version bytes have been seen: a browser upload's filename, a
+ * connector's relative path, or the parent message an attachment was unwrapped from. Tenant-wide
+ * content dedupe (`DocumentsService.uploadVersion`) is what populates and prunes this array —
+ * `recordLocation` appends on a fresh sighting, `forgetLocation` removes one, and a document is
+ * withdrawn exactly when its last location is gone.
+ */
+@Schema({ _id: false })
+export class DocumentLocation {
+  @Prop({ type: String, required: true })
+  path: string;
+
+  @Prop({ type: Types.ObjectId, ref: 'Source' })
+  sourceId?: Types.ObjectId;
+
+  @Prop({ type: DocumentEmailOriginSchema })
+  emailOrigin?: DocumentEmailOrigin;
+
+  @Prop({ type: Date, required: true })
+  firstSeenAt: Date;
+}
+
+export const DocumentLocationSchema = SchemaFactory.createForClass(DocumentLocation);
+
 export type DocumentDocument = HydratedDocument<WithTimestamps<Document>>;
 
 @Schema({ timestamps: true, collection: 'documents' })
@@ -84,10 +109,11 @@ export class Document extends AuditableDocument {
   @Prop({ type: String, required: true, trim: true })
   title: string;
 
-  // Routes which extractor pipeline parses this document; correlates 1:1 with the
-  // `EvidenceLocator` kind prefix (pdf-page/docx-paragraph/xlsx-*), so a chunk's locator variant
-  // is always predictable from its document's sourceKind. Distinct from `mimeType`, which is the
-  // raw content type as uploaded.
+  // Routes which extractor pipeline parses this document. A document's locator kinds follow its
+  // parser rather than a 1:1 prefix — csv and html both emit `xlsx-cell` locators, and html also
+  // emits `text-block` — so a chunk's locator variant is predictable from the parser, not derived
+  // from sourceKind by string prefix. Distinct from `mimeType`, which is the raw content type as
+  // uploaded.
   @Prop({ type: String, required: true, enum: DOCUMENT_SOURCE_KINDS })
   sourceKind: DocumentSourceKind;
 
@@ -130,6 +156,11 @@ export class Document extends AuditableDocument {
    * {@link DocumentEmailOrigin}. */
   @Prop({ type: DocumentEmailOriginSchema })
   emailOrigin?: DocumentEmailOrigin;
+
+  /** Every place this document's current-version bytes have been seen, tenant-wide — see
+   * {@link DocumentLocation}. Empty on a document predating this field. */
+  @Prop({ type: [DocumentLocationSchema], default: [] })
+  locations: DocumentLocation[];
 }
 
 export const DocumentSchema = SchemaFactory.createForClass(Document);
@@ -156,6 +187,26 @@ DocumentSchema.index(
     name: 'documents_emailOrigin_part_unique',
     unique: true,
     partialFilterExpression: { 'emailOrigin.parentVersionId': { $exists: true } },
+  },
+);
+
+/**
+ * Declared here as well as in `migrations/0001-baseline.ts`, with the same key pattern, options
+ * and name, for the same reason as the index above. Not unique — a converged attachment forgets
+ * its old location and grows a new one elsewhere, and two locations can carry the same
+ * `emailOrigin` part only mid-transition. Backs `EmailAttachmentService.unwrapAttachments`'s
+ * widened idempotency lookup, which now checks `locations.emailOrigin.*` alongside
+ * `emailOrigin.*` on the document itself.
+ */
+DocumentSchema.index(
+  {
+    tenantId: 1,
+    'locations.emailOrigin.parentVersionId': 1,
+    'locations.emailOrigin.partIndex': 1,
+  },
+  {
+    name: 'documents_locations_emailOrigin_part',
+    partialFilterExpression: { 'locations.emailOrigin.parentVersionId': { $exists: true } },
   },
 );
 

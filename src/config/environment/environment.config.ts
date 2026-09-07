@@ -53,6 +53,15 @@ const zNumOptional = () =>
     .transform((v) => (v?.trim() ? Number(v.trim()) : undefined))
     .pipe(z.number().finite().optional());
 
+/** Same as `zNumOptional`, additionally refusing a negative value once configured — for a
+ * per-token price, where blank means "unset" and must stay distinguishable from a real `0`. */
+const zNumOptionalNonNegative = () =>
+  z
+    .string()
+    .optional()
+    .transform((v) => (v?.trim() ? Number(v.trim()) : undefined))
+    .pipe(z.number().finite().min(0).optional());
+
 // Exported so callers outside this module (the login cookie's `Secure`/`__Host-` decision) share
 // the one predicate that also gates the MONGO_DB_URI/JWT_SECRET requirement below — a fourth
 // prod-like environment added only here must not silently ship an insecure cookie elsewhere.
@@ -122,9 +131,9 @@ export const environmentSchema = z
     THROTTLE_TTL_MS: zNum(60000),
     THROTTLE_LIMIT: zNum(100),
 
-    // 'anthropic' | 'openai' selects which base ModelProvider providers.module.ts wires behind
-    // the standing Caching(SpendGuard(base)) chain.
-    MODEL_PROVIDER: z.enum(['anthropic', 'openai']).default('anthropic'),
+    // 'anthropic' | 'openai' | 'openai-compatible' selects which base ModelProvider
+    // providers.module.ts wires behind the standing Caching(SpendGuard(base)) chain.
+    MODEL_PROVIDER: z.enum(['anthropic', 'openai', 'openai-compatible']).default('anthropic'),
 
     ANTHROPIC_API_KEY: zOptionalString(),
     ANTHROPIC_MODEL: z.string().default('claude-sonnet-5'),
@@ -158,9 +167,38 @@ export const environmentSchema = z
     VOYAGE_MAX_RETRY_WAIT_MS: zNum(300_000),
     VOYAGE_REQUEST_TIMEOUT_MS: zNum(30_000),
 
+    // 'voyage' | 'openai-compatible' selects which base EmbeddingProvider providers.module.ts
+    // wires behind the standing Caching(SpendGuard(base)) chain — independent of MODEL_PROVIDER.
+    EMBEDDING_PROVIDER: z.enum(['voyage', 'openai-compatible']).default('voyage'),
+    // The deployment's vector width. `0001-baseline.ts` bakes this into the vector index at
+    // migration time; a boot hook refuses to start when the live index and the selected
+    // embedding provider's width disagree.
+    EMBEDDING_DIMENSIONS: zNum(1024).pipe(z.number().int().min(1)),
+
+    // Deliberately optional, no default: self-hosted OpenAI-compatible endpoints (vLLM, Ollama)
+    // accept no auth, so a missing key must not throw at construction.
+    OPENAI_COMPATIBLE_API_KEY: zOptionalString(),
+    OPENAI_COMPATIBLE_BASE_URL: z.string().url().default('http://localhost:11434/v1'),
+    OPENAI_COMPATIBLE_MODEL: z.string().min(1).default('llama3.1:8b'),
+    OPENAI_COMPATIBLE_EMBEDDING_MODEL: z.string().min(1).default('mxbai-embed-large'),
+    OPENAI_COMPATIBLE_TIMEOUT_MS: zNum(60_000),
+    OPENAI_COMPATIBLE_STRUCTURED_OUTPUT: z.enum(['json_schema', 'prompt']).default('json_schema'),
+    // A compatible endpoint's model is priced in neither pricing table (`anthropic-pricing.table.ts`,
+    // `openai-pricing.table.ts` throw on an unlisted model), so cost is configuration here instead.
+    // Blank means unset, not free — a `superRefine` clause below requires the two model prices
+    // once MODEL_PROVIDER selects this provider, and the embedding price once EMBEDDING_PROVIDER
+    // does; an explicit `0` is accepted.
+    OPENAI_COMPATIBLE_PRICE_INPUT_USD_PER_MTOK: zNumOptionalNonNegative(),
+    OPENAI_COMPATIBLE_PRICE_OUTPUT_USD_PER_MTOK: zNumOptionalNonNegative(),
+    OPENAI_COMPATIBLE_EMBEDDING_PRICE_USD_PER_MTOK: zNumOptionalNonNegative(),
+
     TEMPORAL_ADDRESS: z.string().default('localhost:7233'),
     TEMPORAL_NAMESPACE: z.string().default('default'),
     TEMPORAL_TASK_QUEUE: z.string().default('evidence-ops'),
+    // Temporal's own default of 100 concurrent activities, each holding up to a 50 MB document in
+    // memory, is more than the worker's mem_limit can absorb — see docker-compose.yml's `worker`
+    // service.
+    TEMPORAL_MAX_CONCURRENT_ACTIVITY_TASKS: zNum(4).pipe(z.number().int().min(1)),
 
     RETRIEVAL_FUSION: z.enum(['server', 'app']).default('server'),
     RETRIEVAL_LIMIT: zNum(12),
@@ -288,6 +326,48 @@ export const environmentSchema = z
         message: `Must be a model priced in anthropic-pricing.table.ts (one of: ${Object.keys(ANTHROPIC_PRICING).join(', ')})`,
       });
     }
+
+    if (e.EMBEDDING_PROVIDER === 'voyage' && e.VOYAGE_DIMENSIONS !== e.EMBEDDING_DIMENSIONS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['EMBEDDING_DIMENSIONS'],
+        message:
+          `Must equal VOYAGE_DIMENSIONS (${e.VOYAGE_DIMENSIONS}) when EMBEDDING_PROVIDER is ` +
+          `'voyage' — got ${e.EMBEDDING_DIMENSIONS}. The vector index is built at ` +
+          'EMBEDDING_DIMENSIONS, so a mismatch would silently size it for the wrong provider.',
+      });
+    }
+
+    // A compatible endpoint's model is priced in neither pricing table; unlike a lookup miss
+    // there (which throws at the first call), an unset price here would silently price every
+    // call at $0 rather than refusing at boot.
+    if (e.MODEL_PROVIDER === 'openai-compatible') {
+      if (e.OPENAI_COMPATIBLE_PRICE_INPUT_USD_PER_MTOK === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['OPENAI_COMPATIBLE_PRICE_INPUT_USD_PER_MTOK'],
+          message: "Required when MODEL_PROVIDER is 'openai-compatible'",
+        });
+      }
+      if (e.OPENAI_COMPATIBLE_PRICE_OUTPUT_USD_PER_MTOK === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['OPENAI_COMPATIBLE_PRICE_OUTPUT_USD_PER_MTOK'],
+          message: "Required when MODEL_PROVIDER is 'openai-compatible'",
+        });
+      }
+    }
+
+    if (
+      e.EMBEDDING_PROVIDER === 'openai-compatible' &&
+      e.OPENAI_COMPATIBLE_EMBEDDING_PRICE_USD_PER_MTOK === undefined
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['OPENAI_COMPATIBLE_EMBEDDING_PRICE_USD_PER_MTOK'],
+        message: "Required when EMBEDDING_PROVIDER is 'openai-compatible'",
+      });
+    }
   })
   .transform((e) => {
     // Falls back to dev-only defaults below prod-like; superRefine already guarantees
@@ -348,10 +428,26 @@ export const environmentSchema = z
         maxRetryWaitMs: e.VOYAGE_MAX_RETRY_WAIT_MS,
         requestTimeoutMs: e.VOYAGE_REQUEST_TIMEOUT_MS,
       },
+      embedding: {
+        provider: e.EMBEDDING_PROVIDER,
+        dimensions: e.EMBEDDING_DIMENSIONS,
+      },
+      openaiCompatible: {
+        apiKey: e.OPENAI_COMPATIBLE_API_KEY,
+        baseUrl: e.OPENAI_COMPATIBLE_BASE_URL,
+        model: e.OPENAI_COMPATIBLE_MODEL,
+        embeddingModel: e.OPENAI_COMPATIBLE_EMBEDDING_MODEL,
+        timeoutMs: e.OPENAI_COMPATIBLE_TIMEOUT_MS,
+        structuredOutput: e.OPENAI_COMPATIBLE_STRUCTURED_OUTPUT,
+        priceInputUsdPerMtok: e.OPENAI_COMPATIBLE_PRICE_INPUT_USD_PER_MTOK,
+        priceOutputUsdPerMtok: e.OPENAI_COMPATIBLE_PRICE_OUTPUT_USD_PER_MTOK,
+        embeddingPriceUsdPerMtok: e.OPENAI_COMPATIBLE_EMBEDDING_PRICE_USD_PER_MTOK,
+      },
       temporal: {
         address: e.TEMPORAL_ADDRESS,
         namespace: e.TEMPORAL_NAMESPACE,
         taskQueue: e.TEMPORAL_TASK_QUEUE,
+        maxConcurrentActivityTaskExecutions: e.TEMPORAL_MAX_CONCURRENT_ACTIVITY_TASKS,
       },
       retrieval: {
         fusion: e.RETRIEVAL_FUSION,
@@ -405,6 +501,8 @@ export type ModelConfig = EnvironmentConfig['model'];
 export type AnthropicConfig = EnvironmentConfig['anthropic'];
 export type OpenAiConfig = EnvironmentConfig['openai'];
 export type VoyageConfig = EnvironmentConfig['voyage'];
+export type EmbeddingConfig = EnvironmentConfig['embedding'];
+export type OpenAiCompatibleConfig = EnvironmentConfig['openaiCompatible'];
 export type TemporalConfig = EnvironmentConfig['temporal'];
 export type RetrievalConfig = EnvironmentConfig['retrieval'];
 export type TelemetryConfig = EnvironmentConfig['telemetry'];

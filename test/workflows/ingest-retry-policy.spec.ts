@@ -33,6 +33,7 @@ const RETRYABILITY: Readonly<Record<string, Retryability>> = {
   EmptyPdfTextLayerException: 'deterministic',
   MalformedPptxException: 'deterministic',
   MalformedXlsxException: 'deterministic',
+  MalformedHtmlException: 'deterministic',
   HostileArchiveException: 'deterministic',
   MalformedEmailException: 'deterministic',
   HostileEmailException: 'deterministic',
@@ -42,12 +43,13 @@ const RETRYABILITY: Readonly<Record<string, Retryability>> = {
  * Names in `INGEST_NON_RETRYABLE_ERROR_TYPES` that are not ingestion-feature exception classes, so
  * the "no stale entry" assertion below can tell a deliberate non-local entry from the debris of a
  * rename. `MissingTenantId` is an `ApplicationFailure` type string minted in `activities.ts`; the
- * two Voyage names are embedding-provider errors.
+ * other three are embedding-provider errors (Voyage and the OpenAI-compatible provider).
  */
 const NON_INGESTION_ENTRIES = new Set([
   'MissingTenantId',
   'VoyageApiKeyMissingError',
   'VoyageInvalidResponseError',
+  'OpenAiInvalidResponseError',
 ]);
 
 type ExceptionConstructor = new (message: string, cause?: unknown) => BaseException;
@@ -179,11 +181,13 @@ describe('ingestion exception retryability', () => {
     expect(EXTRACT_FACTS_NON_RETRYABLE_ERROR_TYPES).not.toContain('Error');
   });
 
-  // Voyage's rate limit and request failures describe the moment, not the input: retrying is what
-  // resolves them, so they must stay retryable however the deterministic list grows.
+  // Voyage's and the OpenAI-compatible provider's rate limit and request failures describe the
+  // moment, not the input: retrying is what resolves them, so they must stay retryable however
+  // the deterministic list grows.
   it('should leave the embedding provider transient failures retryable', () => {
     expect(INGEST_NON_RETRYABLE_ERROR_TYPES).not.toContain('VoyageRateLimitExceededError');
     expect(INGEST_NON_RETRYABLE_ERROR_TYPES).not.toContain('VoyageRequestFailedError');
+    expect(INGEST_NON_RETRYABLE_ERROR_TYPES).not.toContain('OpenAiRequestFailedError');
   });
 });
 

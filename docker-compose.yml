@@ -56,8 +56,10 @@ x-app-environment: &app-environment
   THROTTLE_TTL_MS: ${THROTTLE_TTL_MS:-60000}
   THROTTLE_LIMIT: ${THROTTLE_LIMIT:-100}
   MODEL_PROVIDER: ${MODEL_PROVIDER:-anthropic}
-  # Every model named here must have an entry in its provider's pricing table: cost is asserted
-  # before each request, so an unpriced model fails the first call rather than degrading.
+  # ANTHROPIC_MODEL and OPENAI_MODEL must each have an entry in their provider's pricing table:
+  # cost is asserted before each request, so an unpriced model fails the first call rather than
+  # degrading. OPENAI_COMPATIBLE_MODEL below has no such table — its cost is configured directly
+  # via the OPENAI_COMPATIBLE_PRICE_*_USD_PER_MTOK variables instead.
   ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
   ANTHROPIC_TIMEOUT_MS: ${ANTHROPIC_TIMEOUT_MS:-60000}
   OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5}
@@ -65,6 +67,24 @@ x-app-environment: &app-environment
   # provider omits the auth header entirely rather than sending an empty bearer.
   OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
   OPENAI_TIMEOUT_MS: ${OPENAI_TIMEOUT_MS:-60000}
+  # 'voyage' or 'openai-compatible' — the same kind of switch as MODEL_PROVIDER, but for
+  # embeddings, chosen independently.
+  EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-voyage}
+  # Baked into the vector index at migration time; changing it once the index exists needs a
+  # migrate:down/migrate:up cycle with the new value.
+  EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
+  # Defaults target a local Ollama instance. Ollama listens on the host, not in this network — from
+  # inside a container that is `http://host.docker.internal:11434/v1`, not `localhost`.
+  OPENAI_COMPATIBLE_BASE_URL: ${OPENAI_COMPATIBLE_BASE_URL:-http://localhost:11434/v1}
+  OPENAI_COMPATIBLE_MODEL: ${OPENAI_COMPATIBLE_MODEL:-llama3.1:8b}
+  OPENAI_COMPATIBLE_EMBEDDING_MODEL: ${OPENAI_COMPATIBLE_EMBEDDING_MODEL:-mxbai-embed-large}
+  OPENAI_COMPATIBLE_TIMEOUT_MS: ${OPENAI_COMPATIBLE_TIMEOUT_MS:-60000}
+  OPENAI_COMPATIBLE_STRUCTURED_OUTPUT: ${OPENAI_COMPATIBLE_STRUCTURED_OUTPUT:-json_schema}
+  # Blank, not defaulted: a compatible endpoint's model is priced in neither provider's pricing
+  # table, so an operator who selects it must set these, and boot refuses to start without them.
+  OPENAI_COMPATIBLE_PRICE_INPUT_USD_PER_MTOK: ${OPENAI_COMPATIBLE_PRICE_INPUT_USD_PER_MTOK:-}
+  OPENAI_COMPATIBLE_PRICE_OUTPUT_USD_PER_MTOK: ${OPENAI_COMPATIBLE_PRICE_OUTPUT_USD_PER_MTOK:-}
+  OPENAI_COMPATIBLE_EMBEDDING_PRICE_USD_PER_MTOK: ${OPENAI_COMPATIBLE_EMBEDDING_PRICE_USD_PER_MTOK:-}
   RETRIEVAL_FUSION: ${RETRIEVAL_FUSION:-server}
   RETRIEVAL_LIMIT: ${RETRIEVAL_LIMIT:-12}
   # RRF-fused, not a 0-1 similarity score: with the store's two equally weighted pipelines and
@@ -330,6 +350,10 @@ services:
       # stray orphan database and must not reappear. `MONGO_AUTH`/`authSource` per the anchor above:
       # migrations run as the same database user the application processes do.
       MONGO_DB_URI: mongodb://${MONGO_AUTH:-}mongo:27017/evidence-ops?directConnection=true&authSource=admin
+      # This service does not inherit `x-app-environment` (it needs none of the rest of it), but
+      # `0001-baseline.ts` reads this to size the vector index it builds — it must match what `api`
+      # and `worker` are configured with, or the index is built at the wrong width.
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
     depends_on:
       mongo:
         condition: service_healthy
@@ -462,6 +486,10 @@ services:
       # bypasses. Without it the worker and api report the same service name and the cross-process
       # trace — the whole point of the Temporal OTel interceptors — becomes unreadable.
       OTEL_SERVICE_NAME: evidence-ops-worker
+      # Each concurrent activity execution can hold up to a 50 MB document in memory; this cap
+      # times that figure is what `mem_limit` below has to absorb, so raising one needs raising
+      # the other.
+      TEMPORAL_MAX_CONCURRENT_ACTIVITY_TASKS: ${TEMPORAL_MAX_CONCURRENT_ACTIVITY_TASKS:-4}
       # Worker-only: every model and embedding call runs in this process, so the knobs that shape
       # ingestion and answering are tuned here rather than on the api.
       VOYAGE_MODEL: ${VOYAGE_MODEL:-voyage-4}

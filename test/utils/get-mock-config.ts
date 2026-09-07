@@ -61,10 +61,28 @@ export const getMockConfig = (): EnvironmentConfig => ({
     requestTimeoutMs: 30000,
   },
 
+  embedding: {
+    provider: 'voyage',
+    dimensions: 1024,
+  },
+
+  openaiCompatible: {
+    apiKey: undefined,
+    baseUrl: 'http://localhost:11434/v1',
+    model: 'llama3.1:8b',
+    embeddingModel: 'mxbai-embed-large',
+    timeoutMs: 60000,
+    structuredOutput: 'json_schema',
+    priceInputUsdPerMtok: undefined,
+    priceOutputUsdPerMtok: undefined,
+    embeddingPriceUsdPerMtok: undefined,
+  },
+
   temporal: {
     address: 'localhost:7233',
     namespace: 'default',
     taskQueue: 'evidence-ops',
+    maxConcurrentActivityTaskExecutions: 4,
   },
 
   retrieval: {

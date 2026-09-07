@@ -1,3 +1,4 @@
+import { EXTRACT_FACTS_START_TO_CLOSE_TIMEOUT_MS } from '../../src/workflows/activity-heartbeat-policy';
 import { ingestDocumentVersion } from '../../src/workflows/ingest-document-version.workflow';
 import {
   EXTRACT_FACTS_NON_RETRYABLE_ERROR_TYPES,
@@ -291,6 +292,35 @@ describe('proxyActivities retry configuration', () => {
     expect(factsOptions.retry?.nonRetryableErrorTypes).toEqual([
       ...EXTRACT_FACTS_NON_RETRYABLE_ERROR_TYPES,
     ]);
+  });
+
+  it('should declare a heartbeat timeout for extractFacts, under its startToCloseTimeout', () => {
+    const [factsOptions] = proxyActivitiesCalls[1];
+    expect(factsOptions.heartbeatTimeout).toBe(INGEST_HEARTBEAT_TIMEOUT_MS);
+    expect(factsOptions.startToCloseTimeout).toBe(EXTRACT_FACTS_START_TO_CLOSE_TIMEOUT_MS);
+  });
+
+  // The property every group in this file must hold, not just the two named above: a numeric
+  // `startToCloseTimeout` strictly greater than `INGEST_HEARTBEAT_TIMEOUT_MS` must declare a
+  // `heartbeatTimeout`, and a group that still expresses its budget as a Temporal duration string
+  // must keep that budget at or under the heartbeat timeout — the shape every cheap, pure-Mongo
+  // group in the workflow file uses.
+  it('should keep every captured proxyActivities group consistent with the heartbeat-timeout property', () => {
+    const durationPattern = /^(\d+) (seconds?|minutes?)$/;
+    for (const [options] of proxyActivitiesCalls) {
+      const { startToCloseTimeout, heartbeatTimeout } = options;
+      if (typeof startToCloseTimeout === 'number') {
+        if (startToCloseTimeout > INGEST_HEARTBEAT_TIMEOUT_MS) {
+          expect(heartbeatTimeout).toBeDefined();
+        }
+        continue;
+      }
+      const match = durationPattern.exec(startToCloseTimeout ?? '');
+      expect(match).not.toBeNull();
+      const [, amount, unit] = match as RegExpExecArray;
+      const ms = Number(amount) * (unit.startsWith('minute') ? 60_000 : 1_000);
+      expect(ms).toBeLessThanOrEqual(INGEST_HEARTBEAT_TIMEOUT_MS);
+    }
   });
 
   it('should mark a missing tenantId and an unknown version non-retryable for recordFactExtractionFailure', () => {
