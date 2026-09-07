@@ -85,10 +85,12 @@ export interface VerifyClaimResult {
 }
 
 /** The tool's complete result: a fixed `advisory` (see `VERIFY_CLAIMS_ADVISORY` below) plus one
- * `VerifyClaimResult` per submitted claim, in submission order. */
+ * `VerifyClaimResult` per submitted claim, in submission order. `verificationId` names the
+ * `VerificationsService.record` row this call persisted. */
 export interface VerifyClaimsResult {
   readonly advisory: string;
   readonly results: readonly VerifyClaimResult[];
+  readonly verificationId?: string;
 }
 
 /**

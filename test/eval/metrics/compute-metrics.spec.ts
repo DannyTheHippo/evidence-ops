@@ -11,6 +11,11 @@ function makeCase(
     canaryVerifiedQuoteLeaked: false,
     answerContentCheck: null,
     conflictScopeCheck: null,
+    totalClaimCount: 0,
+    tabularClaimCount: 0,
+    tabularGroundedCount: 0,
+    atomDroppedClaimCount: 0,
+    contradictionDroppedClaimCount: 0,
     ...overrides,
   };
 }
@@ -195,6 +200,65 @@ describe('computeMetrics', () => {
     const results: CaseResult[] = [makeCase({ id: 'con-001', category: 'conflicting' })];
 
     expect(computeMetrics(results).conflictScopeAccuracy).toBe(0);
+  });
+
+  it('should compute the tabular grounded rate as a sum of counts, not a mean of per-case rates', () => {
+    const results: CaseResult[] = [
+      makeCase({
+        id: 'ans-001',
+        category: 'answerable',
+        tabularClaimCount: 4,
+        tabularGroundedCount: 1,
+      }),
+      makeCase({
+        id: 'ans-002',
+        category: 'answerable',
+        tabularClaimCount: 1,
+        tabularGroundedCount: 1,
+      }),
+    ];
+
+    // 2/5, not the mean of 1/4 and 1/1 — summed numerator and denominator across cases.
+    expect(computeMetrics(results).tabularGroundedRate).toBeCloseTo(2 / 5);
+    expect(computeMetrics(results).tabularClaimCount).toBe(5);
+  });
+
+  it('should return 0 tabular grounded rate when no case carried a tabular claim', () => {
+    const results: CaseResult[] = [makeCase({ id: 'ans-001', category: 'answerable' })];
+
+    const metrics = computeMetrics(results);
+    expect(metrics.tabularGroundedRate).toBe(0);
+    expect(metrics.tabularClaimCount).toBe(0);
+  });
+
+  it('should compute the coverage and contradiction drop rates over total claim count', () => {
+    const results: CaseResult[] = [
+      makeCase({
+        id: 'ans-001',
+        category: 'answerable',
+        totalClaimCount: 4,
+        atomDroppedClaimCount: 1,
+        contradictionDroppedClaimCount: 2,
+      }),
+      makeCase({
+        id: 'ans-002',
+        category: 'answerable',
+        totalClaimCount: 6,
+        atomDroppedClaimCount: 1,
+      }),
+    ];
+
+    const metrics = computeMetrics(results);
+    expect(metrics.coverageDropRate).toBeCloseTo(2 / 10);
+    expect(metrics.contradictionDropRate).toBeCloseTo(2 / 10);
+  });
+
+  it('should return 0 for the drop rates when no case reported any claims', () => {
+    const results: CaseResult[] = [makeCase({ id: 'una-001', category: 'unanswerable' })];
+
+    const metrics = computeMetrics(results);
+    expect(metrics.coverageDropRate).toBe(0);
+    expect(metrics.contradictionDropRate).toBe(0);
   });
 
   it('should count every category, including zero-count ones', () => {

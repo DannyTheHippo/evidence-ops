@@ -38,10 +38,17 @@ if ! docker compose exec -T "$COMPOSE_SERVICE" true >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! docker compose exec -T "$COMPOSE_SERVICE" which mongodump >/dev/null 2>&1; then
+# `command -v` inside a shell, never `which`: the atlas-local image ships the database tools but no
+# `which` binary, so probing with `which` reports mongodump missing on an image that has it — a
+# false negative that sends the operator to the fallback below, and this script is what stands
+# between `docker compose down -v` and an unrecoverable local database.
+if ! docker compose exec -T "$COMPOSE_SERVICE" sh -c 'command -v mongodump' >/dev/null 2>&1; then
   echo "error: mongodump is not present in the '${COMPOSE_SERVICE}' container." >&2
   echo "fallback: run the official database-tools image against the same container's network:" >&2
-  echo "  docker run --rm --network container:${CONTAINER_NAME} -v \"\$(pwd)\":/dump mongodb/mongodb-database-tools \\" >&2
+  # Mounts the requested output's own directory, not `$(pwd)` — the caller was told above to pass a
+  # path outside the repo, and a fallback that writes the archive into the project tree instead
+  # would contradict that in the one situation where the operator is least likely to re-read it.
+  echo "  docker run --rm --network container:${CONTAINER_NAME} -v \"$(cd "$(dirname "$OUT")" && pwd)\":/dump mongodb/mongodb-database-tools \\" >&2
   echo "    mongodump --host=localhost --port=27017 --db=${DB_NAME} --archive=/dump/$(basename "$OUT") --gzip" >&2
   exit 1
 fi

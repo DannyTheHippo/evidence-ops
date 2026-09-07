@@ -632,6 +632,7 @@ describe('McpServerService', () => {
       expect(claimVerificationService.verifyClaims).toHaveBeenCalledWith({
         claims: ['The cap rate was approximately 6.10%.'],
         tenantId: 'tenant-a',
+        requestedBy: { kind: 'pat', id: 'actor-a' },
       });
       const content = result.content as Array<{ type: string; text: string }>;
       expect(JSON.parse(content[0].text)).toEqual(buildVerifyClaimsResult());
@@ -770,6 +771,7 @@ describe('McpServerService', () => {
       expect(claimVerificationService.verifyClaims).toHaveBeenCalledWith({
         claims: ['The cap rate was approximately 6.10%.'],
         tenantId: 'tenant-a',
+        requestedBy: { kind: 'pat', id: 'actor-a' },
       });
     });
 

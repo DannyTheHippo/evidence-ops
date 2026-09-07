@@ -53,6 +53,7 @@ interface AnswerBody {
   retrievedChunkCount?: number;
   verificationReport?: VerificationReport;
   citations?: unknown[];
+  atoms?: unknown[];
   conflictIds?: string[];
   createdAt?: string;
   usage?: AnswerUsageBody;
@@ -219,6 +220,10 @@ describe('QA and Conflicts (e2e)', () => {
           'questionText',
           'runStatus',
           'citations',
+          // Present and empty on a queued run, like `citations` and `conflictIds` beside it: the
+          // withholding rule covers fields that would read as a final verdict, and an empty atom
+          // list asserts nothing about the answer.
+          'atoms',
           'conflictIds',
           'createdAt',
           'withdrawnCitedDocVersionIds',
@@ -276,6 +281,9 @@ describe('QA and Conflicts (e2e)', () => {
         claims: [{ statement: 'The cap rate is approximately 6.10%.', citations: [citation] }],
       });
       expect(body.citations).toEqual([citation]);
+      // Serializes as an array, not as `{}` or a dropped key — the persisted answer carries no
+      // atoms, and an undecomposed run must present that as empty rather than as absent.
+      expect(body.atoms).toEqual([]);
       // `citation.docVersionId` ('version-1') is not a real DocumentVersion, so it can never
       // resolve as withdrawn — this stays an empty array rather than throwing.
       expect(body.withdrawnCitedDocVersionIds).toEqual([]);
@@ -289,6 +297,7 @@ describe('QA and Conflicts (e2e)', () => {
           'retrievedChunkCount',
           'verificationReport',
           'citations',
+          'atoms',
           'conflictIds',
           'createdAt',
           'usage',

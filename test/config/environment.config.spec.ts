@@ -203,6 +203,7 @@ describe('validateEnvironment', () => {
           'telemetry',
           'sources',
           'extraction',
+          'verifier',
           'spend',
           'mcp',
           'sse',
@@ -365,6 +366,20 @@ describe('validateEnvironment', () => {
 
       expect(result.model.provider).toBe('openai');
       expect(result.openai.baseUrl).toBe('https://openai.internal.example/v1');
+    });
+  });
+
+  describe('VERIFY_CONTRADICTION_CHECK', () => {
+    it('defaults to false when unset', () => {
+      const result = validateEnvironment({});
+
+      expect(result.verifier.contradictionCheck).toBe(false);
+    });
+
+    it('parses "true" to true', () => {
+      const result = validateEnvironment({ ...validEnv, VERIFY_CONTRADICTION_CHECK: 'true' });
+
+      expect(result.verifier.contradictionCheck).toBe(true);
     });
   });
 

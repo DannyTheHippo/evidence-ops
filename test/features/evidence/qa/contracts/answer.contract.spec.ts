@@ -7,6 +7,7 @@ import {
   modelAnswerContractSchema,
   modelCitationSchema,
   modelInsufficientEvidenceOutcomeSchema,
+  verificationReportSchema,
   type Locator,
 } from '../../../../../src/features/evidence/qa/contracts/answer.contract';
 import { toStructuredOutputFormat } from '../../../../../src/providers/model/structured-output-format.util';
@@ -303,6 +304,46 @@ describe('answerContractSchema', () => {
     expect(
       result.success && (result.data as Record<string, unknown>).verificationReport,
     ).toBeUndefined();
+  });
+});
+
+describe('verificationReportSchema', () => {
+  it('accepts a report with no atomization', () => {
+    const report = { verifiedClaimCount: 1, totalClaimCount: 1, droppedClaims: [] };
+
+    expect(verificationReportSchema.safeParse(report).success).toBe(true);
+  });
+
+  it('accepts a report carrying an atomization summary', () => {
+    const report = {
+      verifiedClaimCount: 1,
+      totalClaimCount: 1,
+      droppedClaims: [],
+      atomization: {
+        decomposedClaimCount: 1,
+        coverageFallbackCount: 0,
+        atomDroppedClaimCount: 0,
+        contradictionDroppedClaimCount: 0,
+      },
+    };
+
+    expect(verificationReportSchema.safeParse(report).success).toBe(true);
+  });
+
+  it('rejects an atomization summary with a negative count', () => {
+    const report = {
+      verifiedClaimCount: 1,
+      totalClaimCount: 1,
+      droppedClaims: [],
+      atomization: {
+        decomposedClaimCount: -1,
+        coverageFallbackCount: 0,
+        atomDroppedClaimCount: 0,
+        contradictionDroppedClaimCount: 0,
+      },
+    };
+
+    expect(verificationReportSchema.safeParse(report).success).toBe(false);
   });
 });
 

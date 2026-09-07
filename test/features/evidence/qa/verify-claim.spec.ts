@@ -4,6 +4,7 @@ import type {
   Claim,
 } from '../../../../src/features/evidence/qa/contracts/answer.contract';
 import type { RetrievedChunk } from '../../../../src/features/evidence/qa/types/retrieved-chunk.type';
+import type { VerifierMeasure } from '../../../../src/features/evidence/qa/types/verifier-measure.type';
 import {
   verifyClaim,
   type GroundingCellFact,
@@ -873,5 +874,198 @@ describe('verifyClaim with subjectBinding', () => {
     expect(result.kind).toBe('dropped');
     if (result.kind !== 'dropped') throw new Error('unreachable');
     expect(result.violations[0].kind).toBe('numeric-claim-unsupported');
+  });
+});
+
+describe('verifyClaim with measures', () => {
+  const SALE_PRICE_MEASURE: VerifierMeasure = {
+    slug: 'sale_price',
+    label: 'Sale Price',
+    aliases: ['sale price'],
+    valueType: 'currency',
+    canonicalUnit: 'usd',
+    units: [{ id: 'usd', toCanonicalFactor: 1 }],
+    toleranceKind: 'relative',
+    tolerance: 0.01,
+  };
+  const SALE_PRICE_CELL_LOCATOR: EvidenceLocator = {
+    kind: 'xlsx-cell',
+    extractorVersion: 'v1',
+    sheetName: 'Comps',
+    cell: 'B7',
+  };
+  const SALE_PRICE_REGION_LOCATOR: EvidenceLocator = {
+    kind: 'xlsx-region',
+    extractorVersion: 'v1',
+    sheetName: 'Comps',
+    range: 'A1:C10',
+  };
+
+  it('should survive a claim on the ADR-0024 c001 row and upgrade its citation locator to the sale_price cell, with measures supplied', () => {
+    const statement = 'Northgate Business Park sold for $46,900,000.';
+    const chunk: RetrievedChunk = {
+      chunkId: 'chunk-c001',
+      docVersionId: 'doc-v1',
+      sha256: SHA256_A,
+      text: statement,
+      locator: SALE_PRICE_REGION_LOCATOR,
+    };
+    const cellFact: GroundingCellFact = {
+      chunkId: chunk.chunkId,
+      factKey: { entity: 'Northgate Business Park', metric: 'sale_price', period: '2025-07' },
+      value: { amount: 46_900_000, unit: 'usd' },
+      locator: SALE_PRICE_CELL_LOCATOR,
+    };
+    const claim = buildClaim({
+      statement,
+      citations: [
+        buildCitation({
+          chunkId: chunk.chunkId,
+          quote: statement,
+          locator: SALE_PRICE_REGION_LOCATOR,
+        }),
+      ],
+    });
+
+    const result = verifyClaim({
+      claim,
+      retrievedChunks: [chunk],
+      cellFacts: [cellFact],
+      measures: [SALE_PRICE_MEASURE],
+      entities: [],
+    });
+
+    expect(result.kind).toBe('survived');
+    if (result.kind !== 'survived') throw new Error('unreachable');
+    expect(result.claim.citations[0].locator).toEqual(SALE_PRICE_CELL_LOCATOR);
+    expect(result.touchedFactKeys).toEqual([cellFact.factKey]);
+  });
+
+  it('should refuse the raw-text fallback for a measure-bound number on a cell-fact chunk when the statement names no entity, with measures supplied', () => {
+    // R4's asymmetry (`verify-structured-support.ts`): once a cited chunk carries any cell fact, a
+    // measure-bound number never falls back to that chunk's raw text — not even when, as here, the
+    // statement never names an entity `verifyStructuredSupport` could otherwise have bound the
+    // number to, so nothing but the digit itself would otherwise support the claim.
+    const statement = 'The property sold for $46,900,000.';
+    const chunk: RetrievedChunk = {
+      chunkId: 'chunk-no-entity',
+      docVersionId: 'doc-v1',
+      sha256: SHA256_A,
+      text: statement,
+      locator: SALE_PRICE_REGION_LOCATOR,
+    };
+    const cellFact: GroundingCellFact = {
+      chunkId: chunk.chunkId,
+      factKey: { entity: 'Northgate Business Park', metric: 'sale_price', period: '2025-07' },
+      value: { amount: 46_900_000, unit: 'usd' },
+      locator: SALE_PRICE_CELL_LOCATOR,
+    };
+    const claim = buildClaim({
+      statement,
+      citations: [
+        buildCitation({
+          chunkId: chunk.chunkId,
+          quote: statement,
+          locator: SALE_PRICE_REGION_LOCATOR,
+        }),
+      ],
+    });
+
+    const result = verifyClaim({
+      claim,
+      retrievedChunks: [chunk],
+      cellFacts: [cellFact],
+      measures: [SALE_PRICE_MEASURE],
+      entities: [],
+    });
+
+    expect(result.kind).toBe('dropped');
+    if (result.kind !== 'dropped') throw new Error('unreachable');
+    expect(result.violations[0].kind).toBe('numeric-claim-unsupported');
+  });
+});
+
+describe('verifyClaim with atoms', () => {
+  const SALE_PRICE_MEASURE: VerifierMeasure = {
+    slug: 'sale_price',
+    label: 'Sale Price',
+    aliases: ['sale price'],
+    valueType: 'currency',
+    canonicalUnit: 'usd',
+    units: [{ id: 'usd', toCanonicalFactor: 1 }],
+    toleranceKind: 'relative',
+    tolerance: 0.01,
+  };
+  const REGION_LOCATOR: EvidenceLocator = {
+    kind: 'xlsx-region',
+    extractorVersion: 'v1',
+    sheetName: 'Comps',
+    range: 'A1:C10',
+  };
+
+  it('should drop a claim whose atoms cover the statement when one atom is unsupported, with atom-unsupported', () => {
+    // Splitting the claim strips the entity mention off the atom that states the number: the whole
+    // statement survives (it names "Northgate Business Park" once, for the whole claim), but the
+    // atom stating the number on its own names no entity, so `verifyStructuredSupport` cannot bind
+    // it to the cell fact and R4 refuses the raw-text fallback (the same asymmetry the sibling
+    // `verifyClaim with measures` describe block pins directly).
+    const statement = 'Northgate Business Park closed a transaction. It sold for $46,900,000.';
+    const atomWithEntity = 'Northgate Business Park closed a transaction';
+    const atomWithNumber = 'It sold for $46,900,000';
+    const chunk: RetrievedChunk = {
+      chunkId: 'chunk-atoms',
+      docVersionId: 'doc-v1',
+      sha256: SHA256_A,
+      text: statement,
+      locator: REGION_LOCATOR,
+    };
+    const cellFact: GroundingCellFact = {
+      chunkId: chunk.chunkId,
+      factKey: { entity: 'Northgate Business Park', metric: 'sale_price', period: '2025-07' },
+      value: { amount: 46_900_000, unit: 'usd' },
+      locator: REGION_LOCATOR,
+    };
+    const claim = buildClaim({
+      statement,
+      citations: [
+        buildCitation({ chunkId: chunk.chunkId, quote: statement, locator: REGION_LOCATOR }),
+      ],
+    });
+
+    const result = verifyClaim({
+      claim,
+      retrievedChunks: [chunk],
+      cellFacts: [cellFact],
+      measures: [SALE_PRICE_MEASURE],
+      entities: [],
+      atoms: [atomWithEntity, atomWithNumber],
+    });
+
+    expect(result.kind).toBe('dropped');
+    if (result.kind !== 'dropped') throw new Error('unreachable');
+    expect(result.violations[0].kind).toBe('atom-unsupported');
+    expect(result.atomization).toEqual({ coverageFallback: false, atomDropped: true });
+  });
+
+  it('should drop a claim identically whether or not atoms are supplied, when the whole statement itself fails verification', () => {
+    const claim = buildClaim({
+      citations: [buildCitation({ chunkId: 'chunk-fabricated' })],
+    });
+
+    const withoutAtoms = verifyClaim({ claim, retrievedChunks: [PROSE_CHUNK], cellFacts: [] });
+    const withAtoms = verifyClaim({
+      claim,
+      retrievedChunks: [PROSE_CHUNK],
+      cellFacts: [],
+      atoms: ['Northgate Business Park traded'],
+    });
+
+    expect(withAtoms.kind).toBe(withoutAtoms.kind);
+    expect(withAtoms.violations).toEqual(withoutAtoms.violations);
+    expect(withAtoms.touchedFactKeys).toEqual(withoutAtoms.touchedFactKeys);
+    if (withAtoms.kind !== 'dropped' || withoutAtoms.kind !== 'dropped') {
+      throw new Error('unreachable');
+    }
+    expect(withAtoms.dropped).toEqual(withoutAtoms.dropped);
   });
 });

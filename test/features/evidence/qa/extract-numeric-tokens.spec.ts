@@ -1,5 +1,6 @@
 import {
   containsUnrepresentableNumber,
+  extractNumericTokenMatches,
   extractNumericTokens,
 } from '../../../../src/features/evidence/qa/extract-numeric-tokens';
 
@@ -217,6 +218,26 @@ describe('extractNumericTokens', () => {
         expect(Number.isFinite(token)).toBe(true);
       }
     });
+  });
+});
+
+describe('extractNumericTokenMatches', () => {
+  it('should return index-sorted matches with end > index on every entry', () => {
+    const text = 'sold for $41 million on 2025-03-14 at six percent';
+    const matches = extractNumericTokenMatches(text);
+
+    expect(matches.map((match) => match.value)).toEqual([41, 2025, 3, 14, 6]);
+    for (const match of matches) {
+      expect(match.end).toBeGreaterThan(match.index);
+    }
+  });
+
+  it('should agree with extractNumericTokens on the values it extracts, in the same order', () => {
+    const text = 'revenue was $10 and grew by six percent';
+
+    expect(extractNumericTokenMatches(text).map((match) => match.value)).toEqual(
+      extractNumericTokens(text),
+    );
   });
 });
 

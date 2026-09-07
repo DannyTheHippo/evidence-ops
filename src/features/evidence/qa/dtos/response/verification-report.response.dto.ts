@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
+import { AtomizationSummaryResponseDto } from './atomization-summary.response.dto';
 import { DroppedClaimResponseDto } from './dropped-claim.response.dto';
 
 export class VerificationReportResponseDto {
@@ -24,4 +25,13 @@ export class VerificationReportResponseDto {
     description: 'Claims dropped during verification, with the reason each was dropped.',
   })
   droppedClaims: DroppedClaimResponseDto[];
+
+  @Expose()
+  @Type(() => AtomizationSummaryResponseDto)
+  @ApiProperty({
+    required: false,
+    type: () => AtomizationSummaryResponseDto,
+    description: 'Present only when at least one claim went through atom decomposition.',
+  })
+  atomization?: AtomizationSummaryResponseDto;
 }

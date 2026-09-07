@@ -193,6 +193,11 @@ export const environmentSchema = z
     // means it proposes a measure held for admin confirmation instead of being dropped.
     EXTRACTION_HEADER_PROPOSALS: zBool(false),
 
+    // Gates a lowering-only contradiction check on both verification paths. Off means no
+    // contradiction-check model call is ever made and every verdict this codebase already
+    // computed passes through unchanged.
+    VERIFY_CONTRADICTION_CHECK: zBool(false),
+
     /** Per-tenant aggregate daily ceiling on model spend, in USD. A value `<= 0` disables the ceiling entirely. */
     MODEL_SPEND_DAILY_LIMIT_USD: zNum(50),
     // Sub-ceiling reserved against the same aggregate ledger for ingest calls (`fact_extraction`,
@@ -366,6 +371,9 @@ export const environmentSchema = z
         aliasHarvestAutoApply: e.EXTRACTION_ALIAS_HARVEST_AUTO_APPLY,
         headerProposals: e.EXTRACTION_HEADER_PROPOSALS,
       },
+      verifier: {
+        contradictionCheck: e.VERIFY_CONTRADICTION_CHECK,
+      },
       spend: {
         dailyLimitUsd: e.MODEL_SPEND_DAILY_LIMIT_USD,
         ingestDailyLimitUsd: e.MODEL_SPEND_DAILY_LIMIT_INGEST_USD,
@@ -402,6 +410,7 @@ export type RetrievalConfig = EnvironmentConfig['retrieval'];
 export type TelemetryConfig = EnvironmentConfig['telemetry'];
 export type SourcesConfig = EnvironmentConfig['sources'];
 export type ExtractionConfig = EnvironmentConfig['extraction'];
+export type VerifierConfig = EnvironmentConfig['verifier'];
 export type SpendConfig = EnvironmentConfig['spend'];
 export type McpConfig = EnvironmentConfig['mcp'];
 export type SseConfig = EnvironmentConfig['sse'];

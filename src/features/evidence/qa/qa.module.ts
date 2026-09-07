@@ -13,8 +13,12 @@ import {
 import { ProvidersModule } from '../../../providers/providers.module';
 import { ConflictsModule } from '../conflicts/conflicts.module';
 import { FactsModule } from '../facts/facts.module';
+import { MeasuresModule } from '../measures/measures.module';
+import { VerificationsModule } from '../verifications/verifications.module';
 import { AnswerPersistenceService } from './answer-persistence.service';
+import { ClaimDecompositionService } from './claim-decomposition.service';
 import { ClaimVerificationService } from './claim-verification.service';
+import { ContradictionCheckService } from './contradiction-check.service';
 import { EvidenceRetrievalService } from './evidence-retrieval.service';
 import { GroundingGateService } from './grounding-gate.service';
 import { QaController } from './qa.controller';
@@ -31,7 +35,12 @@ import { SynthesisService } from './synthesis.service';
 // `FactsModule`/`ConflictsModule` are for claim verification's cell-fact and conflict lookups
 // (`FactsService.findCellFacts`, `ConflictsService.findConflictedFactGroupsForChunks`) — passing
 // an empty `cellFacts` array is not a safe default, since `verify-claim.ts` only falls back to
-// raw-chunk-text numeric matching when a cited chunk has zero cell facts.
+// raw-chunk-text numeric matching when a cited chunk has zero cell facts. `FactsModule` also
+// exports `CanonicalEntityService`, which `ClaimVerificationService` needs directly — `FactsModule`
+// exports only that and `FactsService`, never `MeasuresService`, so `MeasuresModule` is imported
+// separately for `MeasuresService.listConfirmedDefinitions`. `VerificationsModule` is for
+// `VerificationsService.record`, the persistence `ClaimVerificationService.verifyClaims` calls once
+// per run.
 @Module({
   imports: [
     MongooseModule.forFeature([
@@ -43,6 +52,8 @@ import { SynthesisService } from './synthesis.service';
     ProvidersModule,
     FactsModule,
     ConflictsModule,
+    MeasuresModule,
+    VerificationsModule,
   ],
   controllers: [QaController],
   providers: [
@@ -51,6 +62,8 @@ import { SynthesisService } from './synthesis.service';
     EvidenceRetrievalService,
     QueryEmbeddingCacheService,
     AnswerPersistenceService,
+    ClaimDecompositionService,
+    ContradictionCheckService,
     ClaimVerificationService,
     QaService,
   ],

@@ -53,6 +53,22 @@ export interface CaseResult {
    * and a `conflicting` case whose actual outcome was not `conflicting_evidence` (there is no
    * attached conflict to check the scope of). See `eval/metrics/conflict-scope-check.ts`. */
   readonly conflictScopeCheck: boolean | null;
+  /** Count of the model's own raw claims, source `rawOutcome.claims.length` — before the grounding
+   * gate drops anything. 0 for a non-`answered` outcome. */
+  readonly totalClaimCount: number;
+  /** Of `totalClaimCount`, how many carry at least one citation whose locator is an xlsx region or
+   * cell — source `rawOutcome.claims`, filtered on `locator.kind`. The reported denominator for
+   * `EvalMetrics.tabularGroundedRate`. */
+  readonly tabularClaimCount: number;
+  /** Of `tabularClaimCount`, how many statements survive grounding — source: the raw claim's
+   * statement appears among `groundingResult.claims`, the gate's survivors. */
+  readonly tabularGroundedCount: number;
+  /** Claims the gate dropped for failing coverage under atom-level verification — source
+   * `verificationReport.atomization.atomDroppedClaimCount`, 0 when atomization did not run. */
+  readonly atomDroppedClaimCount: number;
+  /** Claims the gate dropped after the contradiction check lowered a verdict — source
+   * `verificationReport.atomization.contradictionDroppedClaimCount`, 0 when the check did not run. */
+  readonly contradictionDroppedClaimCount: number;
 }
 
 export interface RecallMetrics {
@@ -93,6 +109,24 @@ export interface EvalMetrics {
    * `eval/report.ts`'s `hasConflictScopeGap` — fails CLOSED because a mis-scoped conflict is the
    * exact defect this check exists to catch, so any rate below 1 is that defect returning. */
   readonly conflictScopeAccuracy: number;
+  /** Σ `tabularGroundedCount` / Σ `tabularClaimCount` across cases, 0 when the denominator is 0.
+   * Gated in `compare-baseline.ts`'s `GATED_METRICS` (`higher`) — unlike the two drop rates below,
+   * this one is safe to gate: a checker can only raise it by grounding more tabular claims that
+   * really are supported, never by refusing to check. */
+  readonly tabularGroundedRate: number;
+  /** Σ `tabularClaimCount` across cases — the reported denominator behind `tabularGroundedRate`,
+   * same role as `RecallMetrics.caseCount`. */
+  readonly tabularClaimCount: number;
+  /** Σ `atomDroppedClaimCount` / Σ `totalClaimCount` across cases, 0 when the denominator is 0.
+   * Reported only, deliberately absent from `GATED_METRICS`: on a frozen replay corpus a lower drop
+   * rate reads as a better verifier only because nothing forces it to keep checking — gating it
+   * would reward a checker that stops dropping anything, the exact failure this phase exists to
+   * fix. */
+  readonly coverageDropRate: number;
+  /** Σ `contradictionDroppedClaimCount` / Σ `totalClaimCount` across cases, 0 when the denominator
+   * is 0. Reported only, for the same reason `coverageDropRate` is: fewer drops is not evidence of a
+   * better contradiction check on a corpus that never changes. */
+  readonly contradictionDropRate: number;
   readonly caseCounts: {
     readonly total: number;
     readonly answerable: number;
@@ -175,6 +209,22 @@ function computeApplicableRate(
   return applicable.filter(Boolean).length / applicable.length;
 }
 
+/** Σ `numerator(result)` / Σ `denominator(result)` across every case, 0 rather than `NaN` when the
+ * summed denominator is 0 — shared by `tabularGroundedRate`, `coverageDropRate` and
+ * `contradictionDropRate`, which all sum counts across cases rather than averaging a per-case rate. */
+function computeSummedRate(
+  results: readonly CaseResult[],
+  numerator: (result: CaseResult) => number,
+  denominator: (result: CaseResult) => number,
+): number {
+  const totalDenominator = results.reduce((sum, result) => sum + denominator(result), 0);
+  if (totalDenominator === 0) {
+    return 0;
+  }
+  const totalNumerator = results.reduce((sum, result) => sum + numerator(result), 0);
+  return totalNumerator / totalDenominator;
+}
+
 export function computeMetrics(results: readonly CaseResult[]): EvalMetrics {
   const countOf = (category: EvalCategory): number =>
     results.filter((result) => result.category === category).length;
@@ -203,6 +253,22 @@ export function computeMetrics(results: readonly CaseResult[]): EvalMetrics {
         : results.filter((result) => result.canaryVerifiedQuoteLeaked).length / results.length,
     answerContentAccuracy: computeApplicableRate(results, (result) => result.answerContentCheck),
     conflictScopeAccuracy: computeApplicableRate(results, (result) => result.conflictScopeCheck),
+    tabularGroundedRate: computeSummedRate(
+      results,
+      (result) => result.tabularGroundedCount,
+      (result) => result.tabularClaimCount,
+    ),
+    tabularClaimCount: results.reduce((sum, result) => sum + result.tabularClaimCount, 0),
+    coverageDropRate: computeSummedRate(
+      results,
+      (result) => result.atomDroppedClaimCount,
+      (result) => result.totalClaimCount,
+    ),
+    contradictionDropRate: computeSummedRate(
+      results,
+      (result) => result.contradictionDroppedClaimCount,
+      (result) => result.totalClaimCount,
+    ),
     caseCounts: {
       total: results.length,
       answerable: countOf('answerable'),

@@ -89,6 +89,10 @@ export const getMockConfig = (): EnvironmentConfig => ({
     headerProposals: false,
   },
 
+  verifier: {
+    contradictionCheck: false,
+  },
+
   spend: {
     dailyLimitUsd: 50,
     ingestDailyLimitUsd: undefined,

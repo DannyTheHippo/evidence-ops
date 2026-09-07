@@ -6,6 +6,12 @@ import { MARKET_OVERVIEW_PAGES } from '../../scripts/fixtures/lib/build-market-o
 import { CANARY_MARKERS, COMP_PROPERTIES } from '../../scripts/fixtures/lib/constants';
 import { ClaimVerificationService } from '../../src/features/evidence/qa/claim-verification.service';
 import { ConflictsService } from '../../src/features/evidence/conflicts/conflicts.service';
+import { ClaimDecompositionService } from '../../src/features/evidence/qa/claim-decomposition.service';
+import { ContradictionCheckService } from '../../src/features/evidence/qa/contradiction-check.service';
+import { CanonicalEntityService } from '../../src/features/evidence/facts/canonical-entity.service';
+import { MeasuresService } from '../../src/features/evidence/measures/measures.service';
+import { VerificationsService } from '../../src/features/evidence/verifications/verifications.service';
+import { TypedConfigService } from '../../src/config/environment/typed-config.service';
 import { EvidenceRetrievalService } from '../../src/features/evidence/qa/evidence-retrieval.service';
 import { FactsService } from '../../src/features/evidence/facts/facts.service';
 import { GroundingGateService } from '../../src/features/evidence/qa/grounding-gate.service';
@@ -30,6 +36,7 @@ import { MODEL_PROVIDER } from '../../src/providers/model/model-provider.interfa
 import { UserRole } from '../../src/shared/enums/user-role.enum';
 import { AppLogger } from '../../src/shared/services/logger/logger.service';
 import { getMockLogger } from '../utils/get-mock-logger';
+import { getMockTypedConfig } from '../utils/get-mock-typed-config';
 import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts';
 
 /**
@@ -383,6 +390,37 @@ describe('canary security suite', () => {
             provide: ConflictsService,
             useValue: { findConflictedFactGroupsForChunks: jest.fn().mockResolvedValue([]) },
           },
+          // Decomposition returns `unavailable` and the contradiction flag is off, so neither
+          // service issues a model call: `modelProvider.calls` stays a faithful record of the
+          // verification prompt alone, which is what every assertion below reads.
+          {
+            provide: ClaimDecompositionService,
+            useValue: { decompose: jest.fn().mockResolvedValue({ kind: 'unavailable' }) },
+          },
+          {
+            provide: ContradictionCheckService,
+            useValue: {
+              check: jest.fn(() => {
+                throw new Error('contradiction check must not run with the flag off');
+              }),
+            },
+          },
+          {
+            provide: CanonicalEntityService,
+            useValue: { listCanonicalEntities: jest.fn().mockResolvedValue([]) },
+          },
+          {
+            provide: MeasuresService,
+            useValue: { listConfirmedDefinitions: jest.fn().mockResolvedValue([]) },
+          },
+          {
+            provide: VerificationsService,
+            useValue: { record: jest.fn().mockResolvedValue({ id: 'verification-1' }) },
+          },
+          {
+            provide: TypedConfigService,
+            useValue: getMockTypedConfig({ verifier: { contradictionCheck: false } }),
+          },
           { provide: AppLogger, useValue: getMockLogger() },
         ],
       }).compile();
@@ -409,6 +447,7 @@ describe('canary security suite', () => {
       const result = await claimVerificationService.verifyClaims({
         claims: [INJECTED_CLAIM],
         tenantId: 'tenant-1',
+        requestedBy: { kind: 'pat', id: 'actor-1' },
       });
 
       // Non-vacuity: the claim really did reach the model, fenced in the user message — and the
@@ -456,6 +495,7 @@ describe('canary security suite', () => {
       await claimVerificationService.verifyClaims({
         claims: [FENCE_BREAKING_CLAIM],
         tenantId: 'tenant-1',
+        requestedBy: { kind: 'pat', id: 'actor-1' },
       });
 
       expect(modelProvider.calls).toHaveLength(1);

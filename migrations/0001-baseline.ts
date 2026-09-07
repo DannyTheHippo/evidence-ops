@@ -72,7 +72,7 @@ interface IndexSpec {
  * scopes by first; `createdAt: -1` follows it wherever the access pattern is a newest-first
  * listing.
  *
- * Creating an index also creates its collection, so this table is what brings all seventeen
+ * Creating an index also creates its collection, so this table is what brings all eighteen
  * collections into existence.
  */
 const INDEXES: readonly IndexSpec[] = [
@@ -422,6 +422,19 @@ const INDEXES: readonly IndexSpec[] = [
     keys: { tenantId: 1, claimCoverage: 1 },
     options: { name: 'answers_tenantId_claimCoverage' },
   },
+
+  // Backs `GET /verifications`'s tenant-wide newest-first default listing and its
+  // `?requestedByKind=` filter.
+  {
+    collection: 'verifications',
+    keys: { tenantId: 1, createdAt: -1 },
+    options: { name: 'verifications_tenantId_createdAt' },
+  },
+  {
+    collection: 'verifications',
+    keys: { tenantId: 1, 'requestedBy.kind': 1, createdAt: -1 },
+    options: { name: 'verifications_tenantId_requestedByKind_createdAt' },
+  },
   {
     collection: 'workflow_runs',
     keys: { tenantId: 1, createdAt: -1 },
@@ -655,7 +668,7 @@ async function dropIfExists(db: Db, collectionName: string): Promise<void> {
 }
 
 /**
- * Drops all seventeen collections `up()` creates, and with them every index, Atlas Search definition,
+ * Drops all eighteen collections `up()` creates, and with them every index, Atlas Search definition,
  * seeded row and any application data written since. This is destructive and total: reverting a
  * baseline means returning the database to empty, not preserving what was stored on top of the
  * schema it built.

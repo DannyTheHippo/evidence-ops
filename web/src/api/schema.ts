@@ -724,6 +724,38 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/verifications': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['VerificationsController_list'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/verifications/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['VerificationsController_getById'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/retrieval/search': {
     parameters: {
       query?: never;
@@ -2133,6 +2165,28 @@ export interface components {
        */
       reason: string;
     };
+    AtomizationSummaryResponseDto: {
+      /**
+       * @description Number of claims that were decomposed into atoms.
+       * @example 3
+       */
+      decomposedClaimCount: number;
+      /**
+       * @description Number of claims whose atom decomposition was unavailable and fell back to coverage checking the whole statement.
+       * @example 0
+       */
+      coverageFallbackCount: number;
+      /**
+       * @description Number of claims dropped because one or more of their atoms could not be grounded.
+       * @example 0
+       */
+      atomDroppedClaimCount: number;
+      /**
+       * @description Number of claims dropped because the contradiction check found them incompatible with their own cited evidence.
+       * @example 0
+       */
+      contradictionDroppedClaimCount: number;
+    };
     VerificationReportResponseDto: {
       /**
        * @description Number of model-authored claims that survived server-side citation verification.
@@ -2146,6 +2200,8 @@ export interface components {
       totalClaimCount: number;
       /** @description Claims dropped during verification, with the reason each was dropped. */
       droppedClaims: components['schemas']['DroppedClaimResponseDto'][];
+      /** @description Present only when at least one claim went through atom decomposition. */
+      atomization?: components['schemas']['AtomizationSummaryResponseDto'];
     };
     AnswerUsageResponseDto: {
       /**
@@ -2208,6 +2264,8 @@ export interface components {
       verificationReport?: components['schemas']['VerificationReportResponseDto'];
       /** @description Citations backing the server-verified claims, flattened across all claims. */
       citations: Record<string, never>[];
+      /** @description Atoms of the surviving claims, empty when no claim was decomposed. */
+      atoms: Record<string, never>[];
       /** @description Conflict identifiers relevant to this answer, if any were detected. */
       conflictIds: string[];
       /**
@@ -2220,6 +2278,92 @@ export interface components {
       withdrawnCitedDocVersionIds: string[];
       /** @description Token and cost accounting for the QA synthesis call, present only once runStatus is 'completed'. */
       usage?: components['schemas']['AnswerUsageResponseDto'];
+    };
+    VerificationRequesterResponseDto: {
+      /**
+       * @description Which kind of caller requested this verification run.
+       * @example pat
+       * @enum {string}
+       */
+      kind: 'pat' | 'user';
+      /**
+       * @description Identifier of the requesting PAT or user.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      id: string;
+    };
+    VerifyClaimResultResponseDto: {
+      /**
+       * @description Index of the verified claim within the run's submitted claims array.
+       * @example 0
+       */
+      claimIndex: number;
+      /**
+       * @description Server-resolved verdict for this claim.
+       * @example grounded
+       * @enum {string}
+       */
+      verdict: 'grounded' | 'not_grounded' | 'no_evidence_retrieved' | 'conflicting_evidence';
+      /**
+       * @description Mechanical reason the claim was degraded, present only on a non-grounded verdict.
+       * @example atom-unsupported
+       */
+      reasonCode?: string;
+      /** @description Server-resolved citations backing a grounded verdict. */
+      citations?: Record<string, never>[];
+    };
+    VerificationUsageResponseDto: {
+      /**
+       * @description Prompt tokens summed across every model call in this verification run.
+       * @example 640
+       */
+      promptTokens: number;
+      /**
+       * @description Completion tokens summed across every model call in this verification run.
+       * @example 120
+       */
+      completionTokens: number;
+      /**
+       * @description Total cost in USD summed across every model call in this verification run.
+       * @example 0.0031
+       */
+      costUsd: number;
+    };
+    VerificationResponseDto: {
+      /**
+       * @description Verification identifier.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      id: string;
+      /** @description Who requested this verification run. */
+      requestedBy: components['schemas']['VerificationRequesterResponseDto'];
+      /** @description Claim statements submitted for verification, in submission order. */
+      claims: string[];
+      /** @description One result per submitted claim, in submission order. */
+      results: components['schemas']['VerifyClaimResultResponseDto'][];
+      /** @description Fixed advisory accompanying every verification result — see VERIFY_CLAIMS_ADVISORY. */
+      advisory: string;
+      /** @description Evidence chunk identifiers retrieved for this run. */
+      retrievedChunkIds: string[];
+      /** @description Atoms of the submitted claims, empty when no claim was decomposed. */
+      atoms: Record<string, never>[];
+      /** @description Token and cost accounting summed across every model call in this run. */
+      usage: components['schemas']['VerificationUsageResponseDto'];
+      /**
+       * Format: date-time
+       * @description Verification run creation timestamp.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      createdAt: string;
+    };
+    VerificationListResponseDto: {
+      /**
+       * @description Total number of documents returned.
+       * @example 2
+       */
+      count: number;
+      /** @description The tenant's verification runs. */
+      docs: components['schemas']['VerificationResponseDto'][];
     };
     RetrievedChunkResponseDto: {
       /**
@@ -4760,6 +4904,70 @@ export interface operations {
         };
       };
       /** @description Answer does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  VerificationsController_list: {
+    parameters: {
+      query?: {
+        /** @description Comma-separated fields to include; `_id` is always returned. */
+        select?: string;
+        /** @description Number of documents to skip (offset). */
+        skip?: number;
+        /** @description Maximum number of documents to return. */
+        limit?: number;
+        /** @description Exact requester kind to filter by. */
+        requestedByKind?: 'pat' | 'user';
+        /** @description Field to sort by. Defaults to createdAt. */
+        sort?: 'createdAt';
+        /** @description Sort direction. Defaults to desc. */
+        sortDir?: 'asc' | 'desc';
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Paginated verification run history for the caller's tenant, most recent first, optionally filtered by requestedByKind. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['VerificationListResponseDto'];
+        };
+      };
+    };
+  };
+  VerificationsController_getById: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description One verification run. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['VerificationResponseDto'];
+        };
+      };
+      /** @description Verification does not exist. */
       404: {
         headers: {
           [name: string]: unknown;

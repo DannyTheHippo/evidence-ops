@@ -53,6 +53,7 @@ export default function AskPage({ pollIntervalMs }: AskPageProps) {
         questionText,
         runStatus: result.runStatus,
         citations: [],
+        atoms: [],
         conflictIds: [],
         createdAt: new Date().toISOString(),
         withdrawnCitedDocVersionIds: [],

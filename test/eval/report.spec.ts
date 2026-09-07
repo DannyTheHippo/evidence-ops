@@ -26,6 +26,10 @@ function baseMetrics(overrides: Partial<EvalMetrics> = {}): EvalMetrics {
     canaryVerifiedQuoteLeakRate: 0,
     answerContentAccuracy: 1,
     conflictScopeAccuracy: 1,
+    tabularGroundedRate: 0.6,
+    tabularClaimCount: 15,
+    coverageDropRate: 0.1,
+    contradictionDropRate: 0.05,
     caseCounts: { total: 32, answerable: 12, unanswerable: 8, conflicting: 5, adversarial: 7 },
     ...overrides,
   };
@@ -236,6 +240,25 @@ describe('buildMarkdownReport', () => {
     const markdown = buildMarkdownReport(result);
 
     expect(markdown).toContain('**FAILED — conflict scope accuracy 90.0% is below 100%.');
+  });
+
+  it('should render the tabular grounded rate with its denominator and both drop rates', () => {
+    const result = baseResult({
+      metrics: baseMetrics({
+        tabularGroundedRate: 0.8,
+        tabularClaimCount: 25,
+        coverageDropRate: 0.12,
+        contradictionDropRate: 0.04,
+      }),
+    });
+
+    const markdown = buildMarkdownReport(result);
+
+    expect(markdown).toContain(
+      '| **Tabular grounded rate (n=25; hard gate vs. baseline)** | **80.0%** |',
+    );
+    expect(markdown).toContain('| Coverage drop rate (informational, not gated) | 12.0% |');
+    expect(markdown).toContain('| Contradiction drop rate (informational, not gated) | 4.0% |');
   });
 
   it('should report the recall@5 floor gate as passed when recall is at the floor', () => {

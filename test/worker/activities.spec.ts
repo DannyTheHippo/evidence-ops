@@ -12,8 +12,11 @@ import { FactsService } from '../../src/features/evidence/facts/facts.service';
 import { METRIC_ONTOLOGY } from '../../src/features/evidence/facts/metric-ontology';
 import { IngestionService } from '../../src/features/evidence/ingestion/ingestion.service';
 import { MeasuresService } from '../../src/features/evidence/measures/measures.service';
+import { TypedConfigService } from '../../src/config/environment/typed-config.service';
 import { AnswerPersistenceService } from '../../src/features/evidence/qa/answer-persistence.service';
+import { ClaimDecompositionService } from '../../src/features/evidence/qa/claim-decomposition.service';
 import type { Claim } from '../../src/features/evidence/qa/contracts/answer.contract';
+import { ContradictionCheckService } from '../../src/features/evidence/qa/contradiction-check.service';
 import { EvidenceRetrievalService } from '../../src/features/evidence/qa/evidence-retrieval.service';
 import { GroundingGateService } from '../../src/features/evidence/qa/grounding-gate.service';
 import { SynthesisService } from '../../src/features/evidence/qa/synthesis.service';
@@ -23,6 +26,7 @@ import { APPROVAL_CHANNEL } from '../../src/providers/approval-channel/approval-
 import type { AlsContext } from '../../src/shared/types/als-context.type';
 import { createActivities } from '../../src/worker/activities';
 import { INGEST_HEARTBEAT_INTERVAL_MS } from '../../src/workflows/ingest-retry-policy';
+import { getMockTypedConfig } from '../utils/get-mock-typed-config';
 
 /**
  * `Context.current()` resolves only inside a real activity invocation on a worker, which these
@@ -58,6 +62,9 @@ const activityContext = jest.requireMock('@temporalio/activity') as unknown as {
  * facts/conflicts/canonical entities doesn't have to stub them. `listConfirmedDefinitions`
  * defaults to `METRIC_ONTOLOGY` — the seed set every tenant starts confirmed with — so every
  * existing metric-naming test keeps resolving against the same vocabulary it always has.
+ * `TypedConfigService` defaults to `getMockTypedConfig()`, whose `verifier.contradictionCheck` is
+ * `false` — the same off-by-default shape production config ships with — so a test that doesn't
+ * care about contradiction checking doesn't have to stub it.
  */
 function buildApp(overrides: {
   ingestVersion?: jest.Mock;
@@ -69,6 +76,9 @@ function buildApp(overrides: {
   listConfirmedDefinitions?: jest.Mock;
   retrieve?: jest.Mock;
   synthesizeAnswer?: jest.Mock;
+  decompose?: jest.Mock;
+  check?: jest.Mock;
+  config?: TypedConfigService;
   verify?: jest.Mock;
   findConflictedFactGroupsForChunks?: jest.Mock;
   findConflictedFactGroupsForTenant?: jest.Mock;
@@ -124,6 +134,9 @@ function buildApp(overrides: {
     ],
     [EvidenceRetrievalService, { retrieve: overrides.retrieve ?? jest.fn() }],
     [SynthesisService, { synthesizeAnswer: overrides.synthesizeAnswer ?? jest.fn() }],
+    [ClaimDecompositionService, { decompose: overrides.decompose ?? jest.fn() }],
+    [ContradictionCheckService, { check: overrides.check ?? jest.fn() }],
+    [TypedConfigService, overrides.config ?? getMockTypedConfig()],
     [GroundingGateService, { verify: overrides.verify ?? jest.fn() }],
     [AnswerPersistenceService, { persist: overrides.persist ?? jest.fn() }],
     [
@@ -462,6 +475,167 @@ describe('createActivities', () => {
     expect(result.usage).toEqual({ promptTokens: 0, completionTokens: 0, costUsd: 0 });
   });
 
+  describe('decomposeClaims', () => {
+    it('should skip decomposition and return no atoms for a non-answered outcome', async () => {
+      const mockDecompose = jest.fn();
+      const app = buildApp({ decompose: mockDecompose });
+      const outcome = { kind: 'insufficient_evidence' as const, reason: 'none' };
+
+      const activities = createActivities(app);
+      const result = await activities.decomposeClaims({ outcome, tenantId: 'acme-corp' });
+
+      expect(mockDecompose).not.toHaveBeenCalled();
+      expect(result).toEqual({ atoms: [] });
+    });
+
+    it('should omit a claim whose decomposition came back unavailable, keeping only the claims that decomposed', async () => {
+      const decomposedClaim = buildClaim({ statement: 'The cap rate was approximately 6.10%.' });
+      const unavailableClaim = buildClaim({ statement: 'The vacancy rate is 4%.' });
+      const mockDecompose = jest
+        .fn()
+        .mockResolvedValueOnce({
+          kind: 'decomposed',
+          atoms: ['atom-1'],
+          usage: { promptTokens: 1, completionTokens: 1, costUsd: 0 },
+        })
+        .mockResolvedValueOnce({ kind: 'unavailable', reason: 'provider timeout' });
+      const app = buildApp({ decompose: mockDecompose });
+      const outcome = { kind: 'answered' as const, claims: [decomposedClaim, unavailableClaim] };
+
+      const activities = createActivities(app);
+      const result = await activities.decomposeClaims({ outcome, tenantId: 'acme-corp' });
+
+      expect(result).toEqual({
+        atoms: [{ claimIndex: 0, statement: decomposedClaim.statement, atoms: ['atom-1'] }],
+      });
+    });
+
+    it('should run inside an ALS scope reporting the given tenant', async () => {
+      const als = new AsyncLocalStorage<AlsContext>();
+      let observedTenant: string | undefined;
+      const mockDecompose = jest.fn(() => {
+        observedTenant = als.getStore()?.tenant;
+        return Promise.resolve({ kind: 'unavailable' as const, reason: 'n/a' });
+      });
+      const app = buildApp({ decompose: mockDecompose, als });
+      const outcome = { kind: 'answered' as const, claims: [buildClaim()] };
+
+      const activities = createActivities(app);
+      await activities.decomposeClaims({ outcome, tenantId: 'acme-corp' });
+
+      expect(observedTenant).toBe('acme-corp');
+      expect(als.getStore()).toBeUndefined();
+    });
+  });
+
+  describe('checkContradictions', () => {
+    it('should return no contradicted claims and never call ContradictionCheckService.check when the flag is off', async () => {
+      const mockCheck = jest.fn(() => {
+        throw new Error('ContradictionCheckService.check must not be called when the flag is off');
+      });
+      const app = buildApp({
+        check: mockCheck,
+        config: getMockTypedConfig({ verifier: { contradictionCheck: false } }),
+      });
+      const claim = buildClaim();
+      const outcome = { kind: 'answered' as const, claims: [claim] };
+
+      const activities = createActivities(app);
+      const result = await activities.checkContradictions({
+        outcome,
+        atoms: [],
+        retrievedChunks: [buildRetrievedChunk()],
+        tenantId: 'acme-corp',
+      });
+
+      expect(mockCheck).not.toHaveBeenCalled();
+      expect(result).toEqual({ contradictedClaimIndexes: [] });
+    });
+
+    it('should skip a claim with no citation resolvable against the retrieved chunks', async () => {
+      const claim = buildClaim({
+        citations: [
+          {
+            docVersionId: 'version-unrelated',
+            sha256: 'b'.repeat(64),
+            chunkId: 'chunk-unrelated',
+            locator: { kind: 'pdf-page', page: 1, extractorVersion: 'v1' },
+            quote: 'unrelated quote',
+          },
+        ],
+      });
+      const mockCheck = jest.fn();
+      const app = buildApp({
+        check: mockCheck,
+        config: getMockTypedConfig({ verifier: { contradictionCheck: true } }),
+      });
+      const outcome = { kind: 'answered' as const, claims: [claim] };
+
+      const activities = createActivities(app);
+      const result = await activities.checkContradictions({
+        outcome,
+        atoms: [],
+        retrievedChunks: [buildRetrievedChunk({ chunkId: 'chunk-1' })],
+        tenantId: 'acme-corp',
+      });
+
+      expect(mockCheck).not.toHaveBeenCalled();
+      expect(result).toEqual({ contradictedClaimIndexes: [] });
+    });
+
+    it("should collect the contradicted claim index when the flag is on, checking each of the claim's decomposed atoms", async () => {
+      const claim = buildClaim();
+      const mockCheck = jest.fn().mockResolvedValue({
+        kind: 'checked',
+        contradicted: true,
+        usage: { promptTokens: 1, completionTokens: 1, costUsd: 0 },
+      });
+      const app = buildApp({
+        check: mockCheck,
+        config: getMockTypedConfig({ verifier: { contradictionCheck: true } }),
+      });
+      const outcome = { kind: 'answered' as const, claims: [claim] };
+      const retrievedChunks = [buildRetrievedChunk()];
+
+      const activities = createActivities(app);
+      const result = await activities.checkContradictions({
+        outcome,
+        atoms: [{ claimIndex: 0, statement: claim.statement, atoms: ['atom-1'] }],
+        retrievedChunks,
+        tenantId: 'acme-corp',
+      });
+
+      expect(mockCheck).toHaveBeenCalledWith({
+        atom: 'atom-1',
+        evidence: retrievedChunks,
+        tenantId: 'acme-corp',
+      });
+      expect(result).toEqual({ contradictedClaimIndexes: [0] });
+    });
+
+    it('should ignore an unavailable contradiction check, leaving the claim off the contradicted set', async () => {
+      const claim = buildClaim();
+      const mockCheck = jest
+        .fn()
+        .mockResolvedValue({ kind: 'unavailable', reason: 'provider timeout' });
+      const app = buildApp({
+        check: mockCheck,
+        config: getMockTypedConfig({ verifier: { contradictionCheck: true } }),
+      });
+      const outcome = { kind: 'answered' as const, claims: [claim] };
+
+      const activities = createActivities(app);
+      const result = await activities.checkContradictions({
+        outcome,
+        atoms: [],
+        retrievedChunks: [buildRetrievedChunk()],
+        tenantId: 'acme-corp',
+      });
+
+      expect(result).toEqual({ contradictedClaimIndexes: [] });
+    });
+  });
+
   it('should skip GroundingGateService.verify and pass the outcome through unchanged for a non-answered outcome', async () => {
     const mockVerify = jest.fn();
     const app = buildApp({ verify: mockVerify });
@@ -788,7 +962,14 @@ describe('createActivities', () => {
       violations: [],
       claimCoverage: 0.5,
     });
-    const app = buildApp({ verify: mockVerify });
+    // `listConfirmedDefinitions` overridden to `[]`, not the default `METRIC_ONTOLOGY`: this test
+    // asserts the exact object passed to `verify`, and an empty tenant measure set keeps that
+    // object's `measures` field trivial to write out rather than reproducing
+    // `toVerifierMeasures(METRIC_ONTOLOGY)` by hand.
+    const app = buildApp({
+      verify: mockVerify,
+      listConfirmedDefinitions: jest.fn().mockResolvedValue([]),
+    });
     const outcome = { kind: 'answered' as const, claims: [claim] };
     const retrievedChunks: RetrievedChunk[] = [buildRetrievedChunk()];
 
@@ -804,6 +985,10 @@ describe('createActivities', () => {
       retrievedChunks,
       cellFacts: [],
       conflictedFactKeys: [],
+      atomsByClaimIndex: undefined,
+      contradictedClaimIndexes: undefined,
+      measures: [],
+      entities: [],
     });
     expect(result).toEqual({
       outcome,
@@ -876,10 +1061,14 @@ describe('createActivities', () => {
       violations: [],
       claimCoverage: 1,
     });
+    // `listConfirmedDefinitions` overridden to `[]` for the same reason the previous test's
+    // `buildApp` call is — this exact-matches `verify`'s call, and an empty tenant measure set
+    // keeps its `measures` field trivial rather than reproducing `toVerifierMeasures(METRIC_ONTOLOGY)`.
     const app = buildApp({
       findCellFacts: mockFindCellFacts,
       findConflictedFactGroupsForChunks: mockFindConflictedFactGroupsForChunks,
       verify: mockVerify,
+      listConfirmedDefinitions: jest.fn().mockResolvedValue([]),
     });
     const outcome = { kind: 'answered' as const, claims: [claim] };
 
@@ -900,7 +1089,80 @@ describe('createActivities', () => {
         },
       ],
       conflictedFactKeys: [conflictedFactKey],
+      atomsByClaimIndex: undefined,
+      contradictedClaimIndexes: undefined,
+      measures: [],
+      entities: [],
     });
+  });
+
+  it("should forward decomposed atoms, contradicted claim indexes, tenant measures and canonical entities into GroundingGateService.verify, and return the gate's own atoms and atomization summary", async () => {
+    const claim = buildClaim();
+    const claimAtoms = [{ claimIndex: 0, statement: claim.statement, atoms: ['atom-1'] }];
+    const atomization = {
+      decomposedClaimCount: 1,
+      coverageFallbackCount: 0,
+      atomDroppedClaimCount: 0,
+      contradictionDroppedClaimCount: 0,
+    };
+    const mockVerify = jest.fn().mockReturnValue({
+      outcomeKind: 'answered',
+      claims: [claim],
+      droppedClaims: [],
+      violations: [],
+      claimCoverage: 1,
+      claimAtoms,
+      atomization,
+    });
+    const entity = buildCanonicalEntity();
+    const yearBuiltMeasure = {
+      id: 'year_built',
+      label: 'Year Built',
+      aliases: ['Year Built', 'year built', 'construction year'],
+      valueType: 'count' as const,
+      canonicalUnit: 'years',
+      units: [{ id: 'years', toCanonicalFactor: 1 }],
+      toleranceKind: 'absolute' as const,
+      tolerance: 0,
+    };
+    const app = buildApp({
+      verify: mockVerify,
+      listCanonicalEntities: jest.fn().mockResolvedValue([entity]),
+      listConfirmedDefinitions: jest.fn().mockResolvedValue([yearBuiltMeasure]),
+    });
+    const outcome = { kind: 'answered' as const, claims: [claim] };
+    const retrievedChunks: RetrievedChunk[] = [buildRetrievedChunk()];
+
+    const activities = createActivities(app);
+    const result = await activities.groundingCheck({
+      outcome,
+      retrievedChunks,
+      tenantId: 'acme-corp',
+      atoms: claimAtoms,
+      contradictedClaimIndexes: [0],
+    });
+
+    expect(mockVerify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        atomsByClaimIndex: new Map([[0, ['atom-1']]]),
+        contradictedClaimIndexes: new Set([0]),
+        measures: [
+          {
+            slug: 'year_built',
+            label: 'Year Built',
+            aliases: ['Year Built', 'year built', 'construction year'],
+            valueType: 'count',
+            canonicalUnit: 'years',
+            units: [{ id: 'years', toCanonicalFactor: 1 }],
+            toleranceKind: 'absolute',
+            tolerance: 0,
+          },
+        ],
+        entities: [entity],
+      }),
+    );
+    expect(result.atoms).toEqual(claimAtoms);
+    expect(result.verificationReport?.atomization).toEqual(atomization);
   });
 
   it('should degrade the persisted outcome to insufficient_evidence when the gate drops every claim', async () => {

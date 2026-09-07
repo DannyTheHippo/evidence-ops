@@ -191,7 +191,14 @@ function gitSha(): string {
 }
 
 interface VarianceLaneOptions {
-  readonly activities: Pick<Activities, 'retrieveEvidence' | 'synthesizeAnswer' | 'groundingCheck'>;
+  readonly activities: Pick<
+    Activities,
+    | 'retrieveEvidence'
+    | 'synthesizeAnswer'
+    | 'decomposeClaims'
+    | 'checkContradictions'
+    | 'groundingCheck'
+  >;
   readonly cases: readonly EvalCase[];
   readonly tenantId: string;
   readonly resultsDir: string;
@@ -231,6 +238,19 @@ async function runVarianceLane(options: VarianceLaneOptions): Promise<void> {
         chunks: retrievedChunks,
         tenantId: options.tenantId,
       });
+      // Mirrors `answer-question.workflow.ts`'s decompose-then-check-contradictions ordering
+      // between synthesis and grounding, so this lane measures the same production path the
+      // scoring lane below does.
+      const { atoms } = await options.activities.decomposeClaims({
+        outcome: rawOutcome,
+        tenantId: options.tenantId,
+      });
+      const { contradictedClaimIndexes } = await options.activities.checkContradictions({
+        outcome: rawOutcome,
+        atoms,
+        retrievedChunks,
+        tenantId: options.tenantId,
+      });
       // `questionText` is load-bearing, exactly as in the scoring lane's identical call above: without
       // it `groundingCheck` names no question entity and every conflict-attachment fork fails closed
       // to abstention, which would shift this lane's whole outcome distribution.
@@ -239,6 +259,8 @@ async function runVarianceLane(options: VarianceLaneOptions): Promise<void> {
         retrievedChunks,
         tenantId: options.tenantId,
         questionText: evalCase.question,
+        atoms,
+        contradictedClaimIndexes,
       });
 
       const citations =
@@ -508,6 +530,18 @@ async function main(): Promise<void> {
         chunks: retrievedChunks,
         tenantId: EVAL_TENANT_ID,
       });
+      // Mirrors `answer-question.workflow.ts`'s decompose-then-check-contradictions ordering
+      // between synthesis and grounding, so this lane measures the same production path.
+      const { atoms } = await activities.decomposeClaims({
+        outcome: rawOutcome,
+        tenantId: EVAL_TENANT_ID,
+      });
+      const { contradictedClaimIndexes } = await activities.checkContradictions({
+        outcome: rawOutcome,
+        atoms,
+        retrievedChunks,
+        tenantId: EVAL_TENANT_ID,
+      });
       // `questionText` is what lets `groundingCheck` (`scopeConflictToQuestion`/
       // `resolveQuestionEntity`, `src/features/evidence/qa/scope-conflict-to-question.ts`) name the
       // question's own entity — omitted, `resolveQuestionEntity` sees an empty string, names no
@@ -519,6 +553,8 @@ async function main(): Promise<void> {
         retrievedChunks,
         tenantId: EVAL_TENANT_ID,
         questionText: evalCase.question,
+        atoms,
+        contradictedClaimIndexes,
       });
 
       const chunkByChunkId = new Map(retrievedChunks.map((chunk) => [chunk.chunkId, chunk]));
@@ -623,6 +659,22 @@ async function main(): Promise<void> {
             )
           : null;
 
+      const totalClaimCount = rawOutcome.kind === 'answered' ? rawOutcome.claims.length : 0;
+      const rawTabularClaims =
+        rawOutcome.kind === 'answered'
+          ? rawOutcome.claims.filter((claim) =>
+              claim.citations.some(
+                (citation) =>
+                  citation.locator.kind === 'xlsx-region' || citation.locator.kind === 'xlsx-cell',
+              ),
+            )
+          : [];
+      const groundedStatements = new Set(groundingResult.claims.map((claim) => claim.statement));
+      const tabularGroundedCount = rawTabularClaims.filter((claim) =>
+        groundedStatements.has(claim.statement),
+      ).length;
+      const atomization = groundingResult.verificationReport?.atomization;
+
       caseResults.push({
         id: evalCase.id,
         category: evalCase.category,
@@ -634,6 +686,11 @@ async function main(): Promise<void> {
         canaryVerifiedQuoteLeaked: verifiedQuoteLeak,
         answerContentCheck,
         conflictScopeCheck,
+        totalClaimCount,
+        tabularClaimCount: rawTabularClaims.length,
+        tabularGroundedCount,
+        atomDroppedClaimCount: atomization?.atomDroppedClaimCount ?? 0,
+        contradictionDroppedClaimCount: atomization?.contradictionDroppedClaimCount ?? 0,
       });
 
       perCase.push({
@@ -707,7 +764,7 @@ async function main(): Promise<void> {
 
     console.log(`eval: wrote eval/results/${sha}.json and eval/results/${sha}.md`);
     console.log(
-      `eval: recall@5=${metrics.retrieval.recallAt5.toFixed(2)} recall@10=${metrics.retrieval.recallAt10.toFixed(2)} mrr=${metrics.retrieval.mrr.toFixed(2)} citationPrecision=${metrics.citationPrecision.toFixed(2)} claimCoverage=${metrics.claimCoverageMean.toFixed(2)} abstention=${metrics.abstentionAccuracy.toFixed(2)} conflictRecall=${metrics.conflictRecall.toFixed(2)} canaryOwnVoiceLeakRate=${metrics.canaryOwnVoiceLeakRate} canaryVerifiedQuoteLeakRate=${metrics.canaryVerifiedQuoteLeakRate}`,
+      `eval: recall@5=${metrics.retrieval.recallAt5.toFixed(2)} recall@10=${metrics.retrieval.recallAt10.toFixed(2)} mrr=${metrics.retrieval.mrr.toFixed(2)} citationPrecision=${metrics.citationPrecision.toFixed(2)} claimCoverage=${metrics.claimCoverageMean.toFixed(2)} abstention=${metrics.abstentionAccuracy.toFixed(2)} conflictRecall=${metrics.conflictRecall.toFixed(2)} canaryOwnVoiceLeakRate=${metrics.canaryOwnVoiceLeakRate} canaryVerifiedQuoteLeakRate=${metrics.canaryVerifiedQuoteLeakRate} tabularGrounded=${metrics.tabularGroundedRate.toFixed(2)} coverageDrop=${metrics.coverageDropRate.toFixed(2)} contradictionDrop=${metrics.contradictionDropRate.toFixed(2)}`,
     );
 
     // `hasOwnVoiceLeak` (`./report`) is the same predicate `buildMarkdownReport`'s gate line

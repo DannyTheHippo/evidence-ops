@@ -74,6 +74,7 @@ const pct = (value: number): string => `${(value * 100).toFixed(1)}%`;
 function metricsTable(metrics: EvalMetrics): string {
   const row = (label: string, format: (metrics: EvalMetrics) => string): string =>
     `| ${label} | ${format(metrics)} |`;
+  const tabularGroundedLabel = `**Tabular grounded rate (n=${metrics.tabularClaimCount}; hard gate vs. baseline)**`;
 
   return [
     '| Metric | Value |',
@@ -100,6 +101,9 @@ function metricsTable(metrics: EvalMetrics): string {
     row('Canary verified-quote leak rate (informational, not gated)', (m) =>
       pct(m.canaryVerifiedQuoteLeakRate),
     ),
+    row(tabularGroundedLabel, (m) => `**${pct(m.tabularGroundedRate)}**`),
+    row('Coverage drop rate (informational, not gated)', (m) => pct(m.coverageDropRate)),
+    row('Contradiction drop rate (informational, not gated)', (m) => pct(m.contradictionDropRate)),
   ].join('\n');
 }
 

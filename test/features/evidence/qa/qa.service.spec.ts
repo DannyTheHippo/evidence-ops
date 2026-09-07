@@ -170,6 +170,7 @@ describe('QaService', () => {
         claimCoverage: 1,
         verificationReport,
         citations: [citation],
+        atoms: [],
         conflictIds: [conflictId.toString()],
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
         retrievedChunkCount: 2,
@@ -178,6 +179,29 @@ describe('QaService', () => {
       // `citation.docVersionId` ('v1') is not a valid ObjectId — `resolveWithdrawnDocVersionIds`
       // filters it out and short-circuits before ever querying DocumentVersion.
       expect(mockDocumentVersionModel.find).not.toHaveBeenCalled();
+    });
+
+    it('should round-trip atoms when the answer document carries them', async () => {
+      const answerId = new Types.ObjectId();
+      const claimAtoms = [{ claimIndex: 0, statement: 's', atoms: ['a1', 'a2'] }];
+      mockAnswerModel.findOne.mockResolvedValueOnce({
+        _id: answerId,
+        questionText: 'What is the cap rate?',
+        runStatus: 'completed',
+        outcome: { kind: 'answered' as const, claims: [] },
+        claimCoverage: 1,
+        verificationReport: { verifiedClaimCount: 0, totalClaimCount: 0, droppedClaims: [] },
+        claims: [],
+        atoms: claimAtoms,
+        conflictIds: [],
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        retrievedChunkIds: [],
+      });
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      const result = await service.getAnswerById(answerId.toString(), 'actor', 'tenant-a');
+
+      expect(result.atoms).toEqual(claimAtoms);
     });
 
     // Pins the three-part property a spoofed quote must never break: the raw bidi-override and
@@ -436,6 +460,7 @@ describe('QaService', () => {
           claimCoverage: answer.claimCoverage,
           verificationReport: answer.verificationReport,
           citations: [],
+          atoms: [],
           conflictIds: [],
           createdAt: answer.createdAt,
           usage: undefined,

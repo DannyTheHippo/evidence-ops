@@ -54,6 +54,7 @@ import {
 import { AnswerResponseDto } from './dtos/response/answer.response.dto';
 import { AnswerNotFoundException } from './exceptions/qa.exception';
 import { ANSWER_STREAM_INTERVAL_MS } from './qa.constant';
+import type { ClaimAtoms } from './types/claim-atoms.type';
 
 export interface StartQuestionInput {
   readonly questionText: string;
@@ -75,6 +76,7 @@ export interface AnswerEnvelope {
   readonly claimCoverage?: number;
   readonly verificationReport?: VerificationReport;
   readonly citations: Citation[];
+  readonly atoms: ClaimAtoms[];
   readonly conflictIds: string[];
   readonly createdAt: Date;
   readonly usage?: AnswerUsage;
@@ -457,6 +459,9 @@ export class QaService {
       citations: answer.claims.flatMap((claim) =>
         claim.citations.map((citation) => this.neutralizeCitation(citation)),
       ),
+      // `?? []` covers rows persisted before this field existed — `answer.atoms` is undefined on
+      // those, and the envelope must not hand `undefined` to a consumer expecting an array.
+      atoms: answer.atoms ?? [],
       conflictIds: answer.conflictIds.map((conflictId) => conflictId.toString()),
       createdAt: answer.createdAt,
       // Same withholding rule as `outcome` above — usage is written alongside outcome on

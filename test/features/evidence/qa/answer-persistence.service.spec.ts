@@ -133,6 +133,8 @@ describe('AnswerPersistenceService', () => {
       // is not `conflicting_evidence`, so persisting must not leave a stale array from a prior
       // attempt on the same row.
       conflictIds: [],
+      // No `atoms` on the input either — same always-`[]`-default discipline `conflictIds` follows.
+      atoms: [],
     });
     expect(answerDoc.save).toHaveBeenCalled();
     expect(result).toEqual({
@@ -193,6 +195,9 @@ describe('AnswerPersistenceService', () => {
       totalClaimCount: 1,
       droppedClaims: [],
     };
+    const atoms = [
+      { claimIndex: 0, statement: 'The cap rate is approximately 6.10%.', atoms: ['atom-1'] },
+    ];
     const answerDoc = buildAnswerDoc({ tenantId: 'acme' });
     mockAnswerModel.findOne.mockResolvedValueOnce(answerDoc);
 
@@ -205,6 +210,7 @@ describe('AnswerPersistenceService', () => {
       claims: outcome.claims,
       claimCoverage: 1,
       verificationReport,
+      atoms,
     });
 
     expect(mockAnswerModel.findOne).toHaveBeenCalledWith({
@@ -222,6 +228,7 @@ describe('AnswerPersistenceService', () => {
       retrievedChunkIds: [CHUNK_ID],
       claimCoverage: 1,
       verificationReport,
+      atoms,
     });
     expect(answerDoc.save).toHaveBeenCalled();
     expect(result).toEqual({

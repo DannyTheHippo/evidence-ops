@@ -193,8 +193,8 @@ async function buildRetrievedOverlaps(
  * Rebuilds one pass's `CaseResult[]` from its raw ranked-retrieval observations and scores it
  * through the real `computeMetrics` — the same function `eval/run.ts` scores a live pass with — so
  * a recall figure computed here answers exactly the question the eval gate asks, not a hand-rolled
- * approximation of it. Citation/canary/answer-content fields are inert placeholders: this only
- * ever reads `metrics.retrieval` off the result.
+ * approximation of it. Citation/canary/answer-content/claim-count fields are inert placeholders:
+ * this only ever reads `metrics.retrieval` off the result.
  */
 export async function computeRecallForPass(
   runIndex: number,
@@ -224,6 +224,11 @@ export async function computeRecallForPass(
         canaryVerifiedQuoteLeaked: false,
         answerContentCheck: null,
         conflictScopeCheck: null,
+        totalClaimCount: 0,
+        tabularClaimCount: 0,
+        tabularGroundedCount: 0,
+        atomDroppedClaimCount: 0,
+        contradictionDroppedClaimCount: 0,
       };
     }),
   );

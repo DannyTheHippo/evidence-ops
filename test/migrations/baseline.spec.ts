@@ -236,4 +236,11 @@ describe('migrations/0001-baseline', () => {
 
     expect([...downRecorder.droppedCollections].sort()).toEqual(created);
   });
+
+  it('should drop verifications on down', async () => {
+    const recorder = createRecorder();
+    await down(recorder.db);
+
+    expect(recorder.droppedCollections).toContain('verifications');
+  });
 });

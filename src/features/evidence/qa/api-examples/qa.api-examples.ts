@@ -20,6 +20,7 @@ const exampleCompletedAnswer = {
   retrievedChunkCount: 8,
   verificationReport: { verifiedClaimCount: 1, totalClaimCount: 1, droppedClaims: [] },
   citations: [],
+  atoms: [],
   conflictIds: [],
   createdAt: '2026-07-01T00:00:00.000Z',
   // QA synthesis spend only — not embedding or extraction spend.

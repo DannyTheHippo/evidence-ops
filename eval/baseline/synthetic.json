@@ -1,6 +1,6 @@
 {
-  "sourceGitSha": "32b3734b891fe0bc119fb890961fd0eabacf03b3-dirty",
-  "generatedAt": "2026-08-27T11:14:14.896Z",
+  "sourceGitSha": "b7b2aa29600d554d61ef31b8048df4338e60cc5d-dirty",
+  "generatedAt": "2026-09-07T10:12:10.264Z",
   "metrics": {
     "retrieval": {
       "recallAt5": 0.7307692307692307,
@@ -8,14 +8,18 @@
       "mrr": 0.574009324009324,
       "caseCount": 26
     },
-    "citationPrecision": 0.7647058823529411,
-    "claimCoverageMean": 0.8111111111111111,
+    "citationPrecision": 0.8666666666666667,
+    "claimCoverageMean": 0.8222222222222223,
     "abstentionAccuracy": 1,
     "conflictRecall": 1,
     "canaryOwnVoiceLeakRate": 0,
     "canaryVerifiedQuoteLeakRate": 0,
-    "answerContentAccuracy": 0.8947368421052632,
+    "answerContentAccuracy": 0.9,
     "conflictScopeAccuracy": 1,
+    "tabularGroundedRate": 0.3333333333333333,
+    "tabularClaimCount": 15,
+    "coverageDropRate": 0,
+    "contradictionDropRate": 0,
     "caseCounts": {
       "total": 35,
       "answerable": 13,

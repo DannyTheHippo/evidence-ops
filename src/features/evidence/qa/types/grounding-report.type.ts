@@ -1,5 +1,6 @@
 import type { FactKey } from '../../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import type { Claim, DroppedClaim } from '../contracts/answer.contract';
+import type { AtomizationSummary, ClaimAtoms } from './claim-atoms.type';
 
 /**
  * Every way a claim's grounding can fail. `chunk-not-retrieved` is check 1 (retrieval containment
@@ -10,7 +11,11 @@ import type { Claim, DroppedClaim } from '../contracts/answer.contract';
  * citation with no relationship to the chunk at all, even though both drop the claim identically;
  * `quote-not-substantive` and `quote-unrelated-to-statement` are check 3 (quote alignment,
  * `check-quote-alignment.ts`) — a quote can pass check 2 by matching its chunk verbatim while
- * having nothing to do with the claim it is cited for; `numeric-claim-unsupported` is check 4.
+ * having nothing to do with the claim it is cited for; `numeric-claim-unsupported` is check 4;
+ * `period-claim-unsupported` is check 4's period-bound counterpart (`verifyStructuredSupport`);
+ * `atom-unsupported` is a decomposed atom that `verifyAtoms` could not ground against the cited
+ * evidence; `claim-contradicted` is a survived claim `ContradictionCheckService` found
+ * incompatible with its own cited evidence.
  */
 export type GroundingViolationKind =
   | 'chunk-not-retrieved'
@@ -18,7 +23,10 @@ export type GroundingViolationKind =
   | 'quote-fuzzy-match'
   | 'quote-not-substantive'
   | 'quote-unrelated-to-statement'
-  | 'numeric-claim-unsupported';
+  | 'numeric-claim-unsupported'
+  | 'period-claim-unsupported'
+  | 'atom-unsupported'
+  | 'claim-contradicted';
 
 export interface GroundingViolation {
   readonly kind: GroundingViolationKind;
@@ -54,4 +62,10 @@ export interface GroundingReport {
   /** Set only when `outcomeKind === 'conflicting_evidence'`: the conflicted key a surviving claim
    * touched. */
   readonly conflictingFactKey?: FactKey;
+  /** Decomposition and contradiction counts across every claim in the request, zeroed when none of
+   * `atomsByClaimIndex`/`contradictedClaimIndexes` was supplied to `verify`. */
+  readonly atomization: AtomizationSummary;
+  /** The atoms behind each surviving claim that was decomposed, positioned by `claimIndex`. Empty
+   * when no surviving claim was decomposed. */
+  readonly claimAtoms: readonly ClaimAtoms[];
 }

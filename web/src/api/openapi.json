@@ -4387,6 +4387,7 @@
                             "droppedClaims": []
                           },
                           "citations": [],
+                          "atoms": [],
                           "conflictIds": [],
                           "createdAt": "2026-07-01T00:00:00.000Z",
                           "usage": {
@@ -4454,6 +4455,7 @@
                         "droppedClaims": []
                       },
                       "citations": [],
+                      "atoms": [],
                       "conflictIds": [],
                       "createdAt": "2026-07-01T00:00:00.000Z",
                       "usage": {
@@ -4487,6 +4489,222 @@
         },
         "tags": [
           "qa"
+        ]
+      }
+    },
+    "/verifications": {
+      "get": {
+        "operationId": "VerificationsController_list",
+        "parameters": [
+          {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "requestedByKind",
+            "required": false,
+            "in": "query",
+            "description": "Exact requester kind to filter by.",
+            "schema": {
+              "example": "pat",
+              "type": "string",
+              "enum": [
+                "pat",
+                "user"
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Field to sort by. Defaults to createdAt.",
+            "schema": {
+              "example": "createdAt",
+              "type": "string",
+              "enum": [
+                "createdAt"
+              ]
+            }
+          },
+          {
+            "name": "sortDir",
+            "required": false,
+            "in": "query",
+            "description": "Sort direction. Defaults to desc.",
+            "schema": {
+              "example": "desc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated verification run history for the caller's tenant, most recent first, optionally filtered by requestedByKind.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationListResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "One verification run",
+                    "value": {
+                      "docs": [
+                        {
+                          "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "requestedBy": {
+                            "kind": "pat",
+                            "id": "65f1c2e4a1b2c3d4e5f6a7b9"
+                          },
+                          "claims": [
+                            "The cap rate is approximately 6.10%."
+                          ],
+                          "results": [
+                            {
+                              "claimIndex": 0,
+                              "verdict": "grounded",
+                              "citations": []
+                            }
+                          ],
+                          "advisory": "A \"grounded\" verdict means an independent verifier located supporting evidence for this claim and mechanically checked the citation and every number the claim states against it.",
+                          "retrievedChunkIds": [
+                            "chunk-1"
+                          ],
+                          "atoms": [],
+                          "usage": {
+                            "promptTokens": 640,
+                            "completionTokens": 120,
+                            "costUsd": 0.0031
+                          },
+                          "createdAt": "2026-07-01T00:00:00.000Z"
+                        }
+                      ],
+                      "count": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "verifications"
+        ]
+      }
+    },
+    "/verifications/{id}": {
+      "get": {
+        "operationId": "VerificationsController_getById",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One verification run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Verification run",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "requestedBy": {
+                        "kind": "pat",
+                        "id": "65f1c2e4a1b2c3d4e5f6a7b9"
+                      },
+                      "claims": [
+                        "The cap rate is approximately 6.10%."
+                      ],
+                      "results": [
+                        {
+                          "claimIndex": 0,
+                          "verdict": "grounded",
+                          "citations": []
+                        }
+                      ],
+                      "advisory": "A \"grounded\" verdict means an independent verifier located supporting evidence for this claim and mechanically checked the citation and every number the claim states against it.",
+                      "retrievedChunkIds": [
+                        "chunk-1"
+                      ],
+                      "atoms": [],
+                      "usage": {
+                        "promptTokens": 640,
+                        "completionTokens": 120,
+                        "costUsd": 0.0031
+                      },
+                      "createdAt": "2026-07-01T00:00:00.000Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Verification does not exist.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown verification",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Verification '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "verifications"
         ]
       }
     },
@@ -7703,6 +7921,37 @@
           "reason"
         ]
       },
+      "AtomizationSummaryResponseDto": {
+        "type": "object",
+        "properties": {
+          "decomposedClaimCount": {
+            "type": "number",
+            "example": 3,
+            "description": "Number of claims that were decomposed into atoms."
+          },
+          "coverageFallbackCount": {
+            "type": "number",
+            "example": 0,
+            "description": "Number of claims whose atom decomposition was unavailable and fell back to coverage checking the whole statement."
+          },
+          "atomDroppedClaimCount": {
+            "type": "number",
+            "example": 0,
+            "description": "Number of claims dropped because one or more of their atoms could not be grounded."
+          },
+          "contradictionDroppedClaimCount": {
+            "type": "number",
+            "example": 0,
+            "description": "Number of claims dropped because the contradiction check found them incompatible with their own cited evidence."
+          }
+        },
+        "required": [
+          "decomposedClaimCount",
+          "coverageFallbackCount",
+          "atomDroppedClaimCount",
+          "contradictionDroppedClaimCount"
+        ]
+      },
       "VerificationReportResponseDto": {
         "type": "object",
         "properties": {
@@ -7722,6 +7971,14 @@
             "items": {
               "$ref": "#/components/schemas/DroppedClaimResponseDto"
             }
+          },
+          "atomization": {
+            "description": "Present only when at least one claim went through atom decomposition.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AtomizationSummaryResponseDto"
+              }
+            ]
           }
         },
         "required": [
@@ -7817,6 +8074,13 @@
               "type": "object"
             }
           },
+          "atoms": {
+            "description": "Atoms of the surviving claims, empty when no claim was decomposed.",
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
           "conflictIds": {
             "description": "Conflict identifiers relevant to this answer, if any were detected.",
             "type": "array",
@@ -7851,9 +8115,191 @@
           "questionText",
           "runStatus",
           "citations",
+          "atoms",
           "conflictIds",
           "createdAt",
           "withdrawnCitedDocVersionIds"
+        ]
+      },
+      "VerificationRequesterResponseDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "example": "pat",
+            "enum": [
+              "pat",
+              "user"
+            ],
+            "description": "Which kind of caller requested this verification run."
+          },
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Identifier of the requesting PAT or user."
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ]
+      },
+      "VerifyClaimResultResponseDto": {
+        "type": "object",
+        "properties": {
+          "claimIndex": {
+            "type": "number",
+            "example": 0,
+            "description": "Index of the verified claim within the run's submitted claims array."
+          },
+          "verdict": {
+            "type": "string",
+            "example": "grounded",
+            "enum": [
+              "grounded",
+              "not_grounded",
+              "no_evidence_retrieved",
+              "conflicting_evidence"
+            ],
+            "description": "Server-resolved verdict for this claim."
+          },
+          "reasonCode": {
+            "type": "string",
+            "example": "atom-unsupported",
+            "description": "Mechanical reason the claim was degraded, present only on a non-grounded verdict."
+          },
+          "citations": {
+            "description": "Server-resolved citations backing a grounded verdict.",
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "claimIndex",
+          "verdict"
+        ]
+      },
+      "VerificationUsageResponseDto": {
+        "type": "object",
+        "properties": {
+          "promptTokens": {
+            "type": "number",
+            "example": 640,
+            "description": "Prompt tokens summed across every model call in this verification run."
+          },
+          "completionTokens": {
+            "type": "number",
+            "example": 120,
+            "description": "Completion tokens summed across every model call in this verification run."
+          },
+          "costUsd": {
+            "type": "number",
+            "example": 0.0031,
+            "description": "Total cost in USD summed across every model call in this verification run."
+          }
+        },
+        "required": [
+          "promptTokens",
+          "completionTokens",
+          "costUsd"
+        ]
+      },
+      "VerificationResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Verification identifier."
+          },
+          "requestedBy": {
+            "description": "Who requested this verification run.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/VerificationRequesterResponseDto"
+              }
+            ]
+          },
+          "claims": {
+            "description": "Claim statements submitted for verification, in submission order.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "results": {
+            "description": "One result per submitted claim, in submission order.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VerifyClaimResultResponseDto"
+            }
+          },
+          "advisory": {
+            "type": "string",
+            "description": "Fixed advisory accompanying every verification result — see VERIFY_CLAIMS_ADVISORY."
+          },
+          "retrievedChunkIds": {
+            "description": "Evidence chunk identifiers retrieved for this run.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "atoms": {
+            "description": "Atoms of the submitted claims, empty when no claim was decomposed.",
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "usage": {
+            "description": "Token and cost accounting summed across every model call in this run.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/VerificationUsageResponseDto"
+              }
+            ]
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "Verification run creation timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "requestedBy",
+          "claims",
+          "results",
+          "advisory",
+          "retrievedChunkIds",
+          "atoms",
+          "usage",
+          "createdAt"
+        ]
+      },
+      "VerificationListResponseDto": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number",
+            "example": 2,
+            "description": "Total number of documents returned."
+          },
+          "docs": {
+            "description": "The tenant's verification runs.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VerificationResponseDto"
+            }
+          }
+        },
+        "required": [
+          "count",
+          "docs"
         ]
       },
       "RetrievedChunkResponseDto": {

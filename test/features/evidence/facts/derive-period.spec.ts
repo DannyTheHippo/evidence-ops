@@ -1,6 +1,7 @@
 import {
   derivePeriodFromDateText,
   findStatedPeriods,
+  findStatedPeriodSpans,
   parsePeriod,
   parsePeriodKey,
   periodsOverlap,
@@ -274,5 +275,39 @@ describe('findStatedPeriods', () => {
 
   it('should not read a period out of a four-digit token that is not a plausible year', () => {
     expect(findStatedPeriods('the cap rate for suite 4820')).toEqual([]);
+  });
+});
+
+describe('findStatedPeriodSpans', () => {
+  // One phrase per `MATCHERS` form, in the order they appear in that array, plus the bare year
+  // (`BARE_YEAR_MATCHER`, sentence-mode only). Each phrase is embedded in a sentence rather than
+  // standing alone, so a span reading `text.slice(start, end)` back to `[0, text.length)` would not
+  // pass by coincidence.
+  it.each([
+    ['closed on 2025-03-14 as planned', '2025-03-14'],
+    ['closed on March 14, 2025 as planned', 'March 14, 2025'],
+    ['closed on 14th of March 2025 as planned', '14th of March 2025'],
+    ['reported for 2025-03 in full', '2025-03'],
+    ['guided to Q1 2025 for the deal', 'Q1 2025'],
+    ['guided to 2025-Q1 for the deal', '2025-Q1'],
+    ['restated for FY2025 going forward', 'FY2025'],
+    ['the March 2025 figure stands', 'March 2025'],
+    ['discussed in 2019 at length', '2019'],
+  ])('should yield a span matching the source text for %p', (text, matchedText) => {
+    const spans = findStatedPeriodSpans(text);
+
+    expect(spans).toHaveLength(1);
+    expect(text.slice(spans[0].start, spans[0].end)).toBe(matchedText);
+  });
+
+  it('should carry every span findStatedPeriods dedupes by key, key-for-key', () => {
+    const text = 'the March 2025 figure, dated 2025-03-14';
+    const spans = findStatedPeriodSpans(text);
+
+    // The same period stated twice in two forms yields two spans here — `findStatedPeriods`
+    // dedupes exactly this list by `period.key` down to one.
+    expect(spans.length).toBeGreaterThan(1);
+    const dedupedByKey = [...new Map(spans.map((span) => [span.period.key, span.period])).values()];
+    expect(dedupedByKey).toEqual(findStatedPeriods(text));
   });
 });

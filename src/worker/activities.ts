@@ -4,6 +4,7 @@ import { ApplicationFailure } from '@temporalio/common';
 import { Types } from 'mongoose';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
+import { TypedConfigService } from '../config/environment/typed-config.service';
 import { normalizeEntityName } from '../database/schemas/evidence/canonical-entity/canonical-entity.schema';
 import type { FactKey } from '../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import {
@@ -26,6 +27,8 @@ import {
 } from '../features/evidence/facts/derive-period';
 import { FactsService, type FactsExtractionResult } from '../features/evidence/facts/facts.service';
 import type { MetricDefinition } from '../features/evidence/facts/metric-ontology';
+import { sanitizeEvidenceText } from '../features/evidence/ingestion/sanitize-evidence-text';
+import type { MeasureDefinition } from '../features/evidence/measures/measure-definition';
 import { MeasuresService } from '../features/evidence/measures/measures.service';
 import { extractNumericTokens } from '../features/evidence/qa/extract-numeric-tokens';
 import {
@@ -41,6 +44,8 @@ import {
   type PersistAnswerInput,
   type PersistAnswerResult,
 } from '../features/evidence/qa/answer-persistence.service';
+import { ClaimDecompositionService } from '../features/evidence/qa/claim-decomposition.service';
+import { ContradictionCheckService } from '../features/evidence/qa/contradiction-check.service';
 import type {
   AnswerContract,
   Claim,
@@ -58,7 +63,9 @@ import {
   SynthesisService,
   type SynthesizeAnswerResult,
 } from '../features/evidence/qa/synthesis.service';
+import type { ClaimAtoms } from '../features/evidence/qa/types/claim-atoms.type';
 import type { RetrievedChunk } from '../features/evidence/qa/types/retrieved-chunk.type';
+import type { VerifierMeasure } from '../features/evidence/qa/types/verifier-measure.type';
 import type { GroundingCellFact } from '../features/evidence/qa/verify-claim';
 import {
   APPROVAL_CHANNEL,
@@ -68,6 +75,7 @@ import {
   type ApprovalResult,
 } from '../providers/approval-channel/approval-channel.interface';
 import type { AlsContext } from '../shared/types/als-context.type';
+import { formatPromptLabel } from '../shared/utils/format-prompt-label.util';
 import { INGEST_HEARTBEAT_INTERVAL_MS } from '../workflows/ingest-retry-policy';
 import type { IngestDocumentVersionResult } from '../workflows/types';
 
@@ -234,6 +242,23 @@ function resolveQuestionScopedConflictGroup(
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+/** Projects `MeasuresService.listConfirmedDefinitions`'s rows into the plain-data shape
+ *  `verifyClaim`'s check 4 matches claims against — `slug = id`, the join key
+ *  `ExtractedFact.factKey.metric` actually carries, never `measureId`. Mirrors
+ *  `ClaimVerificationService`'s private `toVerifierMeasures`. */
+function toVerifierMeasures(definitions: readonly MeasureDefinition[]): VerifierMeasure[] {
+  return definitions.map((definition) => ({
+    slug: definition.id,
+    label: definition.label,
+    aliases: definition.aliases,
+    valueType: definition.valueType,
+    canonicalUnit: definition.canonicalUnit,
+    units: definition.units,
+    toleranceKind: definition.toleranceKind,
+    tolerance: definition.tolerance,
+  }));
+}
+
 export interface LoadConflictActivityInput {
   readonly conflictId: string;
   readonly winningFactId: string;
@@ -246,6 +271,35 @@ export interface SynthesizeAnswerActivityInput {
   readonly tenantId: string;
 }
 
+export interface DecomposeClaimsActivityInput {
+  readonly outcome: AnswerContract;
+  readonly tenantId: string;
+}
+
+export interface DecomposeClaimsActivityResult {
+  /** One entry per claim whose decomposition succeeded — `ClaimDecompositionService.decompose`
+   *  returning `unavailable` for a claim (or the outcome not being `answered` at all) leaves that
+   *  claim with no entry rather than throwing, so a broken decomposition call degrades that one
+   *  claim to whole-statement verification instead of failing the whole activity. */
+  readonly atoms: readonly ClaimAtoms[];
+}
+
+export interface CheckContradictionsActivityInput {
+  readonly outcome: AnswerContract;
+  readonly atoms: readonly ClaimAtoms[];
+  readonly retrievedChunks: readonly RetrievedChunk[];
+  readonly tenantId: string;
+}
+
+export interface CheckContradictionsActivityResult {
+  /** Claim indexes (into `outcome.claims`) found incompatible with their own cited evidence.
+   *  `ContradictionCheckService.check` returning `unavailable` for a claim leaves that claim out of
+   *  this set — not contradicted — the same fail-open direction that service's own doc comment
+   *  states. `config.verifier.contradictionCheck` being off skips every lookup and returns this set
+   *  empty without calling the service at all. */
+  readonly contradictedClaimIndexes: readonly number[];
+}
+
 export interface GroundingCheckActivityInput {
   readonly outcome: AnswerContract;
   readonly retrievedChunks: readonly RetrievedChunk[];
@@ -255,6 +309,12 @@ export interface GroundingCheckActivityInput {
    *  field it never carried. Absent, `resolveQuestionEntity` names no entity from an empty question,
    *  so `groundingCheck` abstains (`insufficient_evidence`) rather than attaching any conflict. */
   readonly questionText?: string;
+  /** Decomposed atoms per claim, from `decomposeClaims` — absent or empty means every claim is
+   *  verified as a whole statement only. */
+  readonly atoms?: readonly ClaimAtoms[];
+  /** Claim indexes `checkContradictions` found incompatible with their own cited evidence — absent
+   *  or empty means no claim is dropped for contradiction. */
+  readonly contradictedClaimIndexes?: readonly number[];
 }
 
 export interface GroundingCheckActivityResult {
@@ -272,6 +332,12 @@ export interface GroundingCheckActivityResult {
    * `answer-question.workflow.ts` so a conflicting-evidence answer names the record(s) that
    * produced it, not just their values. */
   readonly conflictIds?: readonly string[];
+  /** Every claim's decomposed atoms the gate verified against (`GroundingReport.claimAtoms`) — set
+   * only on the branch that calls `GroundingGateService.verify` (an `answered` outcome that
+   * survived the retrieval-independent force above), absent on every early-return branch, matching
+   * `verificationReport`'s own optionality. Threaded through to `Answer.atoms` by
+   * `answer-question.workflow.ts`. */
+  readonly atoms?: readonly ClaimAtoms[];
 }
 
 /**
@@ -299,6 +365,10 @@ export interface Activities {
   scanForConflicts(tenantId: string, factKeys?: readonly FactKey[]): Promise<ConflictScanResult>;
   retrieveEvidence(input: RetrieveEvidenceInput): Promise<RetrievedChunk[]>;
   synthesizeAnswer(input: SynthesizeAnswerActivityInput): Promise<SynthesizeAnswerResult>;
+  decomposeClaims(input: DecomposeClaimsActivityInput): Promise<DecomposeClaimsActivityResult>;
+  checkContradictions(
+    input: CheckContradictionsActivityInput,
+  ): Promise<CheckContradictionsActivityResult>;
   groundingCheck(input: GroundingCheckActivityInput): Promise<GroundingCheckActivityResult>;
   persistAnswer(input: PersistAnswerInput): Promise<PersistAnswerResult>;
   loadConflict(input: LoadConflictActivityInput): Promise<ConflictResolutionCandidate>;
@@ -391,6 +461,9 @@ export function createActivities(app: INestApplicationContext): Activities {
   const approvalsService = app.get(ApprovalsService);
   const sourcesService = app.get(SourcesService);
   const measuresService = app.get(MeasuresService);
+  const claimDecompositionService = app.get(ClaimDecompositionService);
+  const contradictionCheckService = app.get(ContradictionCheckService);
+  const config = app.get(TypedConfigService);
   const als = app.get<AsyncLocalStorage<AlsContext>>(AsyncLocalStorage);
 
   return {
@@ -457,6 +530,77 @@ export function createActivities(app: INestApplicationContext): Activities {
           chunks: input.chunks,
           tenantId: input.tenantId,
         });
+      }),
+
+    // Runs between synthesis and grounding, mirroring `ClaimVerificationService.verifyOneClaim`'s
+    // own decompose-before-verify ordering. A non-`answered` outcome has no claims to decompose.
+    // Sequential per claim, never `Promise.all`, matching every other per-claim model-call loop in
+    // this codebase (`ClaimVerificationService.verifyClaims`'s own doc comment states why).
+    decomposeClaims: (input) =>
+      withTenantScope(als, input.tenantId, async () => {
+        if (input.outcome.kind !== 'answered') {
+          return { atoms: [] };
+        }
+        const atoms: ClaimAtoms[] = [];
+        for (const [claimIndex, claim] of input.outcome.claims.entries()) {
+          // The sanitized/collapsed form, never the model's raw claim statement — same prompt-side
+          // division `ClaimVerificationService.verifyOneClaim` draws for the identical call.
+          const sanitized = formatPromptLabel(sanitizeEvidenceText(claim.statement));
+          const decomposition = await claimDecompositionService.decompose({
+            statement: sanitized,
+            tenantId: input.tenantId,
+          });
+          if (decomposition.kind === 'decomposed') {
+            atoms.push({ claimIndex, statement: claim.statement, atoms: decomposition.atoms });
+          }
+        }
+        return { atoms };
+      }),
+
+    // Applied only to claims the gate will otherwise let survive — see `ContradictionCheckService`'s
+    // own doc comment on why this must run on survivors only; the gate itself hasn't run yet at
+    // this point in the workflow, so this activity resolves each claim's cited chunks itself rather
+    // than relying on `groundingCheck`'s. `config.verifier.contradictionCheck` off returns empty
+    // before any lookup — no model spend, no citation resolution — matching
+    // `ClaimVerificationService.verifyOneClaim`'s identical gate on the same flag.
+    checkContradictions: (input) =>
+      withTenantScope(als, input.tenantId, async () => {
+        if (!config.verifier.contradictionCheck) {
+          return { contradictedClaimIndexes: [] };
+        }
+        if (input.outcome.kind !== 'answered') {
+          return { contradictedClaimIndexes: [] };
+        }
+        const atomsByClaimIndex = new Map(
+          input.atoms.map((entry) => [entry.claimIndex, entry.atoms] as const),
+        );
+        const contradictedClaimIndexes: number[] = [];
+        for (const [claimIndex, claim] of input.outcome.claims.entries()) {
+          const citedChunkIds = new Set(claim.citations.map((citation) => citation.chunkId));
+          const citedChunks = input.retrievedChunks.filter((chunk) =>
+            citedChunkIds.has(chunk.chunkId),
+          );
+          if (citedChunks.length === 0) {
+            continue;
+          }
+          // Sanitized, never the claim's raw statement: the atoms are already sanitized by
+          // construction (`decomposeClaims` feeds `claimDecompositionService.decompose` the
+          // sanitized form), and this fallback must not be the one path handing raw caller text to
+          // a model.
+          const sanitizedStatement = formatPromptLabel(sanitizeEvidenceText(claim.statement));
+          for (const atom of atomsByClaimIndex.get(claimIndex) ?? [sanitizedStatement]) {
+            const result = await contradictionCheckService.check({
+              atom,
+              evidence: citedChunks,
+              tenantId: input.tenantId,
+            });
+            if (result.kind === 'checked' && result.contradicted) {
+              contradictedClaimIndexes.push(claimIndex);
+              break;
+            }
+          }
+        }
+        return { contradictedClaimIndexes };
       }),
 
     // `GroundingGateService.verify`'s input type only accepts the `answered` branch of
@@ -587,11 +731,26 @@ export function createActivities(app: INestApplicationContext): Activities {
           locator: fact.locator,
         }));
 
+        // `atomsByClaimIndex`/`contradictedClaimIndexes` are `decomposeClaims`/`checkContradictions`'
+        // plain-array outputs projected into the `Map`/`Set` shape `verify` matches per claim — those
+        // activities return arrays, not `Map`/`Set`, because a Temporal activity result crosses the
+        // workflow's JSON data converter, which cannot round-trip either collection type.
+        const atomsByClaimIndex = input.atoms
+          ? new Map(input.atoms.map((entry) => [entry.claimIndex, entry.atoms] as const))
+          : undefined;
+        const contradictedClaimIndexes = input.contradictedClaimIndexes
+          ? new Set(input.contradictedClaimIndexes)
+          : undefined;
+
         const report = groundingGateService.verify({
           outcome: input.outcome,
           retrievedChunks: input.retrievedChunks,
           cellFacts,
           conflictedFactKeys: conflictGroups.map((group) => group.factKey),
+          atomsByClaimIndex,
+          contradictedClaimIndexes,
+          measures: toVerifierMeasures(confirmedMeasures),
+          entities: canonicalEntities,
         });
         const totalClaimCount = report.claims.length + report.droppedClaims.length;
 
@@ -677,12 +836,14 @@ export function createActivities(app: INestApplicationContext): Activities {
           claims: report.claims,
           claimCoverage: report.claimCoverage,
           conflictIds,
+          atoms: report.claimAtoms,
           verificationReport: {
             verifiedClaimCount: report.claims.length,
             totalClaimCount,
             // `VerificationReport.droppedClaims` (mutable) doesn't accept `GroundingReport`'s
             // `readonly DroppedClaim[]` directly.
             droppedClaims: [...report.droppedClaims],
+            atomization: report.atomization,
           },
         };
       }),

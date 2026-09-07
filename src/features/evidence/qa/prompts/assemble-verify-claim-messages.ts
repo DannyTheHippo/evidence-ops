@@ -67,13 +67,13 @@ const CLAIM_TAG_PATTERN = new RegExp(`<(/?)(${CLAIM_DELIMITER_TAG})`, 'gi');
  * `locateQuote` depends on. The claim is not stored evidence — it arrives fresh on every call, so
  * escaping it at assembly time carries no such risk.
  */
-function escapeClaimDelimiter(text: string): string {
+export function escapeClaimDelimiter(text: string): string {
   // `$2` preserves the original casing, matching `sanitizeEvidenceText`'s treatment of the
   // evidence tag.
   return text.replace(CLAIM_TAG_PATTERN, '&lt;$1$2');
 }
 
-function formatCandidateBlock(candidate: RetrievedChunk, index: number): string {
+export function formatCandidateBlock(candidate: RetrievedChunk, index: number): string {
   const locator = formatPromptLabel(formatLocator(candidate.locator));
   return [
     `<${EVIDENCE_DELIMITER_TAG}>`,

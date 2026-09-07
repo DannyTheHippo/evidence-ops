@@ -275,12 +275,21 @@ describe('Serialization (e2e)', () => {
       },
       claims: [{ statement: 'The cap rate is 6.1%.', citations: [survivingCitation] }],
       claimCoverage: 0.5,
+      atoms: [
+        { claimIndex: 0, statement: 'The cap rate is 6.1%.', atoms: ['The cap rate is 6.1%.'] },
+      ],
       verificationReport: {
         verifiedClaimCount: 1,
         totalClaimCount: 2,
         droppedClaims: [
           { statement: 'The vacancy rate is 4%.', reason: 'quote did not match the source chunk' },
         ],
+        atomization: {
+          decomposedClaimCount: 1,
+          coverageFallbackCount: 0,
+          atomDroppedClaimCount: 0,
+          contradictionDroppedClaimCount: 0,
+        },
       },
     });
 
@@ -290,7 +299,12 @@ describe('Serialization (e2e)', () => {
     const body = response.body as {
       outcome: { kind: string; claims: Array<{ statement: string }> };
       citations: Citation[];
-      verificationReport: { verifiedClaimCount: number; totalClaimCount: number };
+      atoms: Array<{ claimIndex: number; statement: string; atoms: string[] }>;
+      verificationReport: {
+        verifiedClaimCount: number;
+        totalClaimCount: number;
+        atomization: Record<string, number>;
+      };
     };
 
     expect(response.status).toBe(200);
@@ -303,6 +317,20 @@ describe('Serialization (e2e)', () => {
     expect(body.citations).toEqual([survivingCitation]);
     expect(body.verificationReport.verifiedClaimCount).toBe(1);
     expect(body.verificationReport.totalClaimCount).toBe(2);
+    // Regression for the atomization gap: `atoms` and `verificationReport.atomization` are
+    // computed alongside the grounding gate but read through a separate DTO nesting — this is the
+    // gate that catches either losing its @Expose().
+    expect(body.atoms).toEqual([
+      { claimIndex: 0, statement: 'The cap rate is 6.1%.', atoms: ['The cap rate is 6.1%.'] },
+    ]);
+    expect(Object.keys(body.verificationReport.atomization).sort()).toEqual(
+      [
+        'decomposedClaimCount',
+        'coverageFallbackCount',
+        'atomDroppedClaimCount',
+        'contradictionDroppedClaimCount',
+      ].sort(),
+    );
   });
 
   // Regression for the metric-label gap: four SPA surfaces render a raw METRIC_IDS value with no

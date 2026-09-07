@@ -71,6 +71,9 @@ x-app-environment: &app-environment
   # RRF_K=60, the highest score any hit can ever reach is 2/61 (~0.0328) — the API refuses to
   # boot above that ceiling rather than silently abstaining on every question.
   RETRIEVAL_SCORE_FLOOR: ${RETRIEVAL_SCORE_FLOOR:-0}
+  # Off by default, deliberately: enabling this is a config-only change, made once the
+  # lowering-only contradiction check has been measured.
+  VERIFY_CONTRADICTION_CHECK: ${VERIFY_CONTRADICTION_CHECK:-false}
   # The api scrapes on this port and the worker on the next one, derived in `instrumentation.ts`
   # from this single value rather than a second variable that could drift from it.
   METRICS_PORT: ${METRICS_PORT:-9464}

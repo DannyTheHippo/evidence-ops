@@ -127,13 +127,14 @@ function isRepresentableToken(value: number): boolean {
  */
 function extractWordNumberTokens(
   text: string,
-): Array<{ readonly index: number; readonly value: number }> {
+): Array<{ readonly index: number; readonly end: number; readonly value: number }> {
   const words = [...text.matchAll(/\p{L}+/gu)].map((match) => ({
     word: match[0].toLowerCase(),
     index: match.index,
+    end: match.index + match[0].length,
   }));
 
-  const results: Array<{ index: number; value: number }> = [];
+  const results: Array<{ index: number; end: number; value: number }> = [];
   let i = 0;
   while (i < words.length) {
     if (!isCardinalWord(words[i].word)) {
@@ -146,6 +147,7 @@ function extractWordNumberTokens(
     let hasAnchoringCardinal = false;
     let total = 0;
     let current = 0;
+    let lastConsumedIndex = i;
     while (i < words.length && isCardinalWord(words[i].word)) {
       const word = words[i].word;
       integerWords.push(word);
@@ -161,6 +163,7 @@ function extractWordNumberTokens(
         current += ONES[word] ?? TENS[word];
         hasAnchoringCardinal = true;
       }
+      lastConsumedIndex = i;
       i++;
     }
 
@@ -175,6 +178,7 @@ function extractWordNumberTokens(
       }
       if (decimalDigits.length > 0) {
         value = Number(`${value}.${decimalDigits}`);
+        lastConsumedIndex = j - 1;
         i = j;
         matchedDecimal = true;
       }
@@ -183,7 +187,7 @@ function extractWordNumberTokens(
     const isBareAmbiguousOne =
       integerWords.length === 1 && integerWords[0] === 'one' && !matchedDecimal;
     if (!isBareAmbiguousOne && hasAnchoringCardinal && isRepresentableToken(value)) {
-      results.push({ index: startIndex, value });
+      results.push({ index: startIndex, end: words[lastConsumedIndex].end, value });
     }
   }
 
@@ -306,12 +310,24 @@ export function containsUnrepresentableNumber(text: string): boolean {
  * failure direction stays fail-closed (a spurious token can only cause an unsupported claim to be
  * dropped, never the reverse).
  */
-export function extractNumericTokens(text: string): number[] {
+/** One number {@link extractNumericTokenMatches} found, plus the text offsets it was read from. */
+export interface NumericTokenMatch {
+  readonly index: number;
+  readonly end: number;
+  readonly value: number;
+}
+
+/**
+ * {@link extractNumericTokens}'s underlying matches, index-sorted, each carrying the `[index, end)`
+ * offsets in the NFKC-normalized text the value was read from.
+ */
+export function extractNumericTokenMatches(text: string): NumericTokenMatch[] {
   const normalizedText = text.normalize('NFKC');
 
   const digitMatches = [...normalizedText.matchAll(NUMERIC_TOKEN_PATTERN)]
     .map((match) => ({
       index: match.index,
+      end: match.index + match[0].length,
       // `NUMERIC_TOKEN_PATTERN` bounds the decimal part but not the run of digits before it, so an
       // arbitrarily long digit run (a corpus artifact, not a real quantity) still matches and
       // `parseNumericTokenValue` can return `Infinity`/`-Infinity` or a value past
@@ -322,7 +338,9 @@ export function extractNumericTokens(text: string): number[] {
     .filter((match) => isRepresentableToken(match.value));
   const wordMatches = extractWordNumberTokens(normalizedText);
 
-  return [...digitMatches, ...wordMatches]
-    .sort((a, b) => a.index - b.index)
-    .map((match) => match.value);
+  return [...digitMatches, ...wordMatches].sort((a, b) => a.index - b.index);
+}
+
+export function extractNumericTokens(text: string): number[] {
+  return extractNumericTokenMatches(text).map((match) => match.value);
 }

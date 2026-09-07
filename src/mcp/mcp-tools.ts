@@ -263,8 +263,10 @@ export const verifyClaimsToolDefinition: ModelToolDefinition = {
  * `verify_claims`'s registered handler — delegates to `ClaimVerificationService.verifyClaims`.
  * `context.tenantId` — server-derived from the verified PAT, never from `args` — is the sole
  * tenant scope the call runs under; `claims` is the only model-supplied argument. Returns
- * `VerifyClaimsResult` exactly as `ClaimVerificationService` produces it: the fixed advisory plus
- * one `VerifyClaimResult` per submitted claim, in submission order.
+ * `VerifyClaimsResult` exactly as `ClaimVerificationService` produces it: the fixed advisory, one
+ * `VerifyClaimResult` per submitted claim in submission order, and the id of the run's persisted
+ * `Verification` row. `requestedBy` is `{ kind: 'pat', id: context.actorId }` — this surface is
+ * only ever reached by a verified personal access token, never a signed-in user session.
  */
 export function buildVerifyClaimsTool(
   claimVerificationService: ClaimVerificationService,
@@ -274,7 +276,11 @@ export function buildVerifyClaimsTool(
     argsSchema: verifyClaimsArgsSchema,
     handler: async (args: Record<string, unknown>, context: ToolExecutionContext) => {
       const { claims } = args as { claims: string[] };
-      return claimVerificationService.verifyClaims({ claims, tenantId: context.tenantId });
+      return claimVerificationService.verifyClaims({
+        claims,
+        tenantId: context.tenantId,
+        requestedBy: { kind: 'pat', id: context.actorId },
+      });
     },
   };
 }

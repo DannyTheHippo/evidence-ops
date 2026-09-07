@@ -367,6 +367,197 @@ describe('GroundingGateService', () => {
     expect(report.outcomeKind).toBe('conflicting_evidence');
     expect(report.conflictingFactKey).toEqual(factKeyOne);
   });
+
+  it('should carry zeroed atomization and empty claimAtoms on the answered branch when none of the new inputs are supplied', () => {
+    const outcome = buildOutcome([buildClaim()]);
+
+    const report = service.verify({ outcome, retrievedChunks: [CHUNK] });
+
+    expect(report.outcomeKind).toBe('answered');
+    expect(report.atomization).toEqual({
+      decomposedClaimCount: 0,
+      coverageFallbackCount: 0,
+      atomDroppedClaimCount: 0,
+      contradictionDroppedClaimCount: 0,
+    });
+    expect(report.claimAtoms).toEqual([]);
+  });
+
+  it('should carry zeroed atomization and empty claimAtoms on the conflicting_evidence branch when none of the new inputs are supplied', () => {
+    const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+    const cellFacts: GroundingCellFact[] = [
+      {
+        chunkId: CHUNK.chunkId,
+        factKey,
+        value: { amount: 6.1, unit: 'percent' },
+        locator: PDF_LOCATOR,
+      },
+    ];
+    const outcome = buildOutcome([buildClaim()]);
+
+    const report = service.verify({
+      outcome,
+      retrievedChunks: [CHUNK],
+      cellFacts,
+      conflictedFactKeys: [factKey],
+    });
+
+    expect(report.outcomeKind).toBe('conflicting_evidence');
+    expect(report.atomization).toEqual({
+      decomposedClaimCount: 0,
+      coverageFallbackCount: 0,
+      atomDroppedClaimCount: 0,
+      contradictionDroppedClaimCount: 0,
+    });
+    expect(report.claimAtoms).toEqual([]);
+  });
+
+  it('should populate claimAtoms and decomposedClaimCount for a claim verified with a covering atom', () => {
+    const claim = buildClaim();
+    const outcome = buildOutcome([claim]);
+
+    const report = service.verify({
+      outcome,
+      retrievedChunks: [CHUNK],
+      atomsByClaimIndex: new Map([[0, [claim.statement]]]),
+    });
+
+    expect(report.outcomeKind).toBe('answered');
+    expect(report.atomization).toEqual({
+      decomposedClaimCount: 1,
+      coverageFallbackCount: 0,
+      atomDroppedClaimCount: 0,
+      contradictionDroppedClaimCount: 0,
+    });
+    expect(report.claimAtoms).toEqual([
+      { claimIndex: 0, statement: claim.statement, atoms: [claim.statement] },
+    ]);
+  });
+
+  // The gate's own tally of the two atomization outcomes, not `verifyAtoms`'s: a decomposition the
+  // gate counts as neither a fallback nor a drop reports the run as cleanly atomized when it was
+  // not, and the eval metrics built on these counters read the verifier as healthier than it is.
+  it('should count a claim whose atoms do not cover it as a coverage fallback, keeping the claim', () => {
+    const claim = buildClaim();
+    const outcome = buildOutcome([claim]);
+
+    const report = service.verify({
+      outcome,
+      retrievedChunks: [CHUNK],
+      // Missing every content token after the entity — "cap", "rate", "6.10" are all asserted by
+      // the claim and by no atom, so coverage refuses the decomposition.
+      atomsByClaimIndex: new Map([[0, ['Northgate Business Park traded']]]),
+    });
+
+    // Fails OPEN by design: an incomplete decomposition falls back to the whole-claim verdict
+    // rather than to a looser check, so the claim survives exactly as it does with no atoms at all.
+    expect(report.outcomeKind).toBe('answered');
+    expect(report.claims).toHaveLength(1);
+    expect(report.atomization).toEqual({
+      decomposedClaimCount: 1,
+      coverageFallbackCount: 1,
+      atomDroppedClaimCount: 0,
+      contradictionDroppedClaimCount: 0,
+    });
+  });
+
+  it('should count a covered decomposition with an unsupported atom as an atom drop', () => {
+    // The whole statement names the entity once and survives; the atom stating the number carries
+    // no entity of its own, so it cannot be bound to the cell fact and is dropped — taking the
+    // claim with it.
+    const statement = 'Northgate Business Park closed a transaction. It sold for $46,900,000.';
+    const chunk: RetrievedChunk = {
+      chunkId: 'chunk-atoms',
+      docVersionId: 'doc-v1',
+      sha256: SHA256_A,
+      text: statement,
+      locator: PDF_LOCATOR,
+    };
+    const claim = buildClaim({
+      statement,
+      citations: [buildCitation({ chunkId: chunk.chunkId, quote: statement })],
+    });
+
+    const report = service.verify({
+      outcome: buildOutcome([claim]),
+      retrievedChunks: [chunk],
+      cellFacts: [
+        {
+          chunkId: chunk.chunkId,
+          factKey: { entity: 'Northgate Business Park', metric: 'sale_price', period: '2025-07' },
+          value: { amount: 46_900_000, unit: 'usd' },
+          locator: PDF_LOCATOR,
+        },
+      ],
+      measures: [
+        {
+          slug: 'sale_price',
+          label: 'Sale Price',
+          aliases: ['sale price'],
+          valueType: 'currency',
+          canonicalUnit: 'usd',
+          units: [{ id: 'usd', toCanonicalFactor: 1 }],
+          toleranceKind: 'relative',
+          tolerance: 0.01,
+        },
+      ],
+      entities: [],
+      atomsByClaimIndex: new Map([
+        [0, ['Northgate Business Park closed a transaction', 'It sold for $46,900,000']],
+      ]),
+    });
+
+    expect(report.outcomeKind).toBe('insufficient_evidence');
+    expect(report.violations.some((violation) => violation.kind === 'atom-unsupported')).toBe(true);
+    expect(report.atomization).toEqual({
+      decomposedClaimCount: 1,
+      coverageFallbackCount: 0,
+      atomDroppedClaimCount: 1,
+      contradictionDroppedClaimCount: 0,
+    });
+  });
+
+  it('should drop a surviving claim named by contradictedClaimIndexes, bump contradictionDroppedClaimCount, and degrade outcomeKind when it was the last survivor', () => {
+    const droppedCounterSpy = jest.spyOn(groundingClaimsDroppedCounter, 'add');
+    const claim = buildClaim();
+    const outcome = buildOutcome([claim]);
+
+    const report = service.verify({
+      outcome,
+      retrievedChunks: [CHUNK],
+      contradictedClaimIndexes: new Set([0]),
+    });
+
+    expect(report.outcomeKind).toBe('insufficient_evidence');
+    expect(report.claims).toEqual([]);
+    expect(report.droppedClaims).toHaveLength(1);
+    expect(report.droppedClaims[0].statement).toBe(claim.statement);
+    expect(report.violations.some((violation) => violation.kind === 'claim-contradicted')).toBe(
+      true,
+    );
+    expect(report.atomization.contradictionDroppedClaimCount).toBe(1);
+    expect(droppedCounterSpy).toHaveBeenCalledWith(1, { rule: 'claim-contradicted' });
+  });
+
+  it('should not double-count a contradiction index that names a claim verifyClaim already dropped', () => {
+    const droppedCounterSpy = jest.spyOn(groundingClaimsDroppedCounter, 'add');
+    const droppedClaim = buildClaim({
+      citations: [buildCitation({ chunkId: 'chunk-fabricated' })],
+    });
+    const outcome = buildOutcome([droppedClaim]);
+
+    const report = service.verify({
+      outcome,
+      retrievedChunks: [CHUNK],
+      contradictedClaimIndexes: new Set([0]),
+    });
+
+    expect(report.outcomeKind).toBe('insufficient_evidence');
+    expect(report.droppedClaims).toHaveLength(1);
+    expect(report.atomization.contradictionDroppedClaimCount).toBe(0);
+    expect(droppedCounterSpy).toHaveBeenCalledTimes(1);
+    expect(droppedCounterSpy).toHaveBeenCalledWith(1, { rule: 'chunk-not-retrieved' });
+  });
 });
 
 describe('factKeysMatch', () => {

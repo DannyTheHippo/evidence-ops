@@ -4,6 +4,8 @@ import type { AnswerQuestionInput } from '../../src/workflows/types';
 interface ActivityStubs {
   retrieveEvidence: jest.Mock;
   synthesizeAnswer: jest.Mock;
+  decomposeClaims: jest.Mock;
+  checkContradictions: jest.Mock;
   groundingCheck: jest.Mock;
   persistAnswer: jest.Mock;
 }
@@ -28,6 +30,8 @@ jest.mock('@temporalio/workflow', () => {
   const activityStubs = {
     retrieveEvidence: jest.fn(),
     synthesizeAnswer: jest.fn(),
+    decomposeClaims: jest.fn(),
+    checkContradictions: jest.fn(),
     groundingCheck: jest.fn(),
     persistAnswer: jest.fn(),
   };
@@ -46,7 +50,7 @@ const { activityStubs } = temporalWorkflowMock;
 // (during the `answerQuestion` import above) and before any `afterEach(jest.resetAllMocks)`
 // wipes `proxyActivities.mock.calls` — a later `describe` block reading `.mock.calls` directly
 // would see an empty array once the first spec's cleanup has run. Order matches the source file's
-// declaration order: retrieval, synthesis, grounding, persist.
+// declaration order: retrieval, synthesis, decomposition, contradiction, grounding, persist.
 const proxyActivitiesCalls = [...temporalWorkflowMock.proxyActivities.mock.calls];
 
 const input: AnswerQuestionInput = {
@@ -58,6 +62,8 @@ const input: AnswerQuestionInput = {
 describe('answerQuestion', () => {
   beforeEach(() => {
     activityStubs.retrieveEvidence.mockResolvedValue([{ chunkId: 'chunk-1' }]);
+    activityStubs.decomposeClaims.mockResolvedValue({ atoms: [] });
+    activityStubs.checkContradictions.mockResolvedValue({ contradictedClaimIndexes: [] });
     activityStubs.groundingCheck.mockResolvedValue({
       outcome: { kind: 'insufficient_evidence', reason: 'no supporting evidence' },
       claims: [],
@@ -118,6 +124,90 @@ describe('answerQuestion', () => {
       expect.objectContaining({ tenantId: 'acme-corp' }),
     );
   });
+
+  it('should call decomposeClaims after synthesizeAnswer and before checkContradictions and groundingCheck', async () => {
+    const callOrder: string[] = [];
+    activityStubs.synthesizeAnswer.mockImplementation(() => {
+      callOrder.push('synthesizeAnswer');
+      return Promise.resolve({
+        contract: { kind: 'insufficient_evidence', reason: 'none' },
+        usage: { promptTokens: 10, completionTokens: 5, costUsd: 0.001 },
+      });
+    });
+    activityStubs.decomposeClaims.mockImplementation(() => {
+      callOrder.push('decomposeClaims');
+      return Promise.resolve({ atoms: [] });
+    });
+    activityStubs.checkContradictions.mockImplementation(() => {
+      callOrder.push('checkContradictions');
+      return Promise.resolve({ contradictedClaimIndexes: [] });
+    });
+    activityStubs.groundingCheck.mockImplementation(() => {
+      callOrder.push('groundingCheck');
+      return Promise.resolve({
+        outcome: { kind: 'insufficient_evidence', reason: 'no supporting evidence' },
+        claims: [],
+      });
+    });
+
+    await answerQuestion(input);
+
+    expect(callOrder).toEqual([
+      'synthesizeAnswer',
+      'decomposeClaims',
+      'checkContradictions',
+      'groundingCheck',
+    ]);
+  });
+
+  it("should pass decomposeClaims' atoms into checkContradictions alongside the retrieved chunks", async () => {
+    const atoms = [{ claimIndex: 0, statement: 'The cap rate was 6.1%.', atoms: ['atom-1'] }];
+    activityStubs.decomposeClaims.mockResolvedValue({ atoms });
+    activityStubs.synthesizeAnswer.mockResolvedValue({
+      contract: { kind: 'answered', claims: [] },
+      usage: { promptTokens: 10, completionTokens: 5, costUsd: 0.001 },
+    });
+
+    await answerQuestion(input);
+
+    expect(activityStubs.checkContradictions).toHaveBeenCalledWith(
+      expect.objectContaining({ atoms, retrievedChunks: [{ chunkId: 'chunk-1' }] }),
+    );
+  });
+
+  it("should forward decomposeClaims' atoms and checkContradictions' contradictedClaimIndexes into groundingCheck", async () => {
+    const atoms = [{ claimIndex: 0, statement: 'The cap rate was 6.1%.', atoms: ['atom-1'] }];
+    const contradictedClaimIndexes = [0];
+    activityStubs.decomposeClaims.mockResolvedValue({ atoms });
+    activityStubs.checkContradictions.mockResolvedValue({ contradictedClaimIndexes });
+    activityStubs.synthesizeAnswer.mockResolvedValue({
+      contract: { kind: 'answered', claims: [] },
+      usage: { promptTokens: 10, completionTokens: 5, costUsd: 0.001 },
+    });
+
+    await answerQuestion(input);
+
+    expect(activityStubs.groundingCheck).toHaveBeenCalledWith(
+      expect.objectContaining({ atoms, contradictedClaimIndexes }),
+    );
+  });
+
+  it("should pass groundingCheck's atoms through to persistAnswer", async () => {
+    const atoms = [{ claimIndex: 0, statement: 'The cap rate was 6.1%.', atoms: ['atom-1'] }];
+    activityStubs.groundingCheck.mockResolvedValue({
+      outcome: { kind: 'answered', claims: [] },
+      claims: [],
+      atoms,
+    });
+    activityStubs.synthesizeAnswer.mockResolvedValue({
+      contract: { kind: 'answered', claims: [] },
+      usage: { promptTokens: 10, completionTokens: 5, costUsd: 0.001 },
+    });
+
+    await answerQuestion(input);
+
+    expect(activityStubs.persistAnswer).toHaveBeenCalledWith(expect.objectContaining({ atoms }));
+  });
 });
 
 describe('answerQuestion retrieval', () => {
@@ -127,6 +217,8 @@ describe('answerQuestion retrieval', () => {
       contract: { kind: 'insufficient_evidence', reason: 'none' },
       usage: { promptTokens: 10, completionTokens: 5, costUsd: 0.001 },
     });
+    activityStubs.decomposeClaims.mockResolvedValue({ atoms: [] });
+    activityStubs.checkContradictions.mockResolvedValue({ contradictedClaimIndexes: [] });
     activityStubs.groundingCheck.mockResolvedValue({
       outcome: { kind: 'insufficient_evidence', reason: 'no supporting evidence' },
       claims: [],
@@ -179,13 +271,37 @@ describe('proxyActivities retry configuration', () => {
     ]);
   });
 
+  it("should mark the budget, pricing, schema-validation, truncation, and spend-guard failures non-retryable for decomposeClaims, matching synthesizeAnswer's set", () => {
+    const [decompositionOptions] = proxyActivitiesCalls[2];
+    expect(decompositionOptions.retry?.nonRetryableErrorTypes).toEqual([
+      'ModelBudgetExceededError',
+      'UnknownModelPricingError',
+      'ModelSchemaValidationError',
+      'ModelOutputTruncatedError',
+      'TenantSpendLimitExceededError',
+      'ModelRequestMissingTenantError',
+    ]);
+  });
+
+  it("should mark the budget, pricing, schema-validation, truncation, and spend-guard failures non-retryable for checkContradictions, matching synthesizeAnswer's set", () => {
+    const [contradictionOptions] = proxyActivitiesCalls[3];
+    expect(contradictionOptions.retry?.nonRetryableErrorTypes).toEqual([
+      'ModelBudgetExceededError',
+      'UnknownModelPricingError',
+      'ModelSchemaValidationError',
+      'ModelOutputTruncatedError',
+      'TenantSpendLimitExceededError',
+      'ModelRequestMissingTenantError',
+    ]);
+  });
+
   it('should mark a missing tenantId non-retryable for groundingCheck', () => {
-    const [groundingOptions] = proxyActivitiesCalls[2];
+    const [groundingOptions] = proxyActivitiesCalls[4];
     expect(groundingOptions.retry?.nonRetryableErrorTypes).toEqual(['MissingTenantId']);
   });
 
   it('should mark a missing tenantId non-retryable for persistAnswer', () => {
-    const [persistOptions] = proxyActivitiesCalls[3];
+    const [persistOptions] = proxyActivitiesCalls[5];
     expect(persistOptions.retry?.nonRetryableErrorTypes).toEqual(['MissingTenantId']);
   });
 });

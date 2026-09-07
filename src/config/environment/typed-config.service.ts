@@ -19,6 +19,7 @@ import type {
   TelemetryConfig,
   TemporalConfig,
   ThrottleConfig,
+  VerifierConfig,
   VoyageConfig,
 } from './environment.config';
 
@@ -71,6 +72,9 @@ export class TypedConfigService {
   }
   get extraction(): ExtractionConfig {
     return this.config.get('extraction', { infer: true });
+  }
+  get verifier(): VerifierConfig {
+    return this.config.get('verifier', { infer: true });
   }
   get spend(): SpendConfig {
     return this.config.get('spend', { infer: true });

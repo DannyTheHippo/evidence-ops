@@ -28,6 +28,7 @@ export const getMockTypedConfig = (
     telemetry: config.telemetry,
     sources: config.sources,
     extraction: config.extraction,
+    verifier: config.verifier,
     spend: config.spend,
     mcp: config.mcp,
     sse: config.sse,

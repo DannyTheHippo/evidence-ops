@@ -47,6 +47,44 @@ const synthesisActivities = proxyActivities<Pick<Activities, 'synthesizeAnswer'>
   },
 });
 
+// Same paid, non-idempotent, per-claim model-call profile as `synthesisActivities` above, so this
+// group shares its timeout budget and its non-retryable error set verbatim. Both `decomposeClaims`
+// and `checkContradictions` never throw on a model-call failure (`ClaimDecompositionService`/
+// `ContradictionCheckService` fail open into `unavailable` — see their own doc comments), so this
+// group's retry policy exists for the budget and the `MissingTenantId` case, not because either
+// activity is expected to reject.
+const decompositionActivities = proxyActivities<Pick<Activities, 'decomposeClaims'>>({
+  startToCloseTimeout: '2 minutes',
+  scheduleToCloseTimeout: '5 minutes',
+  retry: {
+    maximumAttempts: 2,
+    nonRetryableErrorTypes: [
+      'ModelBudgetExceededError',
+      'UnknownModelPricingError',
+      'ModelSchemaValidationError',
+      'ModelOutputTruncatedError',
+      'TenantSpendLimitExceededError',
+      'ModelRequestMissingTenantError',
+    ],
+  },
+});
+
+const contradictionActivities = proxyActivities<Pick<Activities, 'checkContradictions'>>({
+  startToCloseTimeout: '2 minutes',
+  scheduleToCloseTimeout: '5 minutes',
+  retry: {
+    maximumAttempts: 2,
+    nonRetryableErrorTypes: [
+      'ModelBudgetExceededError',
+      'UnknownModelPricingError',
+      'ModelSchemaValidationError',
+      'ModelOutputTruncatedError',
+      'TenantSpendLimitExceededError',
+      'ModelRequestMissingTenantError',
+    ],
+  },
+});
+
 // Pure, local, deterministic-given-its-inputs verification — no model call, no external network
 // request (see `GroundingGateService`'s own doc comment) — so this is the cheapest activity to
 // retry and gets the shortest timeout.
@@ -76,11 +114,12 @@ const persistActivities = proxyActivities<Pick<Activities, 'persistAnswer'>>({
 });
 
 /**
- * Second workflow in the tree (ADR-0003): retrieve → synthesize → verify grounding → persist.
- * Orchestration only — every side effect (the Mongo hybrid search, the model call, the
- * verification pass, the Mongo write) lives in an activity; this function just sequences their
- * results and threads `tenantId` through unopened to every activity that scopes on it
- * (`retrieveEvidence`, `synthesizeAnswer`, `groundingCheck`, `persistAnswer`).
+ * Second workflow in the tree (ADR-0003): retrieve → synthesize → decompose claims → check
+ * contradictions → verify grounding → persist. Orchestration only — every side effect (the Mongo
+ * hybrid search, the model calls, the verification pass, the Mongo write) lives in an activity;
+ * this function just sequences their results and threads `tenantId` through unopened to every
+ * activity that scopes on it (`retrieveEvidence`, `synthesizeAnswer`, `decomposeClaims`,
+ * `checkContradictions`, `groundingCheck`, `persistAnswer`).
  */
 export async function answerQuestion(input: AnswerQuestionInput): Promise<AnswerQuestionResult> {
   const chunks = await retrievalActivities.retrieveEvidence({
@@ -94,11 +133,25 @@ export async function answerQuestion(input: AnswerQuestionInput): Promise<Answer
     tenantId: input.tenantId,
   });
 
+  const { atoms } = await decompositionActivities.decomposeClaims({
+    outcome,
+    tenantId: input.tenantId,
+  });
+
+  const { contradictedClaimIndexes } = await contradictionActivities.checkContradictions({
+    outcome,
+    atoms,
+    retrievedChunks: chunks,
+    tenantId: input.tenantId,
+  });
+
   const grounding = await groundingActivities.groundingCheck({
     outcome,
     retrievedChunks: chunks,
     tenantId: input.tenantId,
     questionText: input.questionText,
+    atoms,
+    contradictedClaimIndexes,
   });
 
   const persisted = await persistActivities.persistAnswer({
@@ -113,6 +166,7 @@ export async function answerQuestion(input: AnswerQuestionInput): Promise<Answer
     claimCoverage: grounding.claimCoverage,
     verificationReport: grounding.verificationReport,
     conflictIds: grounding.conflictIds,
+    atoms: grounding.atoms,
     usage,
   });
 

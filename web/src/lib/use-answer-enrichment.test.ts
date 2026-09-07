@@ -17,6 +17,7 @@ const baseAnswer: Answer = {
   citations: [],
   conflictIds: [],
   createdAt: new Date().toISOString(),
+  atoms: [],
   withdrawnCitedDocVersionIds: [],
 };
 

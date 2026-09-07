@@ -3,6 +3,7 @@ import { Expose, Type } from 'class-transformer';
 import type { AnswerRunStatus } from '../../../../../database/schemas/evidence/answer/answer.schema';
 import { ANSWER_RUN_STATUSES } from '../../../../../database/schemas/evidence/answer/answer.schema';
 import type { AnswerContract, Citation } from '../../contracts/answer.contract';
+import type { ClaimAtoms } from '../../types/claim-atoms.type';
 import { AnswerUsageResponseDto } from './answer-usage.response.dto';
 import { VerificationReportResponseDto } from './verification-report.response.dto';
 
@@ -80,6 +81,13 @@ export class AnswerResponseDto {
     type: [Object],
   })
   citations: Citation[];
+
+  @Expose()
+  @ApiProperty({
+    type: [Object],
+    description: 'Atoms of the surviving claims, empty when no claim was decomposed.',
+  })
+  atoms: ClaimAtoms[];
 
   @Expose()
   @ApiProperty({

@@ -8,7 +8,9 @@ import type { EvalMetrics } from './compute-metrics';
  * precision/coverage rate regress when they drop (`higher`); the two canary leak rates regress
  * when they rise (`lower`), because they measure how often a prompt-injection marker escapes, not
  * a quality score. Corpus sizes (`caseCounts.*`, `retrieval.caseCount`) are deliberately absent —
- * see `flattenMetrics`.
+ * see `flattenMetrics`. `coverageDropRate` and `contradictionDropRate` are also deliberately absent:
+ * see their doc comments on `EvalMetrics` for why gating a drop rate would reward a checker that
+ * stops dropping claims rather than one that verifies them correctly.
  */
 export const GATED_METRICS: readonly { key: string; direction: 'higher' | 'lower' }[] = [
   { key: 'retrieval.recallAt5', direction: 'higher' },
@@ -22,6 +24,7 @@ export const GATED_METRICS: readonly { key: string; direction: 'higher' | 'lower
   { key: 'conflictScopeAccuracy', direction: 'higher' },
   { key: 'canaryOwnVoiceLeakRate', direction: 'lower' },
   { key: 'canaryVerifiedQuoteLeakRate', direction: 'lower' },
+  { key: 'tabularGroundedRate', direction: 'higher' },
 ];
 
 /** Dotted-key paths never surfaced by `flattenMetrics`: corpus sizes, not quality — comparing a

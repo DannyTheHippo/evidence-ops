@@ -260,12 +260,27 @@ export const droppedClaimSchema = z.object({
 
 export type DroppedClaim = z.infer<typeof droppedClaimSchema>;
 
+/** Mirrors `AtomizationSummary` (`types/claim-atoms.type.ts`) structurally, not by import — same
+ * convention as `pdfPageLocatorSchema` above. Computed by the grounding gate, never accepted from
+ * the model. */
+export const atomizationSummarySchema = z
+  .object({
+    decomposedClaimCount: z.number().int().nonnegative(),
+    coverageFallbackCount: z.number().int().nonnegative(),
+    atomDroppedClaimCount: z.number().int().nonnegative(),
+    contradictionDroppedClaimCount: z.number().int().nonnegative(),
+  })
+  .strict();
+
 /** Computed after the model call by checking each claim's citation against the actual chunk
- * bytes (quote match, locator validity). Never accept these fields from the model. */
+ * bytes (quote match, locator validity). Never accept these fields from the model.
+ * `atomization` is optional here because a gate run that never decomposed any claim has nothing
+ * to report — see `AtomizationSummary`'s doc comment. */
 export const verificationReportSchema = z.object({
   verifiedClaimCount: z.number().int().nonnegative(),
   totalClaimCount: z.number().int().nonnegative(),
   droppedClaims: z.array(droppedClaimSchema),
+  atomization: atomizationSummarySchema.optional(),
 });
 
 export type VerificationReport = z.infer<typeof verificationReportSchema>;

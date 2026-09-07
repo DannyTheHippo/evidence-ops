@@ -254,9 +254,16 @@ interface ConsumedSpan {
   readonly end: number;
 }
 
-function runMatchers(text: string, matchers: readonly PeriodMatcher[]): Period[] {
+/** A period {@link findStatedPeriodSpans} found, plus the text offsets it was read from. */
+export interface StatedPeriodSpan {
+  readonly period: Period;
+  readonly start: number;
+  readonly end: number;
+}
+
+function runMatcherSpans(text: string, matchers: readonly PeriodMatcher[]): StatedPeriodSpan[] {
   const consumed: ConsumedSpan[] = [];
-  const found: Period[] = [];
+  const found: StatedPeriodSpan[] = [];
   for (const matcher of matchers) {
     matcher.pattern.lastIndex = 0;
     for (;;) {
@@ -277,11 +284,15 @@ function runMatchers(text: string, matchers: readonly PeriodMatcher[]): Period[]
       }
       consumed.push(span);
       if (outcome !== 'refuse') {
-        found.push(outcome);
+        found.push({ period: outcome, start: span.start, end: span.end });
       }
     }
   }
   return found;
+}
+
+function runMatchers(text: string, matchers: readonly PeriodMatcher[]): Period[] {
+  return runMatcherSpans(text, matchers).map((span) => span.period);
 }
 
 /**
@@ -333,14 +344,18 @@ export function derivePeriodFromDateText(text: string): string {
  * licence to pick either.
  */
 export function findStatedPeriods(text: string): Period[] {
-  const found = runMatchers(text.trim(), [...MATCHERS, BARE_YEAR_MATCHER]);
   const byKey = new Map<string, Period>();
-  for (const period of found) {
-    if (!byKey.has(period.key)) {
-      byKey.set(period.key, period);
+  for (const span of findStatedPeriodSpans(text)) {
+    if (!byKey.has(span.period.key)) {
+      byKey.set(span.period.key, span.period);
     }
   }
   return [...byKey.values()];
+}
+
+/** {@link findStatedPeriods}'s underlying spans, with the text offsets each period was read from. */
+export function findStatedPeriodSpans(text: string): StatedPeriodSpan[] {
+  return runMatcherSpans(text.trim(), [...MATCHERS, BARE_YEAR_MATCHER]);
 }
 
 const KEY_FISCAL_YEAR = /^FY(\d{4})$/;

@@ -309,7 +309,7 @@ function containsMixedScriptToken(text: string): boolean {
  * refuses alignment outright before ever tokenizing text containing either script, rather than let
  * this function produce a token it cannot honestly compare — see `containsUnsegmentedScript`.
  */
-function extractContentTokens(text: string): Set<string> {
+export function extractContentTokens(text: string): Set<string> {
   const normalized = canonicalizeForAlignment(text);
 
   const numericTokens = extractNumericTokens(normalized).map((value) => `#${value}`);

@@ -21,6 +21,7 @@ import { MeasuresModule } from './features/evidence/measures/measures.module';
 import { QaModule } from './features/evidence/qa/qa.module';
 import { RetrievalModule } from './features/evidence/retrieval/retrieval.module';
 import { SourcesModule } from './features/evidence/sources/sources.module';
+import { VerificationsModule } from './features/evidence/verifications/verifications.module';
 import { WorkflowRunsModule } from './features/evidence/workflow-runs/workflow-runs.module';
 import { ApiKeysModule } from './features/platform/api-keys/api-keys.module';
 import { AuditEventsModule } from './features/platform/audit-events/audit-events.module';
@@ -96,6 +97,7 @@ class ThrottlingModule {}
     LedgerModule,
     ConflictsModule,
     QaModule,
+    VerificationsModule,
     RetrievalModule,
     ApprovalsModule,
     WorkflowRunsModule,

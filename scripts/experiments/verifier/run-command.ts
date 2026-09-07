@@ -110,6 +110,7 @@ export async function runCommand(options: RunCommandOptions): Promise<void> {
           claimVerificationService.verifyClaims({
             claims: statements,
             tenantId: options.tenantId,
+            requestedBy: { kind: 'user', id: 'experiment:verifier' },
           }),
         // The same transform `ClaimVerificationService.verifyOneClaim` applies before retrieving,
         // so the worksheet shows the hits the gate saw rather than a different query's.

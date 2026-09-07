@@ -7,43 +7,20 @@ import type {
 import { locateQuote } from '../../../shared/utils/locate-quote.util';
 import { checkQuoteAlignment } from './check-quote-alignment';
 import type { Citation, Claim, DroppedClaim } from './contracts/answer.contract';
+import { chunkContainsSubjectEntity, containsNormalizedToken } from './entity-token-match';
+import type { CanonicalEntityListing } from '../facts/canonical-entity.service';
 import { containsUnrepresentableNumber, extractNumericTokens } from './extract-numeric-tokens';
 import { findMetricById, METRIC_ONTOLOGY } from '../facts/metric-ontology';
+import { parseClaimAssertions } from './parse-claim-assertions';
 import type { RetrievedChunk } from './types/retrieved-chunk.type';
+import type { VerifierMeasure } from './types/verifier-measure.type';
 import type { GroundingViolation } from './types/grounding-report.type';
+import { verifyAtoms } from './verify-atoms';
+import { verifyStructuredSupport } from './verify-structured-support';
 
-function escapeRegExpToken(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-// One compiled pattern per distinct needle, reused across every `containsNormalizedToken` call for
-// that needle — `verifyClaim` calls it per fact x per citation, and with `subjectBinding` on that is
-// a lot of repeat compiles of the same handful of entity/metric-phrase patterns. Safe to reuse
-// without a `lastIndex` reset: the pattern carries no `g`/`y` flag, so `.test()` never advances any
-// per-instance state.
-const tokenPatternCache = new Map<string, RegExp>();
-
-function tokenPattern(needle: string): RegExp {
-  let pattern = tokenPatternCache.get(needle);
-  if (!pattern) {
-    pattern = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExpToken(needle)}(?![\\p{L}\\p{N}])`, 'u');
-    tokenPatternCache.set(needle, pattern);
-  }
-  return pattern;
-}
-
-/**
- * Whole-token containment between two already-{@link normalizeEntityName}d strings: `needle` must
- * occur in `haystack` with no Unicode letter/digit immediately adjacent on either side, so a short
- * or generic subject name — an attacker-controlled `factKey.entity` extracted from hostile document
- * text, or a short metric alias — cannot bind by matching inside an unrelated longer word. Exported
- * for `ClaimVerificationService.findProseTouchedFactKeys`, which runs the same whole-token check
- * against a claim's own statement rather than a retrieved chunk's text.
- */
-export function containsNormalizedToken(haystack: string, needle: string): boolean {
-  if (needle.length === 0) return false;
-  return tokenPattern(needle).test(haystack);
-}
+/** Re-exported so existing importers (`claim-verification.service.ts` and others) keep compiling
+ * without reaching into `entity-token-match.ts` directly. */
+export { containsNormalizedToken };
 
 /**
  * The entities `subjectBinding` treats this claim as being about: every `cellFacts[].factKey.entity`
@@ -52,7 +29,9 @@ export function containsNormalizedToken(haystack: string, needle: string): boole
  * no registry access to resolve one — this is the only entity signal available without trusting a
  * second, model-authored source of truth. A claim whose statement names none of the retrieved facts'
  * entities yields an empty set, and every `subjectBinding` check below is deliberately inert for it —
- * a claim about an entity with no extracted facts must not be rejected for "having no subject".
+ * a claim about an entity with no extracted facts must not be rejected for "having no subject". Also
+ * the entity signal `verifyStatement`'s structured check 4 uses to seed `verifyStructuredSupport`'s
+ * `subjectEntities`, independent of whether `subjectBinding` itself is on.
  */
 function collectSubjectEntities(
   normalizedStatement: string,
@@ -68,26 +47,22 @@ function collectSubjectEntities(
   return entities;
 }
 
-function chunkContainsSubjectEntity(
-  chunkText: string,
-  subjectEntities: ReadonlySet<string>,
-): boolean {
-  const normalizedChunkText = normalizeEntityName(chunkText);
-  return [...subjectEntities].some((entity) =>
-    containsNormalizedToken(normalizedChunkText, entity),
-  );
-}
-
 /**
  * Whether `metricId` (a `GroundingCellFact.factKey.metric`) is one the claim's statement could
- * plausibly be about. Matched by label/alias containment against `METRIC_ONTOLOGY`
- * (`metric-ontology.ts`) — the same closed id space fact extraction is constrained to — rather than
- * the ontology's own `findMetricByAlias` exact-equality lookup, since a claim statement is prose, not
- * a spreadsheet column header. A `metricId` absent from the ontology (a corrupted or stale-pack fact)
- * relates to nothing: fails closed rather than matching vacuously.
+ * plausibly be about. Matched by label/alias containment against `measures` when supplied, or
+ * against `METRIC_ONTOLOGY` (`metric-ontology.ts`, the same closed id space fact extraction is
+ * constrained to) otherwise — rather than the ontology's own `findMetricByAlias` exact-equality
+ * lookup, since a claim statement is prose, not a spreadsheet column header. A `metricId` absent
+ * from the chosen source relates to nothing: fails closed rather than matching vacuously.
  */
-function metricRelatesToClaim(metricId: string, normalizedStatement: string): boolean {
-  const metric = findMetricById(METRIC_ONTOLOGY, metricId);
+function metricRelatesToClaim(
+  metricId: string,
+  normalizedStatement: string,
+  measures?: readonly VerifierMeasure[],
+): boolean {
+  const metric = measures
+    ? measures.find((candidate) => candidate.slug === metricId)
+    : findMetricById(METRIC_ONTOLOGY, metricId);
   if (!metric) return false;
   return [metric.label, ...metric.aliases].some((phrase) =>
     containsNormalizedToken(normalizedStatement, normalizeEntityName(phrase)),
@@ -95,13 +70,20 @@ function metricRelatesToClaim(metricId: string, normalizedStatement: string): bo
 }
 
 /**
- * Whether `unit` is one `metricId`'s ontology entry actually declares — catches a fact whose
- * `value.unit` belongs to a different metric's unit vocabulary entirely (e.g. `sf` on a `cap_rate`
- * fact), which bare value equality has no way to notice. A `metricId` absent from the ontology has no
- * declared units, so nothing validates against it.
+ * Whether `unit` is one `metricId`'s entry (from `measures` when supplied, `METRIC_ONTOLOGY`
+ * otherwise) actually declares — catches a fact whose `value.unit` belongs to a different metric's
+ * unit vocabulary entirely (e.g. `sf` on a `cap_rate` fact), which bare value equality has no way to
+ * notice. A `metricId` absent from the chosen source has no declared units, so nothing validates
+ * against it.
  */
-function unitValidForMetric(metricId: string, unit: string): boolean {
-  const metric = findMetricById(METRIC_ONTOLOGY, metricId);
+function unitValidForMetric(
+  metricId: string,
+  unit: string,
+  measures?: readonly VerifierMeasure[],
+): boolean {
+  const metric = measures
+    ? measures.find((candidate) => candidate.slug === metricId)
+    : findMetricById(METRIC_ONTOLOGY, metricId);
   return metric?.units.some((candidate) => candidate.id === unit) ?? false;
 }
 
@@ -155,39 +137,47 @@ export type ClaimVerificationResult =
       readonly claim: Claim;
       readonly violations: readonly GroundingViolation[];
       readonly touchedFactKeys: TouchedFactKeys;
+      /** Set only when `atoms` was supplied to `verifyClaim` — see `verifyAtoms`'s own doc comment. */
+      readonly atomization?: { readonly coverageFallback: boolean; readonly atomDropped: boolean };
     }
   | {
       readonly kind: 'dropped';
       readonly dropped: DroppedClaim;
       readonly violations: readonly GroundingViolation[];
       readonly touchedFactKeys: TouchedFactKeys;
+      /** Set only when `atoms` was supplied to `verifyClaim` — see `verifyAtoms`'s own doc comment. */
+      readonly atomization?: { readonly coverageFallback: boolean; readonly atomDropped: boolean };
     };
 
-/**
- * Verifies one claim's citations against what was actually retrieved, in the four-check order the
- * grounding gate documents: retrieval containment, then quote containment, then quote alignment,
- * then numeric support. Fails CLOSED at claim granularity — a single failing citation drops the
- * *whole* claim (a model that pads one fabricated citation onto an otherwise-grounded claim does
- * not get partial credit), and a single unsupported number in an otherwise-grounded claim drops it
- * the same way.
- */
-export function verifyClaim(params: {
-  readonly claim: Claim;
+/** What `verifyStatement` needs beyond the statement text itself: everything `verifyClaim` receives
+ * except `claim` and `atoms` — the citations checks 1-3 read stay pinned to `claim` regardless of
+ * which statement (the whole claim's, or one of its atoms) is under test. */
+interface VerifyStatementContext {
   readonly retrievedChunks: readonly RetrievedChunk[];
   readonly cellFacts: readonly GroundingCellFact[];
-  /**
-   * Off by default (`undefined`/`false`) — every existing caller omits it, so behavior is
-   * byte-identical until a caller opts in. When on, binds check 1's retrieval containment and check
-   * 4's numeric support to the claim's subject entity (and, for check 4, `factKey.metric`/
-   * `value.unit`) rather than accepting a cited chunk, or a value-matched fact, on name or number
-   * alone. See `collectSubjectEntities`'s doc comment for what "subject entity" means given `Claim`
-   * has no structured field to read it from.
-   */
-  readonly subjectBinding?: boolean;
-}): ClaimVerificationResult {
-  const { claim, retrievedChunks, cellFacts, subjectBinding = false } = params;
+  readonly subjectBinding: boolean;
+  readonly measures?: readonly VerifierMeasure[];
+  readonly entities?: readonly CanonicalEntityListing[];
+}
+
+/**
+ * Verifies one piece of text — `claim.statement` itself, or one of its decomposed atoms — against
+ * `claim.citations`, in the four-check order the grounding gate documents: retrieval containment,
+ * then quote containment, then quote alignment, then numeric (and, with `measures`, period)
+ * support. Citations never vary by `statement`; only the text being checked against them does, so
+ * `verifyAtoms` can call this once for the whole claim and again per atom without re-deriving
+ * evidence. Fails CLOSED at this granularity — a single failing citation drops the *whole* check
+ * (a model that pads one fabricated citation onto an otherwise-grounded claim does not get partial
+ * credit), and a single unsupported number drops it the same way.
+ */
+function verifyStatement(
+  statement: string,
+  claim: Claim,
+  context: VerifyStatementContext,
+): ClaimVerificationResult {
+  const { retrievedChunks, cellFacts, subjectBinding, measures, entities } = context;
   const chunkById = new Map(retrievedChunks.map((chunk) => [chunk.chunkId, chunk] as const));
-  const normalizedStatement = normalizeEntityName(claim.statement);
+  const normalizedStatement = normalizeEntityName(statement);
   const subjectEntities = subjectBinding
     ? collectSubjectEntities(normalizedStatement, cellFacts)
     : new Set<string>();
@@ -212,7 +202,7 @@ export function verifyClaim(params: {
       // over the same lookup's result.
       citationViolations.push({
         kind: 'chunk-not-retrieved',
-        claimStatement: claim.statement,
+        claimStatement: statement,
         detail: `chunk '${citation.chunkId}' was not among the chunks retrieved for this request`,
         chunkId: citation.chunkId,
       });
@@ -223,7 +213,7 @@ export function verifyClaim(params: {
     if (match.kind === 'none') {
       citationViolations.push({
         kind: 'quote-not-found',
-        claimStatement: claim.statement,
+        claimStatement: statement,
         detail: `quote for chunk '${citation.chunkId}' does not appear in the cited chunk's text`,
         chunkId: citation.chunkId,
       });
@@ -232,7 +222,7 @@ export function verifyClaim(params: {
     if (match.kind === 'fuzzy') {
       citationViolations.push({
         kind: 'quote-fuzzy-match',
-        claimStatement: claim.statement,
+        claimStatement: statement,
         detail: `quote for chunk '${citation.chunkId}' only matches the cited chunk approximately (similarity ${match.similarity.toFixed(2)}), not verbatim`,
         chunkId: citation.chunkId,
       });
@@ -252,7 +242,7 @@ export function verifyClaim(params: {
     ) {
       citationViolations.push({
         kind: 'quote-unrelated-to-statement',
-        claimStatement: claim.statement,
+        claimStatement: statement,
         detail: `chunk '${citation.chunkId}' does not name this claim's subject entity`,
         chunkId: citation.chunkId,
       });
@@ -266,7 +256,7 @@ export function verifyClaim(params: {
     return {
       kind: 'dropped',
       dropped: {
-        statement: claim.statement,
+        statement,
         reason: citationViolations.map((violation) => violation.detail).join('; '),
       },
       violations: citationViolations,
@@ -299,7 +289,7 @@ export function verifyClaim(params: {
       .map((fact) => fact.value.amount),
   );
   const alignment = checkQuoteAlignment({
-    statement: claim.statement,
+    statement,
     quotes: claim.citations.map((citation) => citation.quote),
     corroboratedNumericTokens,
   });
@@ -308,108 +298,138 @@ export function verifyClaim(params: {
       alignment.kind === 'quote-not-substantive'
         ? {
             kind: 'quote-not-substantive',
-            claimStatement: claim.statement,
+            claimStatement: statement,
             detail: `quote for chunk '${claim.citations[alignment.quoteIndex].chunkId}' does not carry enough content to support any claim`,
           }
         : {
             kind: 'quote-unrelated-to-statement',
-            claimStatement: claim.statement,
+            claimStatement: statement,
             detail:
               'the cited quotes share too little content with the claim statement to support it',
           };
     return {
       kind: 'dropped',
-      dropped: { statement: claim.statement, reason: alignmentViolation.detail },
+      dropped: { statement, reason: alignmentViolation.detail },
       violations: [alignmentViolation],
       touchedFactKeys: [],
     };
   }
 
   // Check 4: every citation is retrieval-contained, quote-verified, and alignment-verified. Every
-  // number in the statement must still be supported — one unsupported number drops the whole claim,
+  // number in the statement must still be supported — one unsupported number drops the whole check,
   // the same fail-closed granularity as check 1/2's per-citation failures above. The same value
   // match that proves support is also what `touchedFactKeys` (below) is built from — a fact only
-  // counts as "touched" by this claim when the claim actually states its value, not merely when it
-  // lives in a cited chunk (see `TouchedFactKeys`'s doc comment).
+  // counts as "touched" by this check when the statement actually states its value, not merely when
+  // it lives in a cited chunk (see `TouchedFactKeys`'s doc comment). With `measures === undefined`
+  // this is the legacy digit-matching loop; with `measures` supplied it defers to
+  // `parseClaimAssertions`/`verifyStructuredSupport`, which bind numbers to a confirmed measure's
+  // tolerance and a cell fact's entity/period rather than to raw digit equality.
   const numericViolations: GroundingViolation[] = [];
   const locatorUpgradeByChunkId = new Map<string, EvidenceLocator>();
   const touchedFacts: GroundingCellFact[] = [];
 
-  // `extractNumericTokens` never returns a value for a digit run it cannot represent — a non-ASCII
-  // `\p{Nd}` script (Arabic-Indic, Devanagari, ...) NFKC does not fold to ASCII, or an ASCII digit run
-  // whose magnitude `isRepresentableToken` rejects (an 18-digit identifier, an overflowing run of
-  // zeros); see that module's own doc comment on `containsUnrepresentableNumber`. Either way the loop
-  // below would otherwise treat a claim stating one as though it stated no number there at all.
-  // `containsUnrepresentableNumber` is the explicit signal for both cases, consulted only against the
-  // claim's own statement — never the cited chunks' text, whose own unrepresentable numbers contribute
-  // no support and no violation, the same as any other number a chunk simply does not corroborate.
-  if (containsUnrepresentableNumber(claim.statement)) {
-    numericViolations.push({
-      kind: 'numeric-claim-unsupported',
-      claimStatement: claim.statement,
-      detail:
-        'claim states a number this system cannot represent as a verifiable value (an unsupported digit script or a magnitude outside its safe range)',
-    });
-  }
-
-  for (const claimedNumber of extractNumericTokens(claim.statement)) {
-    // With `subjectBinding` on, bare value equality is not enough: `isFactBoundToClaim` also
-    // requires the fact's entity, metric, and unit to relate to this claim — closing the gap where
-    // two distinct facts on the same cited chunk carry the identical amount (a claim about entity
-    // A must never acquire a cell-precise locator pointing at entity B's identically-valued figure).
-    const supportingFact = cellFacts.find(
-      (fact) =>
-        fact.value.amount === claimedNumber &&
-        citedChunks.some((chunk) => chunk.chunkId === fact.chunkId) &&
-        (!subjectBinding || isFactBoundToClaim(fact, normalizedStatement, subjectEntities)),
-    );
-
-    if (supportingFact) {
-      // A cell-level fact is strictly stronger evidence than a whole-region quote match, so it
-      // always wins the upgrade regardless of whether the chunk text also happens to contain the
-      // number verbatim.
-      locatorUpgradeByChunkId.set(supportingFact.chunkId, supportingFact.locator);
-      touchedFacts.push(supportingFact);
-      continue;
-    }
-
-    // A cited chunk that carries *any* cell-level fact is treated as authoritative for numbers:
-    // once structured extraction has a ground truth for that chunk, an unmatched value is
-    // rejected rather than accepted on a coincidental digit substring elsewhere in the chunk's
-    // raw text (comps sheets routinely repeat digits across unrelated columns/rows). Raw-text
-    // fallback is only available for a chunk with zero cell facts — a genuinely prose chunk with
-    // no structured extraction to defer to.
-    const supportedByChunkText = citedChunks.some((chunk) => {
-      const chunkHasCellFacts = cellFacts.some((fact) => fact.chunkId === chunk.chunkId);
-      // Strict `===`, the same predicate check 4's cell-fact match above uses, over the same
-      // guaranteed-finite `extractNumericTokens` output on both sides (see that module's own doc
-      // comment) — a plain equality comparison, with no sentinel value either side could collide on.
-      const chunkStatesClaimedNumber = extractNumericTokens(chunk.text).some(
-        (token) => token === claimedNumber,
-      );
-      if (chunkHasCellFacts || !chunkStatesClaimedNumber) {
-        return false;
-      }
-      // `subjectBinding` narrowing of the raw-text fallback: a zero-cell-fact chunk that carries
-      // the claimed number verbatim is still not evidence for *this* claim unless it also names a
-      // subject entity — otherwise any digit run in a 700-token prose chunk would support any claim
-      // sharing that number. Every chunk reaching this point already passed check 1's identical
-      // per-citation gate above, so this branch is currently unreachable in practice; it is kept as
-      // an explicit backstop scoped to check 4's own fallback, so a future change to check 1's
-      // gating cannot silently widen this one. Inert when `subjectEntities` is empty, the same
-      // scoping check 1 uses.
-      return (
-        !subjectBinding ||
-        subjectEntities.size === 0 ||
-        chunkContainsSubjectEntity(chunk.text, subjectEntities)
-      );
-    });
-    if (!supportedByChunkText) {
+  if (measures === undefined) {
+    // `extractNumericTokens` never returns a value for a digit run it cannot represent — a
+    // non-ASCII `\p{Nd}` script (Arabic-Indic, Devanagari, ...) NFKC does not fold to ASCII, or an
+    // ASCII digit run whose magnitude `isRepresentableToken` rejects (an 18-digit identifier, an
+    // overflowing run of zeros); see that module's own doc comment on `containsUnrepresentableNumber`.
+    // Either way the loop below would otherwise treat a statement stating one as though it stated no
+    // number there at all. `containsUnrepresentableNumber` is the explicit signal for both cases,
+    // consulted only against `statement` — never the cited chunks' text, whose own unrepresentable
+    // numbers contribute no support and no violation, the same as any other number a chunk simply
+    // does not corroborate.
+    if (containsUnrepresentableNumber(statement)) {
       numericViolations.push({
         kind: 'numeric-claim-unsupported',
-        claimStatement: claim.statement,
-        detail: `claim states the number ${claimedNumber}, which is not supported by any cited chunk or extracted fact`,
+        claimStatement: statement,
+        detail:
+          'claim states a number this system cannot represent as a verifiable value (an unsupported digit script or a magnitude outside its safe range)',
       });
+    }
+
+    for (const claimedNumber of extractNumericTokens(statement)) {
+      // With `subjectBinding` on, bare value equality is not enough: `isFactBoundToClaim` also
+      // requires the fact's entity, metric, and unit to relate to this statement — closing the gap
+      // where two distinct facts on the same cited chunk carry the identical amount (a claim about
+      // entity A must never acquire a cell-precise locator pointing at entity B's identically-valued
+      // figure).
+      const supportingFact = cellFacts.find(
+        (fact) =>
+          fact.value.amount === claimedNumber &&
+          citedChunks.some((chunk) => chunk.chunkId === fact.chunkId) &&
+          (!subjectBinding || isFactBoundToClaim(fact, normalizedStatement, subjectEntities)),
+      );
+
+      if (supportingFact) {
+        // A cell-level fact is strictly stronger evidence than a whole-region quote match, so it
+        // always wins the upgrade regardless of whether the chunk text also happens to contain the
+        // number verbatim.
+        locatorUpgradeByChunkId.set(supportingFact.chunkId, supportingFact.locator);
+        touchedFacts.push(supportingFact);
+        continue;
+      }
+
+      // A cited chunk that carries *any* cell-level fact is treated as authoritative for numbers:
+      // once structured extraction has a ground truth for that chunk, an unmatched value is
+      // rejected rather than accepted on a coincidental digit substring elsewhere in the chunk's
+      // raw text (comps sheets routinely repeat digits across unrelated columns/rows). Raw-text
+      // fallback is only available for a chunk with zero cell facts — a genuinely prose chunk with
+      // no structured extraction to defer to.
+      const supportedByChunkText = citedChunks.some((chunk) => {
+        const chunkHasCellFacts = cellFacts.some((fact) => fact.chunkId === chunk.chunkId);
+        // Strict `===`, the same predicate check 4's cell-fact match above uses, over the same
+        // guaranteed-finite `extractNumericTokens` output on both sides (see that module's own doc
+        // comment) — a plain equality comparison, with no sentinel value either side could collide on.
+        const chunkStatesClaimedNumber = extractNumericTokens(chunk.text).some(
+          (token) => token === claimedNumber,
+        );
+        if (chunkHasCellFacts || !chunkStatesClaimedNumber) {
+          return false;
+        }
+        // `subjectBinding` narrowing of the raw-text fallback: a zero-cell-fact chunk that carries
+        // the claimed number verbatim is still not evidence for *this* statement unless it also
+        // names a subject entity — otherwise any digit run in a 700-token prose chunk would support
+        // any claim sharing that number. Every chunk reaching this point already passed check 1's
+        // identical per-citation gate above, so this branch is currently unreachable in practice; it
+        // is kept as an explicit backstop scoped to check 4's own fallback, so a future change to
+        // check 1's gating cannot silently widen this one. Inert when `subjectEntities` is empty,
+        // the same scoping check 1 uses.
+        return (
+          !subjectBinding ||
+          subjectEntities.size === 0 ||
+          chunkContainsSubjectEntity(chunk.text, subjectEntities)
+        );
+      });
+      if (!supportedByChunkText) {
+        numericViolations.push({
+          kind: 'numeric-claim-unsupported',
+          claimStatement: statement,
+          detail: `claim states the number ${claimedNumber}, which is not supported by any cited chunk or extracted fact`,
+        });
+      }
+    }
+  } else {
+    const assertions = parseClaimAssertions({ statement, measures, entities: entities ?? [] });
+    // Always derived, independent of `subjectBinding` (which only gates the legacy branch above):
+    // `verifyStructuredSupport`'s R1 binding needs a subject-entity set of its own regardless of
+    // whether the caller opted into `subjectBinding`.
+    const structuredSubjectEntities = new Set<string>([
+      ...collectSubjectEntities(normalizedStatement, cellFacts),
+      ...assertions.entityMentions,
+    ]);
+    const { violations: structuredViolations, supportingFacts } = verifyStructuredSupport({
+      statement,
+      assertions,
+      citedChunks,
+      cellFacts,
+      measures,
+      subjectEntities: structuredSubjectEntities,
+      subjectBinding,
+    });
+    numericViolations.push(...structuredViolations);
+    for (const fact of supportingFacts) {
+      locatorUpgradeByChunkId.set(fact.chunkId, fact.locator);
+      touchedFacts.push(fact);
     }
   }
 
@@ -417,7 +437,7 @@ export function verifyClaim(params: {
     return {
       kind: 'dropped',
       dropped: {
-        statement: claim.statement,
+        statement,
         reason: numericViolations.map((violation) => violation.detail).join('; '),
       },
       violations: numericViolations,
@@ -438,4 +458,66 @@ export function verifyClaim(params: {
     violations: [],
     touchedFactKeys,
   };
+}
+
+/**
+ * Verifies a claim's citations against what was actually retrieved. With `atoms` omitted, this is
+ * exactly `verifyStatement(claim.statement, claim, context)` — checks 1-3 unchanged, check 4 the
+ * legacy digit-matching loop unless `measures` is also supplied, in which case check 4 defers to
+ * `parseClaimAssertions`/`verifyStructuredSupport` (see `verifyStatement`'s own doc comment for both
+ * paths). With `atoms` supplied, verification instead runs through `verifyAtoms`: the whole
+ * statement is verified first via the same `verifyStatement`, and only a claim that survives on its
+ * own is then checked atom by atom, monotonically — decomposition can never turn a claim the
+ * whole-statement check already dropped into a survivor, and can only ever narrow what survives
+ * further (`verify-atoms.ts`'s own doc comment covers the two invariants this establishes).
+ */
+export function verifyClaim(params: {
+  readonly claim: Claim;
+  readonly retrievedChunks: readonly RetrievedChunk[];
+  readonly cellFacts: readonly GroundingCellFact[];
+  /**
+   * Off by default (`undefined`/`false`) — every existing caller omits it, so behavior is
+   * byte-identical until a caller opts in. When on, binds check 1's retrieval containment and check
+   * 4's numeric support to the claim's subject entity (and, for check 4, `factKey.metric`/
+   * `value.unit`) rather than accepting a cited chunk, or a value-matched fact, on name or number
+   * alone. See `collectSubjectEntities`'s doc comment for what "subject entity" means given `Claim`
+   * has no structured field to read it from.
+   */
+  readonly subjectBinding?: boolean;
+  /** The claim's model-decomposed atoms (`ClaimDecompositionService`). Omitted means "not
+   * decomposed" — the whole statement is the only thing verified, byte-identical to today. */
+  readonly atoms?: readonly string[];
+  /** Confirmed measures (`MeasuresService.listConfirmedDefinitions`, projected to
+   * `VerifierMeasure`). Omitted means check 4 stays the legacy digit-matching loop. */
+  readonly measures?: readonly VerifierMeasure[];
+  /** Canonical entities, used by `parseClaimAssertions` to recognize a mentioned entity by alias as
+   * well as by canonical name. Only read when `measures` is also supplied. */
+  readonly entities?: readonly CanonicalEntityListing[];
+}): ClaimVerificationResult {
+  const {
+    claim,
+    retrievedChunks,
+    cellFacts,
+    subjectBinding = false,
+    atoms,
+    measures,
+    entities,
+  } = params;
+  const context: VerifyStatementContext = {
+    retrievedChunks,
+    cellFacts,
+    subjectBinding,
+    measures,
+    entities,
+  };
+
+  if (atoms === undefined) {
+    return verifyStatement(claim.statement, claim, context);
+  }
+
+  return verifyAtoms({
+    claim,
+    atoms,
+    verifyStatement: (statement) => verifyStatement(statement, claim, context),
+  });
 }

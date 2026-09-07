@@ -20,6 +20,10 @@ function baseMetrics(overrides: Partial<EvalMetrics> = {}): EvalMetrics {
     canaryVerifiedQuoteLeakRate: 0,
     answerContentAccuracy: 0.95,
     conflictScopeAccuracy: 1,
+    tabularGroundedRate: 0.7,
+    tabularClaimCount: 20,
+    coverageDropRate: 0.1,
+    contradictionDropRate: 0.05,
     caseCounts: { total: 32, answerable: 12, unanswerable: 8, conflicting: 5, adversarial: 7 },
     ...overrides,
   };

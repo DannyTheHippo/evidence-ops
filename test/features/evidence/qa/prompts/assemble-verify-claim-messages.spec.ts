@@ -2,6 +2,8 @@ import { EVIDENCE_DELIMITER_TAG } from '../../../../../src/features/evidence/ing
 import {
   CLAIM_DELIMITER_TAG,
   assembleVerifyClaimMessages,
+  escapeClaimDelimiter,
+  formatCandidateBlock,
 } from '../../../../../src/features/evidence/qa/prompts/assemble-verify-claim-messages';
 import type { RetrievedChunk } from '../../../../../src/features/evidence/qa/types/retrieved-chunk.type';
 
@@ -148,6 +150,44 @@ describe('assembleVerifyClaimMessages', () => {
     expect(result.messages).toHaveLength(1);
     expect(result.messages[0].content).toBe(
       `<${CLAIM_DELIMITER_TAG}>\nNo evidence retrieved\n</${CLAIM_DELIMITER_TAG}>`,
+    );
+  });
+});
+
+describe('escapeClaimDelimiter', () => {
+  it('should leave text with no claim tag unchanged', () => {
+    expect(escapeClaimDelimiter('The property sold for $12.5 million.')).toBe(
+      'The property sold for $12.5 million.',
+    );
+  });
+
+  it('should escape an open and a close claim tag while preserving casing', () => {
+    expect(escapeClaimDelimiter(`<${CLAIM_DELIMITER_TAG}>text</${CLAIM_DELIMITER_TAG}>`)).toBe(
+      `&lt;${CLAIM_DELIMITER_TAG}>text&lt;/${CLAIM_DELIMITER_TAG}>`,
+    );
+    expect(
+      escapeClaimDelimiter(
+        `<${CLAIM_DELIMITER_TAG.toUpperCase()}>text</${CLAIM_DELIMITER_TAG.toUpperCase()}>`,
+      ),
+    ).toBe(
+      `&lt;${CLAIM_DELIMITER_TAG.toUpperCase()}>text&lt;/${CLAIM_DELIMITER_TAG.toUpperCase()}>`,
+    );
+  });
+});
+
+describe('formatCandidateBlock', () => {
+  it('should render the candidate index and locator around the candidate text', () => {
+    const block = formatCandidateBlock(buildCandidate({ text: 'Candidate text here' }), 2);
+
+    expect(block).toBe(
+      [
+        `<${EVIDENCE_DELIMITER_TAG}>`,
+        'candidate: 2',
+        'locator: PDF page 3',
+        '',
+        'Candidate text here',
+        `</${EVIDENCE_DELIMITER_TAG}>`,
+      ].join('\n'),
     );
   });
 });

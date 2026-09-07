@@ -5,6 +5,7 @@ import type {
   Claim,
   VerificationReport,
 } from '../../../../features/evidence/qa/contracts/answer.contract';
+import type { ClaimAtoms } from '../../../../features/evidence/qa/types/claim-atoms.type';
 import { AuditableDocument } from '../../../global/auditable-document/auditable-document.schema';
 
 export type AnswerRunStatus = 'queued' | 'running' | 'completed' | 'failed';
@@ -57,6 +58,12 @@ export class Answer extends AuditableDocument {
   // explains what was dropped and why.
   @Prop({ type: [MongooseSchema.Types.Mixed], default: [] })
   claims: Claim[];
+
+  // The atoms of surviving claims (see `ClaimAtoms`'s doc comment) — empty when no claim was
+  // decomposed, whether because atomization never ran on this answer or every claim's decompose
+  // call returned `unavailable`.
+  @Prop({ type: [MongooseSchema.Types.Mixed], default: [] })
+  atoms: ClaimAtoms[];
 
   @Prop({ type: Number, min: 0, max: 1 })
   claimCoverage?: number;

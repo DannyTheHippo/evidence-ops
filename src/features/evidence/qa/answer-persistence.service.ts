@@ -9,6 +9,7 @@ import {
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { AnswerContract, Claim, VerificationReport } from './contracts/answer.contract';
 import { AnswerNotFoundException } from './exceptions/qa.exception';
+import type { ClaimAtoms } from './types/claim-atoms.type';
 
 export interface PersistAnswerInput {
   readonly answerId: string;
@@ -23,6 +24,11 @@ export interface PersistAnswerInput {
    * on a retry after the outcome changed) whenever `outcome` is not that kind. See
    * `GroundingCheckActivityResult.conflictIds`'s doc comment in `../../../worker/activities.ts`. */
   readonly conflictIds?: readonly string[];
+  /** The decomposed atoms of every claim the gate verified against (`GroundingCheckActivityResult.
+   * atoms`). Assigned unconditionally below, not `if (atoms)`: a retry must clear a stale value
+   * rather than leave a prior attempt's atoms attached to a different attempt's answer, the same
+   * reasoning `conflictIds`'s doc comment states. */
+  readonly atoms?: readonly ClaimAtoms[];
   /** Synthesis spend for this run (see `SynthesizeAnswerResult.usage`'s doc comment in
    * `synthesis.service.ts` — QA synthesis only, never embedding or extraction spend). Assigned
    * unconditionally below, not `if (usage)`: an activity retry that produces no usage must clear
@@ -92,6 +98,9 @@ export class AnswerPersistenceService {
     // outcome. `Conflict._id` (unlike `EvidenceChunk._id` above) is a real ObjectId, so this
     // coercion is not the chunk-id bug `retrievedChunkIds`'s doc comment warns about.
     answer.conflictIds = (input.conflictIds ?? []).map((id) => new Types.ObjectId(id));
+    // `Answer.atoms` (`ClaimAtoms[]`, mutable) doesn't accept `PersistAnswerInput.atoms`'s
+    // `readonly ClaimAtoms[]` directly — spread rather than widen the input contract's own type.
+    answer.atoms = [...(input.atoms ?? [])];
     answer.usage = input.usage;
 
     await answer.save();

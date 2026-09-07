@@ -19,6 +19,7 @@ function baseAnswer(overrides: Partial<Answer> = {}): Answer {
     citations: [],
     conflictIds: [],
     createdAt: new Date().toISOString(),
+    atoms: [],
     withdrawnCitedDocVersionIds: [],
     ...overrides,
   };
