@@ -38,6 +38,7 @@ import {
 import { FakeWorkflowEngine } from '../../src/providers/workflow-engine/fake-workflow.engine';
 import { WORKFLOW_ENGINE } from '../../src/providers/workflow-engine/workflow-engine.interface';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
+import { measureStamp, type MeasureStamp } from '../utils/measure-stamp';
 import { readSseEvent } from '../utils/read-sse-event';
 import { registerTestUser } from '../utils/register-test-user';
 import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts';
@@ -123,6 +124,21 @@ describe('Documents (e2e)', () => {
   afterAll(async () => {
     await closeTestApp(app);
   });
+
+  // Per-suite cache, not one `measureStamp` call per fact literal: the ~13 fact fixtures below
+  // resolve against only two slugs (`cap_rate`, `net_operating_income`) across at most a
+  // handful of tenants.
+  const measureStampCache = new Map<string, MeasureStamp>();
+  const getMeasureStamp = async (forTenantId: string, slug: string): Promise<MeasureStamp> => {
+    const key = `${forTenantId}::${slug}`;
+    const cached = measureStampCache.get(key);
+    if (cached) {
+      return cached;
+    }
+    const stamp = await measureStamp(app, forTenantId, slug);
+    measureStampCache.set(key, stamp);
+    return stamp;
+  };
 
   const upload = (body: Buffer, filename: string, mime: string, fields: Record<string, string>) => {
     const req = request(getTestServer(app)).post('/api/v1/documents').set('Cookie', cookie);
@@ -569,6 +585,7 @@ describe('Documents (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp(tenantId, 'net_operating_income')),
         chunkId: 'chunk-unclassified',
         documentVersionId: new Types.ObjectId(uploadedVersionId),
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'B2' },
@@ -582,6 +599,7 @@ describe('Documents (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp(tenantId, 'net_operating_income')),
         chunkId: 'chunk-pm',
         documentVersionId: pmVersion._id,
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Rent Roll', cell: 'B2' },
@@ -1209,6 +1227,7 @@ describe('Documents (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp(tenantId, 'cap_rate')),
         chunkId: 'chunk-xlsx',
         documentVersionId: new Types.ObjectId(versionId),
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
@@ -1222,6 +1241,7 @@ describe('Documents (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp(tenantId, 'cap_rate')),
         chunkId: 'chunk-prose',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
@@ -1322,6 +1342,7 @@ describe('Documents (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp(tenantId, 'cap_rate')),
         chunkId: 'chunk-xlsx-3fact',
         documentVersionId: new Types.ObjectId(versionId),
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F3' },
@@ -1335,6 +1356,7 @@ describe('Documents (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp(tenantId, 'cap_rate')),
         chunkId: 'chunk-prose-a',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
@@ -1348,6 +1370,7 @@ describe('Documents (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp(tenantId, 'cap_rate')),
         chunkId: 'chunk-prose-b',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 4 },
@@ -1424,6 +1447,7 @@ describe('Documents (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp(tenantId, 'cap_rate')),
         chunkId: 'chunk-xlsx-resolved',
         documentVersionId: new Types.ObjectId(versionId),
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F4' },
@@ -1437,6 +1461,7 @@ describe('Documents (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp(tenantId, 'cap_rate')),
         chunkId: 'chunk-prose-resolved',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 3 },
@@ -1498,6 +1523,7 @@ describe('Documents (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp(tenantId, 'cap_rate')),
         chunkId: 'chunk-xlsx-orphaned',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F5' },
@@ -1511,6 +1537,7 @@ describe('Documents (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp(tenantId, 'cap_rate')),
         chunkId: 'chunk-prose-orphaned',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 5 },
@@ -1598,6 +1625,7 @@ describe('Documents (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp(sortTenant.tenantId, 'cap_rate')),
         chunkId: 'chunk-xlsx',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
@@ -1611,6 +1639,7 @@ describe('Documents (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp(sortTenant.tenantId, 'cap_rate')),
         chunkId: 'chunk-prose',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },

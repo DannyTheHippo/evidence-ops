@@ -1,15 +1,12 @@
 import type { DocumentSourceClass } from '../../../database/schemas/evidence/document/document.schema';
 
 /**
- * The allowlist of valuation metrics fact extraction is permitted to produce. An open-ended
- * extractor would invent its own metric names per document ("cap rate" vs "capitalization rate"
- * vs "going-in yield"), and nothing downstream could ever compare two documents' figures again —
- * conflict detection groups facts by exact metric id, so the id space has to be closed.
- *
- * Both extractors (`xlsx-fact-extractor.ts`, `prose-fact-extractor.ts`) only ever emit a `metric`
- * value from `METRIC_IDS`: the xlsx extractor by matching a column header against `aliases`, the
- * model extractor because its structured-output schema (`contracts/fact-extraction.contract.ts`)
- * constrains the field to `z.enum(METRIC_IDS)`.
+ * The seed definition for every tenant's `measures` collection (`measure-seed.ts`'s
+ * `buildSeedMeasureRows`) and the ordering `orderForExtraction` (`measures/measure-definition.ts`)
+ * gives those seed rows relative to a tenant's other confirmed measures. Both extractors resolve
+ * against a tenant's confirmed `Measure` rows rather than this constant directly, matched the same
+ * way this file's `findMetricByAlias` always has; a tenant that has confirmed no header proposals
+ * carries exactly this ontology, in this order, as its full extraction allowlist.
  */
 export const METRIC_IDS = [
   'cap_rate',
@@ -25,19 +22,30 @@ export const METRIC_IDS = [
 export type MetricId = (typeof METRIC_IDS)[number];
 
 /**
- * Which pack produced `METRIC_ONTOLOGY` below, stamped onto every `ExtractedFact`/`Conflict` this
- * codebase writes (`FactsService.extractFacts`, `ConflictsService.scanForConflicts`) so a row
- * records which ontology produced it — a row detected under a superseded ontology is identifiable
- * as stale. `'cre'` v1 is byte-identical to `METRIC_ONTOLOGY` as defined in this file — the only
- * ontology this code has ever had — so every existing row is provably a `'cre'` v1 row, not a
- * guess.
+ * Identifies this file's ontology as the seed pack every tenant's `measures` registry starts
+ * from, stamped onto every `ExtractedFact`/`Conflict` this codebase writes
+ * (`FactsService.extractFacts`, `ConflictsService.scanForConflicts`) alongside the fact's own
+ * `measureId`/`measureVersion` — a row detected under a superseded seed ontology is identifiable
+ * as stale independently of which `Measure` row now defines its slug. `'cre'` v1 is
+ * byte-identical to `METRIC_ONTOLOGY` as defined in this file, so every row stamped with it is
+ * provably built from this exact seed, not a guess.
  */
 export const ACTIVE_PACK_ID = 'cre';
 export const ACTIVE_PACK_VERSION = 1;
 
-export type FactValueType = 'currency' | 'percentage' | 'area' | 'duration';
+export type FactValueType = 'currency' | 'percentage' | 'area' | 'duration' | 'count';
+
+export const FACT_VALUE_TYPES: readonly FactValueType[] = [
+  'currency',
+  'percentage',
+  'area',
+  'duration',
+  'count',
+];
 
 export type ToleranceKind = 'absolute' | 'relative';
+
+export const TOLERANCE_KINDS: readonly ToleranceKind[] = ['absolute', 'relative'];
 
 /** Multiplicative conversion from a unit form a document might report to the metric's
  * `canonicalUnit`. Every unit in this ontology is a pure scale factor — nothing here needs an
@@ -48,7 +56,10 @@ export interface MetricUnitDefinition {
 }
 
 export interface MetricDefinition {
-  readonly id: MetricId;
+  // Not narrowed to `MetricId`: a `Measure`'s slug (`measures/measure-definition.ts`'s
+  // `toMeasureDefinition`, `id = slug`) may be header-inferred, outside the fixed `METRIC_IDS`
+  // allowlist this file's own seed rows use.
+  readonly id: string;
   readonly label: string;
   /** Exact header/phrase forms a document might use, matched case-insensitively. Includes the
    * canonical label itself so callers can search one list. */

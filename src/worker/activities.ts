@@ -25,7 +25,8 @@ import {
   type Period,
 } from '../features/evidence/facts/derive-period';
 import { FactsService, type FactsExtractionResult } from '../features/evidence/facts/facts.service';
-import { METRIC_ONTOLOGY, type MetricId } from '../features/evidence/facts/metric-ontology';
+import type { MetricDefinition } from '../features/evidence/facts/metric-ontology';
+import { MeasuresService } from '../features/evidence/measures/measures.service';
 import { extractNumericTokens } from '../features/evidence/qa/extract-numeric-tokens';
 import {
   filterGroupsByEntity,
@@ -144,17 +145,20 @@ function occursAsWholeToken(haystack: string, needle: string): boolean {
 }
 
 /**
- * The single metric `questionText` names from the fixed `METRIC_ONTOLOGY` allowlist, or
+ * The single metric `questionText` names from the tenant's confirmed measures, or
  * `undefined` when that cannot be determined safely — same fail-closed shape as
  * `resolveQuestionEntity` (`scope-conflict-to-question.ts`): naming zero metrics or naming more
  * than one distinct metric both return `undefined` rather than guessing. Matched against every
- * metric's `label` and `aliases` on whole-token boundaries, exact and alias-only, never fuzzy — a
+ * measure's `label` and `aliases` on whole-token boundaries, exact and alias-only, never fuzzy — a
  * fuzzy match here would force `conflicting_evidence` off a metric the question never actually
  * named.
  */
-function resolveQuestionMetric(questionText: string): MetricId | undefined {
+function resolveQuestionMetric(
+  questionText: string,
+  measures: readonly MetricDefinition[],
+): string | undefined {
   const normalizedQuestion = normalizeEntityName(questionText);
-  const namedMetrics = METRIC_ONTOLOGY.filter((metric) =>
+  const namedMetrics = measures.filter((metric) =>
     [metric.label, ...metric.aliases].some((phrase) =>
       occursAsWholeToken(normalizedQuestion, normalizeEntityName(phrase)),
     ),
@@ -210,9 +214,10 @@ function resolveQuestionScopedConflictGroup(
   questionText: string,
   conflictGroups: readonly ConflictedFactGroup[],
   canonicalEntities: readonly CanonicalEntityListing[],
+  measures: readonly MetricDefinition[],
 ): ConflictedFactGroup | undefined {
   const entity = resolveQuestionEntity(questionText, canonicalEntities);
-  const metricId = resolveQuestionMetric(questionText);
+  const metricId = resolveQuestionMetric(questionText, measures);
   if (!entity || !metricId) {
     return undefined;
   }
@@ -385,6 +390,7 @@ export function createActivities(app: INestApplicationContext): Activities {
   const approvalChannel = app.get<ApprovalChannel>(APPROVAL_CHANNEL);
   const approvalsService = app.get(ApprovalsService);
   const sourcesService = app.get(SourcesService);
+  const measuresService = app.get(MeasuresService);
   const als = app.get<AsyncLocalStorage<AlsContext>>(AsyncLocalStorage);
 
   return {
@@ -474,24 +480,27 @@ export function createActivities(app: INestApplicationContext): Activities {
         // Retrieval-independent force, ahead of every kind-based branch below: loads every one of
         // the tenant's `open` conflicts (`findConflictedFactGroupsForTenant`, never scoped to
         // `input.retrievedChunks`) and, when the question's own text resolves to exactly one entity
-        // and exactly one metric naming exactly one `undated` group among those, forces
-        // `conflicting_evidence` immediately — regardless of what the model claimed, cited, or
-        // abstained on, and even when zero chunks were retrieved at all. This is what closes the
-        // gap every check below still has: each of them only ever considers a conflict "in play"
-        // when a *retrieved* chunk's own fact touches it, so a conflicting document that never
-        // lands in top-k can otherwise never force this outcome, and a differently worded question
-        // that still names the same entity and metric could otherwise reach a different outcome
-        // depending on what got retrieved. Restricted to `undated` groups because this function
-        // never derives the question's own period (`resolveQuestionScopedConflictGroup`'s own doc
-        // comment) — a dated group is left to the claim- and chunk-scoped checks below instead.
-        const [tenantConflictGroups, canonicalEntities] = await Promise.all([
+        // and exactly one metric — matched against the tenant's confirmed measures — naming exactly
+        // one `undated` group among those, forces `conflicting_evidence` immediately — regardless of
+        // what the model claimed, cited, or abstained on, and even when zero chunks were retrieved
+        // at all. This is what closes the gap every check below still has: each of them only ever
+        // considers a conflict "in play" when a *retrieved* chunk's own fact touches it, so a
+        // conflicting document that never lands in top-k can otherwise never force this outcome, and
+        // a differently worded question that still names the same entity and metric could otherwise
+        // reach a different outcome depending on what got retrieved. Restricted to `undated` groups
+        // because this function never derives the question's own period
+        // (`resolveQuestionScopedConflictGroup`'s own doc comment) — a dated group is left to the
+        // claim- and chunk-scoped checks below instead.
+        const [tenantConflictGroups, canonicalEntities, confirmedMeasures] = await Promise.all([
           conflictsService.findConflictedFactGroupsForTenant(input.tenantId),
           canonicalEntityService.listCanonicalEntities(input.tenantId),
+          measuresService.listConfirmedDefinitions(input.tenantId),
         ]);
         const questionScopedGroup = resolveQuestionScopedConflictGroup(
           input.questionText ?? '',
           tenantConflictGroups,
           canonicalEntities,
+          confirmedMeasures,
         );
         if (questionScopedGroup) {
           return {

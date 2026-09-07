@@ -1,9 +1,22 @@
 import {
+  FACT_VALUE_TYPES,
   findMetricByAlias,
   findMetricById,
   METRIC_IDS,
   METRIC_ONTOLOGY,
 } from '../../../../src/features/evidence/facts/metric-ontology';
+
+describe('FACT_VALUE_TYPES', () => {
+  it('contains count', () => {
+    expect(FACT_VALUE_TYPES).toContain('count');
+  });
+
+  it('contains every valueType METRIC_ONTOLOGY declares', () => {
+    for (const metric of METRIC_ONTOLOGY) {
+      expect(FACT_VALUE_TYPES).toContain(metric.valueType);
+    }
+  });
+});
 
 describe('METRIC_ONTOLOGY', () => {
   it('should declare a unique id for every metric', () => {

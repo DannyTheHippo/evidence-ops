@@ -24,6 +24,15 @@ import type {
   ParsedElement,
 } from '../../../../src/features/evidence/ingestion/parsers/parsed-element.type';
 import { EVIDENCE_DELIMITER_TAG } from '../../../../src/features/evidence/ingestion/sanitize-evidence-text';
+import {
+  orderForExtraction,
+  toMeasureDefinitions,
+  type MeasureDefinition,
+  type MeasureStamp,
+} from '../../../../src/features/evidence/measures/measure-definition';
+import { buildSeedMeasureRows } from '../../../../src/features/evidence/measures/measure-seed';
+import type { ExtractionMeasureContext } from '../../../../src/features/evidence/measures/measures.service';
+import { MeasuresService } from '../../../../src/features/evidence/measures/measures.service';
 import type { z } from 'zod/v4';
 import {
   MODEL_PROVIDER,
@@ -119,6 +128,16 @@ describe('FactsService', () => {
     keyof Pick<CanonicalEntityService, 'resolveMany' | 'recordHarvestedAliases'>,
     jest.Mock
   >;
+  // Armed in `beforeEach` to the tenant's seed measures (`buildDefaultContext`) so every existing
+  // test's `cap_rate` candidate resolves to a real stamp without arranging the registry itself;
+  // tests about the registry's own branches (no stamp, a header proposal) override per-call.
+  const mockMeasuresService = {
+    loadExtractionContext: jest.fn(),
+    proposeMany: jest.fn(),
+  } satisfies Record<
+    keyof Pick<MeasuresService, 'loadExtractionContext' | 'proposeMany'>,
+    jest.Mock
+  >;
   const versionId = new Types.ObjectId();
   const documentId = new Types.ObjectId();
   const PDF_MIME = 'application/pdf';
@@ -153,10 +172,29 @@ describe('FactsService', () => {
     buildXlsxElement('B2', '5.25%'),
   ];
 
+  /**
+   * The tenant's seed measures, projected the same way `MeasuresService.loadExtractionContext`
+   * projects them — `toMeasureDefinitions(orderForExtraction(...))` over `buildSeedMeasureRows`,
+   * each row given a fresh `_id` the way `measure-definition.spec.ts`'s own replay-cache pin does.
+   * Every existing test's `cap_rate` candidate resolves against this by slug.
+   */
+  const buildMeasureDefinitions = (tenantId = 'default'): MeasureDefinition[] =>
+    orderForExtraction(
+      toMeasureDefinitions(
+        buildSeedMeasureRows(tenantId).map((row) => ({ ...row, _id: new Types.ObjectId() })),
+      ),
+    );
+
+  const buildDefaultContext = (tenantId = 'default'): ExtractionMeasureContext => {
+    const confirmed = buildMeasureDefinitions(tenantId);
+    return { confirmed, matchable: confirmed, rejectedSlugs: new Set() };
+  };
+
   const buildService = async (
     options: {
       chunkConcurrency?: number;
       aliasHarvestAutoApply?: boolean;
+      headerProposals?: boolean;
       modelProvider?: ModelProvider;
     } = {},
   ): Promise<FactsService> => {
@@ -179,10 +217,12 @@ describe('FactsService', () => {
                 options.chunkConcurrency ?? SHIPPED_EXTRACTION_CONFIG.chunkConcurrency,
               aliasHarvestAutoApply:
                 options.aliasHarvestAutoApply ?? SHIPPED_EXTRACTION_CONFIG.aliasHarvestAutoApply,
+              headerProposals: options.headerProposals ?? SHIPPED_EXTRACTION_CONFIG.headerProposals,
             },
           }),
         },
         { provide: AppLogger, useValue: mockLogger },
+        { provide: MeasuresService, useValue: mockMeasuresService },
       ],
     }).compile();
 
@@ -201,6 +241,8 @@ describe('FactsService', () => {
         rawNames.map((name): CanonicalEntityResolution => ({ name, matched: false })),
       ),
     );
+    mockMeasuresService.loadExtractionContext.mockResolvedValue(buildDefaultContext());
+    mockMeasuresService.proposeMany.mockResolvedValue(new Map<string, MeasureStamp>());
 
     service = await buildService();
   });
@@ -419,6 +461,161 @@ describe('FactsService', () => {
         factKeys: [],
       });
       expect(mockExtractedFactModel.insertMany).not.toHaveBeenCalled();
+    });
+
+    /**
+     * `periodStart`/`periodEnd` are derived at extraction from the period key, not stored by the
+     * extractor — and only when that key names a real span. A sheet with a date column produces
+     * one; the `undated` key every other fixture here uses produces neither, which is why this
+     * needs its own row rather than an assertion bolted onto an existing test.
+     */
+    it('should stamp period bounds when the row states a datable period', async () => {
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('workbook-bytes'),
+        contentType: XLSX_MIME,
+        metadata: {},
+      });
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
+        buildVersion({ storageKey: stored.id }),
+      );
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+      mockParserRegistry.resolve.mockReturnValueOnce(
+        buildStubParser([
+          buildXlsxElement('A1', 'Property Name'),
+          buildXlsxElement('B1', 'Cap Rate'),
+          buildXlsxElement('C1', 'Sale Date'),
+          buildXlsxElement('A2', 'Northgate Business Park'),
+          buildXlsxElement('B2', '5.25%'),
+          buildXlsxElement('C2', '2025-03-14'),
+        ]),
+      );
+      mockEvidenceChunkModel.find.mockResolvedValueOnce([
+        {
+          _id: new Types.ObjectId(),
+          locator: { kind: 'xlsx-region', sheetName: SHEET_NAME, range: 'A1:C10' },
+        },
+      ]);
+      mockExtractedFactModel.insertMany.mockResolvedValueOnce([]);
+
+      await service.extractFacts(versionId.toString(), 'default');
+
+      const [rows] = mockExtractedFactModel.insertMany.mock.calls[0] as [Record<string, unknown>[]];
+      expect(rows).toHaveLength(1);
+      expect((rows[0].factKey as { period: string }).period).toBe('2025-03');
+      expect(rows[0].periodStart).toEqual(new Date('2025-03-01T00:00:00.000Z'));
+      expect(rows[0].periodEnd).toEqual(new Date('2025-03-31T00:00:00.000Z'));
+    });
+
+    /**
+     * The fail-closed half of the measure stamp. A slug the tenant has rejected mints no stamp,
+     * and a candidate with no stamp is dropped rather than persisted: a fact stamped to nothing
+     * would be invisible to every consumer that filters on `measureStatus` while still occupying
+     * the ledger — worse than never extracting it, because nothing would ever surface it again.
+     */
+    it('should drop a candidate whose measure the tenant has rejected, and persist nothing', async () => {
+      const definitions = buildMeasureDefinitions();
+      const rejected = definitions.map((definition) =>
+        definition.id === 'cap_rate' ? { ...definition, status: 'rejected' as const } : definition,
+      );
+      mockMeasuresService.loadExtractionContext.mockResolvedValueOnce({
+        confirmed: rejected,
+        matchable: rejected,
+        rejectedSlugs: new Set(['cap_rate']),
+      });
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('workbook-bytes'),
+        contentType: XLSX_MIME,
+        metadata: {},
+      });
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
+        buildVersion({ storageKey: stored.id }),
+      );
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+      mockParserRegistry.resolve.mockReturnValueOnce(buildStubParser(xlsxElements));
+      mockEvidenceChunkModel.find.mockResolvedValueOnce([
+        {
+          _id: new Types.ObjectId(),
+          locator: { kind: 'xlsx-region', sheetName: SHEET_NAME, range: 'A1:C10' },
+        },
+      ]);
+
+      const result = await service.extractFacts(versionId.toString(), 'default');
+
+      expect(result).toEqual({
+        factsCreated: 0,
+        alreadyExtracted: false,
+        skippedChunkCount: 0,
+        factKeys: [],
+      });
+      expect(mockExtractedFactModel.insertMany).not.toHaveBeenCalled();
+      // Dropped visibly: a silent drop here would look identical to a document that simply held
+      // no facts.
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('cap_rate'));
+    });
+
+    /**
+     * The header-proposal path end to end: an unmatched numeric column is filed with the registry,
+     * and the stamp `proposeMany` returns is what the resulting facts carry. The facts land
+     * `proposed`, which is precisely why every ledger and conflict consumer filters on
+     * `measureStatus` — they exist, and they do not count, until an admin confirms the measure.
+     */
+    it('should stamp facts from a header proposal with the stamp the registry returned', async () => {
+      const service = await buildService({ headerProposals: true });
+      const proposedMeasureId = new Types.ObjectId();
+      mockMeasuresService.proposeMany.mockResolvedValueOnce(
+        new Map<string, MeasureStamp>([
+          [
+            'unit_count',
+            {
+              measureId: proposedMeasureId,
+              measureVersion: 1,
+              measureStatus: 'proposed',
+            },
+          ],
+        ]),
+      );
+      const stored = await fakeDocumentStore.put({
+        content: Buffer.from('workbook-bytes'),
+        contentType: XLSX_MIME,
+        metadata: {},
+      });
+      mockDocumentVersionModel.findOne.mockResolvedValueOnce(
+        buildVersion({ storageKey: stored.id }),
+      );
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+      mockParserRegistry.resolve.mockReturnValueOnce(
+        buildStubParser([
+          buildXlsxElement('A1', 'Property Name'),
+          buildXlsxElement('B1', 'Unit Count'),
+          buildXlsxElement('A2', 'Northgate Business Park'),
+          buildXlsxElement('B2', '48'),
+        ]),
+      );
+      mockEvidenceChunkModel.find.mockResolvedValueOnce([
+        {
+          _id: new Types.ObjectId(),
+          locator: { kind: 'xlsx-region', sheetName: SHEET_NAME, range: 'A1:C10' },
+        },
+      ]);
+      mockExtractedFactModel.insertMany.mockResolvedValueOnce([]);
+
+      await service.extractFacts(versionId.toString(), 'default');
+
+      expect(mockMeasuresService.proposeMany).toHaveBeenCalledWith(
+        'default',
+        versionId,
+        expect.arrayContaining([expect.objectContaining({ slug: 'unit_count' })]),
+      );
+      const [rows] = mockExtractedFactModel.insertMany.mock.calls[0] as [Record<string, unknown>[]];
+      const proposedRow = rows.find(
+        (row) => (row.factKey as { metric: string }).metric === 'unit_count',
+      );
+      expect(proposedRow).toBeDefined();
+      expect(proposedRow?.measureStatus).toBe('proposed');
+      expect(proposedRow?.measureVersion).toBe(1);
+      expect((proposedRow?.measureId as Types.ObjectId).toString()).toBe(
+        proposedMeasureId.toString(),
+      );
     });
 
     it('should append the ambiguous-header fidelity reason onto the version, even when the ambiguity leaves no facts to extract', async () => {
@@ -1052,6 +1249,7 @@ describe('FactsService', () => {
         chunkId: { $in: ['chunk-a', 'chunk-b'] },
         tenantId: 'acme-corp',
         'locator.kind': 'xlsx-cell',
+        measureStatus: 'confirmed',
       });
       expect(result).toEqual([]);
     });
@@ -1091,6 +1289,7 @@ describe('FactsService', () => {
       expect(mockExtractedFactModel.find).toHaveBeenCalledWith({
         chunkId: { $in: ['chunk-a', 'chunk-b'] },
         tenantId: 'acme-corp',
+        measureStatus: 'confirmed',
       });
       expect(result).toEqual([]);
     });
@@ -1113,6 +1312,25 @@ describe('FactsService', () => {
       expect(result).toEqual(facts);
     });
   });
+
+  /**
+   * The exclusion invariant: a fact extracted under a measure no admin has confirmed yet is stored
+   * but must not reach a conflict scan or a ledger answer, so both citation-facing lookups filter
+   * on `measureStatus: 'confirmed'` — parameterised over the method rather than asserted once, so
+   * the property is pinned independently of which method the plan happens to name first.
+   */
+  it.each<['findCellFacts' | 'findFactsForChunks']>([['findCellFacts'], ['findFactsForChunks']])(
+    "%s excludes a proposed measure's facts from its query filter",
+    async (method) => {
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+
+      await service[method](['chunk-a'], 'acme-corp');
+
+      expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
+        expect.objectContaining({ measureStatus: 'confirmed' }),
+      );
+    },
+  );
 
   it('should roll back and rethrow when the fact insert fails partway', async () => {
     const stored = await fakeDocumentStore.put({

@@ -88,10 +88,10 @@ export function detectConflicts(
   for (const group of groups.values()) {
     const metric = findMetricById(ontology, group[0].factKey.metric);
     if (!metric) {
-      // Fails open: every fact in the group was validated against the ontology before it was
-      // persisted (see normalize-fact-value.ts's own comment), so this should not happen. If the
-      // ontology and stored data ever drift, skipping this one group is safer than aborting the
-      // whole scan and hiding every other conflict behind it.
+      // Fails open: `ontology` is the tenant's *currently* confirmed measures, and a fact's slug
+      // can outlive the measure it was extracted under (a since-rejected header proposal, a
+      // measure a rescan hasn't reached yet) — a group whose slug names no confirmed measure is
+      // skipped rather than aborting the whole scan and hiding every other conflict behind it.
       continue;
     }
 

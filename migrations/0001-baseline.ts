@@ -1,4 +1,5 @@
 import type { CreateIndexesOptions, Db, IndexDirection, SearchIndexDescription } from 'mongodb';
+import { buildSeedMeasureRows } from '../src/features/evidence/measures/measure-seed';
 import {
   createSearchIndexesWhenReady,
   waitForSearchIndexReady,
@@ -71,7 +72,7 @@ interface IndexSpec {
  * scopes by first; `createdAt: -1` follows it wherever the access pattern is a newest-first
  * listing.
  *
- * Creating an index also creates its collection, so this table is what brings all sixteen
+ * Creating an index also creates its collection, so this table is what brings all seventeen
  * collections into existence.
  */
 const INDEXES: readonly IndexSpec[] = [
@@ -322,6 +323,21 @@ const INDEXES: readonly IndexSpec[] = [
     keys: { tenantId: 1, groupKeyNormalized: 1 },
     options: { name: 'extracted_facts_tenantId_groupKeyNormalized' },
   },
+  // `extracted_facts_tenantId_measureId` backs the fact lookup `MeasuresService.confirm`'s rescan
+  // runs to flip `measureStatus` and load `factKey`s for the measure just confirmed.
+  // `extracted_facts_tenantId_measureStatus_groupKeyNormalized` backs every consumer that must
+  // exclude proposed-measure facts by group (`ConflictsService.scanForConflicts`,
+  // `FactsService.findCellFacts`/`findFactsForChunks`, `LedgerService.listCells`/`resolveValue`).
+  {
+    collection: 'extracted_facts',
+    keys: { tenantId: 1, measureId: 1 },
+    options: { name: 'extracted_facts_tenantId_measureId' },
+  },
+  {
+    collection: 'extracted_facts',
+    keys: { tenantId: 1, measureStatus: 1, groupKeyNormalized: 1 },
+    options: { name: 'extracted_facts_tenantId_measureStatus_groupKeyNormalized' },
+  },
 
   // `conflicts_tenantId_status_factIds` puts the multikey `factIds` array last, per Mongo's
   // single-multikey-field-per-compound-index rule, after the two equality fields.
@@ -488,6 +504,19 @@ const INDEXES: readonly IndexSpec[] = [
     keys: { tenantId: 1, createdAt: -1 },
     options: { name: 'canonical_entities_tenantId_createdAt' },
   },
+
+  // Identical keys, options and names to `MeasureSchema`'s own declarations
+  // (`measure.schema.ts`) — see that schema's doc comment on the pair for why both exist.
+  {
+    collection: 'measures',
+    keys: { tenantId: 1, slug: 1 },
+    options: { unique: true, name: 'measures_tenantId_slug_unique' },
+  },
+  {
+    collection: 'measures',
+    keys: { tenantId: 1, status: 1, createdAt: -1 },
+    options: { name: 'measures_tenantId_status_createdAt' },
+  },
 ];
 
 /** Every collection this migration creates, derived from the index table so `down()` drops exactly
@@ -574,6 +603,27 @@ export const up = async (db: Db): Promise<void> => {
       { upsert: true },
     );
 
+  // Runs for every registry row, not just the default tenant just upserted above: a real
+  // deployment carries other tenants by the time this migration reaches it. `$setOnInsert` with
+  // `upsert: true` makes each row a no-op on re-run — a tenant that already carries a slug (seeded
+  // by `AuthService.register` at its own birth, or by an earlier run of this migration) is left
+  // untouched rather than overwritten.
+  const tenants = await db
+    .collection<{ tenantId: string }>(TENANTS_COLLECTION)
+    .find({}, { projection: { tenantId: 1 } })
+    .toArray();
+  for (const tenant of tenants) {
+    for (const row of buildSeedMeasureRows(tenant.tenantId)) {
+      await db
+        .collection('measures')
+        .updateOne(
+          { tenantId: row.tenantId, slug: row.slug },
+          { $setOnInsert: row },
+          { upsert: true },
+        );
+    }
+  }
+
   // Waits for the Search Index Management service rather than assuming it is up: `mongod` accepts
   // every other command in this migration seconds before it can reach `mongot`, so on the first
   // boot of a fresh volume the index build is the one step that can arrive too early.
@@ -605,7 +655,7 @@ async function dropIfExists(db: Db, collectionName: string): Promise<void> {
 }
 
 /**
- * Drops all sixteen collections `up()` creates, and with them every index, Atlas Search definition,
+ * Drops all seventeen collections `up()` creates, and with them every index, Atlas Search definition,
  * seeded row and any application data written since. This is destructive and total: reverting a
  * baseline means returning the database to empty, not preserving what was stored on top of the
  * schema it built.

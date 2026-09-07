@@ -24,7 +24,7 @@ import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts
 import {
   ACTIVE_PACK_ID,
   ACTIVE_PACK_VERSION,
-  METRIC_ONTOLOGY,
+  METRIC_IDS,
 } from '../../src/features/evidence/facts/metric-ontology';
 import type { Citation } from '../../src/features/evidence/qa/contracts/answer.contract';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
@@ -307,8 +307,10 @@ describe('Serialization (e2e)', () => {
 
   // Regression for the metric-label gap: four SPA surfaces render a raw METRIC_IDS value with no
   // way to show a human label — this is the gate that catches MetricResponseDto losing an
-  // @Expose() or the projection dropping an ontology entry.
-  it('exposes id, label and canonicalUnit for every built-in metric on GET /metrics', async () => {
+  // @Expose() or the projection dropping a confirmed measure. The id order matters beyond
+  // cosmetics: it is the seeded ordering the prose extractor's cached prompt hash depends on, so a
+  // freshly registered tenant's response must reproduce METRIC_IDS in order, byte-for-byte.
+  it('exposes the tenant confirmed measures as id, label, canonicalUnit, in seeded order, on GET /metrics', async () => {
     const { cookie } = await registerTestUser(app, {
       email: 'serialization-metrics-e2e@example.com',
       password: 'correct-horse-battery',
@@ -318,10 +320,11 @@ describe('Serialization (e2e)', () => {
     const body = response.body as Array<Record<string, unknown>>;
 
     expect(response.status).toBe(200);
-    expect(body).toHaveLength(METRIC_ONTOLOGY.length);
+    expect(body.map((metric) => metric.id)).toEqual([...METRIC_IDS]);
+    for (const metric of body) {
+      expect(Object.keys(metric).sort()).toEqual(['canonicalUnit', 'id', 'label']);
+    }
     const capRate = body.find((metric) => metric.id === 'cap_rate');
-    expect(capRate).toBeDefined();
-    expect(Object.keys(capRate as object).sort()).toEqual(['id', 'label', 'canonicalUnit'].sort());
     expect(capRate?.label).toBe('Cap Rate');
     expect(capRate?.canonicalUnit).toBe('ratio');
   });

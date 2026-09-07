@@ -1,4 +1,5 @@
 import type { EvalCategory, EvalOutcome } from './dataset/schema';
+import type { BaselineComparison } from './metrics/compare-baseline';
 import type { CaseOutcomeKind, EvalMetrics } from './metrics/compute-metrics';
 import type { EvalCacheMode } from './bootstrap';
 
@@ -59,6 +60,11 @@ export interface EvalRunResult {
   readonly metrics: EvalMetrics;
   readonly perCase: readonly PerCaseReport[];
   readonly scoringMethodSplit: ScoringMethodSplit;
+  /** Set together — present exactly when `--compare <path>` was passed. `baselinePath` is the
+   * resolved path so the markdown section and the JSON report can name what they compared
+   * against. */
+  readonly baselineComparison?: BaselineComparison;
+  readonly baselinePath?: string;
 }
 
 const pct = (value: number): string => `${(value * 100).toFixed(1)}%`;
@@ -188,6 +194,18 @@ export function isBelowRecallAt5Floor(metrics: EvalMetrics): boolean {
 }
 
 /**
+ * Whether a `--compare` run regressed against its baseline — the sixth hard gate, gated on
+ * `baselineComparison.regressions` rather than a floor: `compareToBaseline` has already resolved
+ * each `GATED_METRICS` key's own direction, so any nonempty `regressions` list is a real
+ * regression to fail CLOSED on. `undefined` (no `--compare` passed) never gates — same anti-drift
+ * pattern as the gates above, the one predicate both `buildMarkdownReport`'s gate line and
+ * `eval/run.ts`'s process exit code read.
+ */
+export function hasBaselineRegression(result: Pick<EvalRunResult, 'baselineComparison'>): boolean {
+  return (result.baselineComparison?.regressions.length ?? 0) > 0;
+}
+
+/**
  * Informational, never gated: whether the tenant's pdf-page/docx-paragraph corpus chunks
  * (`ScoringMethodSplit`) mix both `OverlapScoringMethod`s. Describes the conflict-scope check's
  * chunk resolution only — see `ScoringMethodSplit`'s doc comment; recall and citation precision
@@ -214,6 +232,34 @@ function scoringMethodLine(split: ScoringMethodSplit): string {
     ? `**Mixed run** — ${counts} ${scopeNote} Re-ingest with \`--ingest\` so every chunk carries ` +
         'retained elements before comparing the conflict-scope check against a single-method run.'
     : `${counts} ${scopeNote}`;
+}
+
+/** Empty when `baselineComparison`/`baselinePath` are absent (no `--compare` passed) — the
+ * section itself must not render at all in that case, not render with empty contents. */
+function baselineComparisonSection(result: EvalRunResult): string[] {
+  const comparison = result.baselineComparison;
+  if (!comparison || result.baselinePath === undefined) {
+    return [];
+  }
+  const regressionLine = hasBaselineRegression(result)
+    ? `**FAILED — ${comparison.regressions.length} metric(s) regressed against ` +
+      `${result.baselinePath}: ` +
+      comparison.regressions.map((r) => `${r.metric} ${r.baseline}→${r.current}`).join(', ') +
+      '.**'
+    : `Passed — no gated metric regressed against ${result.baselinePath}.`;
+
+  return [
+    '## Baseline comparison',
+    '',
+    `Baseline: ${result.baselinePath}`,
+    '',
+    regressionLine,
+    '',
+    `Held: ${comparison.held.length}`,
+    `Absent from baseline: ${comparison.absentFromBaseline.length > 0 ? comparison.absentFromBaseline.join(', ') : 'none'}`,
+    `Absent from current: ${comparison.absentFromCurrent.length > 0 ? comparison.absentFromCurrent.join(', ') : 'none'}`,
+    '',
+  ];
 }
 
 export function buildMarkdownReport(result: EvalRunResult): string {
@@ -281,6 +327,7 @@ export function buildMarkdownReport(result: EvalRunResult): string {
     '',
     metricsTable(result.metrics),
     '',
+    ...baselineComparisonSection(result),
     '## Conflict-scope check scoring method',
     '',
     scoringMethodLine(result.scoringMethodSplit),

@@ -1,0 +1,27 @@
+{
+  "sourceGitSha": "32b3734b891fe0bc119fb890961fd0eabacf03b3-dirty",
+  "generatedAt": "2026-08-27T11:14:14.896Z",
+  "metrics": {
+    "retrieval": {
+      "recallAt5": 0.7307692307692307,
+      "recallAt10": 0.7307692307692307,
+      "mrr": 0.574009324009324,
+      "caseCount": 26
+    },
+    "citationPrecision": 0.7647058823529411,
+    "claimCoverageMean": 0.8111111111111111,
+    "abstentionAccuracy": 1,
+    "conflictRecall": 1,
+    "canaryOwnVoiceLeakRate": 0,
+    "canaryVerifiedQuoteLeakRate": 0,
+    "answerContentAccuracy": 0.8947368421052632,
+    "conflictScopeAccuracy": 1,
+    "caseCounts": {
+      "total": 35,
+      "answerable": 13,
+      "unanswerable": 8,
+      "conflicting": 7,
+      "adversarial": 7
+    }
+  }
+}

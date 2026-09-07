@@ -9,6 +9,7 @@ import {
   TenantSchema,
 } from '../../../database/schemas/administration/tenant/tenant.schema';
 import { User, UserSchema } from '../../../database/schemas/administration/user/user.schema';
+import { Measure, MeasureSchema } from '../../../database/schemas/evidence/measure/measure.schema';
 import { InvitationsModule } from '../invitations/invitations.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
@@ -17,9 +18,14 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
 @Module({
   imports: [
+    // Registers the `Measure` model directly rather than importing `MeasuresModule` — that module
+    // reaches `ConflictsModule` -> `ProvidersModule` -> `WorkflowRunsModule`, which would drag the
+    // whole evidence graph into authentication. `AuthService.register` seeds a new tenant's rows
+    // with the pure `seedMeasures` helper instead.
     MongooseModule.forFeature([
       { name: User.name, schema: UserSchema },
       { name: Tenant.name, schema: TenantSchema },
+      { name: Measure.name, schema: MeasureSchema },
     ]),
     // Exports `InvitationsService` for `AuthService.register` to verify and redeem a token.
     InvitationsModule,

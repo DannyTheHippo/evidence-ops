@@ -420,6 +420,70 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/measures': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['MeasuresController_list'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/measures/{id}/confirm': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations['MeasuresController_confirm'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/measures/{id}/reject': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations['MeasuresController_reject'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/measures/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch: operations['MeasuresController_update'];
+    trace?: never;
+  };
   '/conflicts': {
     parameters: {
       query?: never;
@@ -526,6 +590,70 @@ export interface paths {
     get?: never;
     put?: never;
     post: operations['ApprovalsController_decide'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/ledger': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['LedgerController_listCells'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/ledger/resolve': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['LedgerController_resolve'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/ledger/facts': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['LedgerController_listFacts'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/ledger/entities': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['LedgerController_listEntities'];
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -1315,7 +1443,7 @@ export interface components {
     };
     MetricResponseDto: {
       /**
-       * @description Metric identifier, one of METRIC_ONTOLOGY's METRIC_IDS.
+       * @description Measure slug (`Measure.slug`) — the value `ExtractedFact.factKey.metric` carries.
        * @example cap_rate
        */
       id: string;
@@ -1329,6 +1457,224 @@ export interface components {
        * @example ratio
        */
       canonicalUnit: string;
+    };
+    MeasureResponseDto: {
+      /**
+       * @description Measure identifier.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      id: string;
+      /**
+       * @description Slug the ExtractedFact.factKey.metric join key carries.
+       * @example cap_rate
+       */
+      slug: string;
+      /**
+       * @description Human-readable label.
+       * @example Cap Rate
+       */
+      label: string;
+      /**
+       * @description Header/phrase forms matched case-insensitively.
+       * @example [
+       *       "Cap Rate",
+       *       "capitalization rate"
+       *     ]
+       */
+      aliases: string[];
+      /**
+       * @description The kind of value this measure holds.
+       * @example percentage
+       * @enum {string}
+       */
+      valueType: 'currency' | 'percentage' | 'area' | 'duration' | 'count';
+      /**
+       * @description The unit every value converts to.
+       * @example ratio
+       */
+      canonicalUnit: string;
+      /**
+       * @description Convertible units. Exactly one carries toCanonicalFactor 1, matching canonicalUnit.
+       * @example [
+       *       {
+       *         "id": "ratio",
+       *         "toCanonicalFactor": 1
+       *       },
+       *       {
+       *         "id": "percent",
+       *         "toCanonicalFactor": 0.01
+       *       }
+       *     ]
+       */
+      units: string[];
+      /**
+       * @description How tolerance is applied when comparing values.
+       * @example absolute
+       * @enum {string}
+       */
+      toleranceKind: 'absolute' | 'relative';
+      /**
+       * @description Disagreement threshold before two values conflict.
+       * @example 0.0025
+       */
+      tolerance: number;
+      /**
+       * @description Source classes ranked by authority, most authoritative first.
+       * @example [
+       *       "pm-export",
+       *       "spreadsheet"
+       *     ]
+       */
+      authorityOrder?: string[];
+      /**
+       * @description How long an observed value stays current for this measure, in milliseconds.
+       * @example 15552000000
+       */
+      stalenessWindowMs?: number;
+      /**
+       * @description Measure lifecycle status.
+       * @example confirmed
+       * @enum {string}
+       */
+      status: 'proposed' | 'confirmed' | 'rejected';
+      /**
+       * @description How this measure came to exist.
+       * @example seed
+       * @enum {string}
+       */
+      origin: 'seed' | 'header' | 'manual';
+      /**
+       * @description Header evidence recorded while this measure was 'proposed' — empty for a seed or manually authored row.
+       * @example []
+       */
+      proposedFrom: string[];
+      /**
+       * @description Bumped on every confirm/update. Seed rows are the only rows that ever read 1 while confirmed.
+       * @example 1
+       */
+      version: number;
+      /**
+       * @description User id who confirmed this measure.
+       * @example 65f1c2e4a1b2c3d4e5f6a7c1
+       */
+      confirmedBy?: string;
+      /**
+       * Format: date-time
+       * @description When this measure was confirmed.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      confirmedAt?: string;
+      /**
+       * @description User id who rejected this measure.
+       * @example 65f1c2e4a1b2c3d4e5f6a7c1
+       */
+      rejectedBy?: string;
+      /**
+       * Format: date-time
+       * @description When this measure was rejected.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      rejectedAt?: string;
+      /**
+       * @description Why this measure was rejected.
+       * @example duplicate
+       */
+      rejectedReason?: string;
+      /**
+       * @description Outcome of the synchronous conflict rescan the last confirm/update triggered. Absent until this measure has been confirmed or edited at least once.
+       * @example {
+       *       "at": "2026-07-01T00:00:00.000Z",
+       *       "status": "completed",
+       *       "durationMs": 42,
+       *       "conflictsCreated": 0
+       *     }
+       */
+      lastRescan?: Record<string, never>;
+      /**
+       * Format: date-time
+       * @description When this row was first created.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      createdAt: string;
+    };
+    MeasureListResponseDto: {
+      /**
+       * @description Total number of documents returned.
+       * @example 2
+       */
+      count: number;
+      /** @description The tenant's measures. */
+      docs: components['schemas']['MeasureResponseDto'][];
+    };
+    MeasureUnitRequestDto: {
+      /**
+       * @description Unit identifier, matched case-sensitively against a fact’s reported unit.
+       * @example sf
+       */
+      id: string;
+      /**
+       * @description Multiplicative factor converting one of this unit into the canonicalUnit.
+       * @example 1
+       */
+      toCanonicalFactor: number;
+    };
+    MeasureEditsRequestDto: {
+      /**
+       * @description Human-readable label.
+       * @example Tenant Occupancy Share
+       */
+      label?: string;
+      /**
+       * @description Replaces the full alias list. Omit to leave the current aliases untouched.
+       * @example [
+       *       "Occupancy %"
+       *     ]
+       */
+      aliases?: string[];
+      /**
+       * @description The kind of value this measure holds.
+       * @example percentage
+       * @enum {string}
+       */
+      valueType?: 'currency' | 'percentage' | 'area' | 'duration' | 'count';
+      /**
+       * @description The unit every value converts to. Must name one of units below.
+       * @example ratio
+       */
+      canonicalUnit?: string;
+      /** @description Replaces the full unit list. Exactly one unit must have toCanonicalFactor 1 and its id must equal canonicalUnit. */
+      units?: components['schemas']['MeasureUnitRequestDto'][];
+      /**
+       * @description How tolerance is applied when comparing values.
+       * @example absolute
+       * @enum {string}
+       */
+      toleranceKind?: 'absolute' | 'relative';
+      /**
+       * @description Disagreement threshold before two values conflict.
+       * @example 0.02
+       */
+      tolerance?: number;
+      /**
+       * @description Source classes ranked by authority, most authoritative first.
+       * @example [
+       *       "pm-export",
+       *       "spreadsheet"
+       *     ]
+       */
+      authorityOrder?: ('crm-export' | 'pm-export' | 'spreadsheet' | 'memo' | 'report')[];
+      /**
+       * @description How long an observed value stays current for this measure, in milliseconds.
+       * @example 7776000000
+       */
+      stalenessWindowMs?: number;
+    };
+    RejectMeasureRequestDto: {
+      /**
+       * @description Why this proposed measure was rejected.
+       * @example duplicate
+       */
+      reason?: string;
     };
     ConflictResponseDto: {
       /**
@@ -1575,6 +1921,185 @@ export interface components {
        * @example Evidence checks out; the spreadsheet figure is the current underwriting value.
        */
       reason?: string;
+    };
+    LedgerCellResponseDto: {
+      /**
+       * @description Canonical entity name.
+       * @example Northgate Business Park
+       */
+      entity: string;
+      /**
+       * @description Measure slug.
+       * @example cap_rate
+       */
+      measure: string;
+      /**
+       * @description Period key the cell covers; 'undated' when the facts carry no period.
+       * @example 2025-Q1
+       */
+      period: string;
+      /**
+       * @description How the record resolves this cell: one agreed value, a human-adjudicated winner, an open disagreement, or nothing known.
+       * @example single
+       * @enum {string}
+       */
+      state: 'single' | 'adjudicated' | 'conflicted' | 'unknown';
+      /** @description The resolved value. Absent for a conflicted or unknown cell. */
+      value?: Record<string, never>;
+      /** @description Facts behind this cell — the disagreeing set when the cell is conflicted. */
+      factIds: string[];
+      /** @description The conflict over this cell, when one has been recorded. */
+      conflictId?: string;
+      /** @description The decision record behind an adjudicated cell. */
+      decision?: Record<string, never>;
+      /** @description True when an adjudicated winner sits on a withdrawn document version. The decision still stands; the document behind it no longer does. */
+      winnerWithdrawn?: boolean;
+    };
+    LedgerCellListResponseDto: {
+      /**
+       * @description Total number of documents returned.
+       * @example 2
+       */
+      count: number;
+      /** @description Resolved ledger cells. */
+      docs: components['schemas']['LedgerCellResponseDto'][];
+    };
+    LedgerResolutionResponseDto: {
+      /**
+       * @description Canonical entity name.
+       * @example Northgate Business Park
+       */
+      entity: string;
+      /**
+       * @description Measure slug.
+       * @example cap_rate
+       */
+      measure: string;
+      /**
+       * @description Period key the cell covers; 'undated' when the facts carry no period.
+       * @example 2025-Q1
+       */
+      period: string;
+      /**
+       * @description How the record resolves this cell: one agreed value, a human-adjudicated winner, an open disagreement, or nothing known.
+       * @example single
+       * @enum {string}
+       */
+      state: 'single' | 'adjudicated' | 'conflicted' | 'unknown';
+      /** @description The resolved value. Absent for a conflicted or unknown cell. */
+      value?: Record<string, never>;
+      /** @description Facts behind this cell — the disagreeing set when the cell is conflicted. */
+      factIds: string[];
+      /** @description The conflict over this cell, when one has been recorded. */
+      conflictId?: string;
+      /** @description The decision record behind an adjudicated cell. */
+      decision?: Record<string, never>;
+      /** @description True when an adjudicated winner sits on a withdrawn document version. The decision still stands; the document behind it no longer does. */
+      winnerWithdrawn?: boolean;
+      /** @description Citations for the facts this resolution rests on, one per fact. */
+      citations: Record<string, never>[];
+    };
+    FactResponseDto: {
+      /**
+       * @description Fact identifier.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      id: string;
+      /** @description Entity, metric and period this fact is keyed by. */
+      factKey: Record<string, never>;
+      /** @description The extracted amount and its unit. */
+      value: Record<string, never>;
+      /** @description The value in the measure's canonical unit. Absent when the fact's unit does not convert. */
+      canonicalAmount?: number;
+      /** @description The source text this fact was read from. */
+      rawText: string;
+      /**
+       * @description Extractor confidence in this fact.
+       * @example 0.92
+       */
+      confidence: number;
+      /**
+       * @description How this fact was extracted.
+       * @example regex
+       * @enum {string}
+       */
+      extractionMethod: 'llm' | 'regex' | 'manual';
+      /** @description The measure row this fact was stamped under. */
+      measureId: string;
+      /**
+       * @description The measure version in force at extraction time — provenance, never re-derived from the measure as it stands now.
+       * @example 1
+       */
+      measureVersion: number;
+      /**
+       * @description Whether the measure behind this fact is confirmed. A proposed-measure fact is stored but excluded from conflict detection and ledger answers.
+       * @example confirmed
+       * @enum {string}
+       */
+      measureStatus: 'proposed' | 'confirmed';
+      /**
+       * Format: date-time
+       * @description Start of the period this fact covers.
+       */
+      periodStart?: string;
+      /**
+       * Format: date-time
+       * @description End of the period this fact covers.
+       */
+      periodEnd?: string;
+      /**
+       * Format: date-time
+       * @description When the fact was observed, where stated.
+       */
+      observedAt?: string;
+      /** @description Whether the fact's entity matched a registered canonical entity. */
+      entityMatched?: boolean;
+      /** @description Where this fact can be re-checked. Absent when the document version behind it could not be resolved. */
+      citation?: Record<string, never>;
+      /** @description Whether the document version behind this fact has been withdrawn. */
+      withdrawn?: boolean;
+      /** @description Whether a newer version of the same document has superseded this one. */
+      superseded?: boolean;
+      /**
+       * Format: date-time
+       * @description When the fact was extracted.
+       */
+      createdAt: string;
+    };
+    FactListResponseDto: {
+      /**
+       * @description Total number of documents returned.
+       * @example 2
+       */
+      count: number;
+      /** @description Facts behind the addressed cell. */
+      docs: components['schemas']['FactResponseDto'][];
+    };
+    LedgerEntityResponseDto: {
+      /**
+       * @description Canonical entity name.
+       * @example Northgate Business Park
+       */
+      entity: string;
+      /**
+       * @description Confirmed-measure facts recorded against this entity.
+       * @example 12
+       */
+      factCount: number;
+      /**
+       * @description Distinct measures this entity has facts for.
+       * @example 4
+       */
+      measureCount: number;
+    };
+    LedgerEntityListResponseDto: {
+      /**
+       * @description Total number of documents returned.
+       * @example 2
+       */
+      count: number;
+      /** @description Entities the ledger holds confirmed facts for. */
+      docs: components['schemas']['LedgerEntityResponseDto'][];
     };
     StartQuestionRequestDto: {
       /**
@@ -3492,13 +4017,223 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description Every metric METRIC_ONTOLOGY defines, projected to its id, label and canonicalUnit. Read-only: there is no endpoint to add, edit or remove a metric. */
+      /** @description Every confirmed measure of the caller's tenant, projected to id, label and canonicalUnit. Read-only here; authoring happens under /measures. */
       200: {
         headers: {
           [name: string]: unknown;
         };
         content: {
           'application/json': components['schemas']['MetricResponseDto'][];
+        };
+      };
+    };
+  };
+  MeasuresController_list: {
+    parameters: {
+      query?: {
+        /** @description Comma-separated fields to include; `_id` is always returned. */
+        select?: string;
+        /** @description Number of documents to skip (offset). */
+        skip?: number;
+        /** @description Maximum number of documents to return. */
+        limit?: number;
+        /** @description Exact measure status to filter by. */
+        status?: 'proposed' | 'confirmed' | 'rejected';
+        /** @description Field to sort by. Defaults to createdAt. */
+        sort?: 'slug' | 'status' | 'createdAt';
+        /** @description Sort direction. Defaults to desc. */
+        sortDir?: 'asc' | 'desc';
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The tenant's measure registry. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MeasureListResponseDto'];
+        };
+      };
+    };
+  };
+  MeasuresController_confirm: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['MeasureEditsRequestDto'];
+      };
+    };
+    responses: {
+      /** @description The measure row after this confirmation. Triggers a synchronous rescan. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MeasureResponseDto'];
+        };
+      };
+      /** @description The merged definition (current row plus edits) fails validation. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description Caller does not hold the admin role required to author this registry. */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description No measure with this id exists for the caller’s tenant. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description This measure is not in the proposed state and cannot be confirmed or rejected. */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  MeasuresController_reject: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['RejectMeasureRequestDto'];
+      };
+    };
+    responses: {
+      /** @description The measure row after this rejection. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MeasureResponseDto'];
+        };
+      };
+      /** @description Caller does not hold the admin role required to author this registry. */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description No measure with this id exists for the caller’s tenant. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description This measure is not in the proposed state and cannot be confirmed or rejected. */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  MeasuresController_update: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['MeasureEditsRequestDto'];
+      };
+    };
+    responses: {
+      /** @description The measure row after this edit. Triggers a synchronous rescan. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['MeasureResponseDto'];
+        };
+      };
+      /** @description The merged definition (current row plus edits) fails validation. */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description Caller does not hold the admin role required to author this registry. */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description No measure with this id exists for the caller’s tenant. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description This measure is not in the confirmed state and cannot be edited. */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
         };
       };
     };
@@ -3761,6 +4496,150 @@ export interface operations {
         };
         content: {
           'application/json': unknown;
+        };
+      };
+    };
+  };
+  LedgerController_listCells: {
+    parameters: {
+      query?: {
+        /** @description Comma-separated fields to include; `_id` is always returned. */
+        select?: string;
+        /** @description Number of documents to skip (offset). */
+        skip?: number;
+        /** @description Maximum number of documents to return. */
+        limit?: number;
+        /** @description Entity name or a registered alias of one. Resolved to its canonical name first. */
+        entity?: string;
+        /** @description Measure slug to filter by. */
+        measure?: string;
+        /** @description Resolved cell state to filter by. */
+        state?: 'single' | 'adjudicated' | 'conflicted' | 'unknown';
+        /** @description Period the cell covers. Absent means the undated period. */
+        period?: string;
+        /** @description Field to sort by. Defaults to entity. */
+        sort?: 'entity' | 'measure' | 'period';
+        /** @description Sort direction. Defaults to asc. */
+        sortDir?: 'asc' | 'desc';
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The tenant's ledger cells, one per entity × measure × period, each resolved to a state. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['LedgerCellListResponseDto'];
+        };
+      };
+    };
+  };
+  LedgerController_resolve: {
+    parameters: {
+      query: {
+        /** @description Entity name or a registered alias of one. Resolved to its canonical name first. */
+        entity: string;
+        /** @description Measure slug. */
+        measure: string;
+        /** @description Period the cell covers. Absent resolves the undated period. */
+        period?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description One cell resolved in full, with the citations the resolution rests on. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['LedgerResolutionResponseDto'];
+        };
+      };
+      /** @description No measure with that slug exists for the tenant, or it has been rejected. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  LedgerController_listFacts: {
+    parameters: {
+      query: {
+        /** @description Comma-separated fields to include; `_id` is always returned. */
+        select?: string;
+        /** @description Number of documents to skip (offset). */
+        skip?: number;
+        /** @description Maximum number of documents to return. */
+        limit?: number;
+        /** @description Entity name or a registered alias of one. Resolved to its canonical name first. */
+        entity: string;
+        /** @description Measure slug. */
+        measure: string;
+        /** @description Period the cell covers. Absent means the undated period. */
+        period?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Every fact behind one cell, at any measure status — the drill-down deliberately shows proposed-measure facts that the cell view excludes. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['FactListResponseDto'];
+        };
+      };
+      /** @description No measure with that slug exists for the tenant, or it has been rejected. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  LedgerController_listEntities: {
+    parameters: {
+      query?: {
+        /** @description Comma-separated fields to include; `_id` is always returned. */
+        select?: string;
+        /** @description Number of documents to skip (offset). */
+        skip?: number;
+        /** @description Maximum number of documents to return. */
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Entities the ledger holds confirmed facts for. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['LedgerEntityListResponseDto'];
         };
       };
     };

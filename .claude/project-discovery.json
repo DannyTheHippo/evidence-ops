@@ -1,14 +1,36 @@
 {
-  "discoveredAt": "2026-08-25T00:00:00Z",
-  "stack": "mean",
+  "discoveredAt": "2026-09-03T15:45:52Z",
+  "pathAlias": "/Users/danielhendrich/.claude/aliases/evidence-ops",
+  "autonomy": "standing",
+  "authorizedWrites": {
+    "commit": true,
+    "push": false,
+    "deploy": "docker-local"
+  },
+  "stack": "nest",
   "primaryLanguage": "typescript",
   "languages": ["typescript"],
   "packageManager": "npm",
   "monorepoTool": null,
   "runtime": {
     "node": ">=26 <27",
+    "npm": ">=11",
     "nvmrc": "26",
     "dockerBase": "node:26-slim"
+  },
+  "frameworkVersions": {
+    "@nestjs/core": "^11.1.29",
+    "mongoose": "^9.9.2",
+    "@temporalio/worker": "^1.22.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "^4.4.3",
+    "jest": "^30.4.2",
+    "typescript": "^6.0.3",
+    "web/react": "^19.2.8",
+    "web/react-router-dom": "^7.18.2",
+    "web/vite": "^8.2.1",
+    "web/vitest": "^4.1.10",
+    "web/typescript": "^5.7.3"
   },
   "typescript": {
     "config": "tsconfig.json",
@@ -17,6 +39,12 @@
     "decorators": true,
     "pathAliases": {},
     "webConfig": "web/tsconfig.json"
+  },
+  "processes": {
+    "api": "src/main.ts",
+    "worker": "src/worker/main.ts",
+    "mcp": "src/mcp/main.ts",
+    "note": "Three processes over one DI graph: the API boots AppModule; worker and mcp boot the WorkerModule/McpModule slices via NestFactory.createApplicationContext. src/workflows/** sits behind a determinism fence (eslint.config.mjs + Temporal's workflow bundling)."
   },
   "testRunner": {
     "name": "jest",
@@ -61,6 +89,8 @@
     "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --coverage",
     "test:e2e": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --config ./jest.e2e.config.ts",
     "test:integration": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --config ./jest.integration.config.ts",
+    "openapi:generate": "NODE_ENV=local npx ts-node -P tsconfig.ts-node.json scripts/generate-openapi.ts && npm --prefix web run openapi:types",
+    "openapi:check": "npm run openapi:generate && git diff --exit-code -- web/src/api/openapi.json web/src/api/schema.ts",
     "build": "NODE_ENV=production nest build",
     "start": "OTEL_SERVICE_NAME=evidence-ops-api nest start",
     "start:dev": "OTEL_SERVICE_NAME=evidence-ops-api nest start --watch",
@@ -71,13 +101,16 @@
     "migrate:down": "npx tsx ./node_modules/migrate-mongo/bin/migrate-mongo.js down",
     "temporal:dev": "temporal server start-dev --db-filename .temporal/dev.db",
     "eval": "npx ts-node -P tsconfig.ts-node.json eval/run.ts",
+    "experiment:verifier": "npx ts-node -P tsconfig.ts-node.json scripts/experiments/verifier/cli.ts",
     "fixtures:generate": "npx tsx scripts/fixtures/cli.ts",
     "smoke:providers": "npx ts-node -P tsconfig.ts-node.json scripts/smoke-providers.ts",
     "backup:mongo": "bash scripts/backup/mongo-backup.sh",
     "restore:mongo": "bash scripts/backup/mongo-restore.sh",
     "tenant:purge": "npx tsx scripts/tenant-purge.ts",
     "tenant:co-tenant-user": "npx tsx scripts/co-tenant-user.ts",
-    "deps": "ncu -u && npm i && husky"
+    "user:revoke-sessions": "npx tsx scripts/revoke-user-sessions.ts",
+    "deps": "ncu -u && npm i && husky",
+    "prepare": "husky"
   },
   "validation": {
     "local": "checks",
@@ -85,14 +118,14 @@
     "web": "checks:web",
     "typecheck": "tsc",
     "integration": "test:integration",
-    "notes": "`format` and `lint` are mutating (prettier --write / eslint --fix / markdownlint-cli2 --fix) and can never fail as a gate. Use `checks:ci` (format:check + lint:check) wherever failure must be possible. `checks:web` also uses the mutating `lint`; CI's frontend job runs `lint:check`, `typecheck`, `test`, `build`. Prettier does not run on Markdown; `markdownlint-cli2` does. `test:integration` is in neither `checks` nor `checks:ci` — it needs a live `mongodb/mongodb-atlas-local` container and runs in `.github/workflows/integration.yml`."
+    "notes": "`format` and `lint` are mutating (prettier --write / eslint --fix / markdownlint-cli2 --fix) and can never fail as a gate. Use `checks:ci` (format:check + lint:check) wherever failure must be possible. `checks:web` also uses the mutating `lint`; CI's frontend job runs `lint:check`, `typecheck`, `test`, `build`. Prettier does not run on Markdown; `markdownlint-cli2` does. `test:integration` is in neither `checks` nor `checks:ci` — it needs a live `mongodb/mongodb-atlas-local` container and runs in `.github/workflows/integration.yml`. `openapi:check` is likewise outside `checks:ci` — a DTO change without regeneration still lands."
   },
   "packages": [
     {
       "path": ".",
-      "stack": "mean",
+      "stack": "nest",
       "primaryLanguage": "typescript",
-      "role": "NestJS 11 + Mongoose 9 REST API"
+      "role": "NestJS 11 + Mongoose 9 REST API, Temporal worker, MCP server"
     },
     {
       "path": "web",
@@ -126,178 +159,84 @@
     "effort": "high"
   },
   "meta": {
-    "projectSize": 101271,
-    "projectSizeUnit": "lines of .ts/.tsx/.css across src, test, migrations, web/src (generated output excluded)",
+    "projectSize": 148567,
+    "projectSizeUnit": "lines of .ts/.tsx/.css across src, test, migrations, web/src, eval, scripts (generated output excluded: dist, coverage, web/src/api/schema.ts)",
     "projectSizeBreakdown": {
-      "src": 31670,
-      "test": 44945,
-      "migrations": 1307,
-      "web/src": 23349,
-      "eval": 2976,
-      "scripts": 1891
+      "src": 38478,
+      "test": 61484,
+      "migrations": 617,
+      "web/src": 39915,
+      "eval": 3540,
+      "scripts": 4533
     },
     "agentDefaultsBasis": "reviewed",
     "agentDefaultsRationale": "The LOC heuristic returns {opus, xhigh} above 50,000 lines. Model is held at sonnet: rules/orchestration.md § Parallel Orchestration (P1) reserves top-tier for the orchestrator and deep-analysis rows (planner, reviewer), which inherit the session model regardless of this key, and worker-tier units here are scoped to one file tree rather than the whole repo. Effort is raised medium → high because the previous value was derived from a 3,300-line measurement of the same repo. The per-task effort floor rule then raises cross-cutting dispatches to xhigh.",
     "generatedBy": "project-init",
-    "detectionCacheComposed": true,
+    "stackSelection": {
+      "scoredAt": "2026-09-03T15:45:52Z",
+      "root": {
+        "nest": 7,
+        "mean": 0,
+        "mern": 3,
+        "python": 0
+      },
+      "web": {
+        "mern": 8,
+        "nest": 0,
+        "mean": 0,
+        "python": 0
+      },
+      "note": "mean is vetoed (requiredDependencies @angular/core absent); unvetoed it would score 8. nest: @nestjs/core +3, nest-cli.json +2, src/ +1, test/ +1. Root/primary stack = nest because the repository root carries its own package.json."
+    },
+    "detectionCacheComposed": false,
+    "detectionCacheNote": "detection-cache.json (2026-08-10) is contradicted by observed files (react 19 not 18, react-router-dom 7 not 6, vite 8 not 6, Temporal wired not scaffolded) — re-detected inline; the cache file is left untouched.",
+    "lastRefresh": {
+      "mode": "incremental",
+      "anchorCommit": "32b3734",
+      "changedPaths": 800,
+      "detectionA": "full re-run — signal files changed (package.json, web/package.json, web/vite.config.ts, docker-compose.yml, Dockerfile, .env.example)",
+      "detectionB": "18 of 33 recorded samples changed and were re-read; 2 process-bootstrap samples added; the remaining 15 kept their cached result"
+    },
     "businessContext": "none — source enumeration returned an empty list; no business-context files generated"
   },
   "discovery": {
     "sampleSize": 5,
     "samples": [
       { "category": "bootstrap", "file": "src/main.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
-      {
-        "category": "bootstrap",
-        "file": "src/app.module.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "bootstrap",
-        "file": "src/config/app.config.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "controller",
-        "file": "src/features/common/auth/auth.controller.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "service",
-        "file": "src/features/common/auth/auth.service.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "module",
-        "file": "src/features/common/auth/auth.module.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "guard",
-        "file": "src/features/common/auth/guards/jwt-auth.guard.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "decorator",
-        "file": "src/shared/decorators/public-route.decorator.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "dto-request",
-        "file": "src/features/common/auth/dtos/request/register.request.dto.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "dto-response",
-        "file": "src/features/common/auth/dtos/response/me.response.dto.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "dto-response",
-        "file": "src/shared/dtos/response/with-count.response.dto.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "exception",
-        "file": "src/shared/exceptions/base.exception.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "exception",
-        "file": "src/features/common/auth/exceptions/auth.exception.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "filter",
-        "file": "src/shared/filters/global-exception.filter.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "util",
-        "file": "src/shared/utils/to-response-dto.util.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "schema",
-        "file": "src/database/schemas/administration/user/user.schema.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "plugin",
-        "file": "src/database/plugins/auditable.plugin.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "config",
-        "file": "src/config/environment/environment.config.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "config",
-        "file": "src/config/environment/typed-config.service.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "test-config",
-        "file": "jest.config.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "test-config",
-        "file": "jest.e2e.config.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "test-util",
-        "file": "test/utils/get-mock-config.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
+      { "category": "bootstrap", "file": "src/app.module.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      { "category": "bootstrap", "file": "src/config/app.config.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      { "category": "process-bootstrap", "file": "src/worker/main.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      { "category": "process-bootstrap", "file": "src/mcp/main.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      { "category": "controller", "file": "src/features/common/auth/auth.controller.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      { "category": "service", "file": "src/features/common/auth/auth.service.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      { "category": "module", "file": "src/features/common/auth/auth.module.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      { "category": "guard", "file": "src/features/common/auth/guards/jwt-auth.guard.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      { "category": "decorator", "file": "src/shared/decorators/public-route.decorator.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "dto-request", "file": "src/features/common/auth/dtos/request/register.request.dto.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "dto-response", "file": "src/features/common/auth/dtos/response/me.response.dto.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "dto-response", "file": "src/shared/dtos/response/with-count.response.dto.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "exception", "file": "src/shared/exceptions/base.exception.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      { "category": "exception", "file": "src/features/common/auth/exceptions/auth.exception.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "filter", "file": "src/shared/filters/global-exception.filter.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      { "category": "util", "file": "src/shared/utils/to-response-dto.util.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "schema", "file": "src/database/schemas/administration/user/user.schema.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      { "category": "plugin", "file": "src/database/plugins/auditable.plugin.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      { "category": "config", "file": "src/config/environment/environment.config.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      { "category": "config", "file": "src/config/environment/typed-config.service.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "test-config", "file": "jest.config.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "test-config", "file": "jest.e2e.config.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "test-util", "file": "test/utils/get-mock-config.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
       { "category": "tsconfig", "file": "tsconfig.json", "lastSampledAt": "2026-08-10T08:57:15Z" },
-      {
-        "category": "ci",
-        "file": ".github/workflows/ci.yml",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "ci",
-        "file": ".github/workflows/e2e.yml",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "infra",
-        "file": "docker-compose.yml",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
+      { "category": "ci", "file": ".github/workflows/ci.yml", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "ci", "file": ".github/workflows/e2e.yml", "lastSampledAt": "2026-08-10T08:57:15Z" },
+      { "category": "infra", "file": "docker-compose.yml", "lastSampledAt": "2026-09-03T15:45:52Z" },
       { "category": "infra", "file": ".husky/pre-commit", "lastSampledAt": "2026-08-10T08:57:15Z" },
-      {
-        "category": "web-component",
-        "file": "web/src/App.tsx",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "web-component",
-        "file": "web/src/pages/LoginPage.tsx",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "web-api-client",
-        "file": "web/src/api/client.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "web-test",
-        "file": "web/src/pages/LoginPage.test.tsx",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "web-build",
-        "file": "web/vite.config.ts",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      },
-      {
-        "category": "web-styles",
-        "file": "web/src/styles.css",
-        "lastSampledAt": "2026-08-10T08:57:15Z"
-      }
+      { "category": "web-component", "file": "web/src/App.tsx", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      { "category": "web-component", "file": "web/src/pages/LoginPage.tsx", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      { "category": "web-api-client", "file": "web/src/api/client.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      { "category": "web-test", "file": "web/src/pages/LoginPage.test.tsx", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      { "category": "web-build", "file": "web/vite.config.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      { "category": "web-styles", "file": "web/src/styles.css", "lastSampledAt": "2026-08-10T08:57:15Z" }
     ]
   }
 }

@@ -35,9 +35,11 @@ import {
   ExtractedFact,
   ExtractedFactDocument,
 } from '../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import { Measure, MeasureDocument } from '../src/database/schemas/evidence/measure/measure.schema';
 import { MIME_TYPE_TO_SOURCE_KIND } from '../src/features/evidence/documents/documents.constant';
 import { FactsService } from '../src/features/evidence/facts/facts.service';
 import { IngestionService } from '../src/features/evidence/ingestion/ingestion.service';
+import { seedMeasures } from '../src/features/evidence/measures/measure-seed';
 import {
   createSearchChunkCountProbe,
   createVectorChunkProbe,
@@ -151,6 +153,7 @@ export async function ingestFixtures(
     getModelToken(CanonicalEntity.name),
   );
   const tenantModel = app.get<Model<TenantDocument>>(getModelToken(Tenant.name));
+  const measureModel = app.get<Model<MeasureDocument>>(getModelToken(Measure.name));
   const documentStore = app.get<DocumentStore>(DOCUMENT_STORE);
   const ingestionService = app.get(IngestionService);
   const factsService = app.get(FactsService);
@@ -162,6 +165,7 @@ export async function ingestFixtures(
     extractedFactModel.deleteMany({ tenantId }),
     conflictModel.deleteMany({ tenantId }),
     canonicalEntityModel.deleteMany({ tenantId }),
+    measureModel.deleteMany({ tenantId }),
   ]);
 
   // The eval corpus is a real tenant, not a bare `tenantId` string on a pile of documents. Without
@@ -173,6 +177,10 @@ export async function ingestFixtures(
     { $setOnInsert: { tenantId, name: 'Eval corpus' } },
     { upsert: true },
   );
+
+  // Seeds the eval tenant's measures fresh on every run — `factsService.extractFacts` below reads
+  // them via `loadExtractionContext`, so a corpus with no measures would extract zero facts.
+  await seedMeasures(measureModel, tenantId);
 
   // Registers every property the corpus names in a seeded conflict — a real pilot tenant's
   // consultant registers the estate, not just the one property (Kestrel) that happens to need an

@@ -7,6 +7,12 @@ export type ExtractionMethod = 'llm' | 'regex' | 'manual';
 
 export const EXTRACTION_METHODS: readonly ExtractionMethod[] = ['llm', 'regex', 'manual'];
 
+/** `'rejected'` is deliberately not a member: a fact never carries a measure status a human has
+ * rejected — rejection happens on the `Measure`, and a rejected measure proposes no more facts. */
+export type FactMeasureStatus = 'proposed' | 'confirmed';
+
+export const FACT_MEASURE_STATUSES: readonly FactMeasureStatus[] = ['proposed', 'confirmed'];
+
 /** Identifies what a fact is about, independent of which document reported it — the key two or
  * more `ExtractedFact`s must share for `Conflict` detection to compare them. */
 export interface FactKey {
@@ -69,17 +75,52 @@ export class ExtractedFact extends AuditableDocument {
   extractionMethod: ExtractionMethod;
 
   /**
-   * The metric ontology (`metric-ontology.ts`'s `ACTIVE_PACK_ID`/`ACTIVE_PACK_VERSION`) in force
-   * when this fact was extracted. Required, not optional: a fact that cannot say which ontology
-   * and tolerance produced it would resolve against whatever the ontology happens to be at read
-   * time, quietly and possibly wrongly — the same reasoning `EvidenceLocator.extractorVersion`
-   * documents for a coordinate's extractor.
+   * The seed metric ontology (`metric-ontology.ts`'s `ACTIVE_PACK_ID`/`ACTIVE_PACK_VERSION`) in
+   * force when this fact was extracted — the ontology-wide provenance stamp, kept beside the
+   * per-measure stamp (`measureId`/`measureVersion`/`measureStatus` below) rather than replaced
+   * by it. Required, not optional: a fact that cannot say which ontology and tolerance produced
+   * it would resolve against whatever the ontology happens to be at read time, quietly and
+   * possibly wrongly — the same reasoning `EvidenceLocator.extractorVersion` documents for a
+   * coordinate's extractor.
    */
   @Prop({ type: String, required: true })
   packId: string;
 
   @Prop({ type: Number, required: true })
   packVersion: number;
+
+  /**
+   * The `Measure` (`measure.schema.ts`) and its version in force when this fact was extracted —
+   * a second provenance stamp, scoped to the one measure definition that produced this value
+   * rather than the whole ontology. Facts keep the version they were extracted under; consumers
+   * evaluate the value against the measure's current definition, not this stamp.
+   */
+  @Prop({ type: Types.ObjectId, ref: 'Measure', required: true })
+  measureId: Types.ObjectId;
+
+  @Prop({ type: Number, required: true, min: 1 })
+  measureVersion: number;
+
+  /**
+   * The exclusion flag every downstream consumer filters on. `'proposed'` means the fact was
+   * extracted under a measure no admin has confirmed yet: the fact is stored but invisible to
+   * `scanForConflicts`, `findCellFacts`, `findFactsForChunks`, and `LedgerService`'s
+   * `listCells`/`resolveValue`, until confirming the measure flips this to `'confirmed'` and
+   * rescans the fact's group.
+   */
+  @Prop({ type: String, required: true, enum: FACT_MEASURE_STATUSES })
+  measureStatus: FactMeasureStatus;
+
+  /**
+   * Inclusive calendar bounds from `parsePeriodKey(factKey.period).range` at extraction time.
+   * Both absent for a `fiscal-year`, `unstated`, or unparseable `factKey.period` — the same cases
+   * `parsePeriodKey` itself returns no range for.
+   */
+  @Prop({ type: Date })
+  periodStart?: Date;
+
+  @Prop({ type: Date })
+  periodEnd?: Date;
 
   // `EvidenceChunk._id` is a content-addressed string (`computeChunkId`), not an ObjectId — see
   // that schema's own doc comment.

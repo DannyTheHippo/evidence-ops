@@ -7,6 +7,7 @@ import { Conflict } from '../../../../src/database/schemas/evidence/conflict/con
 import { DocumentVersion } from '../../../../src/database/schemas/evidence/document-version/document-version.schema';
 import { Document } from '../../../../src/database/schemas/evidence/document/document.schema';
 import { ExtractedFact } from '../../../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import { Measure } from '../../../../src/database/schemas/evidence/measure/measure.schema';
 import { Approval } from '../../../../src/database/schemas/workflow/approval/approval.schema';
 import { ConflictsService } from '../../../../src/features/evidence/conflicts/conflicts.service';
 import {
@@ -19,6 +20,7 @@ import {
   ACTIVE_PACK_ID,
   ACTIVE_PACK_VERSION,
 } from '../../../../src/features/evidence/facts/metric-ontology';
+import { buildSeedMeasureRows } from '../../../../src/features/evidence/measures/measure-seed';
 import { WorkflowRunsService } from '../../../../src/features/evidence/workflow-runs/workflow-runs.service';
 import { approvalTimeoutCounter } from '../../../../src/providers/telemetry/domain-metrics';
 import { WORKFLOW_ENGINE } from '../../../../src/providers/workflow-engine/workflow-engine.interface';
@@ -35,10 +37,20 @@ describe('ConflictsService', () => {
   const mockDocumentVersionModel = getMockModel();
   const mockDocumentModel = getMockModel();
   const mockApprovalModel = getMockModel();
+  const mockMeasureModel = getMockModel();
   const mockWorkflowEngine = { start: jest.fn(), status: jest.fn(), signal: jest.fn() };
   const mockWorkflowRunsService = { create: jest.fn(), findById: jest.fn() };
   const mockAuditService = { record: jest.fn() };
   const mockLogger = getMockLogger();
+
+  // The tenant's confirmed measures, seed-shaped and byte-identical to `METRIC_ONTOLOGY` — every
+  // `factKey.metric` this file's fixtures use (`cap_rate`, `sale_price`, `building_area_sf`,
+  // `net_operating_income`, ...) resolves against one of these rows, matching what a seed-only
+  // tenant's `measureModel.find({ status: 'confirmed' })` would return.
+  const seedMeasureRows = buildSeedMeasureRows('acme-corp').map((row) => ({
+    ...row,
+    _id: new Types.ObjectId(),
+  }));
 
   const buildFact = (
     factKey: { entity: string; metric: string; period: string },
@@ -80,6 +92,7 @@ describe('ConflictsService', () => {
         { provide: WorkflowRunsService, useValue: mockWorkflowRunsService },
         { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: mockLogger },
+        { provide: getModelToken(Measure.name), useValue: mockMeasureModel },
       ],
     }).compile();
 
@@ -96,6 +109,10 @@ describe('ConflictsService', () => {
     // either keeps this a no-op. `mockResolvedValueOnce` in an individual test still takes
     // priority.
     mockConflictModel.find.mockResolvedValue([]);
+    // Default for `loadConfirmedDefinitions`: the tenant's confirmed measures, matched against by
+    // every existing fixture's `factKey.metric`. A test exercising the exclusion invariant or the
+    // proposal path overrides this with `mockResolvedValueOnce`/`mockResolvedValue`.
+    mockMeasureModel.find.mockResolvedValue(seedMeasureRows);
   });
 
   afterEach(() => {
@@ -108,7 +125,7 @@ describe('ConflictsService', () => {
     const result = await service.scanForConflicts('acme-corp');
 
     expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
-      { tenantId: 'acme-corp' },
+      { tenantId: 'acme-corp', measureStatus: 'confirmed' },
       { factKey: 1, value: 1, documentVersionId: 1 },
     );
     expect(mockConflictModel.find).not.toHaveBeenCalled();
@@ -128,7 +145,7 @@ describe('ConflictsService', () => {
     const result = await service.scanForConflicts(tenantId);
 
     expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
-      { tenantId },
+      { tenantId, measureStatus: 'confirmed' },
       { factKey: 1, value: 1, documentVersionId: 1 },
     );
     // No candidate this scan (values agree), so `findRetractableConflicts` still needs the
@@ -450,6 +467,7 @@ describe('ConflictsService', () => {
       mockDocumentVersionModel.find.mockResolvedValue([]);
       mockDocumentModel.find.mockResolvedValue([]);
       mockConflictModel.find.mockResolvedValue([]);
+      mockMeasureModel.find.mockResolvedValue(seedMeasureRows);
 
       const factA1StillStored = {
         ...buildFact(factKey, { amount: 5.25, unit: 'percent' }),
@@ -547,7 +565,7 @@ describe('ConflictsService', () => {
       const result = await service.scanForConflicts(tenantId, [factKey]);
 
       expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
-        { tenantId, groupKeyNormalized: { $in: [groupKeyNormalized] } },
+        { tenantId, groupKeyNormalized: { $in: [groupKeyNormalized] }, measureStatus: 'confirmed' },
         { factKey: 1, value: 1, documentVersionId: 1 },
       );
       expect(mockConflictModel.find).toHaveBeenCalledWith({
@@ -563,7 +581,7 @@ describe('ConflictsService', () => {
       await service.scanForConflicts(tenantId, [factKey, factKey]);
 
       expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
-        { tenantId, groupKeyNormalized: { $in: [groupKeyNormalized] } },
+        { tenantId, groupKeyNormalized: { $in: [groupKeyNormalized] }, measureStatus: 'confirmed' },
         { factKey: 1, value: 1, documentVersionId: 1 },
       );
     });
@@ -577,7 +595,7 @@ describe('ConflictsService', () => {
       // — it must still take the incremental branch (an `$in: []` query, resolving no facts) and
       // never the cursor-based full-scan path a `factKeys === undefined` check would fall back to.
       expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
-        { tenantId, groupKeyNormalized: { $in: [] } },
+        { tenantId, groupKeyNormalized: { $in: [] }, measureStatus: 'confirmed' },
         { factKey: 1, value: 1, documentVersionId: 1 },
       );
       expect(result).toEqual({ conflictsCreated: 0, skippedFactCount: 0 });
@@ -597,9 +615,11 @@ describe('ConflictsService', () => {
 
       jest.resetAllMocks();
       // `resetAllMocks` also wipes the `beforeEach` defaults for `excludeSupersededFacts`'s two
-      // lookups — restore them so this mid-test reset behaves like every other scan.
+      // lookups and the tenant's confirmed measures — restore them so this mid-test reset behaves
+      // like every other scan.
       mockDocumentVersionModel.find.mockResolvedValue([]);
       mockDocumentModel.find.mockResolvedValue([]);
+      mockMeasureModel.find.mockResolvedValue(seedMeasureRows);
       mockExtractedFactModel.find.mockResolvedValueOnce([factLow, factHigh]);
       mockConflictModel.find.mockResolvedValueOnce([]);
       mockConflictModel.insertMany.mockResolvedValueOnce([]);
@@ -656,6 +676,46 @@ describe('ConflictsService', () => {
         [factLow._id, factHigh._id, factNew._id].map((id) => id.toString()),
       );
       expect(result).toEqual({ conflictsCreated: 1, skippedFactCount: 0 });
+    });
+  });
+
+  describe('exclusion of facts stamped under a proposed measure', () => {
+    const tenantId = 'acme-corp';
+    const factKey = { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' };
+
+    it.each([['incremental', [factKey]] as const, ['full', undefined] as const])(
+      'should scope the %s scan’s fact query to measureStatus confirmed',
+      async (_path, factKeys) => {
+        if (factKeys === undefined) {
+          mockExtractedFactModel.find.mockReturnValueOnce(asCursor([]));
+        } else {
+          mockExtractedFactModel.find.mockResolvedValueOnce([]);
+        }
+
+        await service.scanForConflicts(tenantId, factKeys);
+
+        expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
+          expect.objectContaining({ measureStatus: 'confirmed' }),
+          { factKey: 1, value: 1, documentVersionId: 1 },
+        );
+      },
+    );
+
+    it('should produce no conflict for a group whose slug names no confirmed measure', async () => {
+      mockMeasureModel.find.mockResolvedValueOnce([]);
+      const unconfirmedFactKey = {
+        entity: 'Northgate Business Park',
+        metric: 'walkability_score',
+        period: '2025-03',
+      };
+      const factLow = buildFact(unconfirmedFactKey, { amount: 1, unit: 'count' });
+      const factHigh = buildFact(unconfirmedFactKey, { amount: 2, unit: 'count' });
+      mockExtractedFactModel.find.mockReturnValueOnce(asCursor([factLow, factHigh]));
+
+      const result = await service.scanForConflicts(tenantId);
+
+      expect(mockConflictModel.insertMany).not.toHaveBeenCalled();
+      expect(result).toEqual({ conflictsCreated: 0, skippedFactCount: 0 });
     });
   });
 
@@ -1125,6 +1185,65 @@ describe('ConflictsService', () => {
         ruleFired: 'authority',
       });
       expect(result.docs[0].explanation).toContain(factIdPm.toString());
+    });
+
+    it("should resolve authorityOrder from the tenant's edited Measure row, not a fixed ontology default", async () => {
+      const actorId = new Types.ObjectId().toString();
+      const factIdPm = new Types.ObjectId();
+      const factIdSpreadsheet = new Types.ObjectId();
+      const conflict = {
+        _id: new Types.ObjectId(),
+        factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+        factIds: [factIdPm, factIdSpreadsheet],
+        magnitude: 0.0085,
+        status: 'open',
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      };
+      const documentVersionIdPm = new Types.ObjectId();
+      const documentVersionIdSpreadsheet = new Types.ObjectId();
+      const documentIdPm = new Types.ObjectId();
+      const documentIdSpreadsheet = new Types.ObjectId();
+      const factPm = {
+        _id: factIdPm,
+        value: { amount: 5.25, unit: 'percent' },
+        chunkId: 'chunk-pm',
+        documentVersionId: documentVersionIdPm,
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Rent Roll', cell: 'B2' },
+      };
+      const factSpreadsheet = {
+        _id: factIdSpreadsheet,
+        value: { amount: 6.1, unit: 'percent' },
+        chunkId: 'chunk-comps',
+        documentVersionId: documentVersionIdSpreadsheet,
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'C4' },
+      };
+      // `cap_rate` carries no `authorityOrder` in the seed ontology (see the "no authorityOrder"
+      // case above) — this tenant's confirmed row has since been edited to add one, and it is that
+      // edit, not a seed default, the proposal must resolve against.
+      mockMeasureModel.find.mockResolvedValueOnce(
+        seedMeasureRows.map((row) =>
+          row.slug === 'cap_rate' ? { ...row, authorityOrder: ['pm-export', 'spreadsheet'] } : row,
+        ),
+      );
+      mockConflictModel.find.mockResolvedValueOnce([conflict]);
+      mockConflictModel.countDocuments.mockResolvedValueOnce(1);
+      mockExtractedFactModel.find.mockResolvedValueOnce([factPm, factSpreadsheet]);
+      mockDocumentVersionModel.find.mockResolvedValueOnce([
+        { _id: documentVersionIdPm, documentId: documentIdPm },
+        { _id: documentVersionIdSpreadsheet, documentId: documentIdSpreadsheet },
+      ]);
+      mockDocumentModel.find.mockResolvedValueOnce([
+        { _id: documentIdPm, sourceClass: 'pm-export' },
+        { _id: documentIdSpreadsheet, sourceClass: 'spreadsheet' },
+      ]);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      const result = await service.list({ skip: 0, limit: 20 }, actorId, 'tenant-a');
+
+      expect(result.docs[0]).toMatchObject({
+        proposedWinnerFactId: factIdPm.toString(),
+        ruleFired: 'authority',
+      });
     });
 
     it('should mark a value withdrawn when its documentVersionId carries withdrawnAt, and leave the other value in the pair untouched', async () => {

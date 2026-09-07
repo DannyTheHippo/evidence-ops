@@ -24,6 +24,10 @@ import {
   type FactValue,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import {
+  Measure,
+  type MeasureDocument,
+} from '../../../database/schemas/evidence/measure/measure.schema';
+import {
   Approval,
   type ApprovalDocument,
 } from '../../../database/schemas/workflow/approval/approval.schema';
@@ -37,12 +41,12 @@ import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
 import { resolveSort } from '../../../shared/utils/resolve-sort.util';
 import type { ResolveConflictWorkflowInput } from '../../../workflows/types';
+import { ACTIVE_PACK_ID, ACTIVE_PACK_VERSION, findMetricById } from '../facts/metric-ontology';
 import {
-  ACTIVE_PACK_ID,
-  ACTIVE_PACK_VERSION,
-  findMetricById,
-  METRIC_ONTOLOGY,
-} from '../facts/metric-ontology';
+  orderForExtraction,
+  toMeasureDefinitions,
+  type MeasureDefinition,
+} from '../measures/measure-definition';
 import {
   WorkflowRunsService,
   type WorkflowRunResult,
@@ -217,8 +221,23 @@ export class ConflictsService {
 
     private readonly auditService: AuditService,
     private readonly logger: AppLogger,
+
+    @InjectModel(Measure.name)
+    private readonly measureModel: Model<MeasureDocument>,
   ) {
     this.logger.init(ConflictsService.name);
+  }
+
+  /**
+   * Loads and orders the tenant's confirmed measures — the same shape `detectConflicts`,
+   * `computeConflictProposal` and `toConflictDto` all match a fact's `factKey.metric` against.
+   * Called once per `scanForConflicts`/`list`/`computeProposalForConflict` invocation rather than
+   * cached: a measure's `authorityOrder`, `tolerance` or confirmation status can change between
+   * calls, and every consumer here must see the tenant's current registry, not a stale snapshot.
+   */
+  private async loadConfirmedDefinitions(tenantId: string): Promise<MeasureDefinition[]> {
+    const docs = await this.measureModel.find({ tenantId, status: 'confirmed' });
+    return orderForExtraction(toMeasureDefinitions(docs));
   }
 
   /**
@@ -260,6 +279,7 @@ export class ConflictsService {
 
     let factById = new Map<string, ExtractedFactDocument>();
     let factEnrichmentByFactId = new Map<string, FactSourceEnrichment>();
+    let definitions: MeasureDefinition[] = [];
     if (conflicts.length > 0) {
       const everyFactId = [
         ...new Set(conflicts.flatMap((conflict) => conflict.factIds.map((id) => id.toString()))),
@@ -275,6 +295,7 @@ export class ConflictsService {
         facts,
         tenantId,
       );
+      definitions = await this.loadConfirmedDefinitions(tenantId);
     }
 
     await this.auditService.record({
@@ -286,7 +307,7 @@ export class ConflictsService {
 
     return {
       docs: conflicts.map((conflict) =>
-        this.toConflictDto(conflict, factById, factEnrichmentByFactId),
+        this.toConflictDto(conflict, factById, factEnrichmentByFactId, definitions),
       ),
       count,
     };
@@ -294,9 +315,12 @@ export class ConflictsService {
 
   /**
    * Scans `ExtractedFact`s for one tenant, groups by `(entity, metric, period)`, and persists a
-   * `Conflict` for each group whose normalized values disagree by more than the built-in
-   * `METRIC_ONTOLOGY`'s tolerance for that metric — every candidate this call detects, and every
-   * `Conflict` it inserts, is judged and stamped against that one fixed ontology.
+   * `Conflict` for each group whose normalized values disagree by more than the tenant's
+   * confirmed measure's tolerance for that metric — every candidate this call detects, and every
+   * `Conflict` it inserts, is judged against the tenant's confirmed measures as loaded once, up
+   * front, for this scan. Both fact queries below exclude `measureStatus: 'proposed'` facts: a
+   * fact stamped under a measure a human hasn't confirmed yet must stay invisible to conflict
+   * detection until confirmation flips it (`MeasuresService.confirm`'s rescan).
    *
    * Two paths over the identical `detectConflicts` core, chosen by whether `factKeys` is
    * `undefined` (not by emptiness — `factKeys: []` is a real "this ingest produced zero facts"
@@ -322,19 +346,24 @@ export class ConflictsService {
     tenantId: string,
     factKeys?: readonly FactKey[],
   ): Promise<ConflictScanResult> {
+    const definitions = await this.loadConfirmedDefinitions(tenantId);
+
     if (factKeys !== undefined) {
       const groupKeys = [...new Set(factKeys.map(groupKey))];
-      return this.scanGroupKeys(tenantId, groupKeys);
+      return this.scanGroupKeys(tenantId, groupKeys, definitions);
     }
 
     const facts: ScannableFact[] = [];
     const cursor = this.extractedFactModel
-      .find({ tenantId }, { factKey: 1, value: 1, documentVersionId: 1 })
+      .find(
+        { tenantId, measureStatus: 'confirmed' },
+        { factKey: 1, value: 1, documentVersionId: 1 },
+      )
       .cursor();
     for await (const fact of cursor) {
       facts.push(this.toFactForScan(fact));
     }
-    return this.detectAndPersist(tenantId, facts, { tenantId });
+    return this.detectAndPersist(tenantId, facts, { tenantId }, definitions);
   }
 
   private toFactForScan(fact: {
@@ -357,15 +386,17 @@ export class ConflictsService {
   private async scanGroupKeys(
     tenantId: string,
     groupKeys: readonly string[],
+    definitions: readonly MeasureDefinition[],
   ): Promise<ConflictScanResult> {
     const facts = await this.extractedFactModel.find(
-      { tenantId, groupKeyNormalized: { $in: groupKeys } },
+      { tenantId, groupKeyNormalized: { $in: groupKeys }, measureStatus: 'confirmed' },
       { factKey: 1, value: 1, documentVersionId: 1 },
     );
     return this.detectAndPersist(
       tenantId,
       facts.map((fact) => this.toFactForScan(fact)),
       { tenantId, groupKeyNormalized: { $in: groupKeys } },
+      definitions,
     );
   }
 
@@ -373,6 +404,7 @@ export class ConflictsService {
     tenantId: string,
     facts: readonly ScannableFact[],
     existingConflictScope: QueryFilter<ConflictDocument>,
+    definitions: readonly MeasureDefinition[],
   ): Promise<ConflictScanResult> {
     if (facts.length === 0) {
       this.logger.debug(`No conflicts detected for tenant '${tenantId}'`);
@@ -380,7 +412,7 @@ export class ConflictsService {
     }
 
     const currentFacts = await this.excludeSupersededFacts(facts, tenantId);
-    const { conflicts: candidates, skipped } = detectConflicts(currentFacts, METRIC_ONTOLOGY);
+    const { conflicts: candidates, skipped } = detectConflicts(currentFacts, definitions);
 
     // A silently-dropped fact is a fact that can never conflict — the quiet correctness loss this
     // whole scan exists to prevent — so every skip is logged individually with the context (fact
@@ -978,21 +1010,22 @@ export class ConflictsService {
   }
 
   /**
-   * Pure given its inputs: looks up `metricId` in the built-in `METRIC_ONTOLOGY` and calls
-   * `resolveConflictPolicy` with the metric's own `authorityOrder`/`stalenessWindowMs` as the
-   * survivorship policy. `metricId` (from `Conflict.factKey.metric`, stored as a plain string on
-   * the schema) is not guaranteed to be a metric the ontology still defines — the ontology can
-   * change between when a conflict was detected (stamped on `Conflict.packId`/`packVersion`, see
-   * that field's own doc comment on staleness) and when this runs. The `?? { authorityOrder:
-   * undefined, stalenessWindowMs: Infinity }` fallback produces exactly the `ruleFired: 'none'` a
-   * genuinely unconfigured metric already gets, rather than throw for a case that isn't a
-   * data-integrity fault — this method only ever proposes, never gates.
+   * Pure given its inputs: looks up `metricId` in `definitions` (the tenant's confirmed measures,
+   * loaded once per call by the caller) and calls `resolveConflictPolicy` with the metric's own
+   * `authorityOrder`/`stalenessWindowMs` as the survivorship policy. `metricId` (from
+   * `Conflict.factKey.metric`, stored as a plain string on the schema) is not guaranteed to be a
+   * slug `definitions` still carries — a measure can be edited, rejected, or the conflict
+   * predates a rescan (see `Conflict.packId`/`packVersion`'s own doc comment on staleness). The
+   * `?? { authorityOrder: undefined, stalenessWindowMs: Infinity }` fallback produces exactly the
+   * `ruleFired: 'none'` a genuinely unconfigured metric already gets, rather than throw for a case
+   * that isn't a data-integrity fault — this method only ever proposes, never gates.
    */
   private computeConflictProposal(
     candidates: readonly ConflictingFactForResolution[],
     metricId: string,
+    definitions: readonly MeasureDefinition[],
   ): ResolveConflictProposal {
-    const metric = findMetricById(METRIC_ONTOLOGY, metricId);
+    const metric = findMetricById(definitions, metricId);
     const policy: SurvivorshipPolicy = {
       authorityOrder: metric?.authorityOrder,
       stalenessWindowMs: metric?.stalenessWindowMs ?? Number.POSITIVE_INFINITY,
@@ -1003,13 +1036,13 @@ export class ConflictsService {
   /**
    * `requestResolution`'s own proposal computation, run once at approval-request time (see that
    * method's doc comment for why the result then travels through the workflow rather than being
-   * recomputed later) — loads this one conflict's current facts and reduces to
-   * `computeConflictProposal`. Takes the minimal shape a proposal needs, not a full
-   * `ConflictDocument`, so a caller that only has a `ConflictResolutionCandidate` in hand (as
-   * `requestResolution` does) doesn't need a second full conflict read to supply this. A fact that
-   * no longer resolves just narrows the candidate set `resolveConflictPolicy` sees, which already
-   * degrades to `ruleFired: 'none'` on its own — this never throws, unlike `toConflictDto`'s
-   * read-path integrity check.
+   * recomputed later) — loads this one conflict's current facts and the tenant's confirmed
+   * measures, then reduces to `computeConflictProposal`. Takes the minimal shape a proposal needs,
+   * not a full `ConflictDocument`, so a caller that only has a `ConflictResolutionCandidate` in
+   * hand (as `requestResolution` does) doesn't need a second full conflict read to supply this. A
+   * fact that no longer resolves just narrows the candidate set `resolveConflictPolicy` sees,
+   * which already degrades to `ruleFired: 'none'` on its own — this never throws, unlike
+   * `toConflictDto`'s read-path integrity check.
    */
   private async computeProposalForConflict(
     conflict: { readonly factIds: readonly Types.ObjectId[]; readonly factKey: FactKey },
@@ -1033,13 +1066,15 @@ export class ConflictsService {
       sourceClass: sourceClassByFactId.get(fact._id.toString()) as DocumentSourceClass,
       observedAt: fact.observedAt,
     }));
-    return this.computeConflictProposal(candidates, conflict.factKey.metric);
+    const definitions = await this.loadConfirmedDefinitions(tenantId);
+    return this.computeConflictProposal(candidates, conflict.factKey.metric, definitions);
   }
 
   private toConflictDto(
     conflict: ConflictDocument,
     factById: Map<string, ExtractedFactDocument>,
     factEnrichmentByFactId: Map<string, FactSourceEnrichment>,
+    definitions: readonly MeasureDefinition[],
   ): ConflictResponseDto {
     const values: ConflictValueShape[] = [];
     const candidates: ConflictingFactForResolution[] = [];
@@ -1120,10 +1155,10 @@ export class ConflictsService {
       };
     }
 
-    // Computed fresh on every read, never persisted: the built-in ontology's `authorityOrder` and a
+    // Computed fresh on every read, never persisted: a measure's `authorityOrder` and a
     // document's `sourceClass` both change over time, so a stored proposal would silently go stale
     // and a reviewer could act on a rule that no longer applies.
-    const proposal = this.computeConflictProposal(candidates, conflict.factKey.metric);
+    const proposal = this.computeConflictProposal(candidates, conflict.factKey.metric, definitions);
 
     return {
       ...base,

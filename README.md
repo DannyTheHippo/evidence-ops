@@ -800,9 +800,13 @@ docs/                  adr/, global/ (architecture, threat model, pilot runbook)
 
 ## Scope notes
 
-- No generated OpenAPI client — the SPA uses a hand-written fetch client, and the response
-  interfaces in `web/src/api/client.ts` mirror the API's response DTOs by hand. Change both in the
-  same commit; nothing type-checks across the two roots.
+- Response types for every named schema are generated from OpenAPI (ADR-0023): `npm run
+  openapi:generate` boots the API in preview mode, writes `web/src/api/openapi.json`, and derives
+  `web/src/api/schema.ts`; `web/src/api/client.ts` reads its interfaces from
+  `components['schemas']` there. List envelopes, request DTOs and the
+  `Locator`/`AnswerOutcome`/`Citation` unions stay hand-written in `client.ts` and must change in
+  the same commit as the API; `npm run openapi:check` fails on an uncommitted regeneration diff
+  but is not part of `checks:ci`.
 - The SPA holds no credential. The browser session is an HttpOnly cookie; the SPA answers "am I
   logged in?" by probing `GET /auth/me` and caching the result in memory, and that probe fails
   closed.

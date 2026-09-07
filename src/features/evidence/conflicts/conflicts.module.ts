@@ -16,6 +16,7 @@ import {
   ExtractedFact,
   ExtractedFactSchema,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import { Measure, MeasureSchema } from '../../../database/schemas/evidence/measure/measure.schema';
 import {
   Approval,
   ApprovalSchema,
@@ -29,9 +30,13 @@ import { ConflictsService } from './conflicts.service';
 // `WorkflowRunsService` — both `ConflictsService.requestResolution` needs (see its own doc
 // comment and `WorkflowRunsModule`'s own comment naming this as the expected consumer).
 // `Document`/`DocumentVersion` are for `ConflictsService`'s survivorship-proposal lookup —
-// resolving each disagreeing fact's `sourceClass` for `resolveConflictPolicy`, whose
-// `authorityOrder`/`stalenessWindowMs` now come from the built-in `METRIC_ONTOLOGY` rather than a
-// registered service. `Approval` is for `requestResolution`'s own pending-duplicate guard — a
+// resolving each disagreeing fact's `sourceClass` for `resolveConflictPolicy`. `Measure` is
+// registered here directly — this module's existing pattern for `Document`/`DocumentVersion` —
+// rather than by importing the measures feature module: the dependency runs the other way (that
+// module imports this one for its confirm-time rescan), so a reverse edge here would create a
+// cycle that a `forwardRef` would hide rather than fix. `authorityOrder`/`stalenessWindowMs` come
+// from the tenant's confirmed `Measure` rows, loaded once per scan/list/rescan, not a fixed
+// ontology constant. `Approval` is for `requestResolution`'s own pending-duplicate guard — a
 // read-only check against the same collection `MongoApprovalChannel` writes, not a second writer
 // of it.
 @Module({
@@ -41,6 +46,7 @@ import { ConflictsService } from './conflicts.service';
       { name: Conflict.name, schema: ConflictSchema },
       { name: DocumentVersion.name, schema: DocumentVersionSchema },
       { name: Document.name, schema: DocumentSchema },
+      { name: Measure.name, schema: MeasureSchema },
       { name: Approval.name, schema: ApprovalSchema },
     ]),
     ProvidersModule,

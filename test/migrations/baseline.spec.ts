@@ -2,6 +2,7 @@ import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Db } from 'mongodb';
 import { down, up } from '../../migrations/0001-baseline';
+import { METRIC_IDS } from '../../src/features/evidence/facts/metric-ontology';
 
 const SCHEMAS_ROOT = join(__dirname, '..', '..', 'src', 'database', 'schemas');
 
@@ -54,6 +55,9 @@ function createRecorder(): Recorder {
       seedCalls.push({ collection: name, args });
       return Promise.resolve();
     },
+    find: () => ({
+      toArray: (): Promise<{ tenantId: string }[]> => Promise.resolve([{ tenantId: 'default' }]),
+    }),
     createSearchIndexes: (definitions: { name?: string; type?: string }[]): Promise<string[]> => {
       searchIndexCalls.push({ collection: name, definitions });
       return Promise.resolve(definitions.map((definition) => String(definition.name)));
@@ -173,16 +177,36 @@ describe('migrations/0001-baseline', () => {
     const recorder = createRecorder();
     await up(recorder.db);
 
-    expect(recorder.seedCalls).toEqual([
-      {
-        collection: TENANTS,
-        args: [
-          { tenantId: 'default' },
-          { $setOnInsert: { tenantId: 'default', name: 'Default tenant' } },
-          { upsert: true },
-        ],
-      },
-    ]);
+    expect(recorder.seedCalls[0]).toEqual({
+      collection: TENANTS,
+      args: [
+        { tenantId: 'default' },
+        { $setOnInsert: { tenantId: 'default', name: 'Default tenant' } },
+        { upsert: true },
+      ],
+    });
+  });
+
+  it('should upsert one seed measure per registry tenant, one per METRIC_IDS entry', async () => {
+    const recorder = createRecorder();
+    await up(recorder.db);
+
+    const measureCalls = recorder.seedCalls.slice(1);
+    expect(measureCalls).toHaveLength(METRIC_IDS.length);
+
+    for (const call of measureCalls) {
+      expect(call.collection).toBe('measures');
+
+      const [filter, update, options] = call.args as [
+        { tenantId: string; slug: string },
+        { $setOnInsert: { tenantId: string; slug: string } },
+        { upsert: boolean },
+      ];
+      expect(METRIC_IDS).toContain(filter.slug);
+      expect(filter).toEqual({ tenantId: 'default', slug: filter.slug });
+      expect(update.$setOnInsert).toMatchObject({ tenantId: 'default', slug: filter.slug });
+      expect(options).toEqual({ upsert: true });
+    }
   });
 
   it('should create the lexical and vector search indexes on evidence_chunks', async () => {

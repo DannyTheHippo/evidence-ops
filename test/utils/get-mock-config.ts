@@ -86,6 +86,7 @@ export const getMockConfig = (): EnvironmentConfig => ({
   extraction: {
     chunkConcurrency: 2,
     aliasHarvestAutoApply: false,
+    headerProposals: false,
   },
 
   spend: {

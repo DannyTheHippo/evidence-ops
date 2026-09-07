@@ -4,6 +4,9 @@
   hypothetical
 - **Date:** 2026-08-10
 - **Supersedes:** —
+- **Amended by:** `docs/adr/0022-lexical-alignment-hardening.md`, which narrows Known bound 2 — a
+  standard English cardinal number written in words is now visible to `extractNumericTokens`; the
+  digit-plus-magnitude-word half of the bound is unchanged (see that ADR's § What this narrows).
 
 ## Context
 

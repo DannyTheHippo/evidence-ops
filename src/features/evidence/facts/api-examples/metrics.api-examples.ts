@@ -7,11 +7,11 @@ export const metricsApiExamples: Record<string, ApiResponseOptions> = {
     status: HttpStatus.OK,
     type: [MetricResponseDto],
     description:
-      'Every metric METRIC_ONTOLOGY defines, projected to its id, label and canonicalUnit. ' +
-      'Read-only: there is no endpoint to add, edit or remove a metric.',
+      "Every confirmed measure of the caller's tenant, projected to id, label and canonicalUnit. " +
+      'Read-only here; authoring happens under /measures.',
     examples: {
       example: {
-        summary: 'Two of the built-in metrics',
+        summary: 'Two of the tenant confirmed measures',
         value: [
           { id: 'cap_rate', label: 'Cap Rate', canonicalUnit: 'ratio' },
           { id: 'sale_price', label: 'Sale Price', canonicalUnit: 'usd' },

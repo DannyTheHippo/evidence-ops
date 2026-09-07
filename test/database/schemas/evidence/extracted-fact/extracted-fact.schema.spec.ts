@@ -20,6 +20,9 @@ const buildFactInput = () => ({
   extractionMethod: 'llm' as const,
   packId: 'cre',
   packVersion: 1,
+  measureId: new mongoose.Types.ObjectId(),
+  measureVersion: 1,
+  measureStatus: 'confirmed' as const,
   // Content-addressed (`computeChunkId`), not an ObjectId — see `EvidenceChunk._id`'s doc comment.
   chunkId: 'chunk-b7',
   documentVersionId: new mongoose.Types.ObjectId(),
@@ -93,6 +96,45 @@ describe('ExtractedFact schema', () => {
       const fact = new ExtractedFactModel({ ...buildFactInput(), observedAt });
 
       expect(fact.observedAt).toEqual(observedAt);
+      expect(fact.validateSync()).toBeUndefined();
+    });
+
+    it.each(['measureId', 'measureVersion', 'measureStatus'] as const)('requires %s', (field) => {
+      const input = { ...buildFactInput() };
+      delete (input as Record<string, unknown>)[field];
+      const fact = new ExtractedFactModel(input);
+
+      const error = fact.validateSync();
+
+      expect(error?.errors[field]).toBeDefined();
+    });
+
+    it('rejects a measureStatus outside proposed/confirmed', () => {
+      const fact = new ExtractedFactModel({
+        ...buildFactInput(),
+        measureStatus: 'rejected',
+      });
+
+      const error = fact.validateSync();
+
+      expect(error?.errors.measureStatus).toBeDefined();
+    });
+
+    it('leaves periodStart and periodEnd undefined when not supplied', () => {
+      const fact = new ExtractedFactModel(buildFactInput());
+
+      expect(fact.periodStart).toBeUndefined();
+      expect(fact.periodEnd).toBeUndefined();
+      expect(fact.validateSync()).toBeUndefined();
+    });
+
+    it('accepts explicit periodStart and periodEnd', () => {
+      const periodStart = new Date('2025-07-01T00:00:00.000Z');
+      const periodEnd = new Date('2025-09-30T00:00:00.000Z');
+      const fact = new ExtractedFactModel({ ...buildFactInput(), periodStart, periodEnd });
+
+      expect(fact.periodStart).toEqual(periodStart);
+      expect(fact.periodEnd).toEqual(periodEnd);
       expect(fact.validateSync()).toBeUndefined();
     });
   });

@@ -206,9 +206,9 @@ function evaluateCandidates(
     const metric = findMetricById(ontology, candidate.metric);
     if (!metric) {
       // Unreachable while the schema and the ontology agree — `candidate.metric` is constrained
-      // by `z.enum(METRIC_IDS)`. Kept as an explicit fail-closed check rather than a non-null
-      // assertion in case a long-lived process ever serves a stale compiled schema against an
-      // updated ontology.
+      // by `z.enum` built from the tenant's confirmed measure slugs, in `orderForExtraction`
+      // order. Kept as an explicit fail-closed check rather than a non-null assertion in case a
+      // long-lived process ever serves a stale compiled schema against an updated ontology.
       rejected.push({ candidate, reason: `metric '${candidate.metric}' is not in the ontology` });
       continue;
     }

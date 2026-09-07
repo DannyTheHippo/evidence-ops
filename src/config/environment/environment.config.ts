@@ -189,6 +189,9 @@ export const environmentSchema = z
     // conflict group across every document already ingested, so the harvester records proposals
     // with their citations and changes no resolution until an operator turns this on deliberately.
     EXTRACTION_ALIAS_HARVEST_AUTO_APPLY: zBool(false),
+    // Off means an unmatched numeric spreadsheet column mints nothing during extraction; on
+    // means it proposes a measure held for admin confirmation instead of being dropped.
+    EXTRACTION_HEADER_PROPOSALS: zBool(false),
 
     /** Per-tenant aggregate daily ceiling on model spend, in USD. A value `<= 0` disables the ceiling entirely. */
     MODEL_SPEND_DAILY_LIMIT_USD: zNum(50),
@@ -361,6 +364,7 @@ export const environmentSchema = z
       extraction: {
         chunkConcurrency: e.EXTRACTION_CHUNK_CONCURRENCY,
         aliasHarvestAutoApply: e.EXTRACTION_ALIAS_HARVEST_AUTO_APPLY,
+        headerProposals: e.EXTRACTION_HEADER_PROPOSALS,
       },
       spend: {
         dailyLimitUsd: e.MODEL_SPEND_DAILY_LIMIT_USD,

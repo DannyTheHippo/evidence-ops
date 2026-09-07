@@ -22,6 +22,7 @@ import {
   WorkflowRunDocument,
 } from '../../src/database/schemas/workflow/workflow-run/workflow-run.schema';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
+import { measureStamp } from '../utils/measure-stamp';
 import { registerTestUser } from '../utils/register-test-user';
 import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts';
 
@@ -126,6 +127,7 @@ describe('Tenant isolation (e2e)', () => {
       .send({ questionText: 'What is the cap rate for Northgate Business Park?' });
     answerIdA = (started.body as AnswerBody).id;
 
+    const capRateStamp = await measureStamp(app, tenantIdA, 'cap_rate');
     const factLow = await extractedFactModel.create({
       factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
       groupKeyNormalized: groupKey({
@@ -139,6 +141,7 @@ describe('Tenant isolation (e2e)', () => {
       extractionMethod: 'llm',
       packId: 'cre',
       packVersion: 1,
+      ...capRateStamp,
       chunkId: 'chunk-xlsx',
       documentVersionId: new Types.ObjectId(),
       locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
@@ -157,6 +160,7 @@ describe('Tenant isolation (e2e)', () => {
       extractionMethod: 'llm',
       packId: 'cre',
       packVersion: 1,
+      ...capRateStamp,
       chunkId: 'chunk-prose',
       documentVersionId: new Types.ObjectId(),
       locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },

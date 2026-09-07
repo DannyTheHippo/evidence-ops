@@ -12,6 +12,11 @@ import { findMetricByAlias, type MetricDefinition } from './metric-ontology';
 import { parseCalendarDate } from './parse-calendar-date';
 import type { ParsedElement } from '../ingestion/parsers/parsed-element.type';
 import { parseHeaderUnitMarker, resolveHeaderRow } from '../ingestion/sheet-header';
+import {
+  buildHeaderProposal,
+  deriveMeasureSlug,
+  type HeaderMeasureProposal,
+} from '../measures/infer-header-measure';
 import { wordLookup } from '../qa/extract-numeric-tokens';
 
 export interface FactCandidate {
@@ -47,6 +52,17 @@ export interface RejectedXlsxCandidate {
   readonly reason: string;
 }
 
+/** One unmatched, header-inferred column, resolved to a synthetic definition for this call so the
+ *  ordinary per-cell parsers can mint candidates from it — `FactsService` is what turns these into
+ *  `Measure` rows via `MeasuresService.proposeMany`, this file never persists anything. Present only
+ *  under `XlsxExtractionContext.proposeFromHeaders`; a second sheet in the same call whose column
+ *  derives the same slug merges its candidates into the same entry rather than minting a second
+ *  one. */
+export interface XlsxHeaderProposal {
+  readonly proposal: HeaderMeasureProposal;
+  readonly candidates: readonly FactCandidate[];
+}
+
 export interface XlsxFactExtractionResult {
   readonly accepted: FactCandidate[];
   readonly rejected: RejectedXlsxCandidate[];
@@ -56,6 +72,50 @@ export interface XlsxFactExtractionResult {
    *  `DocumentVersion.reducedFidelityReasons` rather than leaving either signal unread. Always
    *  present, empty when nothing was ambiguous or rejected. */
   readonly reducedFidelityReasons: readonly string[];
+  readonly proposals: readonly XlsxHeaderProposal[];
+}
+
+/**
+ * What a spreadsheet column resolves to for fact-minting purposes: either an ontology metric this
+ * sheet's header matched, or (under `XlsxExtractionContext.proposeFromHeaders`) a synthetic
+ * definition built from a header-inferred proposal. `headerUnit` is the column header's own
+ * percent/ratio marker (`parseHeaderUnitMarker`, sheet-header.ts), resolved once per column rather
+ * than once per cell, since it depends only on the header text.
+ */
+interface XlsxColumnResolution {
+  readonly definition: MetricDefinition;
+  readonly headerUnit: 'percent' | 'ratio' | undefined;
+  readonly proposal?: HeaderMeasureProposal;
+}
+
+/** `HeaderMeasureProposal` shaped as a `MetricDefinition` (`id: slug`) so the existing display
+ *  parsers, written against `MetricDefinition`, need no separate code path for a column that has
+ *  been proposed rather than matched. */
+function toSyntheticMetricDefinition(proposal: HeaderMeasureProposal): MetricDefinition {
+  return {
+    id: proposal.slug,
+    label: proposal.label,
+    aliases: proposal.aliases,
+    valueType: proposal.valueType,
+    canonicalUnit: proposal.canonicalUnit,
+    units: proposal.units,
+    toleranceKind: proposal.toleranceKind,
+    tolerance: proposal.tolerance,
+  };
+}
+
+/** `XlsxExtractionContext.matchable` deliberately holds `MetricDefinition`, not
+ *  `measure-definition.ts`'s `MeasureDefinition` — this extractor needs no measure id, only the
+ *  fields a display parser reads, and `FactsService` is what maps a resulting `factKey.metric`
+ *  slug back to a `Measure` stamp afterwards. */
+export interface XlsxExtractionContext {
+  readonly matchable: readonly MetricDefinition[];
+  /** Slugs a human has already rejected as a measure (`Measure.status === 'rejected'`) — a column
+   *  whose header derives one of these mints no proposal, even with `proposeFromHeaders` on. */
+  readonly rejectedSlugs: ReadonlySet<string>;
+  /** With this off, an unmatched numeric column is skipped exactly as it always has been — no
+   *  proposal, no synthetic definition, no observable difference from before this flag existed. */
+  readonly proposeFromHeaders: boolean;
 }
 
 // A spreadsheet has no dedicated "entity" or "period" column type — which header plays that role
@@ -268,12 +328,23 @@ function parsePercentageDisplay(
   };
 }
 
-function parseAreaDisplay(text: string): DisplayParseOutcome {
+/**
+ * The reading every `area`/`duration`/`count` cell needs: strip thousands separators, read the
+ * cleaned text as a decimal amount, and express it in `metric`'s own factor-1 unit — none of these
+ * three value types carries a currency-style magnitude suffix or a percent/ratio ambiguity to
+ * resolve, so unlike `parseCurrencyDisplay`/`parsePercentageDisplay` there is only one reading to
+ * produce.
+ */
+function parseBaseUnitDisplay(text: string, metric: MetricDefinition): DisplayParseOutcome {
   const cleaned = text.replace(/,/g, '').trim();
   const amount = parseDecimalAmount(cleaned);
-  return amount === undefined
-    ? refuse(text, 'not a decimal square-foot value')
-    : { value: { amount, unit: 'sf' } };
+  if (amount === undefined) {
+    return refuse(text, `not a decimal ${metric.valueType} value`);
+  }
+  const baseUnit = metric.units.find((unit) => unit.toCanonicalFactor === 1);
+  return baseUnit
+    ? { value: { amount, unit: baseUnit.id } }
+    : refuse(text, `metric '${metric.id}' declares no base unit to read a bare amount as`);
 }
 
 function parseDisplayValue(
@@ -288,12 +359,16 @@ function parseDisplayValue(
   if (metric.valueType === 'currency') {
     return parseCurrencyDisplay(text, metric);
   }
-  if (metric.valueType === 'area') {
-    return parseAreaDisplay(text);
+  if (
+    metric.valueType === 'area' ||
+    metric.valueType === 'duration' ||
+    metric.valueType === 'count'
+  ) {
+    return parseBaseUnitDisplay(text, metric);
   }
-  // 'duration' metrics (e.g. lease_term_years) have no column in this ontology's spreadsheet
-  // source — reachable only if a future column alias maps a header to one, at which point this
-  // extractor would need an explicit parser for it rather than silently mis-parsing.
+  // Every `FactValueType` this codebase declares (percentage, currency, area, duration, count) has
+  // a parser above; this is reachable only for a value type outside that union, which is the one
+  // gap `DisplayParseResult`'s `undefined` branch exists for.
   return undefined;
 }
 
@@ -311,7 +386,7 @@ interface SheetCell {
 function extractSheetFacts(
   sheetName: string,
   elements: readonly ParsedElement[],
-  ontology: readonly MetricDefinition[],
+  context: XlsxExtractionContext,
   strictPercentUnitResolution: boolean,
 ): XlsxFactExtractionResult {
   const cells: SheetCell[] = [];
@@ -330,7 +405,7 @@ function extractSheetFacts(
     });
   }
   if (cells.length === 0) {
-    return { accepted: [], rejected: [], reducedFidelityReasons: [] };
+    return { accepted: [], rejected: [], reducedFidelityReasons: [], proposals: [] };
   }
 
   // Mirrors chunker.ts's identical assumption near its own header-row derivation — pointed at the
@@ -340,9 +415,83 @@ function extractSheetFacts(
   const reducedFidelityReasons = reducedFidelityReason
     ? [`Sheet '${sheetName}': ${reducedFidelityReason}`]
     : [];
-  const headerByColumn = new Map<string, string>();
+  const headerCellByColumn = new Map<string, SheetCell>();
   for (const cell of cells.filter((cell) => cell.row === headerRow)) {
-    headerByColumn.set(cell.column, cell.text);
+    headerCellByColumn.set(cell.column, cell);
+  }
+  const headerByColumn = new Map<string, string>();
+  for (const [column, headerCell] of headerCellByColumn) {
+    headerByColumn.set(column, headerCell.text);
+  }
+
+  // Resolved once per column, ahead of the row loop below, since every input a column's
+  // resolution depends on (its header text, and — under `proposeFromHeaders` — its own data-row
+  // cell texts) is itself column-scoped, not row-scoped. With `proposeFromHeaders` off, this
+  // produces exactly what the per-cell resolution used to: a matched metric or nothing, so an
+  // unmatched column is skipped exactly as it always has been.
+  const columnResolutions = new Map<string, XlsxColumnResolution>();
+  const proposalsBySlug = new Map<
+    string,
+    { proposal: HeaderMeasureProposal; candidates: FactCandidate[] }
+  >();
+  for (const [column, headerCell] of headerCellByColumn) {
+    const header = headerCell.text;
+    const headerUnitMarker = strictPercentUnitResolution
+      ? parseHeaderUnitMarker(header)
+      : undefined;
+    // The slug fallback below is unconditional except for one case: a header that itself carries
+    // a percent/ratio marker (`parseHeaderUnitMarker`) while `strictPercentUnitResolution` is off.
+    // Stripping that header's parenthetical would resolve it to a metric and hand a markerless
+    // cell straight to `parsePercentageDisplay`'s lenient ratio default — the exact 100x-magnitude
+    // defect that flag exists to let a caller opt out of. With the flag on, the marker path above
+    // already resolves the header correctly and supplies `headerUnit`, so this check never changes
+    // strict-mode behaviour; it only restores the pre-slug-fallback "mints nothing" outcome for the
+    // ambiguous flag-off case.
+    const slugFallbackAllowed =
+      strictPercentUnitResolution || parseHeaderUnitMarker(header).unit === undefined;
+    const matched =
+      findMetricByAlias(context.matchable, header) ??
+      (headerUnitMarker
+        ? findMetricByAlias(context.matchable, headerUnitMarker.baseText)
+        : undefined) ??
+      (slugFallbackAllowed
+        ? context.matchable.find((definition) => definition.id === deriveMeasureSlug(header))
+        : undefined);
+    if (matched) {
+      columnResolutions.set(column, { definition: matched, headerUnit: headerUnitMarker?.unit });
+      continue;
+    }
+    if (
+      !context.proposeFromHeaders ||
+      isEntityHeader(header) ||
+      isPeriodHeader(header) ||
+      isAsOfHeader(header)
+    ) {
+      // Allowlist enforcement: a header that names no known metric and proposes none either (e.g.
+      // "Notes", or the entity/period/as-of columns themselves) never produces a fact.
+      continue;
+    }
+    const slug = deriveMeasureSlug(header);
+    if (!slug || context.rejectedSlugs.has(slug)) {
+      // A slug this grammar refuses mints nothing to propose; a slug a human has already rejected
+      // as a measure mints nothing either, even with the flag on.
+      continue;
+    }
+    const columnCellTexts = cells
+      .filter((cell) => cell.column === column && cell.row > headerRow && !cell.mergeCovered)
+      .map((cell) => cell.text);
+    const proposal = buildHeaderProposal(header, headerCell.locator, columnCellTexts);
+    if (!proposal) {
+      // Fails CLOSED: a mixed or all-empty column is not a measure column — see
+      // `buildHeaderProposal`'s own doc comment for exactly what it refuses.
+      continue;
+    }
+    columnResolutions.set(column, {
+      definition: toSyntheticMetricDefinition(proposal),
+      headerUnit: undefined,
+      proposal,
+    });
+    proposalsBySlug.set(proposal.slug, { proposal, candidates: [] });
   }
 
   const rowsByNumber = new Map<number, SheetCell[]>();
@@ -379,28 +528,13 @@ function extractSheetFacts(
         // every metric it happens to overlap, only the master cell's own column is.
         continue;
       }
-      const header = headerByColumn.get(cell.column);
-      if (!header) {
+      const resolution = columnResolutions.get(cell.column);
+      if (!resolution) {
         continue;
       }
-      const headerUnitMarker = strictPercentUnitResolution
-        ? parseHeaderUnitMarker(header)
-        : undefined;
-      const metric =
-        findMetricByAlias(ontology, header) ??
-        (headerUnitMarker ? findMetricByAlias(ontology, headerUnitMarker.baseText) : undefined);
-      if (!metric) {
-        // Allowlist enforcement: a header that names no known metric (e.g. "Notes", or the entity
-        // and period columns themselves) never produces a fact.
-        continue;
-      }
+      const { definition: metric, headerUnit } = resolution;
       const factKey: FactKey = { entity, metric: metric.id, period };
-      const parsed = parseDisplayValue(
-        cell.text,
-        metric,
-        headerUnitMarker?.unit,
-        strictPercentUnitResolution,
-      );
+      const parsed = parseDisplayValue(cell.text, metric, headerUnit, strictPercentUnitResolution);
       if (!parsed) {
         // Only a metric whose `valueType` has no parser here reaches this — a cell this file can
         // read but refuses returns a reason instead, and is recorded below.
@@ -424,7 +558,7 @@ function extractSheetFacts(
         });
         continue;
       }
-      accepted.push({
+      const candidate: FactCandidate = {
         factKey,
         value,
         rawText: cell.text,
@@ -433,7 +567,12 @@ function extractSheetFacts(
         extractionMethod: 'regex',
         locator: cell.locator,
         observedAt,
-      });
+      };
+      if (resolution.proposal) {
+        proposalsBySlug.get(resolution.proposal.slug)?.candidates.push(candidate);
+      } else {
+        accepted.push(candidate);
+      }
     }
   }
 
@@ -455,6 +594,7 @@ function extractSheetFacts(
     accepted,
     rejected,
     reducedFidelityReasons: [...reducedFidelityReasons, ...rejectionReasons],
+    proposals: Array.from(proposalsBySlug.values()),
   };
 }
 
@@ -471,7 +611,7 @@ function extractSheetFacts(
  * today, so it ships inert until a caller turns it on deliberately. */
 export function extractXlsxFacts(
   elements: readonly ParsedElement[],
-  ontology: readonly MetricDefinition[],
+  context: XlsxExtractionContext,
   strictPercentUnitResolution = false,
 ): XlsxFactExtractionResult {
   const bySheet = new Map<string, ParsedElement[]>();
@@ -488,16 +628,39 @@ export function extractXlsxFacts(
   const accepted: FactCandidate[] = [];
   const rejected: RejectedXlsxCandidate[] = [];
   const reducedFidelityReasons: string[] = [];
+  // Keyed by slug so a second sheet in the same call that derives the same slug merges its
+  // candidates into the one proposal, rather than minting a second one — see
+  // `XlsxHeaderProposal`'s own doc comment.
+  const proposalsBySlug = new Map<
+    string,
+    { proposal: HeaderMeasureProposal; candidates: FactCandidate[] }
+  >();
   for (const [sheetName, sheetElements] of bySheet) {
     const sheetResult = extractSheetFacts(
       sheetName,
       sheetElements,
-      ontology,
+      context,
       strictPercentUnitResolution,
     );
     accepted.push(...sheetResult.accepted);
     rejected.push(...sheetResult.rejected);
     reducedFidelityReasons.push(...sheetResult.reducedFidelityReasons);
+    for (const entry of sheetResult.proposals) {
+      const existing = proposalsBySlug.get(entry.proposal.slug);
+      if (existing) {
+        existing.candidates.push(...entry.candidates);
+      } else {
+        proposalsBySlug.set(entry.proposal.slug, {
+          proposal: entry.proposal,
+          candidates: [...entry.candidates],
+        });
+      }
+    }
   }
-  return { accepted, rejected, reducedFidelityReasons };
+  return {
+    accepted,
+    rejected,
+    reducedFidelityReasons,
+    proposals: Array.from(proposalsBySlug.values()),
+  };
 }

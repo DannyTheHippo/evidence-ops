@@ -13,9 +13,10 @@ import { z } from 'zod/v4';
  * the source chunk by `prose-fact-extractor.ts` after the call returns — a schema can shape the
  * JSON, but only application code can check a quote is real.
  *
- * Built from `metricIds` rather than hardcoding `METRIC_IDS` directly so `prose-fact-extractor.ts`
- * can call this once per extraction with `METRIC_ONTOLOGY`'s metric ids, in the ontology's own
- * order, without this file importing `metric-ontology.ts` itself.
+ * Built from `metricIds` rather than hardcoding a fixed ontology directly so `prose-fact-
+ * extractor.ts` can call this once per extraction with the tenant's confirmed measure slugs, in
+ * `orderForExtraction` order, without this file importing `metric-ontology.ts` or the measures
+ * feature itself.
  */
 export function buildFactCandidateSchema(metricIds: readonly string[]) {
   return z.object({

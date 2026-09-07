@@ -3,6 +3,7 @@ import {
   RECALL_AT_5_FLOOR,
   buildMarkdownReport,
   failingCases,
+  hasBaselineRegression,
   hasConflictScopeGap,
   hasMixedScoringMethods,
   hasOwnVoiceLeak,
@@ -11,6 +12,7 @@ import {
   type EvalRunResult,
   type ScoringMethodSplit,
 } from '../../eval/report';
+import type { BaselineComparison } from '../../eval/metrics/compare-baseline';
 import type { EvalMetrics } from '../../eval/metrics/compute-metrics';
 
 function baseMetrics(overrides: Partial<EvalMetrics> = {}): EvalMetrics {
@@ -303,6 +305,103 @@ describe('buildMarkdownReport', () => {
     const markdown = buildMarkdownReport(result);
 
     expect(markdown).toContain('No pdf-page/docx-paragraph chunks under this tenant.');
+  });
+});
+
+describe('buildMarkdownReport — baseline comparison', () => {
+  function comparison(overrides: Partial<BaselineComparison> = {}): BaselineComparison {
+    return {
+      regressions: [],
+      held: ['retrieval.recallAt5', 'citationPrecision'],
+      absentFromBaseline: [],
+      absentFromCurrent: [],
+      ...overrides,
+    };
+  }
+
+  it('should omit the section entirely when no baseline comparison was run', () => {
+    const markdown = buildMarkdownReport(baseResult());
+
+    expect(markdown).not.toContain('## Baseline comparison');
+  });
+
+  it('should render the section when a baseline comparison is present', () => {
+    const result = baseResult({
+      baselineComparison: comparison(),
+      baselinePath: 'eval/baseline/synthetic.json',
+    });
+
+    const markdown = buildMarkdownReport(result);
+
+    expect(markdown).toContain('## Baseline comparison');
+    expect(markdown).toContain('Baseline: eval/baseline/synthetic.json');
+    expect(markdown).toContain('Passed — no gated metric regressed against');
+    expect(markdown).not.toContain('FAILED');
+  });
+
+  it('should render FAILED and name each regressed metric', () => {
+    const result = baseResult({
+      baselineComparison: comparison({
+        regressions: [{ metric: 'retrieval.recallAt5', baseline: 0.8, current: 0.7 }],
+      }),
+      baselinePath: 'eval/baseline/synthetic.json',
+    });
+
+    const markdown = buildMarkdownReport(result);
+
+    expect(markdown).toContain(
+      '**FAILED — 1 metric(s) regressed against eval/baseline/synthetic.json: ' +
+        'retrieval.recallAt5 0.8→0.7.**',
+    );
+  });
+
+  it('should render held count and absent lists', () => {
+    const result = baseResult({
+      baselineComparison: comparison({
+        held: ['citationPrecision'],
+        absentFromBaseline: ['conflictScopeAccuracy'],
+        absentFromCurrent: ['retrieval.mrr'],
+      }),
+      baselinePath: 'eval/baseline/synthetic.json',
+    });
+
+    const markdown = buildMarkdownReport(result);
+
+    expect(markdown).toContain('Held: 1');
+    expect(markdown).toContain('Absent from baseline: conflictScopeAccuracy');
+    expect(markdown).toContain('Absent from current: retrieval.mrr');
+  });
+});
+
+describe('hasBaselineRegression', () => {
+  it('should return false when no baseline comparison was run', () => {
+    expect(hasBaselineRegression({ baselineComparison: undefined })).toBe(false);
+  });
+
+  it('should return false when the comparison found no regressions', () => {
+    expect(
+      hasBaselineRegression({
+        baselineComparison: {
+          regressions: [],
+          held: ['citationPrecision'],
+          absentFromBaseline: [],
+          absentFromCurrent: [],
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it('should return true when the comparison found at least one regression', () => {
+    expect(
+      hasBaselineRegression({
+        baselineComparison: {
+          regressions: [{ metric: 'retrieval.recallAt5', baseline: 0.8, current: 0.7 }],
+          held: [],
+          absentFromBaseline: [],
+          absentFromCurrent: [],
+        },
+      }),
+    ).toBe(true);
   });
 });
 

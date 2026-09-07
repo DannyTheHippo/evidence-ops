@@ -8,6 +8,7 @@ import type { StringValue } from 'ms';
 import { DEFAULT_TENANT_ID } from '../../../../src/database/constants/tenant.constant';
 import { Tenant } from '../../../../src/database/schemas/administration/tenant/tenant.schema';
 import { User } from '../../../../src/database/schemas/administration/user/user.schema';
+import { Measure } from '../../../../src/database/schemas/evidence/measure/measure.schema';
 import { AuthService } from '../../../../src/features/common/auth/auth.service';
 import {
   EmailAlreadyRegisteredException,
@@ -17,6 +18,7 @@ import {
 } from '../../../../src/features/common/auth/exceptions/auth.exception';
 import { JwtPayload } from '../../../../src/features/common/auth/types/jwt-payload.type';
 import { InvitationsService } from '../../../../src/features/common/invitations/invitations.service';
+import { METRIC_ONTOLOGY } from '../../../../src/features/evidence/facts/metric-ontology';
 import { UserRole } from '../../../../src/shared/enums/user-role.enum';
 import { AuditService } from '../../../../src/shared/services/audit/audit.service';
 import { AppLogger } from '../../../../src/shared/services/logger/logger.service';
@@ -31,6 +33,7 @@ describe('AuthService', () => {
   const mockUserId = '65f1c2e4a1b2c3d4e5f6a7b8';
   const mockUserModel = getMockModel();
   const mockTenantModel = getMockModel();
+  const mockMeasureModel = getMockModel();
   const mockConfig = getMockConfig();
   const mockAuditService = { record: jest.fn() };
   const mockInvitationsService = { verify: jest.fn(), accept: jest.fn(), release: jest.fn() };
@@ -69,6 +72,10 @@ describe('AuthService', () => {
         {
           provide: getModelToken(Tenant.name),
           useValue: mockTenantModel,
+        },
+        {
+          provide: getModelToken(Measure.name),
+          useValue: mockMeasureModel,
         },
         {
           provide: AppLogger,
@@ -153,6 +160,32 @@ describe('AuthService', () => {
       expect(result.role).toBe(UserRole.Admin);
     });
 
+    it('should seed the tenant with one measure row per METRIC_ONTOLOGY entry before creating the user', async () => {
+      mockUserModel.findOne.mockResolvedValueOnce(null);
+      mockTenantModel.create.mockImplementationOnce((doc: { tenantId: string; name: string }) =>
+        Promise.resolve(buildMockTenant(doc)),
+      );
+      mockUserModel.create.mockImplementationOnce((doc: Record<string, unknown>) =>
+        Promise.resolve(buildMockUser(doc)),
+      );
+
+      await service.register({ email: 'user@example.com', password: 'password123' });
+
+      const tenantCalls = mockTenantModel.create.mock.calls as Array<
+        [{ tenantId: string; name: string }]
+      >;
+      const createdTenantId = tenantCalls[0][0].tenantId;
+      expect(mockMeasureModel.insertMany).toHaveBeenCalledTimes(1);
+      const [seededRows] = mockMeasureModel.insertMany.mock.calls[0] as [
+        Array<{ tenantId: string; slug: string }>,
+      ];
+      expect(seededRows).toHaveLength(METRIC_ONTOLOGY.length);
+      expect(seededRows.every((row) => row.tenantId === createdTenantId)).toBe(true);
+      expect(mockMeasureModel.insertMany.mock.invocationCallOrder[0]).toBeLessThan(
+        mockUserModel.create.mock.invocationCallOrder[0],
+      );
+    });
+
     it('should generate a different tenantId for each registration', async () => {
       mockUserModel.findOne.mockResolvedValue(null);
       mockTenantModel.create.mockImplementation((doc: { tenantId: string; name: string }) =>
@@ -171,7 +204,7 @@ describe('AuthService', () => {
       expect(tenantCalls[0][0].tenantId).not.toBe(tenantCalls[1][0].tenantId);
     });
 
-    it('should delete the newly created tenant and rethrow when user creation fails', async () => {
+    it('should delete both the newly created tenant and its seeded measures, and rethrow, when user creation fails', async () => {
       mockUserModel.findOne.mockResolvedValueOnce(null);
       mockTenantModel.create.mockImplementationOnce((doc: { tenantId: string; name: string }) =>
         Promise.resolve(buildMockTenant(doc)),
@@ -179,6 +212,7 @@ describe('AuthService', () => {
       const userCreationError = new Error('user creation failed');
       mockUserModel.create.mockRejectedValueOnce(userCreationError);
       mockTenantModel.deleteOne.mockResolvedValueOnce(undefined);
+      mockMeasureModel.deleteMany.mockResolvedValueOnce(undefined);
 
       const error = await service
         .register({ email: 'user@example.com', password: 'password123' })
@@ -190,6 +224,31 @@ describe('AuthService', () => {
       >;
       const createdTenantId = tenantCalls[0][0].tenantId;
       expect(mockTenantModel.deleteOne).toHaveBeenCalledWith({ tenantId: createdTenantId });
+      expect(mockMeasureModel.deleteMany).toHaveBeenCalledWith({ tenantId: createdTenantId });
+    });
+
+    it('should delete the newly created tenant and rethrow, without ever creating a user, when measure seeding fails', async () => {
+      mockUserModel.findOne.mockResolvedValueOnce(null);
+      mockTenantModel.create.mockImplementationOnce((doc: { tenantId: string; name: string }) =>
+        Promise.resolve(buildMockTenant(doc)),
+      );
+      const seedingError = new Error('measure seeding failed');
+      mockMeasureModel.insertMany.mockRejectedValueOnce(seedingError);
+      mockTenantModel.deleteOne.mockResolvedValueOnce(undefined);
+      mockMeasureModel.deleteMany.mockResolvedValueOnce(undefined);
+
+      const error = await service
+        .register({ email: 'user@example.com', password: 'password123' })
+        .catch((e: unknown) => e);
+
+      expect(error).toBe(seedingError);
+      expect(mockUserModel.create).not.toHaveBeenCalled();
+      const tenantCalls = mockTenantModel.create.mock.calls as Array<
+        [{ tenantId: string; name: string }]
+      >;
+      const createdTenantId = tenantCalls[0][0].tenantId;
+      expect(mockTenantModel.deleteOne).toHaveBeenCalledWith({ tenantId: createdTenantId });
+      expect(mockMeasureModel.deleteMany).toHaveBeenCalledWith({ tenantId: createdTenantId });
     });
 
     it('should throw EmailAlreadyRegisteredException with 409 Conflict on a duplicate email', async () => {

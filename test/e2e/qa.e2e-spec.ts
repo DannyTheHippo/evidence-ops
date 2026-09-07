@@ -29,6 +29,7 @@ import type {
   VerificationReport,
 } from '../../src/features/evidence/qa/contracts/answer.contract';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
+import { measureStamp, type MeasureStamp } from '../utils/measure-stamp';
 import { readSseEvent } from '../utils/read-sse-event';
 import { registerTestUser } from '../utils/register-test-user';
 import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts';
@@ -112,6 +113,19 @@ describe('QA and Conflicts (e2e)', () => {
   afterAll(async () => {
     await closeTestApp(app);
   });
+
+  // Per-suite cache, not one `measureStamp` call per fact literal: every fact fixture below
+  // resolves against the same tenant and only two slugs (`cap_rate`, `net_operating_income`).
+  const measureStampCache = new Map<string, MeasureStamp>();
+  const getMeasureStamp = async (slug: string): Promise<MeasureStamp> => {
+    const cached = measureStampCache.get(slug);
+    if (cached) {
+      return cached;
+    }
+    const stamp = await measureStamp(app, tenantId, slug);
+    measureStampCache.set(slug, stamp);
+    return stamp;
+  };
 
   describe('POST /questions', () => {
     it('rejects an unauthenticated request', async () => {
@@ -691,6 +705,7 @@ describe('QA and Conflicts (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp('cap_rate')),
         chunkId: 'chunk-xlsx',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
@@ -704,6 +719,7 @@ describe('QA and Conflicts (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp('cap_rate')),
         chunkId: 'chunk-prose',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
@@ -794,6 +810,7 @@ describe('QA and Conflicts (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp('cap_rate')),
         chunkId: 'chunk-withdrawn-conflict',
         documentVersionId: withdrawnVersion._id,
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
@@ -807,6 +824,7 @@ describe('QA and Conflicts (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp('cap_rate')),
         chunkId: 'chunk-live-conflict',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
@@ -885,6 +903,7 @@ describe('QA and Conflicts (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp('net_operating_income')),
         chunkId: 'chunk-pm',
         documentVersionId: pmVersion._id,
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Rent Roll', cell: 'B2' },
@@ -898,6 +917,7 @@ describe('QA and Conflicts (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp('net_operating_income')),
         chunkId: 'chunk-comps',
         documentVersionId: spreadsheetVersion._id,
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'C4' },
@@ -956,6 +976,7 @@ describe('QA and Conflicts (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp('cap_rate')),
         chunkId: 'chunk-eastgate-low',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F3' },
@@ -969,6 +990,7 @@ describe('QA and Conflicts (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp('cap_rate')),
         chunkId: 'chunk-eastgate-high',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 3 },
@@ -998,6 +1020,7 @@ describe('QA and Conflicts (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp('cap_rate')),
         chunkId: 'chunk-westgate-low',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F4' },
@@ -1011,6 +1034,7 @@ describe('QA and Conflicts (e2e)', () => {
         confidence: 0.9,
         extractionMethod: 'llm',
         ...PACK_STAMP,
+        ...(await getMeasureStamp('cap_rate')),
         chunkId: 'chunk-westgate-high',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 4 },

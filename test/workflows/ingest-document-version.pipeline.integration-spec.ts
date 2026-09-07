@@ -36,6 +36,11 @@ import {
   ExtractedFactSchema,
   type ExtractedFactDocument,
 } from '../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import {
+  Measure,
+  MeasureSchema,
+  type MeasureDocument,
+} from '../../src/database/schemas/evidence/measure/measure.schema';
 import type { ApprovalDocument } from '../../src/database/schemas/workflow/approval/approval.schema';
 import { ConflictsService } from '../../src/features/evidence/conflicts/conflicts.service';
 import { CanonicalEntityService } from '../../src/features/evidence/facts/canonical-entity.service';
@@ -46,6 +51,8 @@ import { IngestionService } from '../../src/features/evidence/ingestion/ingestio
 import { ParserRegistry } from '../../src/features/evidence/ingestion/parser.registry';
 import { PdfParser } from '../../src/features/evidence/ingestion/parsers/pdf.parser';
 import { XlsxParser } from '../../src/features/evidence/ingestion/parsers/xlsx.parser';
+import { seedMeasures } from '../../src/features/evidence/measures/measure-seed';
+import { MeasuresService } from '../../src/features/evidence/measures/measures.service';
 import type { WorkflowRunsService } from '../../src/features/evidence/workflow-runs/workflow-runs.service';
 import { FakeEmbeddingProvider } from '../../src/providers/embedding/fake-embedding.provider';
 import { FakeModelProvider } from '../../src/providers/model/fake-model.provider';
@@ -96,6 +103,7 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
   let extractedFactModel: Model<ExtractedFactDocument>;
   let conflictModel: Model<ConflictDocument>;
   let canonicalEntityModel: Model<CanonicalEntityDocument>;
+  let measureModel: Model<MeasureDocument>;
 
   beforeAll(async () => {
     connection = await mongoose.createConnection(MONGO_DB_URI).asPromise();
@@ -128,6 +136,19 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
       CanonicalEntity.name,
       CanonicalEntitySchema,
     ) as unknown as Model<CanonicalEntityDocument>;
+    measureModel = connection.model(
+      Measure.name,
+      MeasureSchema,
+    ) as unknown as Model<MeasureDocument>;
+
+    // Extraction resolves the tenant's allowlist through `MeasuresService.loadExtractionContext`,
+    // not `METRIC_ONTOLOGY` directly, so this pipeline needs the same eight seed rows a real tenant
+    // gets from `POST /auth/register` — without them, every extracted candidate's slug has no
+    // stamp and `FactsService` drops it. `deleteMany` first because `TENANT_ID` is unique per test
+    // run (`randomUUID()`), but `seedMeasures`'s `insertMany` still isn't idempotent against a
+    // second call for the same id.
+    await measureModel.deleteMany({ tenantId: TENANT_ID });
+    await seedMeasures(measureModel, TENANT_ID);
   });
 
   afterAll(async () => {
@@ -139,6 +160,7 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
         extractedFactModel.deleteMany({ tenantId: TENANT_ID }),
         conflictModel.deleteMany({ tenantId: TENANT_ID }),
         canonicalEntityModel.deleteMany({ tenantId: TENANT_ID }),
+        measureModel.deleteMany({ tenantId: TENANT_ID }),
       ]);
       await connection.close();
     }
@@ -183,17 +205,6 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
     // this integration lane.
     const workflowEngine = new FakeWorkflowEngine();
     const workflowRunsService = { create: jest.fn() } as unknown as WorkflowRunsService;
-    const factsService = new FactsService(
-      documentVersionModel,
-      evidenceChunkModel,
-      extractedFactModel,
-      documentStore,
-      modelProvider,
-      parserRegistry,
-      canonicalEntityService,
-      getMockTypedConfig(),
-      logger,
-    );
     // `requestResolution`'s pending-approval guard is never exercised by this pipeline, so
     // `approvalModel` is an unused-but-required stub.
     const approvalModel = { exists: jest.fn() } as unknown as Model<ApprovalDocument>;
@@ -207,6 +218,30 @@ describe('Ingest → facts → conflicts pipeline (integration)', () => {
       workflowRunsService,
       auditService,
       logger,
+      measureModel,
+    );
+    // Real, not stubbed: `MeasuresService.loadExtractionContext` is what resolves the seeded rows
+    // above into `FactsService`'s extraction allowlist, and `proposeMany` is what a header-proposal
+    // column (none in these fixtures) would file against — a fake here would leave the seam this
+    // pipeline exists to prove untested.
+    const measuresService = new MeasuresService(
+      measureModel,
+      extractedFactModel,
+      conflictsService,
+      auditService,
+      logger,
+    );
+    const factsService = new FactsService(
+      documentVersionModel,
+      evidenceChunkModel,
+      extractedFactModel,
+      documentStore,
+      modelProvider,
+      parserRegistry,
+      canonicalEntityService,
+      getMockTypedConfig(),
+      logger,
+      measuresService,
     );
 
     // --- comps.xlsx: the current-underwriting cap rate (5.25%, cell Comps!F2) ---

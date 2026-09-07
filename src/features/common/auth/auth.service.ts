@@ -9,9 +9,14 @@ import {
   TenantDocument,
 } from '../../../database/schemas/administration/tenant/tenant.schema';
 import { User, UserDocument } from '../../../database/schemas/administration/user/user.schema';
+import {
+  Measure,
+  MeasureDocument,
+} from '../../../database/schemas/evidence/measure/measure.schema';
 import { UserRole } from '../../../shared/enums/user-role.enum';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
+import { seedMeasures } from '../../evidence/measures/measure-seed';
 import { InvitationsService } from '../invitations/invitations.service';
 import { LoginRequestDto } from './dtos/request/login.request.dto';
 import { RegisterRequestDto } from './dtos/request/register.request.dto';
@@ -39,6 +44,9 @@ export class AuthService {
 
     @InjectModel(Tenant.name)
     private readonly tenantModel: Model<TenantDocument>,
+
+    @InjectModel(Measure.name)
+    private readonly measureModel: Model<MeasureDocument>,
 
     private readonly jwtService: JwtService,
     private readonly auditService: AuditService,
@@ -75,11 +83,18 @@ export class AuthService {
 
     let user: UserDocument;
     try {
+      // A tenant is never half-born: its measures are seeded before it gains a user, so a failure
+      // past this point always has both a tenant row and a measures row to clean up.
+      await seedMeasures(this.measureModel, tenantId);
       user = await this.userModel.create({ email, password, tenantId, role: UserRole.Admin });
     } catch (error) {
-      // The registrant is the sole member of a tenant that failed to gain a user — remove the
-      // orphaned registry row rather than leave a tenant with nobody in it.
-      await this.tenantModel.deleteOne({ tenantId });
+      // The registrant is the sole member of a tenant that failed to gain a user, or the tenant's
+      // measure seeding itself failed — either way remove both the orphaned tenant row and its
+      // (possibly partial) measures rather than leave a tenant that exists but extracts nothing.
+      await Promise.all([
+        this.tenantModel.deleteOne({ tenantId }),
+        this.measureModel.deleteMany({ tenantId }),
+      ]);
       throw error;
     }
 

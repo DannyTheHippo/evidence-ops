@@ -9,7 +9,9 @@ import {
 } from '../../src/features/evidence/facts/canonical-entity.service';
 import { derivePeriodFromDateText } from '../../src/features/evidence/facts/derive-period';
 import { FactsService } from '../../src/features/evidence/facts/facts.service';
+import { METRIC_ONTOLOGY } from '../../src/features/evidence/facts/metric-ontology';
 import { IngestionService } from '../../src/features/evidence/ingestion/ingestion.service';
+import { MeasuresService } from '../../src/features/evidence/measures/measures.service';
 import { AnswerPersistenceService } from '../../src/features/evidence/qa/answer-persistence.service';
 import type { Claim } from '../../src/features/evidence/qa/contracts/answer.contract';
 import { EvidenceRetrievalService } from '../../src/features/evidence/qa/evidence-retrieval.service';
@@ -53,7 +55,9 @@ const activityContext = jest.requireMock('@temporalio/activity') as unknown as {
  * `findConflictedFactGroupsForChunks`, `findConflictedFactGroupsForTenant` and
  * `listCanonicalEntities` default to resolving `[]` — the same "no grounding input" shape
  * `GroundingGateService.verify` itself defaults to — so a test that doesn't care about cell
- * facts/conflicts/canonical entities doesn't have to stub them.
+ * facts/conflicts/canonical entities doesn't have to stub them. `listConfirmedDefinitions`
+ * defaults to `METRIC_ONTOLOGY` — the seed set every tenant starts confirmed with — so every
+ * existing metric-naming test keeps resolving against the same vocabulary it always has.
  */
 function buildApp(overrides: {
   ingestVersion?: jest.Mock;
@@ -62,6 +66,7 @@ function buildApp(overrides: {
   scanForConflicts?: jest.Mock;
   findCellFacts?: jest.Mock;
   listCanonicalEntities?: jest.Mock;
+  listConfirmedDefinitions?: jest.Mock;
   retrieve?: jest.Mock;
   synthesizeAnswer?: jest.Mock;
   verify?: jest.Mock;
@@ -108,6 +113,13 @@ function buildApp(overrides: {
       CanonicalEntityService,
       {
         listCanonicalEntities: overrides.listCanonicalEntities ?? jest.fn().mockResolvedValue([]),
+      },
+    ],
+    [
+      MeasuresService,
+      {
+        listConfirmedDefinitions:
+          overrides.listConfirmedDefinitions ?? jest.fn().mockResolvedValue([...METRIC_ONTOLOGY]),
       },
     ],
     [EvidenceRetrievalService, { retrieve: overrides.retrieve ?? jest.fn() }],
@@ -1156,6 +1168,95 @@ describe('createActivities', () => {
         retrievedChunks: [],
         tenantId: 'acme-corp',
         questionText: 'What is the cap rate for Northgate Business Park?',
+      });
+
+      expect(result).toEqual({ outcome, claims: [] });
+    });
+
+    // Proves the metric vocabulary `resolveQuestionMetric` matches against is the *tenant's*
+    // confirmed measures, not the global `METRIC_ONTOLOGY` constant: this pair only differs in
+    // whether `listConfirmedDefinitions` includes `year_built`, and only the tenant that has it
+    // confirmed can have a question scoped to it.
+    it('should force conflicting_evidence off a tenant-specific confirmed measure named by the question', async () => {
+      const yearBuiltMeasure = {
+        id: 'year_built',
+        label: 'Year Built',
+        aliases: ['Year Built', 'year built', 'construction year'],
+        valueType: 'count' as const,
+        canonicalUnit: 'years',
+        units: [{ id: 'years', toCanonicalFactor: 1 }],
+        toleranceKind: 'absolute' as const,
+        tolerance: 0,
+      };
+      const yearBuiltFactKey = {
+        entity: 'Northgate Business Park',
+        metric: 'year_built',
+        period: derivePeriodFromDateText(''),
+      };
+      const yearBuiltValues = [
+        { value: 1998, unit: 'years', sourceChunkId: 'chunk-a' },
+        { value: 2001, unit: 'years', sourceChunkId: 'chunk-b' },
+      ];
+      const app = buildApp({
+        findConflictedFactGroupsForTenant: jest
+          .fn()
+          .mockResolvedValue([{ conflictId, factKey: yearBuiltFactKey, values: yearBuiltValues }]),
+        listCanonicalEntities: jest
+          .fn()
+          .mockResolvedValue([buildCanonicalEntity({ canonicalName: 'Northgate Business Park' })]),
+        listConfirmedDefinitions: jest
+          .fn()
+          .mockResolvedValue([...METRIC_ONTOLOGY, yearBuiltMeasure]),
+      });
+      const outcome = { kind: 'insufficient_evidence' as const, reason: 'none' };
+
+      const activities = createActivities(app);
+      const result = await activities.groundingCheck({
+        outcome,
+        retrievedChunks: [],
+        tenantId: 'acme-corp',
+        questionText: 'What is the Year Built for Northgate Business Park?',
+      });
+
+      expect(result).toEqual({
+        outcome: {
+          kind: 'conflicting_evidence',
+          factKey: yearBuiltFactKey,
+          values: yearBuiltValues,
+        },
+        claims: [],
+        conflictIds: [conflictId],
+      });
+    });
+
+    it("should NOT force conflicting_evidence when the named metric's slug is absent from the tenant's confirmed measures", async () => {
+      const yearBuiltFactKey = {
+        entity: 'Northgate Business Park',
+        metric: 'year_built',
+        period: derivePeriodFromDateText(''),
+      };
+      const yearBuiltValues = [
+        { value: 1998, unit: 'years', sourceChunkId: 'chunk-a' },
+        { value: 2001, unit: 'years', sourceChunkId: 'chunk-b' },
+      ];
+      const app = buildApp({
+        findConflictedFactGroupsForTenant: jest
+          .fn()
+          .mockResolvedValue([{ conflictId, factKey: yearBuiltFactKey, values: yearBuiltValues }]),
+        listCanonicalEntities: jest
+          .fn()
+          .mockResolvedValue([buildCanonicalEntity({ canonicalName: 'Northgate Business Park' })]),
+        // Default `listConfirmedDefinitions` (METRIC_ONTOLOGY) never includes `year_built` — this
+        // tenant has not confirmed it, so the question cannot resolve to that metric at all.
+      });
+      const outcome = { kind: 'insufficient_evidence' as const, reason: 'none' };
+
+      const activities = createActivities(app);
+      const result = await activities.groundingCheck({
+        outcome,
+        retrievedChunks: [],
+        tenantId: 'acme-corp',
+        questionText: 'What is the Year Built for Northgate Business Park?',
       });
 
       expect(result).toEqual({ outcome, claims: [] });

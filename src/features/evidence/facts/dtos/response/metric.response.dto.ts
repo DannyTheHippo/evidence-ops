@@ -5,7 +5,8 @@ export class MetricResponseDto {
   @Expose()
   @ApiProperty({
     example: 'cap_rate',
-    description: "Metric identifier, one of METRIC_ONTOLOGY's METRIC_IDS.",
+    description:
+      'Measure slug (`Measure.slug`) — the value `ExtractedFact.factKey.metric` carries.',
   })
   id: string;
 

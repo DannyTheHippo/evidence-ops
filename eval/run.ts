@@ -15,6 +15,7 @@ import {
   conflictValuesContainExpectedStrings,
 } from './metrics/answer-content-check';
 import { classifyCanaryLeak } from './metrics/classify-canary-leak';
+import { compareToBaseline, readBaselineFile } from './metrics/compare-baseline';
 import { computeMetrics, type CaseOutcomeKind, type CaseResult } from './metrics/compute-metrics';
 import { conflictValuesOverlapExpectedLocators } from './metrics/conflict-scope-check';
 import {
@@ -30,6 +31,7 @@ import {
   RECALL_AT_5_FLOOR,
   buildMarkdownReport,
   failingCases,
+  hasBaselineRegression,
   hasConflictScopeGap,
   hasMixedScoringMethods,
   hasOwnVoiceLeak,
@@ -99,6 +101,9 @@ interface CliOptions {
   readonly lane: EvalLane;
   /** `undefined` outside the variance lane; a pass count of at least 1 inside it. */
   readonly varianceRuns: number | undefined;
+  /** Path to a committed baseline file (`--compare <path>`), compared against this run's metrics
+   * after `computeMetrics`. `undefined` when the flag was not passed — no comparison runs. */
+  readonly compare?: string;
 }
 
 /**
@@ -128,6 +133,19 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
     );
   }
 
+  const compareFlagIndex = argv.indexOf('--compare');
+  const compareArg = compareFlagIndex === -1 ? undefined : argv[compareFlagIndex + 1];
+  if (compareFlagIndex !== -1 && compareArg === undefined) {
+    throw new Error('eval: --compare requires a path');
+  }
+  if (variance && compareArg !== undefined) {
+    throw new Error(
+      'eval: --variance cannot be combined with --compare — the variance lane reports a spread ' +
+        'over repeated passes, not a single scored run, so there is no one result to compare ' +
+        'against a baseline.',
+    );
+  }
+
   const runsFlagIndex = argv.indexOf('--runs');
   const runsArg = runsFlagIndex === -1 ? undefined : argv[runsFlagIndex + 1];
   const varianceRuns = runsArg === undefined ? DEFAULT_VARIANCE_RUNS : Number(runsArg);
@@ -141,6 +159,7 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
     ingest: argv.includes('--ingest'),
     lane: (laneArg as EvalLane | undefined) ?? 'synthetic',
     varianceRuns: variance ? varianceRuns : undefined,
+    compare: compareArg,
   };
 }
 
@@ -655,6 +674,17 @@ async function main(): Promise<void> {
     }
 
     const metrics = computeMetrics(caseResults);
+
+    // `--compare` is resolved here, before `result` is built, so both the JSON report
+    // (`baselineComparison`) and the sixth hard gate below read the same comparison rather than
+    // recomputing it. `undefined` when the flag was not passed — no comparison runs, and the
+    // sixth gate below is a no-op.
+    const baselinePath = options.compare === undefined ? undefined : path.resolve(options.compare);
+    const baselineComparison =
+      baselinePath === undefined
+        ? undefined
+        : compareToBaseline(metrics, (await readBaselineFile(baselinePath)).metrics);
+
     const result: EvalRunResult = {
       gitSha: sha,
       generatedAt: new Date().toISOString(),
@@ -663,6 +693,8 @@ async function main(): Promise<void> {
       metrics,
       perCase,
       scoringMethodSplit,
+      baselineComparison,
+      baselinePath,
     };
 
     await mkdir(RESULTS_DIR, { recursive: true });
@@ -734,6 +766,30 @@ async function main(): Promise<void> {
           `${RECALL_AT_5_FLOOR} floor (hard gate)`,
       );
       process.exitCode = 1;
+    }
+
+    // The sixth hard gate, present only when `--compare` was passed. Read from
+    // `baselineComparison.regressions`, never from the process exit code of anything else — the
+    // gates above already exit nonzero on this repo's own pre-existing absolute floors (e.g.
+    // recall@5 below `RECALL_AT_5_FLOOR`), which is expected and orthogonal to whether this run
+    // regressed against its baseline. `hasBaselineRegression` is the same anti-drift predicate
+    // `buildMarkdownReport`'s Baseline comparison section reads.
+    if (result.baselineComparison) {
+      const { regressions, held, absentFromBaseline, absentFromCurrent } =
+        result.baselineComparison;
+      console.log(
+        `eval: baseline comparison — ${regressions.length} regression(s), ${held.length} held, ` +
+          `${absentFromBaseline.length} absent from baseline, ${absentFromCurrent.length} absent ` +
+          `from current`,
+      );
+      if (hasBaselineRegression(result)) {
+        console.error(
+          `eval: FAILED — ${regressions.length} metric(s) regressed against ` +
+            `${result.baselinePath}: ` +
+            regressions.map((r) => `${r.metric} ${r.baseline}→${r.current}`).join(', '),
+        );
+        process.exitCode = 1;
+      }
     }
   } finally {
     await closeEvalApp(app);

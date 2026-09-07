@@ -2288,7 +2288,7 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "Every metric METRIC_ONTOLOGY defines, projected to its id, label and canonicalUnit. Read-only: there is no endpoint to add, edit or remove a metric.",
+            "description": "Every confirmed measure of the caller's tenant, projected to id, label and canonicalUnit. Read-only here; authoring happens under /measures.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2299,7 +2299,7 @@
                 },
                 "examples": {
                   "example": {
-                    "summary": "Two of the built-in metrics",
+                    "summary": "Two of the tenant confirmed measures",
                     "value": [
                       {
                         "id": "cap_rate",
@@ -2320,6 +2320,576 @@
         },
         "tags": [
           "metrics"
+        ]
+      }
+    },
+    "/measures": {
+      "get": {
+        "operationId": "MeasuresController_list",
+        "parameters": [
+          {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "Exact measure status to filter by.",
+            "schema": {
+              "example": "proposed",
+              "type": "string",
+              "enum": [
+                "proposed",
+                "confirmed",
+                "rejected"
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Field to sort by. Defaults to createdAt.",
+            "schema": {
+              "example": "slug",
+              "type": "string",
+              "enum": [
+                "slug",
+                "status",
+                "createdAt"
+              ]
+            }
+          },
+          {
+            "name": "sortDir",
+            "required": false,
+            "in": "query",
+            "description": "Sort direction. Defaults to desc.",
+            "schema": {
+              "example": "desc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's measure registry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasureListResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "One confirmed measure",
+                    "value": {
+                      "docs": [
+                        {
+                          "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "slug": "cap_rate",
+                          "label": "Cap Rate",
+                          "aliases": [
+                            "Cap Rate",
+                            "capitalization rate"
+                          ],
+                          "valueType": "percentage",
+                          "canonicalUnit": "ratio",
+                          "units": [
+                            {
+                              "id": "ratio",
+                              "toCanonicalFactor": 1
+                            },
+                            {
+                              "id": "percent",
+                              "toCanonicalFactor": 0.01
+                            }
+                          ],
+                          "toleranceKind": "absolute",
+                          "tolerance": 0.0025,
+                          "stalenessWindowMs": 15552000000,
+                          "status": "confirmed",
+                          "origin": "seed",
+                          "proposedFrom": [],
+                          "version": 1,
+                          "createdAt": "2026-07-01T00:00:00.000Z"
+                        }
+                      ],
+                      "count": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "measures"
+        ]
+      }
+    },
+    "/measures/{id}/confirm": {
+      "post": {
+        "operationId": "MeasuresController_confirm",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeasureEditsRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The measure row after this confirmation. Triggers a synchronous rescan.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasureResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Confirmed measure",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "slug": "cap_rate",
+                      "label": "Cap Rate",
+                      "aliases": [
+                        "Cap Rate",
+                        "capitalization rate"
+                      ],
+                      "valueType": "percentage",
+                      "canonicalUnit": "ratio",
+                      "units": [
+                        {
+                          "id": "ratio",
+                          "toCanonicalFactor": 1
+                        },
+                        {
+                          "id": "percent",
+                          "toCanonicalFactor": 0.01
+                        }
+                      ],
+                      "toleranceKind": "absolute",
+                      "tolerance": 0.0025,
+                      "stalenessWindowMs": 15552000000,
+                      "status": "confirmed",
+                      "origin": "seed",
+                      "proposedFrom": [],
+                      "version": 2,
+                      "createdAt": "2026-07-01T00:00:00.000Z",
+                      "confirmedBy": "65f1c2e4a1b2c3d4e5f6a7c1",
+                      "confirmedAt": "2026-07-02T00:00:00.000Z",
+                      "lastRescan": {
+                        "at": "2026-07-02T00:00:00.000Z",
+                        "status": "completed",
+                        "durationMs": 42,
+                        "conflictsCreated": 0,
+                        "skippedFactCount": 0
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The merged definition (current row plus edits) fails validation.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "No factor-1 unit",
+                    "value": {
+                      "statusCode": 400,
+                      "message": "exactly one unit must have toCanonicalFactor 1 and its id must equal canonicalUnit 'ratio'",
+                      "error": "Bad Request"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not hold the admin role required to author this registry.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No measure with this id exists for the caller’s tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown id",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Measure '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This measure is not in the proposed state and cannot be confirmed or rejected.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Already confirmed",
+                    "value": {
+                      "statusCode": 409,
+                      "message": "Measure '65f1c2e4a1b2c3d4e5f6a7b8' is 'confirmed', not 'proposed'",
+                      "error": "Conflict"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "measures"
+        ]
+      }
+    },
+    "/measures/{id}/reject": {
+      "post": {
+        "operationId": "MeasuresController_reject",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejectMeasureRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The measure row after this rejection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasureResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Rejected measure",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "slug": "cap_rate",
+                      "label": "Cap Rate",
+                      "aliases": [
+                        "Cap Rate",
+                        "capitalization rate"
+                      ],
+                      "valueType": "percentage",
+                      "canonicalUnit": "ratio",
+                      "units": [
+                        {
+                          "id": "ratio",
+                          "toCanonicalFactor": 1
+                        },
+                        {
+                          "id": "percent",
+                          "toCanonicalFactor": 0.01
+                        }
+                      ],
+                      "toleranceKind": "absolute",
+                      "tolerance": 0.0025,
+                      "stalenessWindowMs": 15552000000,
+                      "status": "rejected",
+                      "origin": "seed",
+                      "proposedFrom": [],
+                      "version": 1,
+                      "createdAt": "2026-07-01T00:00:00.000Z",
+                      "rejectedBy": "65f1c2e4a1b2c3d4e5f6a7c1",
+                      "rejectedAt": "2026-07-02T00:00:00.000Z",
+                      "rejectedReason": "duplicate"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not hold the admin role required to author this registry.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No measure with this id exists for the caller’s tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown id",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Measure '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This measure is not in the proposed state and cannot be confirmed or rejected.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Already confirmed",
+                    "value": {
+                      "statusCode": 409,
+                      "message": "Measure '65f1c2e4a1b2c3d4e5f6a7b8' is 'confirmed', not 'proposed'",
+                      "error": "Conflict"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "measures"
+        ]
+      }
+    },
+    "/measures/{id}": {
+      "patch": {
+        "operationId": "MeasuresController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeasureEditsRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The measure row after this edit. Triggers a synchronous rescan.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeasureResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Updated measure",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "slug": "cap_rate",
+                      "label": "Cap Rate",
+                      "aliases": [
+                        "Cap Rate",
+                        "capitalization rate"
+                      ],
+                      "valueType": "percentage",
+                      "canonicalUnit": "ratio",
+                      "units": [
+                        {
+                          "id": "ratio",
+                          "toCanonicalFactor": 1
+                        },
+                        {
+                          "id": "percent",
+                          "toCanonicalFactor": 0.01
+                        }
+                      ],
+                      "toleranceKind": "absolute",
+                      "tolerance": 0.0025,
+                      "stalenessWindowMs": 15552000000,
+                      "status": "confirmed",
+                      "origin": "seed",
+                      "proposedFrom": [],
+                      "version": 2,
+                      "createdAt": "2026-07-01T00:00:00.000Z",
+                      "confirmedBy": "65f1c2e4a1b2c3d4e5f6a7c1",
+                      "confirmedAt": "2026-07-02T00:00:00.000Z",
+                      "lastRescan": {
+                        "at": "2026-07-02T00:00:00.000Z",
+                        "status": "completed",
+                        "durationMs": 42,
+                        "conflictsCreated": 0,
+                        "skippedFactCount": 0
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The merged definition (current row plus edits) fails validation.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "No factor-1 unit",
+                    "value": {
+                      "statusCode": 400,
+                      "message": "exactly one unit must have toCanonicalFactor 1 and its id must equal canonicalUnit 'ratio'",
+                      "error": "Bad Request"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not hold the admin role required to author this registry.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No measure with this id exists for the caller’s tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown id",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Measure '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This measure is not in the confirmed state and cannot be edited.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Still proposed",
+                    "value": {
+                      "statusCode": 409,
+                      "message": "Measure '65f1c2e4a1b2c3d4e5f6a7b8' is 'proposed', not 'confirmed'",
+                      "error": "Conflict"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "measures"
         ]
       }
     },
@@ -3062,6 +3632,543 @@
         },
         "tags": [
           "approvals"
+        ]
+      }
+    },
+    "/ledger": {
+      "get": {
+        "operationId": "LedgerController_listCells",
+        "parameters": [
+          {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "entity",
+            "required": false,
+            "in": "query",
+            "description": "Entity name or a registered alias of one. Resolved to its canonical name first.",
+            "schema": {
+              "example": "Northgate Business Park",
+              "type": "string"
+            }
+          },
+          {
+            "name": "measure",
+            "required": false,
+            "in": "query",
+            "description": "Measure slug to filter by.",
+            "schema": {
+              "example": "cap_rate",
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "required": false,
+            "in": "query",
+            "description": "Resolved cell state to filter by.",
+            "schema": {
+              "example": "conflicted",
+              "type": "string",
+              "enum": [
+                "single",
+                "adjudicated",
+                "conflicted",
+                "unknown"
+              ]
+            }
+          },
+          {
+            "name": "period",
+            "required": false,
+            "in": "query",
+            "description": "Period the cell covers. Absent means the undated period.",
+            "schema": {
+              "example": "2025-Q1",
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Field to sort by. Defaults to entity.",
+            "schema": {
+              "example": "entity",
+              "type": "string",
+              "enum": [
+                "entity",
+                "measure",
+                "period"
+              ]
+            }
+          },
+          {
+            "name": "sortDir",
+            "required": false,
+            "in": "query",
+            "description": "Sort direction. Defaults to asc.",
+            "schema": {
+              "example": "asc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's ledger cells, one per entity × measure × period, each resolved to a state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerCellListResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "A settled cell and an adjudicated one",
+                    "value": {
+                      "docs": [
+                        {
+                          "entity": "Northgate Business Park",
+                          "measure": "cap_rate",
+                          "period": "2025-Q1",
+                          "state": "single",
+                          "value": {
+                            "amount": 5.25,
+                            "unit": "percent",
+                            "canonicalAmount": 0.0525
+                          },
+                          "factIds": [
+                            "65f1c2e4a1b2c3d4e5f6a7b8"
+                          ]
+                        },
+                        {
+                          "entity": "Cedar Bluff Logistics",
+                          "measure": "net_operating_income",
+                          "period": "2025",
+                          "state": "adjudicated",
+                          "value": {
+                            "amount": 2134450,
+                            "unit": "usd",
+                            "canonicalAmount": 2134450
+                          },
+                          "factIds": [
+                            "65f1c2e4a1b2c3d4e5f6a7d1",
+                            "65f1c2e4a1b2c3d4e5f6a7d2"
+                          ],
+                          "conflictId": "65f1c2e4a1b2c3d4e5f6a7e0",
+                          "decision": {
+                            "conflictId": "65f1c2e4a1b2c3d4e5f6a7e0",
+                            "outcome": "resolved",
+                            "winningFactId": "65f1c2e4a1b2c3d4e5f6a7d1",
+                            "decidedBy": "65f1c2e4a1b2c3d4e5f6a7c9",
+                            "reason": "The audited statement supersedes the broker summary.",
+                            "resolvedAt": "2026-07-04T09:15:00.000Z",
+                            "ruleFired": "authority",
+                            "followedProposal": true
+                          },
+                          "winnerWithdrawn": false
+                        }
+                      ],
+                      "count": 2
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "ledger"
+        ]
+      }
+    },
+    "/ledger/resolve": {
+      "get": {
+        "operationId": "LedgerController_resolve",
+        "parameters": [
+          {
+            "name": "entity",
+            "required": true,
+            "in": "query",
+            "description": "Entity name or a registered alias of one. Resolved to its canonical name first.",
+            "schema": {
+              "example": "Northgate Business Park",
+              "type": "string"
+            }
+          },
+          {
+            "name": "measure",
+            "required": true,
+            "in": "query",
+            "description": "Measure slug.",
+            "schema": {
+              "example": "cap_rate",
+              "type": "string"
+            }
+          },
+          {
+            "name": "period",
+            "required": false,
+            "in": "query",
+            "description": "Period the cell covers. Absent resolves the undated period.",
+            "schema": {
+              "example": "2025-Q1",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One cell resolved in full, with the citations the resolution rests on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerResolutionResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "A single agreed value with its citation",
+                    "value": {
+                      "entity": "Northgate Business Park",
+                      "measure": "cap_rate",
+                      "period": "2025-Q1",
+                      "state": "single",
+                      "value": {
+                        "amount": 5.25,
+                        "unit": "percent",
+                        "canonicalAmount": 0.0525
+                      },
+                      "factIds": [
+                        "65f1c2e4a1b2c3d4e5f6a7b8"
+                      ],
+                      "citations": [
+                        {
+                          "factId": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "documentId": "65f1c2e4a1b2c3d4e5f6a7c0",
+                          "documentVersionId": "65f1c2e4a1b2c3d4e5f6a7c1",
+                          "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                          "locator": {
+                            "kind": "xlsx-cell",
+                            "sheet": "Comps",
+                            "cell": "D4"
+                          },
+                          "extractorVersion": "xlsx-1",
+                          "quote": "5.25%",
+                          "withdrawn": false
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No measure with that slug exists for the tenant, or it has been rejected.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown measure",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Measure 'occupancy' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "ledger"
+        ]
+      }
+    },
+    "/ledger/facts": {
+      "get": {
+        "operationId": "LedgerController_listFacts",
+        "parameters": [
+          {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "entity",
+            "required": true,
+            "in": "query",
+            "description": "Entity name or a registered alias of one. Resolved to its canonical name first.",
+            "schema": {
+              "example": "Northgate Business Park",
+              "type": "string"
+            }
+          },
+          {
+            "name": "measure",
+            "required": true,
+            "in": "query",
+            "description": "Measure slug.",
+            "schema": {
+              "example": "cap_rate",
+              "type": "string"
+            }
+          },
+          {
+            "name": "period",
+            "required": false,
+            "in": "query",
+            "description": "Period the cell covers. Absent means the undated period.",
+            "schema": {
+              "example": "2025-Q1",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every fact behind one cell, at any measure status — the drill-down deliberately shows proposed-measure facts that the cell view excludes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FactListResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "One confirmed fact behind a cell",
+                    "value": {
+                      "docs": [
+                        {
+                          "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "factKey": {
+                            "entity": "Northgate Business Park",
+                            "metric": "cap_rate",
+                            "period": "2025-Q1"
+                          },
+                          "value": {
+                            "amount": 5.25,
+                            "unit": "percent"
+                          },
+                          "canonicalAmount": 0.0525,
+                          "rawText": "5.25%",
+                          "confidence": 0.95,
+                          "extractionMethod": "regex",
+                          "measureId": "65f1c2e4a1b2c3d4e5f6a7a1",
+                          "measureVersion": 1,
+                          "measureStatus": "confirmed",
+                          "periodStart": "2025-01-01T00:00:00.000Z",
+                          "periodEnd": "2025-03-31T00:00:00.000Z",
+                          "entityMatched": true,
+                          "citation": {
+                            "factId": "65f1c2e4a1b2c3d4e5f6a7b8",
+                            "documentId": "65f1c2e4a1b2c3d4e5f6a7c0",
+                            "documentVersionId": "65f1c2e4a1b2c3d4e5f6a7c1",
+                            "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                            "locator": {
+                              "kind": "xlsx-cell",
+                              "sheet": "Comps",
+                              "cell": "D4"
+                            },
+                            "extractorVersion": "xlsx-1",
+                            "quote": "5.25%",
+                            "withdrawn": false
+                          },
+                          "withdrawn": false,
+                          "superseded": false,
+                          "createdAt": "2026-07-01T00:00:00.000Z"
+                        }
+                      ],
+                      "count": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No measure with that slug exists for the tenant, or it has been rejected.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown measure",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Measure 'occupancy' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "ledger"
+        ]
+      }
+    },
+    "/ledger/entities": {
+      "get": {
+        "operationId": "LedgerController_listEntities",
+        "parameters": [
+          {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Entities the ledger holds confirmed facts for.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerEntityListResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Two entities",
+                    "value": {
+                      "docs": [
+                        {
+                          "entity": "Cedar Bluff Logistics",
+                          "factCount": 8,
+                          "measureCount": 3
+                        },
+                        {
+                          "entity": "Northgate Business Park",
+                          "factCount": 12,
+                          "measureCount": 4
+                        }
+                      ],
+                      "count": 2
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "ledger"
         ]
       }
     },
@@ -5539,7 +6646,7 @@
           "id": {
             "type": "string",
             "example": "cap_rate",
-            "description": "Metric identifier, one of METRIC_ONTOLOGY's METRIC_IDS."
+            "description": "Measure slug (`Measure.slug`) — the value `ExtractedFact.factKey.metric` carries."
           },
           "label": {
             "type": "string",
@@ -5557,6 +6664,324 @@
           "label",
           "canonicalUnit"
         ]
+      },
+      "MeasureResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Measure identifier."
+          },
+          "slug": {
+            "type": "string",
+            "example": "cap_rate",
+            "description": "Slug the ExtractedFact.factKey.metric join key carries."
+          },
+          "label": {
+            "type": "string",
+            "example": "Cap Rate",
+            "description": "Human-readable label."
+          },
+          "aliases": {
+            "example": [
+              "Cap Rate",
+              "capitalization rate"
+            ],
+            "description": "Header/phrase forms matched case-insensitively.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "valueType": {
+            "type": "string",
+            "example": "percentage",
+            "enum": [
+              "currency",
+              "percentage",
+              "area",
+              "duration",
+              "count"
+            ],
+            "description": "The kind of value this measure holds."
+          },
+          "canonicalUnit": {
+            "type": "string",
+            "example": "ratio",
+            "description": "The unit every value converts to."
+          },
+          "units": {
+            "example": [
+              {
+                "id": "ratio",
+                "toCanonicalFactor": 1
+              },
+              {
+                "id": "percent",
+                "toCanonicalFactor": 0.01
+              }
+            ],
+            "description": "Convertible units. Exactly one carries toCanonicalFactor 1, matching canonicalUnit.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "toleranceKind": {
+            "type": "string",
+            "example": "absolute",
+            "enum": [
+              "absolute",
+              "relative"
+            ],
+            "description": "How tolerance is applied when comparing values."
+          },
+          "tolerance": {
+            "type": "number",
+            "example": 0.0025,
+            "description": "Disagreement threshold before two values conflict."
+          },
+          "authorityOrder": {
+            "example": [
+              "pm-export",
+              "spreadsheet"
+            ],
+            "description": "Source classes ranked by authority, most authoritative first.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "stalenessWindowMs": {
+            "type": "number",
+            "example": 15552000000,
+            "description": "How long an observed value stays current for this measure, in milliseconds."
+          },
+          "status": {
+            "type": "string",
+            "example": "confirmed",
+            "enum": [
+              "proposed",
+              "confirmed",
+              "rejected"
+            ],
+            "description": "Measure lifecycle status."
+          },
+          "origin": {
+            "type": "string",
+            "example": "seed",
+            "enum": [
+              "seed",
+              "header",
+              "manual"
+            ],
+            "description": "How this measure came to exist."
+          },
+          "proposedFrom": {
+            "example": [],
+            "description": "Header evidence recorded while this measure was 'proposed' — empty for a seed or manually authored row.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "version": {
+            "type": "number",
+            "example": 1,
+            "description": "Bumped on every confirm/update. Seed rows are the only rows that ever read 1 while confirmed."
+          },
+          "confirmedBy": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7c1",
+            "description": "User id who confirmed this measure."
+          },
+          "confirmedAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "When this measure was confirmed."
+          },
+          "rejectedBy": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7c1",
+            "description": "User id who rejected this measure."
+          },
+          "rejectedAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "When this measure was rejected."
+          },
+          "rejectedReason": {
+            "type": "string",
+            "example": "duplicate",
+            "description": "Why this measure was rejected."
+          },
+          "lastRescan": {
+            "type": "object",
+            "example": {
+              "at": "2026-07-01T00:00:00.000Z",
+              "status": "completed",
+              "durationMs": 42,
+              "conflictsCreated": 0
+            },
+            "description": "Outcome of the synchronous conflict rescan the last confirm/update triggered. Absent until this measure has been confirmed or edited at least once."
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "When this row was first created."
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "label",
+          "aliases",
+          "valueType",
+          "canonicalUnit",
+          "units",
+          "toleranceKind",
+          "tolerance",
+          "status",
+          "origin",
+          "proposedFrom",
+          "version",
+          "createdAt"
+        ]
+      },
+      "MeasureListResponseDto": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number",
+            "example": 2,
+            "description": "Total number of documents returned."
+          },
+          "docs": {
+            "description": "The tenant's measures.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MeasureResponseDto"
+            }
+          }
+        },
+        "required": [
+          "count",
+          "docs"
+        ]
+      },
+      "MeasureUnitRequestDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "sf",
+            "description": "Unit identifier, matched case-sensitively against a fact’s reported unit."
+          },
+          "toCanonicalFactor": {
+            "type": "number",
+            "example": 1,
+            "description": "Multiplicative factor converting one of this unit into the canonicalUnit."
+          }
+        },
+        "required": [
+          "id",
+          "toCanonicalFactor"
+        ]
+      },
+      "MeasureEditsRequestDto": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "example": "Tenant Occupancy Share",
+            "description": "Human-readable label."
+          },
+          "aliases": {
+            "example": [
+              "Occupancy %"
+            ],
+            "description": "Replaces the full alias list. Omit to leave the current aliases untouched.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "valueType": {
+            "type": "string",
+            "example": "percentage",
+            "enum": [
+              "currency",
+              "percentage",
+              "area",
+              "duration",
+              "count"
+            ],
+            "description": "The kind of value this measure holds."
+          },
+          "canonicalUnit": {
+            "type": "string",
+            "example": "ratio",
+            "description": "The unit every value converts to. Must name one of units below."
+          },
+          "units": {
+            "description": "Replaces the full unit list. Exactly one unit must have toCanonicalFactor 1 and its id must equal canonicalUnit.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MeasureUnitRequestDto"
+            }
+          },
+          "toleranceKind": {
+            "type": "string",
+            "example": "absolute",
+            "enum": [
+              "absolute",
+              "relative"
+            ],
+            "description": "How tolerance is applied when comparing values."
+          },
+          "tolerance": {
+            "type": "number",
+            "example": 0.02,
+            "description": "Disagreement threshold before two values conflict."
+          },
+          "authorityOrder": {
+            "type": "array",
+            "example": [
+              "pm-export",
+              "spreadsheet"
+            ],
+            "description": "Source classes ranked by authority, most authoritative first.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "crm-export",
+                "pm-export",
+                "spreadsheet",
+                "memo",
+                "report"
+              ]
+            }
+          },
+          "stalenessWindowMs": {
+            "type": "number",
+            "example": 7776000000,
+            "description": "How long an observed value stays current for this measure, in milliseconds."
+          }
+        }
+      },
+      "RejectMeasureRequestDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "example": "duplicate",
+            "description": "Why this proposed measure was rejected."
+          }
+        }
       },
       "ConflictResponseDto": {
         "type": "object",
@@ -5894,6 +7319,331 @@
         },
         "required": [
           "decision"
+        ]
+      },
+      "LedgerCellResponseDto": {
+        "type": "object",
+        "properties": {
+          "entity": {
+            "type": "string",
+            "example": "Northgate Business Park",
+            "description": "Canonical entity name."
+          },
+          "measure": {
+            "type": "string",
+            "example": "cap_rate",
+            "description": "Measure slug."
+          },
+          "period": {
+            "type": "string",
+            "example": "2025-Q1",
+            "description": "Period key the cell covers; 'undated' when the facts carry no period."
+          },
+          "state": {
+            "type": "string",
+            "example": "single",
+            "enum": [
+              "single",
+              "adjudicated",
+              "conflicted",
+              "unknown"
+            ],
+            "description": "How the record resolves this cell: one agreed value, a human-adjudicated winner, an open disagreement, or nothing known."
+          },
+          "value": {
+            "type": "object",
+            "description": "The resolved value. Absent for a conflicted or unknown cell."
+          },
+          "factIds": {
+            "description": "Facts behind this cell — the disagreeing set when the cell is conflicted.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "conflictId": {
+            "type": "string",
+            "description": "The conflict over this cell, when one has been recorded."
+          },
+          "decision": {
+            "type": "object",
+            "description": "The decision record behind an adjudicated cell."
+          },
+          "winnerWithdrawn": {
+            "type": "boolean",
+            "description": "True when an adjudicated winner sits on a withdrawn document version. The decision still stands; the document behind it no longer does."
+          }
+        },
+        "required": [
+          "entity",
+          "measure",
+          "period",
+          "state",
+          "factIds"
+        ]
+      },
+      "LedgerCellListResponseDto": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number",
+            "example": 2,
+            "description": "Total number of documents returned."
+          },
+          "docs": {
+            "description": "Resolved ledger cells.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LedgerCellResponseDto"
+            }
+          }
+        },
+        "required": [
+          "count",
+          "docs"
+        ]
+      },
+      "LedgerResolutionResponseDto": {
+        "type": "object",
+        "properties": {
+          "entity": {
+            "type": "string",
+            "example": "Northgate Business Park",
+            "description": "Canonical entity name."
+          },
+          "measure": {
+            "type": "string",
+            "example": "cap_rate",
+            "description": "Measure slug."
+          },
+          "period": {
+            "type": "string",
+            "example": "2025-Q1",
+            "description": "Period key the cell covers; 'undated' when the facts carry no period."
+          },
+          "state": {
+            "type": "string",
+            "example": "single",
+            "enum": [
+              "single",
+              "adjudicated",
+              "conflicted",
+              "unknown"
+            ],
+            "description": "How the record resolves this cell: one agreed value, a human-adjudicated winner, an open disagreement, or nothing known."
+          },
+          "value": {
+            "type": "object",
+            "description": "The resolved value. Absent for a conflicted or unknown cell."
+          },
+          "factIds": {
+            "description": "Facts behind this cell — the disagreeing set when the cell is conflicted.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "conflictId": {
+            "type": "string",
+            "description": "The conflict over this cell, when one has been recorded."
+          },
+          "decision": {
+            "type": "object",
+            "description": "The decision record behind an adjudicated cell."
+          },
+          "winnerWithdrawn": {
+            "type": "boolean",
+            "description": "True when an adjudicated winner sits on a withdrawn document version. The decision still stands; the document behind it no longer does."
+          },
+          "citations": {
+            "description": "Citations for the facts this resolution rests on, one per fact.",
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "entity",
+          "measure",
+          "period",
+          "state",
+          "factIds",
+          "citations"
+        ]
+      },
+      "FactResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Fact identifier."
+          },
+          "factKey": {
+            "type": "object",
+            "description": "Entity, metric and period this fact is keyed by."
+          },
+          "value": {
+            "type": "object",
+            "description": "The extracted amount and its unit."
+          },
+          "canonicalAmount": {
+            "type": "number",
+            "description": "The value in the measure's canonical unit. Absent when the fact's unit does not convert."
+          },
+          "rawText": {
+            "type": "string",
+            "description": "The source text this fact was read from."
+          },
+          "confidence": {
+            "type": "number",
+            "example": 0.92,
+            "description": "Extractor confidence in this fact."
+          },
+          "extractionMethod": {
+            "type": "string",
+            "example": "regex",
+            "enum": [
+              "llm",
+              "regex",
+              "manual"
+            ],
+            "description": "How this fact was extracted."
+          },
+          "measureId": {
+            "type": "string",
+            "description": "The measure row this fact was stamped under."
+          },
+          "measureVersion": {
+            "type": "number",
+            "example": 1,
+            "description": "The measure version in force at extraction time — provenance, never re-derived from the measure as it stands now."
+          },
+          "measureStatus": {
+            "type": "string",
+            "example": "confirmed",
+            "enum": [
+              "proposed",
+              "confirmed"
+            ],
+            "description": "Whether the measure behind this fact is confirmed. A proposed-measure fact is stored but excluded from conflict detection and ledger answers."
+          },
+          "periodStart": {
+            "format": "date-time",
+            "type": "string",
+            "description": "Start of the period this fact covers."
+          },
+          "periodEnd": {
+            "format": "date-time",
+            "type": "string",
+            "description": "End of the period this fact covers."
+          },
+          "observedAt": {
+            "format": "date-time",
+            "type": "string",
+            "description": "When the fact was observed, where stated."
+          },
+          "entityMatched": {
+            "type": "boolean",
+            "description": "Whether the fact's entity matched a registered canonical entity."
+          },
+          "citation": {
+            "type": "object",
+            "description": "Where this fact can be re-checked. Absent when the document version behind it could not be resolved."
+          },
+          "withdrawn": {
+            "type": "boolean",
+            "description": "Whether the document version behind this fact has been withdrawn."
+          },
+          "superseded": {
+            "type": "boolean",
+            "description": "Whether a newer version of the same document has superseded this one."
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "description": "When the fact was extracted."
+          }
+        },
+        "required": [
+          "id",
+          "factKey",
+          "value",
+          "rawText",
+          "confidence",
+          "extractionMethod",
+          "measureId",
+          "measureVersion",
+          "measureStatus",
+          "createdAt"
+        ]
+      },
+      "FactListResponseDto": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number",
+            "example": 2,
+            "description": "Total number of documents returned."
+          },
+          "docs": {
+            "description": "Facts behind the addressed cell.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FactResponseDto"
+            }
+          }
+        },
+        "required": [
+          "count",
+          "docs"
+        ]
+      },
+      "LedgerEntityResponseDto": {
+        "type": "object",
+        "properties": {
+          "entity": {
+            "type": "string",
+            "example": "Northgate Business Park",
+            "description": "Canonical entity name."
+          },
+          "factCount": {
+            "type": "number",
+            "example": 12,
+            "description": "Confirmed-measure facts recorded against this entity."
+          },
+          "measureCount": {
+            "type": "number",
+            "example": 4,
+            "description": "Distinct measures this entity has facts for."
+          }
+        },
+        "required": [
+          "entity",
+          "factCount",
+          "measureCount"
+        ]
+      },
+      "LedgerEntityListResponseDto": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number",
+            "example": 2,
+            "description": "Total number of documents returned."
+          },
+          "docs": {
+            "description": "Entities the ledger holds confirmed facts for.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LedgerEntityResponseDto"
+            }
+          }
+        },
+        "required": [
+          "count",
+          "docs"
         ]
       },
       "StartQuestionRequestDto": {

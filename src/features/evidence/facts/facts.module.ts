@@ -18,6 +18,7 @@ import {
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import { ProvidersModule } from '../../../providers/providers.module';
 import { IngestionModule } from '../ingestion/ingestion.module';
+import { MeasuresModule } from '../measures/measures.module';
 import { CanonicalEntitiesController } from './canonical-entities.controller';
 import { CanonicalEntityService } from './canonical-entity.service';
 import { FactsService } from './facts.service';
@@ -37,6 +38,10 @@ import { MetricsService } from './metrics.service';
     // rather than depending on `IngestionService`, since it needs the raw `ParsedElement`s (for
     // deterministic xlsx facts, and for narrowing a prose fact's locator past its chunk's anchor).
     IngestionModule,
+    // `FactsService` resolves the tenant's extraction allowlist through `MeasuresService` rather
+    // than the fixed `METRIC_ONTOLOGY` constant — see `MeasuresModule`'s own comment for why this
+    // dependency runs one way and introduces no cycle.
+    MeasuresModule,
   ],
   controllers: [CanonicalEntitiesController, MetricsController],
   // Exported as well as registered: `FactsService` depends on `CanonicalEntityService` to

@@ -26,6 +26,7 @@ import {
 import { FakeWorkflowEngine } from '../../src/providers/workflow-engine/fake-workflow.engine';
 import { WORKFLOW_ENGINE } from '../../src/providers/workflow-engine/workflow-engine.interface';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
+import { measureStamp } from '../utils/measure-stamp';
 import { readSseEvent } from '../utils/read-sse-event';
 import { registerTestUser } from '../utils/register-test-user';
 import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts';
@@ -104,7 +105,16 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
     await closeTestApp(app);
   });
 
+  // Cached, not resolved on every `seedConflictWithFacts()` call: this file's fixtures resolve
+  // against one tenant and one slug (`cap_rate`) throughout.
+  let capRateStamp: Awaited<ReturnType<typeof measureStamp>> | undefined;
+  const getCapRateStamp = async () => {
+    capRateStamp ??= await measureStamp(app, tenantId, 'cap_rate');
+    return capRateStamp;
+  };
+
   const seedConflictWithFacts = async () => {
+    const capRate = await getCapRateStamp();
     const factLow = await extractedFactModel.create({
       factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
       groupKeyNormalized: groupKey({
@@ -118,6 +128,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       extractionMethod: 'llm',
       packId: 'cre',
       packVersion: 1,
+      ...capRate,
       chunkId: 'chunk-xlsx',
       documentVersionId: new Types.ObjectId(),
       locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
@@ -136,6 +147,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       extractionMethod: 'llm',
       packId: 'cre',
       packVersion: 1,
+      ...capRate,
       chunkId: 'chunk-prose',
       documentVersionId: new Types.ObjectId(),
       locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },

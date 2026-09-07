@@ -8,7 +8,10 @@ import { buildMultipartEmail } from '../../../../scripts/fixtures/adversarial/li
 import type { DocumentVersionDocument } from '../../../../src/database/schemas/evidence/document-version/document-version.schema';
 import { Document } from '../../../../src/database/schemas/evidence/document/document.schema';
 import { METRIC_ONTOLOGY } from '../../../../src/features/evidence/facts/metric-ontology';
-import { extractXlsxFacts } from '../../../../src/features/evidence/facts/xlsx-fact-extractor';
+import {
+  extractXlsxFacts,
+  type XlsxExtractionContext,
+} from '../../../../src/features/evidence/facts/xlsx-fact-extractor';
 import {
   resolveUploadKind,
   SOURCE_KIND_TO_MIME_TYPE,
@@ -118,8 +121,16 @@ describe('email attachment acceptance — an XLSX that arrived by email', () => 
     expect(viaEmail.extractorVersion).toBe(viaUpload.extractorVersion);
     expect(viaEmail.elements).toEqual(viaUpload.elements);
 
-    const emailFacts = extractXlsxFacts(viaEmail.elements, METRIC_ONTOLOGY);
-    const uploadFacts = extractXlsxFacts(viaUpload.elements, METRIC_ONTOLOGY);
+    // The extractor's own allowlist context, standing in for a tenant whose confirmed measures are
+    // exactly the seed ontology — this spec compares two parses of the same workbook, not
+    // header-proposal behaviour, so `proposeFromHeaders` stays off.
+    const context: XlsxExtractionContext = {
+      matchable: METRIC_ONTOLOGY,
+      rejectedSlugs: new Set(),
+      proposeFromHeaders: false,
+    };
+    const emailFacts = extractXlsxFacts(viaEmail.elements, context);
+    const uploadFacts = extractXlsxFacts(viaUpload.elements, context);
 
     expect(emailFacts.accepted.length).toBeGreaterThan(0);
     expect(emailFacts.accepted.every((fact) => fact.locator.kind === 'xlsx-cell')).toBe(true);

@@ -13,6 +13,7 @@ import {
 } from '../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import { CanonicalEntityService } from '../../src/features/evidence/facts/canonical-entity.service';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
+import { unitMeasureStamp } from '../utils/measure-stamp';
 import { registerTestUser } from '../utils/register-test-user';
 
 interface HarvestedAliasBody {
@@ -607,6 +608,7 @@ describe('Canonical Entities (e2e)', () => {
         extractionMethod: 'regex',
         packId: 'core',
         packVersion: 1,
+        ...unitMeasureStamp('noi'),
         chunkId: 'chunk-1',
         documentVersionId: new Types.ObjectId(),
         locator: { kind: 'pdf-page', page: 2, extractorVersion: 'pdf-1' },

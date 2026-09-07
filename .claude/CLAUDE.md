@@ -25,9 +25,10 @@ human approval signal with a timeout branch, which is why the approval survives 
 
 **The MCP surface is a third process** (ADR-0014): `src/mcp/main.ts` boots `McpModule` on the same
 `WorkerModule` slice pattern and serves stateless Streamable HTTP, authenticated per call by a
-personal access token rather than the SPA's session cookie. It advertises `search_evidence`,
-`get_answer` and `request_resolution`; approval-deciding tools are deliberately absent, because the
-surface that proposes a resolution must not also convey approval. `src/workflows/**` sits behind a determinism fence (ADR-0003,
+personal access token rather than the SPA's session cookie. It advertises five tools —
+`search_evidence`, `ask_evidence`, `get_answer`, `verify_claims` and `request_resolution` — and no
+approval-deciding tool, deliberately, because the surface that proposes a resolution must not also
+convey approval. `src/workflows/**` sits behind a determinism fence (ADR-0003,
 `eslint.config.mjs`, enforced again by Temporal's own workflow-bundling step in `Worker.create`):
 it may only import from `src/workflows/**` itself and pure type-only files, never services, Mongoose,
 or `src/providers/**` directly. `ProvidersModule` binds `WORKFLOW_ENGINE` to the real
@@ -96,7 +97,7 @@ kebab-case with a type suffix.
   - **FORBIDDEN to quote decisions or dates.** No "decided 2026-08-12", no "per the review", no "changed from X to Y", no "ADR-0008 rejected …", no measurement provenance ("measured on express 5.2.1"), no narration of what a previous implementation did. Code comments describe the present state of the code, never its history or the argument that produced it.
   - Decision records, dated findings, measurement provenance, and rejected alternatives belong in `docs/adr/`, the threat model, or the plan file — the places built to hold them, where they can be superseded cleanly. A rationale worth keeping is worth writing where it will be maintained; a rationale inlined as a comment rots silently the moment the code moves.
   - The **behaviour** a rationale protects still gets stated, in present tense and about the code: not "Mongoose 9 started rejecting array updates, found via e2e", but "Pipeline updates require `updatePipeline`; without it the driver rejects the call." State a guard's failure direction the same way — as what it does, not as what was decided.
-- Never commit, merge, or rebase — the user commits manually. No remote writes.
+- Never merge, rebase, or push — no remote writes. A local commit after a green validation gate is authorized without asking (standing authorization: § Standing instructions below; `authorizedWrites.commit: true` in `project-discovery.json`).
 - No path aliases in either root; relative imports are the convention.
 - Per-project `.claude/settings.local.json` inherits user-level `permissions.deny`/`ask` without downgrade.
 - Tool order, Bash guards, file hygiene, and comment discipline: per the auto-loaded user-level rules — not restated here.
@@ -114,11 +115,11 @@ Detail: `rules/jest-tests.md` (API), `rules/react.md` § SPA Testing (web).
 
 ## Discovered Conventions
 
-- **Deny-by-default auth.** `JwtAuthGuard` is a global `APP_GUARD` registered in `AuthModule`. Every new route is authenticated the moment it exists; `@PublicRoute()` is the only escape and applying it is a security decision.
+- **Deny-by-default auth.** `JwtAuthGuard` is a global `APP_GUARD` registered in `AuthModule`. Every new route is authenticated the moment it exists; `@PublicRoute()` is the only escape and applying it is a security decision. The `User` row, not the token, is the authority: `JwtAuthGuard` compares every minted claim (`tokenVersion`, `role`, `tenantId`, `email`) against it on each request and refuses on any mismatch or a missing row.
 - **Two silent-failure traps.** A response DTO field without `@Expose()` is dropped from the payload (`toResponseDto` uses `excludeExtraneousValues: true`). A request DTO field without a class-validator decorator is stripped, and an unknown field is a 400 (`ValidationPipe` runs `whitelist` + `forbidNonWhitelisted`). Neither produces an error anywhere.
 - **Routing.** Global prefix `api`, URI versioning with `defaultVersion: '1'` → `/api/v1/...`. Explicit `@Version('1')` and `@HttpCode()` on every handler. Swagger at `/docs`.
 - **Errors.** Feature exceptions extend `BaseException(message, status, cause?)`. A bare `Error` collapses to a 500 `Internal server error` in `GlobalExceptionFilter` and loses the detail; `cause` is how a failure stays debuggable (attached to the body below prod-like environments only).
-- **Request context.** `CorrelationMiddleware` + `AsyncLocalStorageMiddleware` are applied globally with an explicit exclusion list; `JwtAuthGuard` stamps the user id into the ALS store, and `auditablePlugin` reads it. A Mongoose Query is lazy — one built inside a request but awaited outside the ALS scope stamps no audit fields, silently.
+- **Request context.** `CorrelationMiddleware`, `AsyncLocalStorageMiddleware` and `CsrfOriginMiddleware` are applied globally with the same explicit exclusion list (`health`, `info`); `JwtAuthGuard` stamps the user id into the ALS store, and `auditablePlugin` reads it. A Mongoose Query is lazy — one built inside a request but awaited outside the ALS scope stamps no audit fields, silently.
 - **Config refuses at construction.** zod validates `process.env` synchronously during `AppModule` decorator evaluation and aborts boot listing every offending variable. `MONGO_DB_URI` and `JWT_SECRET` are required under `production`/`staging`, dev-defaulted below.
 - **zod is for env and model contracts; HTTP DTOs are not.** Requests use class-validator, responses use class-transformer. zod additionally owns `src/config/environment/`, `src/providers/**`, and the model-facing contracts (`answer.contract.ts`, `fact-extraction.contract.ts`) — those schemas must convert to JSON Schema for Anthropic's `output_format`, which class-validator cannot do. Note the provider layer imports `zod/v4` explicitly.
 - **SPA API base is relative** — `const API = '/api/v1'`, proxied by Vite in dev and nginx in prod. No `VITE_*` vars, no `import.meta.env`, no hardcoded origins. The session is an HttpOnly cookie the browser sends itself — the SPA holds no credential and there is no `AuthContext`; `ensureSession()` probes `GET /auth/me` once and caches the answer in module scope, and `useSession()` is the reactive shell over it. Both fail closed: a rejected probe resolves to anonymous, never to a stale "probably still signed in".
@@ -150,3 +151,11 @@ Coverage: `jest.config.ts` requires 100% statements/branches/functions/lines, an
 CI (`.github/workflows/ci.yml`) runs `format:check`, `lint:check`, `tsc`, `test` as a matrix, plus a `web` job running `lint:check`, `typecheck`, `test`, `build`. `test:e2e` runs in `e2e.yml`. Husky pre-commit runs the mutating `format`, `lint`, `tsc`.
 
 Database: `docker compose up -d mongo` then `npm run migrate:up` before anything that touches Mongo.
+
+## Standing instructions (2026-09-03)
+
+Recorded from the user's own messages. `project-discovery.json` carries the matching `autonomy: "standing"` and `authorizedWrites` (`commit: true`, `push: false`, `deploy: "docker-local"`).
+
+1. Deploy to the local docker stack (`docker compose`) when a change is done; never a remote or live deploy, never push.
+2. `.env.example` lists only secrets; every non-secret environment knob lives in docker-compose (price caps count as secrets).
+3. After a green validation gate, commit locally without asking (standing authorization).

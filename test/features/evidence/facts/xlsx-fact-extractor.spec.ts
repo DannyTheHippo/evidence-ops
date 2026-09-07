@@ -5,7 +5,10 @@ import {
   METRIC_ONTOLOGY,
   type MetricDefinition,
 } from '../../../../src/features/evidence/facts/metric-ontology';
-import { extractXlsxFacts } from '../../../../src/features/evidence/facts/xlsx-fact-extractor';
+import {
+  extractXlsxFacts,
+  type XlsxExtractionContext,
+} from '../../../../src/features/evidence/facts/xlsx-fact-extractor';
 import { CsvParser } from '../../../../src/features/evidence/ingestion/parsers/csv.parser';
 import { XlsxParser } from '../../../../src/features/evidence/ingestion/parsers/xlsx.parser';
 import type { ParsedElement } from '../../../../src/features/evidence/ingestion/parsers/parsed-element.type';
@@ -18,6 +21,18 @@ import rawManifest from '../../../../fixtures/data-room/manifest.json';
 const FIXTURE_PATH = path.join(__dirname, '../../../../fixtures/data-room/comps.xlsx');
 
 const EXTRACTOR_VERSION = 'xlsx-exceljs-2';
+
+/** Every call below reads `METRIC_ONTOLOGY` as its `matchable` set unless it names a different one
+ *  explicitly, starts with an empty `rejectedSlugs`, and defaults `proposeFromHeaders` off — the
+ *  shared shape most of this file's assertions exercise, with the header-proposal-specific tests
+ *  overriding the last two arguments directly. */
+function extractionContext(
+  matchable: readonly MetricDefinition[] = METRIC_ONTOLOGY,
+  proposeFromHeaders = false,
+  rejectedSlugs: ReadonlySet<string> = new Set(),
+): XlsxExtractionContext {
+  return { matchable, rejectedSlugs, proposeFromHeaders };
+}
 
 function cellElement(
   sheetName: string,
@@ -57,7 +72,7 @@ describe('extractXlsxFacts — real comps.xlsx fixture', () => {
     const parsed = await new XlsxParser().parse(content);
     const conflictLocation = rawManifest.conflicts[0].locations[0];
 
-    const { accepted } = extractXlsxFacts(parsed.elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(parsed.elements, extractionContext());
     const capRateFact = accepted.find(
       (fact) =>
         fact.factKey.entity === rawManifest.conflicts[0].property &&
@@ -84,7 +99,7 @@ describe('extractXlsxFacts — real comps.xlsx fixture', () => {
     const content = await readFile(FIXTURE_PATH);
     const parsed = await new XlsxParser().parse(content);
 
-    const { accepted, rejected } = extractXlsxFacts(parsed.elements, METRIC_ONTOLOGY);
+    const { accepted, rejected } = extractXlsxFacts(parsed.elements, extractionContext());
     const pricePerSfFact = accepted.find(
       (fact) =>
         fact.factKey.entity === 'Northgate Business Park' && fact.factKey.metric === 'price_per_sf',
@@ -98,7 +113,7 @@ describe('extractXlsxFacts — real comps.xlsx fixture', () => {
     const content = await readFile(FIXTURE_PATH);
     const parsed = await new XlsxParser().parse(content);
 
-    const { accepted } = extractXlsxFacts(parsed.elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(parsed.elements, extractionContext());
     const northgateFacts = accepted.filter(
       (fact) => fact.factKey.entity === 'Northgate Business Park',
     );
@@ -118,7 +133,7 @@ describe('extractXlsxFacts — real comps.xlsx fixture', () => {
     const content = await readFile(FIXTURE_PATH);
     const parsed = await new XlsxParser().parse(content);
 
-    const { accepted } = extractXlsxFacts(parsed.elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(parsed.elements, extractionContext());
 
     expect(accepted.some((fact) => (fact.locator as XlsxCellLocator).cell === 'H2')).toBe(false);
   });
@@ -127,7 +142,7 @@ describe('extractXlsxFacts — real comps.xlsx fixture', () => {
     const content = await readFile(FIXTURE_PATH);
     const parsed = await new XlsxParser().parse(content);
 
-    const { accepted } = extractXlsxFacts(parsed.elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(parsed.elements, extractionContext());
     const entities = new Set(accepted.map((fact) => fact.factKey.entity));
 
     expect(entities.size).toBe(10);
@@ -159,7 +174,7 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
       2,
     );
 
-    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(elements, extractionContext());
     const salePrice = accepted.find((fact) => fact.factKey.metric === 'sale_price');
 
     expect(salePrice?.value).toEqual({ amount: 12, unit: 'usd_millions' });
@@ -172,7 +187,7 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
     const pricePerSfHeader = ['Property Name', 'Price per SF (USD)'] as const;
     const elements = buildRow('Sheet1', pricePerSfHeader, ['Acme Tower', '$250.00'], 2);
 
-    const { accepted, rejected } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted, rejected } = extractXlsxFacts(elements, extractionContext());
 
     expect(accepted[0].value).toEqual({ amount: 250, unit: 'usd_per_sf' });
     expect(rejected).toEqual([]);
@@ -184,7 +199,7 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
 
     const { accepted, rejected, reducedFidelityReasons } = extractXlsxFacts(
       elements,
-      METRIC_ONTOLOGY,
+      extractionContext(),
     );
 
     // The cell mints no fact, and the drop is visible: a magnitude on a per-square-foot price is a
@@ -200,10 +215,11 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
   it('should drop a row with no entity-column value', () => {
     const elements = buildRow('Sheet1', headerRow, ['', '2025-01-15', '100,000', '$1,000', ''], 2);
 
-    expect(extractXlsxFacts(elements, METRIC_ONTOLOGY)).toEqual({
+    expect(extractXlsxFacts(elements, extractionContext())).toEqual({
       accepted: [],
       rejected: [],
       reducedFidelityReasons: [],
+      proposals: [],
     });
   });
 
@@ -211,7 +227,7 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
     const noDateHeader = ['Property Name', 'Building Area (SF)', 'Notes'] as const;
     const elements = buildRow('Sheet1', noDateHeader, ['Acme Tower', '100,000', ''], 2);
 
-    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(elements, extractionContext());
 
     expect(accepted).toHaveLength(1);
     expect(accepted[0].factKey.period).toBe('undated');
@@ -227,7 +243,7 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
       2,
     );
 
-    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(elements, extractionContext());
     const buildingArea = accepted.find((fact) => fact.factKey.metric === 'building_area_sf');
 
     // "Sale Date" only feeds `factKey.period` (still derived below) — with no dedicated as-of
@@ -244,7 +260,7 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
       2,
     );
 
-    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(elements, extractionContext());
     const buildingArea = accepted.find((fact) => fact.factKey.metric === 'building_area_sf');
 
     expect(buildingArea?.factKey.period).toBe('2025-01');
@@ -259,7 +275,7 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
       2,
     );
 
-    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(elements, extractionContext());
     const buildingArea = accepted.find((fact) => fact.factKey.metric === 'building_area_sf');
 
     // February has no 30th — the same parseCalendarDate round-trip guard the period column relies
@@ -276,7 +292,7 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
       2,
     );
 
-    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(elements, extractionContext());
 
     expect(accepted.some((fact) => fact.factKey.metric === 'building_area_sf')).toBe(false);
   });
@@ -289,7 +305,7 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
       2,
     );
 
-    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(elements, extractionContext());
 
     expect(accepted.some((fact) => fact.factKey.metric === 'sale_price')).toBe(false);
   });
@@ -298,7 +314,7 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
     const ratioHeader = ['Property Name', 'Cap Rate'] as const;
     const elements = buildRow('Sheet1', ratioHeader, ['Acme Tower', '0.0525'], 2);
 
-    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(elements, extractionContext());
 
     expect(accepted[0].value).toEqual({ amount: 0.0525, unit: 'ratio' });
   });
@@ -324,7 +340,10 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
     const ratioHeader = ['Property Name', 'Cap Rate'] as const;
     const elements = buildRow('Sheet1', ratioHeader, ['Acme Tower', '5.25%'], 2);
 
-    const { accepted, rejected } = extractXlsxFacts(elements, misconfiguredOntology);
+    const { accepted, rejected } = extractXlsxFacts(
+      elements,
+      extractionContext(misconfiguredOntology),
+    );
 
     expect(accepted).toEqual([]);
     expect(rejected).toHaveLength(1);
@@ -350,7 +369,7 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
       cellElement('Sheet1', `B${'9'.repeat(320)}`, '200,000'),
     ];
 
-    const { accepted, rejected } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted, rejected } = extractXlsxFacts(elements, extractionContext());
 
     expect(accepted).toHaveLength(1);
     expect(accepted[0].value).toEqual({ amount: 100000, unit: 'sf' });
@@ -358,10 +377,11 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
   });
 
   it('should return no facts for an empty element list', () => {
-    expect(extractXlsxFacts([], METRIC_ONTOLOGY)).toEqual({
+    expect(extractXlsxFacts([], extractionContext())).toEqual({
       accepted: [],
       rejected: [],
       reducedFidelityReasons: [],
+      proposals: [],
     });
   });
 
@@ -374,10 +394,11 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
       },
     ];
 
-    expect(extractXlsxFacts(elements, METRIC_ONTOLOGY)).toEqual({
+    expect(extractXlsxFacts(elements, extractionContext())).toEqual({
       accepted: [],
       rejected: [],
       reducedFidelityReasons: [],
+      proposals: [],
     });
   });
 
@@ -397,7 +418,7 @@ describe('extractXlsxFacts — synthetic edge cases', () => {
       cellElement('Sheet1', 'C3', '100,000'),
     ];
 
-    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(elements, extractionContext());
 
     expect(accepted).toHaveLength(1);
     expect(accepted[0].factKey).toEqual({
@@ -414,7 +435,7 @@ describe('extractXlsxFacts — strictPercentUnitResolution', () => {
     const ratioHeader = ['Property Name', 'Cap Rate'] as const;
     const elements = buildRow('Sheet1', ratioHeader, ['Acme Tower', '5.25'], 2);
 
-    const { accepted, rejected } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted, rejected } = extractXlsxFacts(elements, extractionContext());
 
     expect(accepted[0].value).toEqual({ amount: 5.25, unit: 'ratio' });
     expect(rejected).toEqual([]);
@@ -428,7 +449,7 @@ describe('extractXlsxFacts — strictPercentUnitResolution', () => {
     const markerHeader = ['Property Name', 'Cap Rate (%)'] as const;
     const elements = buildRow('Sheet1', markerHeader, ['Acme Tower', '5.25'], 2);
 
-    const { accepted, rejected } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted, rejected } = extractXlsxFacts(elements, extractionContext());
 
     expect(accepted).toEqual([]);
     expect(rejected).toEqual([]);
@@ -442,7 +463,7 @@ describe('extractXlsxFacts — strictPercentUnitResolution', () => {
     const ratioHeader = ['Property Name', 'Cap Rate'] as const;
     const elements = buildRow('Sheet1', ratioHeader, ['Acme Tower', '5.25'], 2);
 
-    const { accepted, rejected } = extractXlsxFacts(elements, METRIC_ONTOLOGY, true);
+    const { accepted, rejected } = extractXlsxFacts(elements, extractionContext(), true);
 
     expect(accepted).toEqual([]);
     expect(rejected).toHaveLength(1);
@@ -459,7 +480,7 @@ describe('extractXlsxFacts — strictPercentUnitResolution', () => {
     const ratioHeader = ['Property Name', 'Cap Rate'] as const;
     const elements = buildRow('Sheet1', ratioHeader, ['Acme Tower', '5.25%'], 2);
 
-    const { accepted, rejected } = extractXlsxFacts(elements, METRIC_ONTOLOGY, true);
+    const { accepted, rejected } = extractXlsxFacts(elements, extractionContext(), true);
 
     expect(accepted[0].value).toEqual({ amount: 5.25, unit: 'percent' });
     expect(rejected).toEqual([]);
@@ -469,7 +490,7 @@ describe('extractXlsxFacts — strictPercentUnitResolution', () => {
     const markerHeader = ['Property Name', 'Cap Rate (%)'] as const;
     const elements = buildRow('Sheet1', markerHeader, ['Acme Tower', '5.25'], 2);
 
-    const { accepted, rejected } = extractXlsxFacts(elements, METRIC_ONTOLOGY, true);
+    const { accepted, rejected } = extractXlsxFacts(elements, extractionContext(), true);
 
     expect(accepted).toHaveLength(1);
     expect(accepted[0].factKey.metric).toBe('cap_rate');
@@ -481,7 +502,7 @@ describe('extractXlsxFacts — strictPercentUnitResolution', () => {
     const markerHeader = ['Property Name', 'Cap Rate (ratio)'] as const;
     const elements = buildRow('Sheet1', markerHeader, ['Acme Tower', '0.0525'], 2);
 
-    const { accepted, rejected } = extractXlsxFacts(elements, METRIC_ONTOLOGY, true);
+    const { accepted, rejected } = extractXlsxFacts(elements, extractionContext(), true);
 
     expect(accepted).toHaveLength(1);
     expect(accepted[0].value).toEqual({ amount: 0.0525, unit: 'ratio' });
@@ -506,7 +527,7 @@ describe('extractXlsxFacts — reducedFidelityReasons (header ambiguity)', () =>
       cellElement('Comps', 'D3', '5.25%'),
     ];
 
-    const { reducedFidelityReasons } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { reducedFidelityReasons } = extractXlsxFacts(elements, extractionContext());
 
     expect(reducedFidelityReasons).toHaveLength(1);
     expect(reducedFidelityReasons[0]).toContain("Sheet 'Comps'");
@@ -520,7 +541,7 @@ describe('extractXlsxFacts — reducedFidelityReasons (header ambiguity)', () =>
       cellElement('Comps', 'A3', 'note three'),
     ];
 
-    const { reducedFidelityReasons } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { reducedFidelityReasons } = extractXlsxFacts(elements, extractionContext());
 
     expect(reducedFidelityReasons).toHaveLength(1);
     expect(reducedFidelityReasons[0]).toContain("Sheet 'Comps'");
@@ -531,7 +552,7 @@ describe('extractXlsxFacts — reducedFidelityReasons (header ambiguity)', () =>
     const content = await readFile(FIXTURE_PATH);
     const parsed = await new XlsxParser().parse(content);
 
-    const { reducedFidelityReasons } = extractXlsxFacts(parsed.elements, METRIC_ONTOLOGY);
+    const { reducedFidelityReasons } = extractXlsxFacts(parsed.elements, extractionContext());
 
     expect(reducedFidelityReasons).toEqual([]);
   });
@@ -552,7 +573,7 @@ describe('extractXlsxFacts — merge-covered cells are not minted as facts', () 
       cellElement('Sheet1', 'C2', '$500,000', true),
     ];
 
-    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(elements, extractionContext());
 
     expect(accepted).toHaveLength(1);
     expect(accepted[0].factKey.metric).toBe('sale_price');
@@ -570,11 +591,147 @@ describe('extractXlsxFacts — merge-covered cells are not minted as facts', () 
       cellElement('Sheet1', 'B2', '100,000'),
     ];
 
-    const { accepted } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+    const { accepted } = extractXlsxFacts(elements, extractionContext());
 
     expect(accepted).toHaveLength(1);
     expect(accepted[0].factKey.entity).toBe('Acme Tower');
   });
+});
+
+describe('extractXlsxFacts — header-inferred measure proposals', () => {
+  const unmatchedHeaderRow = ['Property Name', 'Unit Count'] as const;
+
+  it('should stay inert (byte-for-byte) with proposeFromHeaders off: an unmatched numeric column yields no proposal and no fact', () => {
+    const elements = buildRow('Sheet1', unmatchedHeaderRow, ['Acme Tower', '12'], 2);
+
+    const { accepted, proposals } = extractXlsxFacts(elements, extractionContext());
+
+    expect(proposals).toEqual([]);
+    expect(accepted).toEqual([]);
+  });
+
+  it('should propose an unmatched numeric column with proposeFromHeaders on, one candidate per data row', () => {
+    const elements = [
+      ...buildRow('Sheet1', unmatchedHeaderRow, ['Acme Tower', '12'], 2),
+      cellElement('Sheet1', 'A3', 'Beta Plaza'),
+      cellElement('Sheet1', 'B3', '9'),
+    ];
+
+    const { accepted, proposals } = extractXlsxFacts(
+      elements,
+      extractionContext(METRIC_ONTOLOGY, true),
+    );
+
+    expect(accepted).toEqual([]);
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0].proposal.slug).toBe('unit_count');
+    expect(proposals[0].proposal.valueType).toBe('count');
+    expect(proposals[0].candidates).toHaveLength(2);
+    expect(
+      proposals[0].candidates.every((candidate) => candidate.factKey.metric === 'unit_count'),
+    ).toBe(true);
+  });
+
+  it('should propose nothing for a slug already rejected as a measure, even with proposeFromHeaders on', () => {
+    const elements = buildRow('Sheet1', unmatchedHeaderRow, ['Acme Tower', '12'], 2);
+
+    const { accepted, proposals } = extractXlsxFacts(
+      elements,
+      extractionContext(METRIC_ONTOLOGY, true, new Set(['unit_count'])),
+    );
+
+    expect(proposals).toEqual([]);
+    expect(accepted).toEqual([]);
+  });
+
+  it('should match a header whose derived slug names a confirmed measure instead of proposing it', () => {
+    // 'Cap-Rate' aliases nothing in METRIC_ONTOLOGY, but derives the same slug ('cap_rate') as the
+    // seeded metric of that id — the slug fallback in the header→definition resolution order.
+    const slugHeaderRow = ['Property Name', 'Cap-Rate'] as const;
+    const elements = buildRow('Sheet1', slugHeaderRow, ['Acme Tower', '5.25%'], 2);
+
+    const { accepted, proposals } = extractXlsxFacts(
+      elements,
+      extractionContext(METRIC_ONTOLOGY, true),
+    );
+
+    expect(proposals).toEqual([]);
+    expect(accepted).toHaveLength(1);
+    expect(accepted[0].factKey.metric).toBe('cap_rate');
+    expect(accepted[0].value).toEqual({ amount: 5.25, unit: 'percent' });
+  });
+
+  it('should refuse a mixed column even with proposeFromHeaders on — a stray label mints nothing', () => {
+    const elements = [
+      ...buildRow('Sheet1', unmatchedHeaderRow, ['Acme Tower', '12'], 2),
+      cellElement('Sheet1', 'A3', 'Beta Plaza'),
+      cellElement('Sheet1', 'B3', 'n/a'),
+    ];
+
+    const { accepted, proposals } = extractXlsxFacts(
+      elements,
+      extractionContext(METRIC_ONTOLOGY, true),
+    );
+
+    expect(proposals).toEqual([]);
+    expect(accepted).toEqual([]);
+  });
+
+  // One metric per `area | duration | count` valueType, so `parseBaseUnitDisplay` is swept for
+  // every branch `parseDisplayValue` now routes through it, not only the area case that existed
+  // before it was generalized.
+  const BASE_UNIT_ONTOLOGY: readonly MetricDefinition[] = [
+    {
+      id: 'lot_size',
+      label: 'Lot Size',
+      aliases: ['Lot Size'],
+      valueType: 'area',
+      canonicalUnit: 'sf',
+      units: [{ id: 'sf', toCanonicalFactor: 1 }],
+      toleranceKind: 'relative',
+      tolerance: 0.01,
+    },
+    {
+      id: 'lease_term',
+      label: 'Lease Term',
+      aliases: ['Lease Term'],
+      valueType: 'duration',
+      canonicalUnit: 'years',
+      units: [{ id: 'years', toCanonicalFactor: 1 }],
+      toleranceKind: 'absolute',
+      tolerance: 0,
+    },
+    {
+      id: 'unit_count_metric',
+      label: 'Unit Count Metric',
+      aliases: ['Unit Count Metric'],
+      valueType: 'count',
+      canonicalUnit: 'count',
+      units: [{ id: 'count', toCanonicalFactor: 1 }],
+      toleranceKind: 'absolute',
+      tolerance: 0,
+    },
+  ];
+
+  it.each(BASE_UNIT_ONTOLOGY)(
+    'should mint a bare "1,234" cell in the factor-1 unit for a $valueType metric',
+    (metric) => {
+      const elements = buildRow(
+        'Sheet1',
+        ['Property Name', metric.label],
+        ['Acme Tower', '1,234'],
+        2,
+      );
+
+      const { accepted, rejected } = extractXlsxFacts(
+        elements,
+        extractionContext(BASE_UNIT_ONTOLOGY),
+      );
+
+      expect(rejected).toEqual([]);
+      expect(accepted[0].value).toEqual({ amount: 1234, unit: metric.units[0].id });
+    },
+  );
 });
 
 // The cell every sweep row plants its candidate text in: third column, first data row.
@@ -692,7 +849,7 @@ async function extractFromCsv(
   ];
   const csv = Buffer.from(rows.map((row) => row.map(csvField).join(',')).join('\n'), 'utf8');
   const parsed = await new CsvParser(',', ['text/csv']).parse(csv);
-  return extractXlsxFacts(parsed.elements, METRIC_ONTOLOGY);
+  return extractXlsxFacts(parsed.elements, extractionContext());
 }
 
 function asScannableFacts(
@@ -783,7 +940,7 @@ describe('extractXlsxFacts — numeric grammar sweep, extractor through detector
           cellElement('Sheet1', 'C2', '   '),
         ];
 
-        const { accepted, rejected } = extractXlsxFacts(elements, METRIC_ONTOLOGY);
+        const { accepted, rejected } = extractXlsxFacts(elements, extractionContext());
 
         expect(accepted).toEqual([]);
         expect(rejected.map((entry) => (entry.locator as XlsxCellLocator).cell)).toContain(
