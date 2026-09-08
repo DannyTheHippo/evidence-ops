@@ -857,5 +857,12 @@ main().catch((error: unknown) => {
   console.error(
     error instanceof Error ? `eval: fatal error — ${error.message}\n${error.stack}` : error,
   );
-  process.exitCode = 1;
+  // `process.exit`, not `process.exitCode`: a failure inside `createEvalApp` throws before `main`'s
+  // own `try` binds `app`, so its `finally` never runs and nothing closes the partially built Nest
+  // context. Setting an exit code only asks Node to leave once the event loop drains, and the
+  // orphaned Mongo handles mean it never does — the process then sits idle forever instead of
+  // failing. A hang is worse than a failure here: CI waits out its wall-clock timeout and reports
+  // nothing about the cause. The error is already on stderr, which is synchronous for files and
+  // pipes, so there is nothing left to flush.
+  process.exit(1);
 });
