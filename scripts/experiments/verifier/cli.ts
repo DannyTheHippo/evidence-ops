@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { DRAFTING_INPUT_TOKEN_BUDGET } from './draft-claims';
 import type { RunCommandModule } from './run-command';
 import type { SummarizeCommandModule } from './summarize-command';
 
@@ -49,7 +50,8 @@ const loadModule = createRequire(__filename);
 
 function usage(): never {
   console.error('usage: cli.ts run [--tenant <id>] [--claims-per-document <n>] [--seed <n>]');
-  console.error('                 [--out <dir>] [--run-id <id>]');
+  console.error('                 [--out <dir>] [--run-id <id>] [--max-documents <n>]');
+  console.error('                 [--draft-window-tokens <n>]');
   console.error('       cli.ts summarize --run <dir>');
   process.exit(1);
 }
@@ -58,6 +60,19 @@ function readNumberFlag(argv: readonly string[], flag: string, fallback: number)
   const index = argv.indexOf(flag);
   if (index === -1) {
     return fallback;
+  }
+  const value = Number(argv[index + 1]);
+  if (!Number.isFinite(value)) {
+    console.error(`${flag} needs a number`);
+    usage();
+  }
+  return value;
+}
+
+function readOptionalNumberFlag(argv: readonly string[], flag: string): number | undefined {
+  const index = argv.indexOf(flag);
+  if (index === -1) {
+    return undefined;
   }
   const value = Number(argv[index + 1]);
   if (!Number.isFinite(value)) {
@@ -84,6 +99,8 @@ async function main(): Promise<void> {
       seed: readNumberFlag(argv, '--seed', DEFAULT_SAMPLE_SEED),
       outputRoot: readStringFlag(argv, '--out') ?? DEFAULT_OUTPUT_ROOT,
       runId: readStringFlag(argv, '--run-id'),
+      maxDocuments: readOptionalNumberFlag(argv, '--max-documents'),
+      draftWindowTokens: readNumberFlag(argv, '--draft-window-tokens', DRAFTING_INPUT_TOKEN_BUDGET),
     });
     return;
   }

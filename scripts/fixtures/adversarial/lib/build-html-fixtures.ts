@@ -15,9 +15,12 @@ function html(body: string): Buffer {
   return Buffer.from(body, 'utf8');
 }
 
-/** Wraps one paragraph in `depth` levels of `<div>`, past `HTML_MAX_NESTING_DEPTH` at the default
- *  depth — this refuses at the depth scan before `parse5` ever runs, rather than parsing into a
- *  deeply nested but otherwise ordinary document. */
+/** Wraps one paragraph in `depth` levels of `<div>`. Deep enough to prove the walk is iterative
+ *  rather than recursive — a recursive walk overflows the stack an order of magnitude below this —
+ *  and comfortably inside `HTML_MAX_NESTING_DEPTH`, so this fixture parses. Refusal at the depth
+ *  bound is exercised in memory by `html.parser.spec.ts` instead, the same way the byte-cap cases
+ *  are: a document built to cross that bound is over half a megabyte, which is not bytes worth
+ *  committing. */
 export function buildNestedTagsHtml(depth = 5_000): Buffer {
   return html(
     `${'<div>'.repeat(depth)}<p>Deeply nested paragraph text.</p>${'</div>'.repeat(depth)}`,

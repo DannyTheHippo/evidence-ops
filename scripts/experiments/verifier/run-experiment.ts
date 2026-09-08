@@ -10,6 +10,7 @@ import type {
   ClaimOutcome,
   CorpusDocument,
   DraftedClaim,
+  DraftWindow,
   VerdictBreakdown,
 } from './types';
 import {
@@ -26,17 +27,32 @@ export const VERDICTS_ARTEFACT = 'verdicts.json';
 export const WORKSHEET_ARTEFACT = 'worksheet.md';
 export const RUN_ARTEFACT = 'run.json';
 
+/** A drafting pass's output: the statements it wrote, and — only when the document had to be
+ *  trimmed to fit the drafting budget — the window that was actually drafted from. */
+export interface DraftForDocumentResult {
+  readonly statements: readonly string[];
+  readonly draftWindow?: DraftWindow;
+}
+
 export interface RunExperimentDeps {
   readonly draftForDocument: (
     document: CorpusDocument,
     passOrdinal: number,
-  ) => Promise<readonly string[]>;
+  ) => Promise<DraftForDocumentResult>;
   readonly verifyBatch: (statements: readonly string[]) => Promise<VerifyClaimsResult>;
   /** Retrieval for the worksheet only. The caller applies the same query transform
    *  `ClaimVerificationService` applies, so the hits shown are the hits the gate saw. */
   readonly retrieveContext: (statement: string) => Promise<readonly RetrievedChunk[]>;
   readonly writeArtefact: (filename: string, content: string) => Promise<void>;
   readonly log: (message: string) => void;
+}
+
+/** Which documents a run drafted from, without the parsed corpus itself — the record other tooling
+ *  reads back does not need the chunks, only what was sampled and from how large a population. */
+export interface DocumentSampleSummary {
+  readonly seed: number;
+  readonly populationSize: number;
+  readonly filenames: readonly string[];
 }
 
 export interface RunExperimentOptions {
@@ -46,6 +62,8 @@ export interface RunExperimentOptions {
   readonly maxBatchSize: number;
   readonly seed: number;
   readonly filenameByDocVersionId: Readonly<Record<string, string>>;
+  /** Absent when the run drafted from the whole corpus rather than a bounded sample of it. */
+  readonly documentSample?: DocumentSampleSummary;
 }
 
 /** `run.json`: everything the summary command needs that the worksheet does not carry. */
@@ -60,6 +78,8 @@ export interface RunRecord {
   readonly gateFailureCount: number;
   readonly bar1: BarResult;
   readonly sample: AdjudicationSample;
+  readonly documentSample?: DocumentSampleSummary;
+  readonly windowedDocumentCount: number;
 }
 
 function normalizeForDedupe(statement: string): string {
@@ -92,9 +112,13 @@ export async function runExperiment(
   const drafted: DraftedClaim[] = [];
   const seenStatements = new Set<string>();
   let duplicatesDropped = 0;
+  let windowedDocumentCount = 0;
 
   for (const [passOrdinal, document] of documents.entries()) {
-    const statements = await deps.draftForDocument(document, passOrdinal);
+    const { statements, draftWindow } = await deps.draftForDocument(document, passOrdinal);
+    if (draftWindow !== undefined) {
+      windowedDocumentCount += 1;
+    }
     let keptForDocument = 0;
     for (const statement of statements) {
       const normalized = normalizeForDedupe(statement);
@@ -108,10 +132,16 @@ export async function runExperiment(
         statement,
         sourceFilename: document.filename,
         draftPass: passOrdinal,
+        ...(draftWindow === undefined ? {} : { draftWindow }),
       });
       keptForDocument += 1;
     }
-    deps.log(`drafted ${keptForDocument} claim(s) from ${document.filename}`);
+    deps.log(
+      draftWindow === undefined
+        ? `drafted ${keptForDocument} claim(s) from ${document.filename}`
+        : `drafted ${keptForDocument} claim(s) from ${document.filename} ` +
+            `(window: ${draftWindow.tokenCount} of ${draftWindow.documentTokenCount} tokens)`,
+    );
   }
 
   if (drafted.length === 0) {
@@ -191,6 +221,8 @@ export async function runExperiment(
     gateFailureCount: breakdown.not_grounded + breakdown.no_evidence_retrieved,
     bar1: evaluateBar(gateFailureRate(breakdown), BAR_1_MIN_GATE_FAILURE_RATE),
     sample,
+    ...(options.documentSample === undefined ? {} : { documentSample: options.documentSample }),
+    windowedDocumentCount,
   };
   await deps.writeArtefact(RUN_ARTEFACT, `${JSON.stringify(record, null, 2)}\n`);
 

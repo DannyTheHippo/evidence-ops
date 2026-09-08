@@ -4,6 +4,7 @@ import {
   VERDICTS_ARTEFACT,
   WORKSHEET_ARTEFACT,
   runExperiment,
+  type DraftForDocumentResult,
   type RunExperimentDeps,
   type RunExperimentOptions,
   type RunRecord,
@@ -22,6 +23,7 @@ import { makeChunk, makeDocument, makeLocator } from './verifier-fixtures';
 function makeDeps(
   statementsByFile: Readonly<Record<string, readonly string[]>>,
   verdicts: Readonly<Record<string, ClaimVerdict>>,
+  draftWindowByFile: Readonly<Record<string, DraftForDocumentResult['draftWindow']>> = {},
 ): {
   deps: RunExperimentDeps;
   artefacts: Map<string, string>;
@@ -35,7 +37,11 @@ function makeDeps(
   const deps: RunExperimentDeps = {
     draftForDocument: (document) => {
       calls.push(`draft:${document.filename}`);
-      return Promise.resolve(statementsByFile[document.filename] ?? []);
+      const draftWindow = draftWindowByFile[document.filename];
+      return Promise.resolve({
+        statements: statementsByFile[document.filename] ?? [],
+        ...(draftWindow === undefined ? {} : { draftWindow }),
+      });
     },
     verifyBatch: (statements): Promise<VerifyClaimsResult> => {
       calls.push('verify');
@@ -240,5 +246,40 @@ describe('runExperiment', () => {
     const { deps } = makeDeps({ 'om.pdf': [], 'rent-roll.xlsx': [] }, {});
 
     await expect(runExperiment(documents, deps, options)).rejects.toThrow('produced no claims');
+  });
+
+  it('records the draft window on a claim drafted from a windowed document, and counts the document', async () => {
+    const draftWindow = { chunkCount: 3, tokenCount: 50_000, documentTokenCount: 80_000 };
+    const { deps, artefacts } = makeDeps(
+      { 'om.pdf': ['claim one'], 'rent-roll.xlsx': ['claim two'] },
+      {},
+      { 'om.pdf': draftWindow },
+    );
+
+    const record = await runExperiment(documents, deps, options);
+
+    expect(record.windowedDocumentCount).toBe(1);
+    const claims = JSON.parse(artefacts.get(CLAIMS_ARTEFACT) ?? '') as {
+      claims: { claimId: string; sourceFilename: string; draftWindow?: typeof draftWindow }[];
+    };
+    expect(claims.claims.find((claim) => claim.claimId === 'c001')).toMatchObject({ draftWindow });
+    expect(claims.claims.find((claim) => claim.claimId === 'c002')?.draftWindow).toBeUndefined();
+  });
+
+  it('reports zero windowed documents and carries the document sample when neither is windowed', async () => {
+    const { deps } = makeDeps({ 'om.pdf': ['claim one'], 'rent-roll.xlsx': [] }, {});
+    const optionsWithSample: RunExperimentOptions = {
+      ...options,
+      documentSample: { seed: 1729, populationSize: 2, filenames: ['om.pdf', 'rent-roll.xlsx'] },
+    };
+
+    const record = await runExperiment(documents, deps, optionsWithSample);
+
+    expect(record.windowedDocumentCount).toBe(0);
+    expect(record.documentSample).toEqual({
+      seed: 1729,
+      populationSize: 2,
+      filenames: ['om.pdf', 'rent-roll.xlsx'],
+    });
   });
 });

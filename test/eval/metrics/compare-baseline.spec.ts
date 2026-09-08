@@ -26,6 +26,7 @@ function baseMetrics(overrides: Partial<EvalMetrics> = {}): EvalMetrics {
     contradictionDropRate: 0.05,
     ledgerResolvedRate: 0,
     ledgerGateSurvivalRate: 0,
+    answerRate: 0.9,
     caseCounts: { total: 32, answerable: 12, unanswerable: 8, conflicting: 5, adversarial: 7 },
     ...overrides,
   };

@@ -432,9 +432,14 @@ describe('HtmlParser', () => {
       expect(textBlocks(result).map((block) => block.text)).toEqual(['beforeafter']);
     });
 
-    it('should parse a document nested to exactly HTML_MAX_NESTING_DEPTH without a stack overflow', async () => {
-      const html =
-        '<div>'.repeat(HTML_MAX_NESTING_DEPTH) + 'x' + '</div>'.repeat(HTML_MAX_NESTING_DEPTH);
+    // Deep enough to prove the walk is iterative rather than recursive — a recursive walk overflows
+    // the stack a decimal order of magnitude below this — but not at `HTML_MAX_NESTING_DEPTH`
+    // itself. That bound is calibrated against a degenerate unclosed chain, and building one at the
+    // bound would cost `parse5` tens of seconds inside a unit test to prove a property this depth
+    // already proves.
+    it('should parse a deeply nested document without a stack overflow', async () => {
+      const depth = 5_000;
+      const html = '<div>'.repeat(depth) + 'x' + '</div>'.repeat(depth);
 
       const result = await parser.parse(Buffer.from(html));
 

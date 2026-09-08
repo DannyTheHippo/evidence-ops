@@ -1,6 +1,6 @@
 {
   "globs": ["**/*.md"],
-  "ignores": ["**/node_modules/**", "eval/results/**"],
+  "ignores": ["**/node_modules/**", "eval/results/**", "eval/public/results/**"],
   "gitignore": true,
   "config": {
     "default": true,

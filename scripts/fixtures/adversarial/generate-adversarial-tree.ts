@@ -193,7 +193,8 @@ export async function generateAdversarialTree(targetDir: string): Promise<void> 
     {
       path: 'nested-tags.html',
       buffer: buildNestedTagsHtml(),
-      description: 'One paragraph wrapped in 5,000 levels of nested <div>.',
+      description:
+        'One paragraph wrapped in 5,000 levels of nested <div> — deep enough to need an iterative walk, inside the depth bound so it parses.',
     },
     {
       path: 'unclosed-tags.html',

@@ -23,6 +23,8 @@ import { formatPromptLabel } from '../../../src/shared/utils/format-prompt-label
 import { draftClaims } from './draft-claims';
 import { loadCorpus } from './load-corpus';
 import { runExperiment, WORKSHEET_ARTEFACT } from './run-experiment';
+import { sampleDocuments } from './sample-documents';
+import { windowDocumentToBudget } from './window-document';
 
 /** The shape `cli.ts` loads this module under, without importing its value graph. */
 export type RunCommandModule = {
@@ -35,6 +37,9 @@ export interface RunCommandOptions {
   readonly seed: number;
   readonly outputRoot: string;
   readonly runId?: string;
+  /** Undefined draws the whole corpus; otherwise the seeded sample `sampleDocuments` draws. */
+  readonly maxDocuments?: number;
+  readonly draftWindowTokens: number;
 }
 
 /** Mirrors `eval/run.ts`'s provenance stamp: a results file whose label names a commit the run did
@@ -87,8 +92,14 @@ export async function runCommand(options: RunCommandOptions): Promise<void> {
     await assertRequiredSearchIndexesExist(connection.db);
 
     const { documents, filenameByDocVersionId } = await loadCorpus(app, options.tenantId);
+    const documentSample = sampleDocuments(
+      documents,
+      options.maxDocuments ?? documents.length,
+      options.seed,
+    );
     console.log(
-      `verifier: corpus for tenant '${options.tenantId}' — ${documents.length} document(s)`,
+      `verifier: corpus for tenant '${options.tenantId}' — ${documents.length} document(s), ` +
+        `drafting from ${documentSample.documents.length}`,
     );
 
     const modelProvider = app.get<ModelProvider>(MODEL_PROVIDER);
@@ -96,16 +107,30 @@ export async function runCommand(options: RunCommandOptions): Promise<void> {
     const evidenceRetrievalService = app.get(EvidenceRetrievalService);
 
     const record = await runExperiment(
-      documents,
+      documentSample.documents,
       {
-        draftForDocument: (document, passOrdinal) =>
-          draftClaims(modelProvider, {
-            document,
+        draftForDocument: async (document, passOrdinal) => {
+          const windowed = windowDocumentToBudget(document, options.draftWindowTokens);
+          const statements = await draftClaims(modelProvider, {
+            document: windowed.document,
             statementCount: options.claimsPerDocument,
             maxStatementLength: VERIFY_CLAIMS_CLAIM_MAX_LENGTH,
             tenantId: options.tenantId,
             passOrdinal,
-          }),
+          });
+          return {
+            statements,
+            ...(windowed.windowed
+              ? {
+                  draftWindow: {
+                    chunkCount: windowed.document.chunks.length,
+                    tokenCount: windowed.tokenCount,
+                    documentTokenCount: windowed.documentTokenCount,
+                  },
+                }
+              : {}),
+          };
+        },
         verifyBatch: (statements) =>
           claimVerificationService.verifyClaims({
             claims: statements,
@@ -130,6 +155,11 @@ export async function runCommand(options: RunCommandOptions): Promise<void> {
         maxBatchSize: VERIFY_CLAIMS_MAX_CLAIMS,
         seed: options.seed,
         filenameByDocVersionId,
+        documentSample: {
+          seed: documentSample.seed,
+          populationSize: documentSample.populationSize,
+          filenames: documentSample.filenames,
+        },
       },
     );
 

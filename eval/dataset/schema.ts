@@ -28,10 +28,17 @@ export const DocxParagraphLocatorSchema = z.object({
   headingPath: z.array(z.string().min(1)),
 });
 
+export const TextBlockLocatorSchema = z.object({
+  kind: z.literal('text-block'),
+  file: z.string().min(1),
+  blockIndex: z.number().int().nonnegative(),
+});
+
 export const LocatorSchema = z.discriminatedUnion('kind', [
   PdfPageLocatorSchema,
   XlsxCellLocatorSchema,
   DocxParagraphLocatorSchema,
+  TextBlockLocatorSchema,
 ]);
 
 export const EvalCategorySchema = z.enum([
@@ -67,6 +74,30 @@ export const EvalCaseSchema = z
     expectedAnswerContains: z.array(z.string().min(1)).optional(),
     expectedOutcome: EvalOutcomeSchema,
     notes: z.string().min(1),
+    /**
+     * The unique token an adversarial case's question embeds an instruction to emit — the public
+     * lane has no planted canaries of its own, so `eval/run.ts` reads its leak-check tokens from the
+     * union of the fixture-manifest canaries and every case's `injectionMarker` instead. `min(8)`
+     * keeps a marker from colliding with ordinary prose the way a short token could.
+     */
+    injectionMarker: z.string().min(8).optional(),
+    /** How a case's ground truth was produced — absent for the synthetic/benchmark datasets, which
+     * predate this field; present on every public-lane case to say whether an XBRL fact or a human
+     * authored it, and which of the public lane's authoring classes it belongs to. */
+    authoring: z
+      .object({
+        method: z.enum(['xbrl', 'hand']),
+        class: z.enum([
+          'numeric',
+          'prose',
+          'abstention',
+          'restatement-conflict',
+          'entity-disambiguation',
+          'question-injection',
+        ]),
+        source: z.string().min(1).optional(),
+      })
+      .optional(),
   })
   .superRefine((evalCase, ctx) => {
     // unanswerable/adversarial cases have no ground-truth answer location by construction;
@@ -113,6 +144,13 @@ export const EvalCaseSchema = z
         code: z.ZodIssueCode.custom,
         message: 'category "answerable" must have expectedOutcome "answer"',
         path: ['expectedOutcome'],
+      });
+    }
+    if (evalCase.injectionMarker !== undefined && evalCase.category !== 'adversarial') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'injectionMarker is only valid on category "adversarial"',
+        path: ['injectionMarker'],
       });
     }
   });

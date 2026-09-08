@@ -1,14 +1,15 @@
 import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
 import { execSync } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Connection, Model } from 'mongoose';
 import { bootstrapEvalApp, closeEvalApp, type EvalCacheMode } from './bootstrap';
 import { readCacheManifest, writeCacheManifest } from './cache-manifest';
 import { computeCorpusFingerprint } from './compute-corpus-fingerprint';
-import casesJson from './dataset/cases.json';
 import { EvalDatasetSchema, type EvalCase } from './dataset/schema';
 import { ingestFixtures, type IngestedFixture } from './ingest-fixtures';
+import { EVAL_LANES, laneConfig, type EvalLane } from './lanes';
 import { loadExistingCorpus } from './load-existing-corpus';
 import {
   answerContainsExpectedStrings,
@@ -30,18 +31,28 @@ import {
   ANSWER_CONTENT_ACCURACY_FLOOR,
   RECALL_AT_5_FLOOR,
   buildMarkdownReport,
+  evaluateBars,
   failingCases,
   hasBaselineRegression,
   hasConflictScopeGap,
+  hasMissedBar,
   hasMixedScoringMethods,
   hasOwnVoiceLeak,
   isBelowAnswerContentFloor,
   isBelowRecallAt5Floor,
   type EvalRunResult,
+  type LaneBars,
   type PerCaseReport,
   type ScoringMethodSplit,
 } from './report';
 import { aggregateVariance } from './variance/aggregate-variance';
+import {
+  assertResumable,
+  baseSha,
+  completeObservations,
+  completedPassCount,
+  nextObservationSlots,
+} from './variance/variance-resume';
 import {
   buildVarianceMarkdownReport,
   type VarianceCaseRun,
@@ -57,39 +68,6 @@ import { createActivities, type Activities } from '../src/worker/activities';
 
 const CANARY_TOKENS: readonly string[] = manifest.canaries.map((canary) => canary.token);
 
-/**
- * The synthetic lane is the committed, zero-cost replay lane CI runs on every change: its cache and
- * results live under `eval/cache`/`eval/results` and stay tracked in git. The benchmark lane is a
- * separate lane over a corpus outside the synthetic fixtures, re-recorded deliberately rather than
- * replayed by default — its cache and results live under `eval/benchmark/`, which `.gitignore`
- * excludes wholesale so a cache entry that embeds a client document's content can never enter git
- * history. Each lane uses its own tenant so a benchmark run's ingested evidence never mixes with the
- * synthetic corpus already ingested under the synthetic lane's tenant.
- */
-type EvalLane = 'synthetic' | 'benchmark';
-
-const EVAL_LANES: readonly EvalLane[] = ['synthetic', 'benchmark'];
-
-interface LaneConfig {
-  readonly tenantId: string;
-  readonly cacheDir: string;
-  readonly modelCacheDir: string;
-  readonly embeddingCacheDir: string;
-  readonly resultsDir: string;
-}
-
-function laneConfig(lane: EvalLane): LaneConfig {
-  const laneRoot = lane === 'synthetic' ? __dirname : path.join(__dirname, 'benchmark');
-  const cacheDir = path.join(laneRoot, 'cache');
-  return {
-    tenantId: lane === 'synthetic' ? 'eval' : 'eval-benchmark',
-    cacheDir,
-    modelCacheDir: path.join(cacheDir, 'model'),
-    embeddingCacheDir: path.join(cacheDir, 'embedding'),
-    resultsDir: path.join(laneRoot, 'results'),
-  };
-}
-
 const DEFAULT_VARIANCE_RUNS = 5;
 
 interface CliOptions {
@@ -104,6 +82,9 @@ interface CliOptions {
   /** Path to a committed baseline file (`--compare <path>`), compared against this run's metrics
    * after `computeMetrics`. `undefined` when the flag was not passed — no comparison runs. */
   readonly compare?: string;
+  /** `--resume`: continue an existing `variance-<baseSha>.json` progress file instead of starting a
+   * fresh one. Only valid alongside `--variance`. */
+  readonly resume: boolean;
 }
 
 /**
@@ -117,6 +98,14 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
   const laneArg = laneFlagIndex === -1 ? undefined : argv[laneFlagIndex + 1];
   if (laneArg !== undefined && !EVAL_LANES.includes(laneArg as EvalLane)) {
     throw new Error(`eval: unknown lane '${laneArg}' — expected one of ${EVAL_LANES.join(', ')}`);
+  }
+  // The public lane's corpus is built by `eval:public:ingest`, resumable at document granularity —
+  // `--ingest` here would re-run the eval harness's own synthetic/benchmark ingest path against it,
+  // which is not what that path does.
+  if (laneArg === 'public' && argv.includes('--ingest')) {
+    throw new Error(
+      'eval: --ingest is not supported on the public lane — use npm run eval:public:ingest',
+    );
   }
 
   const variance = argv.includes('--variance');
@@ -153,6 +142,11 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
     throw new Error(`eval: --runs must be a positive integer, got '${runsArg}'`);
   }
 
+  const resume = argv.includes('--resume');
+  if (resume && !variance) {
+    throw new Error('eval: --resume is only valid alongside --variance');
+  }
+
   return {
     cacheMode: variance ? 'off' : argv.includes('--record') ? 'record' : 'replay',
     embeddingCacheMode: variance ? 'replay' : argv.includes('--record') ? 'record' : 'replay',
@@ -160,6 +154,7 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
     lane: (laneArg as EvalLane | undefined) ?? 'synthetic',
     varianceRuns: variance ? varianceRuns : undefined,
     compare: compareArg,
+    resume,
   };
 }
 
@@ -204,10 +199,14 @@ interface VarianceLaneOptions {
   readonly tenantId: string;
   readonly resultsDir: string;
   readonly gitSha: string;
+  readonly datasetFingerprint: string;
   readonly corpusFingerprint: string;
   readonly requestedRunCount: number;
   readonly modelCacheMode: EvalCacheMode;
   readonly embeddingCacheMode: EvalCacheMode;
+  /** `--resume`: continue `variance-<baseSha>.json` from its `nextObservationSlots` instead of
+   * starting a fresh progress file. */
+  readonly resume: boolean;
 }
 
 /**
@@ -218,108 +217,165 @@ interface VarianceLaneOptions {
  * nondeterminism rather than asserting a threshold on it, and a measurement that fails the build is
  * a measurement that stops being taken.
  *
- * The report is rewritten after every completed pass, over the passes completed so far. Each pass
- * spends real money, so a lane stopped part-way — by the daily spend ceiling, or by anything
- * else — must leave a complete, readable report of the passes that did finish rather than losing
- * them with the process.
+ * Named and resumed by `baseSha(options.gitSha)` (the `-dirty` suffix stripped) rather than the raw
+ * label, so a run that goes from clean to dirty (or back) between passes still resumes the same
+ * file. The progress file is rewritten after every observed case, not every completed pass — each
+ * case spends real money, so a lane stopped part-way must leave every case that did finish on disk,
+ * not just the passes that happened to complete before the stop.
  */
 async function runVarianceLane(options: VarianceLaneOptions): Promise<void> {
-  const observations: VarianceCaseRun[] = [];
+  const base = baseSha(options.gitSha);
+  const jsonPath = path.join(options.resultsDir, `variance-${base}.json`);
+  const mdPath = path.join(options.resultsDir, `variance-${base}.md`);
 
-  for (let runIndex = 1; runIndex <= options.requestedRunCount; runIndex += 1) {
-    console.log(`eval: variance pass ${runIndex}/${options.requestedRunCount}`);
+  let observations: VarianceCaseRun[] = [];
+  let passLabels: { runIndex: number; gitSha: string; startedAt: string }[] = [];
 
-    for (const evalCase of options.cases) {
-      const retrievedChunks = await options.activities.retrieveEvidence({
-        questionText: evalCase.question,
-        tenantId: options.tenantId,
-      });
-      const { contract: rawOutcome } = await options.activities.synthesizeAnswer({
-        questionText: evalCase.question,
-        chunks: retrievedChunks,
-        tenantId: options.tenantId,
-      });
-      // Mirrors `answer-question.workflow.ts`'s decompose-then-check-contradictions ordering
-      // between synthesis and grounding, so this lane measures the same production path the
-      // scoring lane below does.
-      const { atoms } = await options.activities.decomposeClaims({
-        outcome: rawOutcome,
-        tenantId: options.tenantId,
-      });
-      const { contradictedClaimIndexes } = await options.activities.checkContradictions({
-        outcome: rawOutcome,
-        atoms,
-        retrievedChunks,
-        tenantId: options.tenantId,
-      });
-      // `questionText` is load-bearing, exactly as in the scoring lane's identical call above: without
-      // it `groundingCheck` names no question entity and every conflict-attachment fork fails closed
-      // to abstention, which would shift this lane's whole outcome distribution.
-      const groundingResult = await options.activities.groundingCheck({
-        outcome: rawOutcome,
-        retrievedChunks,
-        tenantId: options.tenantId,
-        questionText: evalCase.question,
-        atoms,
-        contradictedClaimIndexes,
-      });
-
-      const citations =
-        groundingResult.outcome.kind === 'answered'
-          ? groundingResult.claims.flatMap((claim) => claim.citations)
-          : [];
-
-      observations.push({
-        runIndex,
-        caseId: evalCase.id,
-        question: evalCase.question,
-        outcomeKind: groundingResult.outcome.kind,
-        citedChunkIds: citations.map((citation) => citation.chunkId),
-        claimCount: groundingResult.outcome.kind === 'answered' ? groundingResult.claims.length : 0,
-        retrievedChunkIds: retrievedChunks.map((chunk) => chunk.chunkId),
-        citations: citations.map((citation) => ({
-          chunkId: citation.chunkId,
-          quote: citation.quote,
-        })),
-      });
-
-      console.log(
-        `eval: variance ${runIndex}/${options.requestedRunCount} ${evalCase.id} -> ` +
-          `${groundingResult.outcome.kind}`,
+  if (options.resume) {
+    const existing = JSON.parse(await readFile(jsonPath, 'utf-8')) as VarianceRunResult;
+    assertResumable(existing, {
+      datasetFingerprint: options.datasetFingerprint,
+      corpusFingerprint: options.corpusFingerprint,
+      requestedRunCount: options.requestedRunCount,
+    });
+    // Untracked result files (this progress file among them) must not block a resume — only a
+    // tracked-file change means the code that would produce the next pass has moved since the last
+    // one ran, which is the condition `--resume` exists to catch.
+    const dirtyTrackedFiles = execSync('git status --porcelain --untracked-files=no', {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .toString()
+      .trim();
+    if (dirtyTrackedFiles.length > 0) {
+      throw new Error(
+        `eval: --resume refused — tracked files differ from the last recorded pass: ` +
+          `${dirtyTrackedFiles
+            .split('\n')
+            .map((line) => line.trim())
+            .join(', ')}`,
       );
     }
+    observations = [...existing.observations];
+    passLabels = [...existing.passLabels];
+  }
 
+  const caseIds = options.cases.map((evalCase) => evalCase.id);
+  const caseById = new Map(options.cases.map((evalCase) => [evalCase.id, evalCase]));
+  const slots = nextObservationSlots(observations, caseIds, options.requestedRunCount);
+
+  let currentRunIndex: number | undefined;
+
+  for (const slot of slots) {
+    if (slot.runIndex !== currentRunIndex) {
+      currentRunIndex = slot.runIndex;
+      console.log(`eval: variance pass ${currentRunIndex}/${options.requestedRunCount}`);
+      passLabels.push({
+        runIndex: currentRunIndex,
+        gitSha: options.gitSha,
+        startedAt: new Date().toISOString(),
+      });
+    }
+
+    const evalCase = caseById.get(slot.caseId);
+    if (!evalCase) {
+      throw new Error(`eval: variance slot references unknown case '${slot.caseId}'`);
+    }
+
+    const retrievedChunks = await options.activities.retrieveEvidence({
+      questionText: evalCase.question,
+      tenantId: options.tenantId,
+    });
+    const { contract: rawOutcome } = await options.activities.synthesizeAnswer({
+      questionText: evalCase.question,
+      chunks: retrievedChunks,
+      tenantId: options.tenantId,
+    });
+    // Mirrors `answer-question.workflow.ts`'s decompose-then-check-contradictions ordering
+    // between synthesis and grounding, so this lane measures the same production path the
+    // scoring lane below does.
+    const { atoms } = await options.activities.decomposeClaims({
+      outcome: rawOutcome,
+      tenantId: options.tenantId,
+    });
+    const { contradictedClaimIndexes } = await options.activities.checkContradictions({
+      outcome: rawOutcome,
+      atoms,
+      retrievedChunks,
+      tenantId: options.tenantId,
+    });
+    // `questionText` is load-bearing, exactly as in the scoring lane's identical call above: without
+    // it `groundingCheck` names no question entity and every conflict-attachment fork fails closed
+    // to abstention, which would shift this lane's whole outcome distribution.
+    const groundingResult = await options.activities.groundingCheck({
+      outcome: rawOutcome,
+      retrievedChunks,
+      tenantId: options.tenantId,
+      questionText: evalCase.question,
+      atoms,
+      contradictedClaimIndexes,
+    });
+
+    const citations =
+      groundingResult.outcome.kind === 'answered'
+        ? groundingResult.claims.flatMap((claim) => claim.citations)
+        : [];
+
+    observations.push({
+      runIndex: slot.runIndex,
+      caseId: evalCase.id,
+      question: evalCase.question,
+      outcomeKind: groundingResult.outcome.kind,
+      citedChunkIds: citations.map((citation) => citation.chunkId),
+      claimCount: groundingResult.outcome.kind === 'answered' ? groundingResult.claims.length : 0,
+      retrievedChunkIds: retrievedChunks.map((chunk) => chunk.chunkId),
+      citations: citations.map((citation) => ({
+        chunkId: citation.chunkId,
+        quote: citation.quote,
+      })),
+    });
+
+    console.log(
+      `eval: variance ${slot.runIndex}/${options.requestedRunCount} ${evalCase.id} -> ` +
+        `${groundingResult.outcome.kind}`,
+    );
+
+    const runCount = completedPassCount(observations, caseIds);
+    const complete = completeObservations(observations, caseIds);
     const result: VarianceRunResult = {
-      gitSha: options.gitSha,
-      generatedAt: new Date().toISOString(),
-      runCount: runIndex,
-      requestedRunCount: options.requestedRunCount,
+      baseGitSha: base,
+      datasetFingerprint: options.datasetFingerprint,
       corpusFingerprint: options.corpusFingerprint,
+      requestedRunCount: options.requestedRunCount,
+      passLabels,
+      observations,
+      generatedAt: new Date().toISOString(),
+      runCount,
       modelCacheMode: options.modelCacheMode,
       embeddingCacheMode: options.embeddingCacheMode,
-      observations,
-      aggregate: aggregateVariance(observations, runIndex),
+      // Absent until the first pass completes — `aggregateVariance` throws on a case missing a
+      // pass, and this file is written after every case, so it can be read back mid-pass with no
+      // complete pass yet to aggregate over.
+      aggregate: runCount > 0 ? aggregateVariance(complete, runCount) : undefined,
     };
 
     await mkdir(options.resultsDir, { recursive: true });
-    await writeFile(
-      path.join(options.resultsDir, `variance-${options.gitSha}.json`),
-      JSON.stringify(result, null, 2),
-      'utf-8',
-    );
-    await writeFile(
-      path.join(options.resultsDir, `variance-${options.gitSha}.md`),
-      buildVarianceMarkdownReport(result),
-      'utf-8',
-    );
+    await writeFile(jsonPath, JSON.stringify(result, null, 2), 'utf-8');
+    await writeFile(mdPath, buildVarianceMarkdownReport(result), 'utf-8');
 
-    const { summary } = result.aggregate;
-    console.log(
-      `eval: wrote variance-${options.gitSha}.json/.md — after ${runIndex} pass(es): ` +
-        `flips=${summary.flippedCaseIds.length} ` +
-        `citationStability=${summary.citationStabilityRate ?? 'n/a'} ` +
-        `answeredEveryPass=${summary.answeredEveryRunCaseCount}/${summary.caseCount}`,
-    );
+    if (result.aggregate) {
+      const { summary } = result.aggregate;
+      console.log(
+        `eval: wrote variance-${base}.json/.md — after ${runCount} pass(es): ` +
+          `flips=${summary.flippedCaseIds.length} ` +
+          `citationStability=${summary.citationStabilityRate ?? 'n/a'} ` +
+          `answeredEveryPass=${summary.answeredEveryRunCaseCount}/${summary.caseCount}`,
+      );
+    } else {
+      console.log(
+        `eval: wrote variance-${base}.json/.md — pass ${slot.runIndex} in progress, no complete ` +
+          `pass yet`,
+      );
+    }
   }
 }
 
@@ -331,6 +387,11 @@ async function main(): Promise<void> {
     modelCacheDir: MODEL_CACHE_DIR,
     embeddingCacheDir: EMBEDDING_CACHE_DIR,
     resultsDir: RESULTS_DIR,
+    datasetPath: DATASET_PATH,
+    datasetManifestPath: DATASET_MANIFEST_PATH,
+    corpusDir: CORPUS_DIR,
+    ledgerPath: LEDGER_PATH,
+    barsPath: BARS_PATH,
   } = laneConfig(options.lane);
   const sha = gitSha();
   console.log(
@@ -339,7 +400,35 @@ async function main(): Promise<void> {
       `${options.varianceRuns === undefined ? '' : `, variance passes = ${options.varianceRuns}`}`,
   );
 
-  const cases = EvalDatasetSchema.parse(casesJson);
+  const datasetBytes = await readFile(DATASET_PATH);
+  const datasetFingerprint = createHash('sha256').update(datasetBytes).digest('hex');
+  const cases = EvalDatasetSchema.parse(JSON.parse(datasetBytes.toString('utf-8')));
+
+  if (DATASET_MANIFEST_PATH !== undefined) {
+    // The public lane's dataset is frozen against `casesSha256` before any run
+    // (`scripts/public-corpus/freeze-dataset.ts`) — a case file edited after freezing would
+    // otherwise score silently against ground truth nobody re-verified.
+    const datasetManifest = JSON.parse(await readFile(DATASET_MANIFEST_PATH, 'utf-8')) as {
+      casesSha256?: string;
+    };
+    if (datasetManifest.casesSha256 !== datasetFingerprint) {
+      throw new Error(
+        `eval: dataset fingerprint mismatch — '${DATASET_MANIFEST_PATH}' recorded ` +
+          `'${datasetManifest.casesSha256}', '${DATASET_PATH}' hashes to '${datasetFingerprint}'. ` +
+          `Run 'npm run corpus:freeze' after any dataset edit.`,
+      );
+    }
+  }
+
+  // The public lane has no planted canaries of its own — its leak-check tokens are the union of
+  // the fixture-manifest canaries (harmless no-ops against a corpus that never contains them) and
+  // every case's own `injectionMarker`. Unconditional rather than gated on `canarySource`: no
+  // synthetic/benchmark case carries an `injectionMarker`, so the union is a no-op there and this
+  // stays one code path for every lane.
+  const canaryTokens: readonly string[] = [
+    ...CANARY_TOKENS,
+    ...cases.flatMap((evalCase) => (evalCase.injectionMarker ? [evalCase.injectionMarker] : [])),
+  ];
 
   const app = await bootstrapEvalApp({
     cacheMode: options.cacheMode,
@@ -446,7 +535,10 @@ async function main(): Promise<void> {
     // range-intersection check, never element-index/text-containment, so folding them in here would
     // double-count against a split that only ever describes the pdf/docx path (S8).
     const proseEvalChunks = allEvalChunks.filter(
-      (chunk) => chunk.locator.kind === 'pdf-page' || chunk.locator.kind === 'docx-paragraph',
+      (chunk) =>
+        chunk.locator.kind === 'pdf-page' ||
+        chunk.locator.kind === 'docx-paragraph' ||
+        chunk.locator.kind === 'text-block',
     );
     const scoringMethodSplit: ScoringMethodSplit = {
       elementIndexChunks: proseEvalChunks.filter(
@@ -501,6 +593,20 @@ async function main(): Promise<void> {
       }
     }
 
+    if (LEDGER_PATH !== undefined) {
+      // The public lane's ingest is resumable at document granularity — a ledger without
+      // `completedAt` means some selected file is still `pending`/`facts-pending`, and scoring
+      // against a partial corpus would silently record a retrieval/recall figure for a corpus that
+      // was never actually finished.
+      const ledger = JSON.parse(await readFile(LEDGER_PATH, 'utf-8')) as { completedAt?: string };
+      if (!ledger.completedAt) {
+        throw new Error(
+          `eval: ingest ledger '${LEDGER_PATH}' has no completedAt — the public corpus ingest is ` +
+            `not finished. Run 'npm run eval:public:ingest' until it reports complete.`,
+        );
+      }
+    }
+
     const activities = createActivities(app);
 
     if (options.varianceRuns !== undefined) {
@@ -510,10 +616,12 @@ async function main(): Promise<void> {
         tenantId: EVAL_TENANT_ID,
         resultsDir: RESULTS_DIR,
         gitSha: sha,
+        datasetFingerprint,
         corpusFingerprint,
         requestedRunCount: options.varianceRuns,
         modelCacheMode: options.cacheMode,
         embeddingCacheMode: options.embeddingCacheMode,
+        resume: options.resume,
       });
       return;
     }
@@ -545,10 +653,16 @@ async function main(): Promise<void> {
         ledgerSurvived = ledgerGroundingResult.outcome.kind !== 'insufficient_evidence';
       }
 
+      // Timed only on a lane with a `barsPath` — `CaseResult.retrievalMs` stays `undefined` on the
+      // synthetic lane, which is what keeps `EvalMetrics.retrievalLatency` unset and the synthetic
+      // lane's committed results stable under replay.
+      const retrievalStartedAt = BARS_PATH === undefined ? undefined : Date.now();
       const retrievedChunks = await activities.retrieveEvidence({
         questionText: evalCase.question,
         tenantId: EVAL_TENANT_ID,
       });
+      const retrievalMs =
+        retrievalStartedAt === undefined ? undefined : Date.now() - retrievalStartedAt;
       const { contract: rawOutcome } = await activities.synthesizeAnswer({
         questionText: evalCase.question,
         chunks: retrievedChunks,
@@ -594,6 +708,7 @@ async function main(): Promise<void> {
                   locator: chunk.locator,
                 },
                 evalCase.expectedLocators,
+                CORPUS_DIR,
               ),
             ),
           )
@@ -622,6 +737,7 @@ async function main(): Promise<void> {
                   locator: chunk.locator,
                 },
                 evalCase.expectedLocators,
+                CORPUS_DIR,
               );
             }),
           )
@@ -638,7 +754,7 @@ async function main(): Promise<void> {
       const { ownVoiceLeak, verifiedQuoteLeak } = classifyCanaryLeak(
         serializedOutcome,
         verifiedQuotes,
-        CANARY_TOKENS,
+        canaryTokens,
       );
 
       const recallHitRank = retrievedOverlaps.length > 0 ? retrievedOverlaps.indexOf(true) + 1 : 0;
@@ -680,6 +796,7 @@ async function main(): Promise<void> {
               groundingResult.outcome.values.map((value) => value.sourceChunkId),
               (chunkId) => corpusChunkById.get(chunkId),
               evalCase.expectedLocators,
+              CORPUS_DIR,
             )
           : null;
 
@@ -717,6 +834,7 @@ async function main(): Promise<void> {
         contradictionDroppedClaimCount: atomization?.contradictionDroppedClaimCount ?? 0,
         ledgerResolved,
         ledgerSurvived,
+        retrievalMs,
       });
 
       perCase.push({
@@ -768,16 +886,28 @@ async function main(): Promise<void> {
         ? undefined
         : compareToBaseline(metrics, (await readBaselineFile(baselinePath)).metrics);
 
+    // The public lane's pre-registered bars, read from a tracked file rather than a constant —
+    // absent on a lane with no `barsPath`, which is what leaves the synthetic lane's fixed floors
+    // below as the only gate.
+    const bars =
+      BARS_PATH === undefined
+        ? undefined
+        : (JSON.parse(await readFile(BARS_PATH, 'utf-8')) as LaneBars);
+    const barOutcomes = bars === undefined ? undefined : evaluateBars(metrics, bars);
+
     const result: EvalRunResult = {
       gitSha: sha,
       generatedAt: new Date().toISOString(),
+      lane: options.lane,
       cacheMode: options.cacheMode,
       corpusFingerprint,
+      datasetFingerprint,
       metrics,
       perCase,
       scoringMethodSplit,
       baselineComparison,
       baselinePath,
+      barOutcomes,
     };
 
     await mkdir(RESULTS_DIR, { recursive: true });
@@ -802,35 +932,11 @@ async function main(): Promise<void> {
       process.exitCode = 1;
     }
 
-    // The second hard gate, on the same `./report` predicate the markdown gate line reads. A case
-    // whose expected outcome did not happen fails the run: replay serves every model and embedding
-    // response from a committed fixture, so the outcome is reproducible — a wrong answer here is a
-    // regression in the dataset, the prompts, or retrieval, never sampling noise. Applies in record
-    // mode too, where the same wrong answer is what a re-record would freeze into the cache.
-    const failing = failingCases(perCase);
-    if (failing.length > 0) {
-      console.error(
-        `eval: FAILED — ${failing.length} case(s) did not produce their expected outcome ` +
-          `(hard gate): ${failing.map((row) => row.id).join(', ')}`,
-      );
-      process.exitCode = 1;
-    }
-
-    // The third hard gate, on the same `./report` predicate the markdown gate line reads. Gated at
-    // a floor (`ANSWER_CONTENT_ACCURACY_FLOOR`), not 1 — `expectedAnswerContains` is scored against
-    // free-form model prose and rendered conflict values, so a floor at the dataset's own baseline
-    // catches a regression without demanding perfection this metric was never meant to reach.
-    if (isBelowAnswerContentFloor(metrics)) {
-      console.error(
-        `eval: FAILED — answer content accuracy ${metrics.answerContentAccuracy} is below the ` +
-          `${ANSWER_CONTENT_ACCURACY_FLOOR} floor (hard gate)`,
-      );
-      process.exitCode = 1;
-    }
-
     // The fourth hard gate, on the same `./report` predicate the markdown gate line reads. Gated at
     // exactly 1 — a mis-scoped conflict is the exact defect `conflictScopeAccuracy` exists to
-    // catch, so any rate below 1 fails the run rather than being averaged away.
+    // catch, so any rate below 1 fails the run rather than being averaged away. Unconditional, same
+    // as the own-voice gate above: `bars.json`'s `conflictScopeAccuracy` bound is the same 1.00, so
+    // this and the bar loop below never disagree on the public lane.
     if (hasConflictScopeGap(metrics)) {
       console.error(
         `eval: FAILED — conflict scope accuracy ${metrics.conflictScopeAccuracy} is below 1 ` +
@@ -839,24 +945,83 @@ async function main(): Promise<void> {
       process.exitCode = 1;
     }
 
-    // The fifth hard gate, on the same `./report` predicate the markdown gate line reads. Gated at
-    // a floor (`RECALL_AT_5_FLOOR`), not 1 — recall depends on chunking and embedding behaviour this
-    // corpus was never meant to hold to 100%, so a floor at the dataset's own baseline catches a
-    // retrieval regression without demanding perfection this metric was never meant to reach.
-    if (isBelowRecallAt5Floor(metrics)) {
-      console.error(
-        `eval: FAILED — recall@5 ${metrics.retrieval.recallAt5} is below the ` +
-          `${RECALL_AT_5_FLOOR} floor (hard gate)`,
-      );
-      process.exitCode = 1;
+    if (barOutcomes === undefined) {
+      // The second hard gate, on the same `./report` predicate the markdown gate line reads. A case
+      // whose expected outcome did not happen fails the run: replay serves every model and
+      // embedding response from a committed fixture, so the outcome is reproducible — a wrong
+      // answer here is a regression in the dataset, the prompts, or retrieval, never sampling
+      // noise. Applies in record mode too, where the same wrong answer is what a re-record would
+      // freeze into the cache. Skipped on a lane with `barOutcomes`: n≈180 over a single run would
+      // be red by construction on a per-case count, so `failingCases` is informational there (see
+      // `bars.json`'s `reported` list).
+      const failing = failingCases(perCase);
+      if (failing.length > 0) {
+        console.error(
+          `eval: FAILED — ${failing.length} case(s) did not produce their expected outcome ` +
+            `(hard gate): ${failing.map((row) => row.id).join(', ')}`,
+        );
+        process.exitCode = 1;
+      }
+
+      // The third hard gate, on the same `./report` predicate the markdown gate line reads. Gated
+      // at a floor (`ANSWER_CONTENT_ACCURACY_FLOOR`), not 1 — `expectedAnswerContains` is scored
+      // against free-form model prose and rendered conflict values, so a floor at the dataset's own
+      // baseline catches a regression without demanding perfection this metric was never meant to
+      // reach. Skipped on a lane with `barOutcomes`: the public lane's own bar is registered lower
+      // (0.90, `bars.json`) than this synthetic-lane floor (0.95) — applying this floor there would
+      // fail a run the pre-registered bar actually passed.
+      if (isBelowAnswerContentFloor(metrics)) {
+        console.error(
+          `eval: FAILED — answer content accuracy ${metrics.answerContentAccuracy} is below the ` +
+            `${ANSWER_CONTENT_ACCURACY_FLOOR} floor (hard gate)`,
+        );
+        process.exitCode = 1;
+      }
+
+      // The fifth hard gate, on the same `./report` predicate the markdown gate line reads. Gated
+      // at a floor (`RECALL_AT_5_FLOOR`), not 1 — recall depends on chunking and embedding
+      // behaviour this dataset was never meant to hold to 100%, so a floor at the dataset's own
+      // baseline catches a retrieval regression without demanding perfection this metric was never
+      // meant to reach. Skipped on a lane with `barOutcomes`: `bars.json`'s `recallAt5` bound
+      // covers it there instead.
+      if (isBelowRecallAt5Floor(metrics)) {
+        console.error(
+          `eval: FAILED — recall@5 ${metrics.retrieval.recallAt5} is below the ` +
+            `${RECALL_AT_5_FLOOR} floor (hard gate)`,
+        );
+        process.exitCode = 1;
+      }
+    } else {
+      // A lane scored against pre-registered bars (`bars.json`) rather than the synthetic lane's
+      // fixed floors — one MET/MISSED line per bar, and `hasMissedBar` is the single predicate both
+      // this exit code and `buildMarkdownReport`'s "## Pre-registered bars" section read.
+      for (const outcome of barOutcomes) {
+        const bound = [
+          outcome.bound.min === undefined ? undefined : `min=${outcome.bound.min}`,
+          outcome.bound.max === undefined ? undefined : `max=${outcome.bound.max}`,
+        ]
+          .filter((part): part is string => part !== undefined)
+          .join(' ');
+        console.log(
+          `eval: bar ${outcome.metric} ${outcome.met ? 'MET' : 'MISSED'} ` +
+            `observed=${outcome.observed} bound=${bound}`,
+        );
+      }
+      if (hasMissedBar(barOutcomes)) {
+        console.error(
+          `eval: FAILED — ${barOutcomes.filter((outcome) => !outcome.met).length} pre-registered ` +
+            `bar(s) missed (hard gate)`,
+        );
+        process.exitCode = 1;
+      }
     }
 
-    // The sixth hard gate, present only when `--compare` was passed. Read from
-    // `baselineComparison.regressions`, never from the process exit code of anything else — the
-    // gates above already exit nonzero on this repo's own pre-existing absolute floors (e.g.
-    // recall@5 below `RECALL_AT_5_FLOOR`), which is expected and orthogonal to whether this run
-    // regressed against its baseline. `hasBaselineRegression` is the same anti-drift predicate
-    // `buildMarkdownReport`'s Baseline comparison section reads.
+    // The sixth hard gate, present only when `--compare` was passed, on both the synthetic and the
+    // public lane. Read from `baselineComparison.regressions`, never from the process exit code of
+    // anything else — the gates above already exit nonzero on this repo's own pre-existing absolute
+    // floors (e.g. recall@5 below `RECALL_AT_5_FLOOR`), which is expected and orthogonal to whether
+    // this run regressed against its baseline. `hasBaselineRegression` is the same anti-drift
+    // predicate `buildMarkdownReport`'s Baseline comparison section reads.
     if (result.baselineComparison) {
       const { regressions, held, absentFromBaseline, absentFromCurrent } =
         result.baselineComparison;

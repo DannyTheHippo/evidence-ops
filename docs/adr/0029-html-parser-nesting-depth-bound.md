@@ -110,3 +110,31 @@ previously took over 35 s.
   agent by moving the element budget, the orchestrator by restoring it — and each fix would have
   shipped the quadratic untouched. The split measurement (`parse5` 100,336 ms vs walk 7 ms) is what
   settled it. A guard that runs after the expensive call cannot bound the expensive call.
+
+## Amendment, 2026-09-08 — the bound was calibrated on the wrong shape
+
+The public-corpus fetch (Phase 5) put 235 real SEC filings through this parser and **`corpus:size`
+failed on the first one**. `HTML_MAX_NESTING_DEPTH` was 1,000; measured against the corpus, that
+refuses **123 of 235 filings (52%)**.
+
+The error was in the proxy, not the intent. `checkNestingDepth` counts cumulative unclosed opens,
+and knows nothing of implicit closing — so a table-heavy filing whose `<td>`, `<tr>` and `<p>` close
+implicitly scores far higher here than it costs `parse5` to build. The two shapes diverge by more
+than an order of magnitude at the same scanned depth:
+
+| document | scanned depth | size | parse time |
+| --- | --- | --- | --- |
+| synthetic single chain of nested `<div>` | 50,000 | 0.5 MiB | ~35,000 ms |
+| Welltower 10-K (`well-20241231.htm`) | 50,629 | 15 MiB | **652 ms** |
+| Welltower 10-K (`well-20231231.htm`) | 46,683 | 15 MiB | 661 ms |
+| Alexandria 10-K (`are-20231231.htm`) | 25,122 | 6 MiB | 247 ms |
+
+Corpus depth distribution: median 1,178, p90 12,767, max 50,629.
+
+**The bound is now 60,000**, sitting above the real corpus maximum and below the point where a
+degenerate chain would approach the `extractFacts` activity timeout. The guard still refuses the
+shape it exists to refuse; it no longer refuses half of the real documents this system is for.
+
+The original bound was derived entirely from synthetic probes. That is the failure this cycle was
+commissioned to fix, reproduced in miniature: a number measured against documents we authored
+ourselves, wrong the first time it met documents we did not.

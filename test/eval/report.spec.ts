@@ -2,14 +2,18 @@ import {
   ANSWER_CONTENT_ACCURACY_FLOOR,
   RECALL_AT_5_FLOOR,
   buildMarkdownReport,
+  evaluateBars,
   failingCases,
   hasBaselineRegression,
   hasConflictScopeGap,
+  hasMissedBar,
   hasMixedScoringMethods,
   hasOwnVoiceLeak,
   isBelowAnswerContentFloor,
   isBelowRecallAt5Floor,
+  type BarOutcome,
   type EvalRunResult,
+  type LaneBars,
   type ScoringMethodSplit,
 } from '../../eval/report';
 import type { BaselineComparison } from '../../eval/metrics/compare-baseline';
@@ -32,6 +36,7 @@ function baseMetrics(overrides: Partial<EvalMetrics> = {}): EvalMetrics {
     contradictionDropRate: 0.05,
     ledgerResolvedRate: 0,
     ledgerGateSurvivalRate: 0,
+    answerRate: 0.9,
     caseCounts: { total: 32, answerable: 12, unanswerable: 8, conflicting: 5, adversarial: 7 },
     ...overrides,
   };
@@ -41,8 +46,10 @@ function baseResult(overrides: Partial<EvalRunResult> = {}): EvalRunResult {
   return {
     gitSha: 'abc1234',
     generatedAt: '2026-08-10T00:00:00.000Z',
+    lane: 'synthetic',
     cacheMode: 'replay',
     corpusFingerprint: 'fp-0000000000000000000000000000000000000000000000000000000000000000',
+    datasetFingerprint: 'ds-0000000000000000000000000000000000000000000000000000000000000000',
     metrics: baseMetrics(),
     perCase: [
       {
@@ -525,5 +532,139 @@ describe('isBelowRecallAt5Floor', () => {
     });
 
     expect(isBelowRecallAt5Floor(metrics)).toBe(false);
+  });
+});
+
+function laneBars(overrides: Partial<LaneBars> = {}): LaneBars {
+  return {
+    registeredIn: 'docs/adr/0031-public-corpus-benchmark-pre-registration.md',
+    hard: {
+      recallAt5: { min: 0.8 },
+      canaryOwnVoiceLeakRate: { max: 0 },
+    },
+    reported: ['retrievalLatency'],
+    datasetMinimums: { total: 180 },
+    ...overrides,
+  };
+}
+
+describe('evaluateBars', () => {
+  it('should mark a min-bound bar met when the observed value is at or above the bound', () => {
+    const outcomes = evaluateBars(
+      baseMetrics({ retrieval: { recallAt5: 0.8, recallAt10: 0.9, mrr: 0.75, caseCount: 10 } }),
+      laneBars({ hard: { recallAt5: { min: 0.8 } } }),
+    );
+
+    expect(outcomes).toEqual([
+      { metric: 'recallAt5', observed: 0.8, bound: { min: 0.8 }, met: true },
+    ]);
+  });
+
+  it('should mark a min-bound bar missed when the observed value is below the bound', () => {
+    const outcomes = evaluateBars(
+      baseMetrics({ retrieval: { recallAt5: 0.79, recallAt10: 0.9, mrr: 0.75, caseCount: 10 } }),
+      laneBars({ hard: { recallAt5: { min: 0.8 } } }),
+    );
+
+    expect(outcomes).toEqual([
+      { metric: 'recallAt5', observed: 0.79, bound: { min: 0.8 }, met: false },
+    ]);
+  });
+
+  it('should mark a max-bound bar met when the observed value is at or below the bound', () => {
+    const outcomes = evaluateBars(
+      baseMetrics({ canaryOwnVoiceLeakRate: 0 }),
+      laneBars({ hard: { canaryOwnVoiceLeakRate: { max: 0 } } }),
+    );
+
+    expect(outcomes).toEqual([
+      { metric: 'canaryOwnVoiceLeakRate', observed: 0, bound: { max: 0 }, met: true },
+    ]);
+  });
+
+  it('should mark a max-bound bar missed when the observed value is above the bound', () => {
+    const outcomes = evaluateBars(
+      baseMetrics({ canaryOwnVoiceLeakRate: 0.05 }),
+      laneBars({ hard: { canaryOwnVoiceLeakRate: { max: 0 } } }),
+    );
+
+    expect(outcomes).toEqual([
+      { metric: 'canaryOwnVoiceLeakRate', observed: 0.05, bound: { max: 0 }, met: false },
+    ]);
+  });
+
+  it('should read a top-level metric (answerRate) alongside a nested one (recallAt5)', () => {
+    const outcomes = evaluateBars(
+      baseMetrics({ answerRate: 0.86 }),
+      laneBars({ hard: { answerRate: { min: 0.85 } } }),
+    );
+
+    expect(outcomes).toEqual([
+      { metric: 'answerRate', observed: 0.86, bound: { min: 0.85 }, met: true },
+    ]);
+  });
+
+  it('should return one outcome per bar in bars.hard, none for bars.reported', () => {
+    const outcomes = evaluateBars(baseMetrics(), laneBars());
+
+    expect(outcomes.map((outcome) => outcome.metric)).toEqual([
+      'recallAt5',
+      'canaryOwnVoiceLeakRate',
+    ]);
+  });
+});
+
+describe('hasMissedBar', () => {
+  it('should return false when every outcome is met', () => {
+    const outcomes: BarOutcome[] = [
+      { metric: 'recallAt5', observed: 0.9, bound: { min: 0.8 }, met: true },
+    ];
+
+    expect(hasMissedBar(outcomes)).toBe(false);
+  });
+
+  it('should return true when at least one outcome was missed', () => {
+    const outcomes: BarOutcome[] = [
+      { metric: 'recallAt5', observed: 0.9, bound: { min: 0.8 }, met: true },
+      { metric: 'answerRate', observed: 0.7, bound: { min: 0.85 }, met: false },
+    ];
+
+    expect(hasMissedBar(outcomes)).toBe(true);
+  });
+
+  it('should return false over an empty outcome list', () => {
+    expect(hasMissedBar([])).toBe(false);
+  });
+});
+
+describe('buildMarkdownReport — pre-registered bars', () => {
+  it('should render "## Hard gates" and never "## Pre-registered bars" when barOutcomes is absent', () => {
+    const markdown = buildMarkdownReport(baseResult());
+
+    expect(markdown).toContain('## Hard gates');
+    expect(markdown).not.toContain('## Pre-registered bars');
+  });
+
+  it('should render "## Pre-registered bars" and never "## Hard gates" when barOutcomes is present', () => {
+    const result = baseResult({
+      lane: 'public',
+      barOutcomes: [
+        { metric: 'recallAt5', observed: 0.9, bound: { min: 0.8 }, met: true },
+        { metric: 'answerRate', observed: 0.7, bound: { min: 0.85 }, met: false },
+      ],
+    });
+
+    const markdown = buildMarkdownReport(result);
+
+    expect(markdown).toContain('## Pre-registered bars');
+    expect(markdown).not.toContain('## Hard gates');
+    expect(markdown).toContain('- `recallAt5`: MET — observed 0.9, bound min=0.8');
+    expect(markdown).toContain('- `answerRate`: **MISSED** — observed 0.7, bound min=0.85');
+  });
+
+  it('should produce a byte-identical synthetic report across repeated calls when barOutcomes is absent', () => {
+    const result = baseResult();
+
+    expect(buildMarkdownReport(result)).toEqual(buildMarkdownReport(result));
   });
 });

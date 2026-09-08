@@ -19,8 +19,13 @@ const EXTRACTOR_VERSION = 'html-parse5-1';
  * Independent of, and tighter than, the upload gate's own `MAX_FILE_SIZE_BYTES` (50 MiB) — an
  * accepted upload can still be refused here, the same relationship `xlsx.parser.ts`'s worksheet
  * budget carries to the archive budget it sits under.
+ *
+ * Sized against real filings: the largest 10-K measured is 20.27 MiB, and byte count is not what
+ * drives parse cost — a 15 MiB filing parses in well under a second, while a 0.5 MiB degenerate
+ * chain costs tens of seconds, which {@link HTML_MAX_NESTING_DEPTH} is what bounds. See
+ * `docs/adr/0029`'s amendment.
  */
-export const HTML_MAX_BYTES = 20 * 1024 * 1024;
+export const HTML_MAX_BYTES = 32 * 1024 * 1024;
 
 /**
  * Fails CLOSED, as a capacity limit on this parser's own output and the downstream chunking cost
@@ -30,19 +35,30 @@ export const HTML_MAX_BYTES = 20 * 1024 * 1024;
  * conservative approximation of the output being bounded. It is not a bound on parsing cost —
  * this count runs during the tree walk, which begins only once `parse5` has already returned; the
  * cost of reaching that point is bounded by {@link HTML_MAX_NESTING_DEPTH} instead.
+ *
+ * Sized against real filings rather than synthetic fixtures: a REIT 10-K's financial tables open
+ * tens of thousands of cells, reaching ~106,000 block-level elements in the largest measured, so a
+ * lower cap refuses ordinary annual reports. See `docs/adr/0029`'s amendment.
  */
-export const HTML_MAX_EMITTED_ELEMENTS = 20_000;
+export const HTML_MAX_EMITTED_ELEMENTS = 150_000;
 
 /**
  * Fails CLOSED, checked against the decoded text before `parse5` ever sees it. `parse5`'s own parse
- * cost grows quadratically in nesting depth while staying linear in tag count, so a small file of
- * deeply nested tags costs orders of magnitude more than a large flat one: at a hundred thousand
- * levels it spends minutes inside `parseHtml`, where the same tag count laid out flat takes
- * milliseconds. No budget this parser checks during its own tree walk can bound that, because the
- * walk runs only after `parseHtml` returns — this is the only guard that runs in time. Real
- * documents nest tens of levels deep, and parsing at this bound costs single-digit milliseconds.
+ * cost grows quadratically in the depth of an *unclosed* element chain while staying linear in tag
+ * count, so a small file of deeply nested unclosed tags costs orders of magnitude more than a large
+ * flat one. No budget this parser checks during its own tree walk can bound that, because the walk
+ * runs only after `parseHtml` returns — this is the only guard that runs in time.
+ *
+ * The bound is calibrated against the degenerate shape, not against real documents, because
+ * `checkNestingDepth` counts cumulative unclosed opens rather than `parse5`'s own stack depth: it
+ * knows nothing of implicit closing, so a table-heavy filing whose `<td>`/`<tr>`/`<p>` close
+ * implicitly scores far higher here than it costs to parse. Real SEC filings reach a scanned depth
+ * of ~50,000 and parse in well under a second; a single unclosed chain at the same scanned depth
+ * costs tens of seconds. This sits above the former and below the point where the latter would
+ * approach the ingest activity's own timeout, so it admits real documents and still refuses the
+ * shape it exists to refuse. Measurements: `docs/adr/0029-html-parser-nesting-depth-bound.md`.
  */
-export const HTML_MAX_NESTING_DEPTH = 1000;
+export const HTML_MAX_NESTING_DEPTH = 60_000;
 
 /**
  * The void elements, excluded from the depth scan because they never close — counting them as opens

@@ -1,11 +1,10 @@
 import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
 import { readFile } from 'node:fs/promises';
-import path from 'node:path';
 import type { Connection, Model } from 'mongoose';
 import { bootstrapEvalApp, closeEvalApp } from './bootstrap';
 import { computeCorpusFingerprint } from './compute-corpus-fingerprint';
-import casesJson from './dataset/cases.json';
 import { EvalDatasetSchema } from './dataset/schema';
+import { EVAL_LANES, laneConfig, type EvalLane } from './lanes';
 import { loadExistingCorpus } from './load-existing-corpus';
 import { classifyOverlapScoringMethod, type OverlapScoringMethod } from './metrics/locator-overlap';
 import { RECALL_AT_5_FLOOR } from './report';
@@ -23,8 +22,6 @@ import {
   EvidenceChunkDocument,
 } from '../src/database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
 
-const EVAL_TENANT_ID = 'eval';
-
 /**
  * The minimal shape this script reads off a variance result JSON — deliberately narrower than
  * `VarianceRunResult` (`eval/variance/variance-report.ts`): a result file this script is pointed
@@ -37,14 +34,25 @@ interface VarianceResultFile {
   readonly observations: readonly VarianceCaseRun[];
 }
 
-function parseCliArgs(argv: readonly string[]): { readonly resultPath: string } {
+function parseCliArgs(argv: readonly string[]): {
+  readonly resultPath: string;
+  readonly lane: EvalLane;
+} {
   const [resultPath] = argv;
   if (!resultPath) {
     throw new Error(
-      'recall-from-variance: usage: eval/recall-from-variance.ts <path-to-variance-result.json>',
+      'recall-from-variance: usage: eval/recall-from-variance.ts <path-to-variance-result.json> ' +
+        '[--lane <lane>]',
     );
   }
-  return { resultPath };
+  const laneFlagIndex = argv.indexOf('--lane');
+  const laneArg = laneFlagIndex === -1 ? undefined : argv[laneFlagIndex + 1];
+  if (laneArg !== undefined && !EVAL_LANES.includes(laneArg as EvalLane)) {
+    throw new Error(
+      `recall-from-variance: unknown lane '${laneArg}' — expected one of ${EVAL_LANES.join(', ')}`,
+    );
+  }
+  return { resultPath, lane: (laneArg as EvalLane | undefined) ?? 'synthetic' };
 }
 
 async function loadVarianceResult(resultPath: string): Promise<VarianceResultFile> {
@@ -113,16 +121,22 @@ function printReport(
 }
 
 async function main(): Promise<void> {
-  const { resultPath } = parseCliArgs(process.argv.slice(2));
+  const { resultPath, lane } = parseCliArgs(process.argv.slice(2));
+  const {
+    tenantId: EVAL_TENANT_ID,
+    modelCacheDir: MODEL_CACHE_DIR,
+    embeddingCacheDir: EMBEDDING_CACHE_DIR,
+    datasetPath: DATASET_PATH,
+    corpusDir: CORPUS_DIR,
+  } = laneConfig(lane);
   const variance = await loadVarianceResult(resultPath);
-  const cases = EvalDatasetSchema.parse(casesJson);
+  const cases = EvalDatasetSchema.parse(JSON.parse(await readFile(DATASET_PATH, 'utf-8')));
 
-  const cacheDir = path.join(__dirname, 'cache');
   const app = await bootstrapEvalApp({
     cacheMode: 'replay',
     embeddingCacheMode: 'replay',
-    modelCacheDir: path.join(cacheDir, 'model'),
-    embeddingCacheDir: path.join(cacheDir, 'embedding'),
+    modelCacheDir: MODEL_CACHE_DIR,
+    embeddingCacheDir: EMBEDDING_CACHE_DIR,
   });
 
   try {
@@ -169,7 +183,12 @@ async function main(): Promise<void> {
     );
 
     const scoringMethod = classifyOverlapScoringMethod({ elements: undefined });
-    const result = await recallFromVariance(variance.observations, cases, corpusChunkById);
+    const result = await recallFromVariance(
+      variance.observations,
+      cases,
+      corpusChunkById,
+      CORPUS_DIR,
+    );
     printReport(result, variance.runCount, scoringMethod);
   } finally {
     await closeEvalApp(app);

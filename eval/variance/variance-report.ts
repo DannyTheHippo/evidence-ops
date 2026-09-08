@@ -5,6 +5,7 @@ import {
   type VarianceAggregate,
   type VarianceObservation,
 } from './aggregate-variance';
+import type { VarianceProgress } from './variance-resume';
 
 /**
  * One question's full record on one pass. Wider than `VarianceObservation` — which carries only the
@@ -18,18 +19,18 @@ export interface VarianceCaseRun extends VarianceObservation {
   readonly citations: readonly { readonly chunkId: string; readonly quote: string }[];
 }
 
-export interface VarianceRunResult {
-  readonly gitSha: string;
+export interface VarianceRunResult extends VarianceProgress {
   readonly generatedAt: string;
-  /** Passes actually completed — written after every pass, so a lane stopped by the spend ceiling
-   * leaves a complete report over the passes that did finish rather than nothing at all. */
+  /** Complete passes — a pass counts only once every case in it has been observed, so a lane stopped
+   * mid-pass by the spend ceiling or a crash still leaves a complete report over the passes that did
+   * finish rather than nothing at all. */
   readonly runCount: number;
-  readonly requestedRunCount: number;
-  readonly corpusFingerprint: string;
   readonly modelCacheMode: EvalCacheMode;
   readonly embeddingCacheMode: EvalCacheMode;
-  readonly observations: readonly VarianceCaseRun[];
-  readonly aggregate: VarianceAggregate;
+  /** Absent until at least one pass is complete — `aggregateVariance` throws on a case missing a
+   * pass (`aggregate-variance.ts:157-169`), and the file is written after every observed case, so it
+   * can be read back mid-pass with no complete pass to aggregate yet. */
+  readonly aggregate?: VarianceAggregate;
 }
 
 const pct = (value: number): string => `${(value * 100).toFixed(1)}%`;
@@ -45,13 +46,13 @@ function citationSetCell(citationSetKey: string): string {
   return citationSetKey.split(',').map(shortId).join(' ');
 }
 
-function summaryTable(result: VarianceRunResult): string {
-  const { summary } = result.aggregate;
+function summaryTable(aggregate: VarianceAggregate, requestedRunCount: number): string {
+  const { summary } = aggregate;
   const rate = summary.citationStabilityRate;
   return [
     '| Figure | Value |',
     '| --- | --- |',
-    `| Passes | ${summary.runCount} of ${result.requestedRunCount} requested |`,
+    `| Passes | ${summary.runCount} of ${requestedRunCount} requested |`,
     `| Questions | ${summary.caseCount} |`,
     `| Questions reaching a safety outcome in any pass | ${summary.safetyOutcomeCaseCount} |`,
     `| **Outcome flips (primary bar: 0)** | **${summary.flippedCaseIds.length}** |`,
@@ -95,8 +96,38 @@ function rawTable(perCase: readonly CaseVariance[]): string {
   ].join('\n');
 }
 
+/** Header shared by a complete and an in-progress report: the two fingerprints a resume is checked
+ * against, and one line per pass naming the sha it ran under and when it started. */
+function headerLines(result: VarianceRunResult): readonly string[] {
+  return [
+    `# Variance run ${result.baseGitSha}`,
+    '',
+    `Generated: ${result.generatedAt}`,
+    `Passes: ${result.runCount} of ${result.requestedRunCount} requested`,
+    `Model cache: ${result.modelCacheMode} (every model call live)`,
+    `Embedding cache: ${result.embeddingCacheMode}`,
+    `Corpus fingerprint: ${result.corpusFingerprint}`,
+    `Dataset fingerprint: ${result.datasetFingerprint}`,
+    '',
+    ...result.passLabels.map(
+      (label) => `Pass ${label.runIndex}: ${label.gitSha} (${label.startedAt})`,
+    ),
+  ];
+}
+
 export function buildVarianceMarkdownReport(result: VarianceRunResult): string {
-  const { summary } = result.aggregate;
+  const aggregate = result.aggregate;
+  if (aggregate === undefined) {
+    return [
+      ...headerLines(result),
+      '',
+      'No pass has completed yet — the bars, summary and per-question tables need at least one ' +
+        'complete pass to aggregate over.',
+      '',
+    ].join('\n');
+  }
+
+  const { summary } = aggregate;
   const primaryLine = summary.primaryBarMet
     ? 'Met — every question reaching a safety outcome reached the same one in every pass.'
     : `**MISSED — ${summary.flippedCaseIds.length} question(s) changed outcome kind: ` +
@@ -114,13 +145,7 @@ export function buildVarianceMarkdownReport(result: VarianceRunResult): string {
           `${pct(CITATION_STABILITY_BAR)} bar.**`;
 
   return [
-    `# Variance run ${result.gitSha}`,
-    '',
-    `Generated: ${result.generatedAt}`,
-    `Passes: ${result.runCount} of ${result.requestedRunCount} requested`,
-    `Model cache: ${result.modelCacheMode} (every model call live)`,
-    `Embedding cache: ${result.embeddingCacheMode}`,
-    `Corpus fingerprint: ${result.corpusFingerprint}`,
+    ...headerLines(result),
     '',
     '## Bars',
     '',
@@ -136,18 +161,18 @@ export function buildVarianceMarkdownReport(result: VarianceRunResult): string {
     '',
     '## Summary',
     '',
-    summaryTable(result),
+    summaryTable(aggregate, result.requestedRunCount),
     '',
     '## Per-question spread',
     '',
-    perCaseTable(result.aggregate.perCase),
+    perCaseTable(aggregate.perCase),
     '',
     '## Raw — one row per question per pass',
     '',
     'Cited chunks are the first 8 characters of each `chunkId`; the JSON report carries them in ' +
       'full, alongside the retrieved pool and the verified quotes.',
     '',
-    rawTable(result.aggregate.perCase),
+    rawTable(aggregate.perCase),
     '',
   ].join('\n');
 }

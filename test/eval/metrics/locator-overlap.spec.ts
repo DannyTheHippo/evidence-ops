@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   chunkOverlapsAnyLocator,
@@ -207,6 +208,80 @@ describe('chunkOverlapsAnyLocator', () => {
     );
 
     expect(results.some(Boolean)).toBe(false);
+  });
+});
+
+describe('text-block locator scoring', () => {
+  it('should match a chunk via retained text-block elements at the matching blockIndex', async () => {
+    const chunk: OverlapCandidateChunk = {
+      filename: 'filing.htm',
+      text: 'block zero\n\nblock one',
+      locator: { kind: 'text-block', blockIndex: 0, headingPath: [], extractorVersion: 'v1' },
+      elements: [
+        {
+          locator: { kind: 'text-block', blockIndex: 0, headingPath: [], extractorVersion: 'v1' },
+          text: 'block zero',
+        },
+        {
+          locator: { kind: 'text-block', blockIndex: 1, headingPath: [], extractorVersion: 'v1' },
+          text: 'block one',
+        },
+      ],
+    };
+    const locator: Locator = { kind: 'text-block', file: 'filing.htm', blockIndex: 1 };
+
+    expect(await chunkOverlapsLocator(chunk, locator)).toBe(true);
+  });
+
+  it('should not match a text-block at a different blockIndex', async () => {
+    const chunk: OverlapCandidateChunk = {
+      filename: 'filing.htm',
+      text: 'block zero',
+      locator: { kind: 'text-block', blockIndex: 0, headingPath: [], extractorVersion: 'v1' },
+      elements: [
+        {
+          locator: { kind: 'text-block', blockIndex: 0, headingPath: [], extractorVersion: 'v1' },
+          text: 'block zero',
+        },
+      ],
+    };
+    const locator: Locator = { kind: 'text-block', file: 'filing.htm', blockIndex: 9 };
+
+    expect(await chunkOverlapsLocator(chunk, locator)).toBe(false);
+  });
+
+  it('should return false for a text-block locator against a chunk of a different locator kind', async () => {
+    const chunk: OverlapCandidateChunk = {
+      filename: 'filing.htm',
+      text: 'page one text',
+      locator: { kind: 'pdf-page', page: 1, extractorVersion: 'pdf-pdfjs-1' },
+    };
+    const locator: Locator = { kind: 'text-block', file: 'filing.htm', blockIndex: 0 };
+
+    expect(await chunkOverlapsLocator(chunk, locator)).toBe(false);
+  });
+
+  // Regression: without threading `corpusDir` into `resolveLocatorText`, this would try to read
+  // 'sample.htm' from the default fixtures/data-room corpus, where it does not exist, and reject
+  // instead of resolving — proving the parameter actually reaches the text-containment fallback.
+  it('should fall back to text-containment resolved from an explicit corpusDir', async () => {
+    const corpusDir = await mkdtemp(path.join(tmpdir(), 'locator-overlap-'));
+    try {
+      await writeFile(
+        path.join(corpusDir, 'sample.htm'),
+        '<html><body><p>Alpha unique marker qwerty123</p></body></html>',
+      );
+      const chunk: OverlapCandidateChunk = {
+        filename: 'sample.htm',
+        text: 'Alpha unique marker qwerty123',
+        locator: { kind: 'text-block', blockIndex: 0, headingPath: [], extractorVersion: 'v1' },
+      };
+      const locator: Locator = { kind: 'text-block', file: 'sample.htm', blockIndex: 0 };
+
+      expect(await chunkOverlapsLocator(chunk, locator, corpusDir)).toBe(true);
+    } finally {
+      await rm(corpusDir, { recursive: true, force: true });
+    }
   });
 });
 

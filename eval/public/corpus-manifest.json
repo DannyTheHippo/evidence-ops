@@ -1,0 +1,4687 @@
+{
+  "schemaVersion": 1,
+  "allowlist": {
+    "registrants": [
+      {
+        "cik": "0001045609",
+        "name": "Prologis"
+      },
+      {
+        "cik": "0001063761",
+        "name": "Simon Property Group"
+      },
+      {
+        "cik": "0000726728",
+        "name": "Realty Income"
+      },
+      {
+        "cik": "0001393311",
+        "name": "Public Storage"
+      },
+      {
+        "cik": "0001101239",
+        "name": "Equinix"
+      },
+      {
+        "cik": "0000915912",
+        "name": "AvalonBay"
+      },
+      {
+        "cik": "0001037540",
+        "name": "BXP"
+      },
+      {
+        "cik": "0000879101",
+        "name": "Kimco"
+      },
+      {
+        "cik": "0000766704",
+        "name": "Welltower"
+      },
+      {
+        "cik": "0001297996",
+        "name": "Digital Realty"
+      },
+      {
+        "cik": "0000740260",
+        "name": "Ventas"
+      },
+      {
+        "cik": "0001070750",
+        "name": "Host Hotels"
+      },
+      {
+        "cik": "0000899689",
+        "name": "Vornado"
+      },
+      {
+        "cik": "0000034903",
+        "name": "Federal Realty"
+      },
+      {
+        "cik": "0000910606",
+        "name": "Regency Centers"
+      },
+      {
+        "cik": "0001289490",
+        "name": "Extra Space Storage"
+      },
+      {
+        "cik": "0000920522",
+        "name": "Essex"
+      },
+      {
+        "cik": "0000912595",
+        "name": "Mid-America Apartment"
+      },
+      {
+        "cik": "0001035443",
+        "name": "Alexandria"
+      }
+    ],
+    "forms": [
+      "10-K",
+      "10-Q"
+    ],
+    "filedFrom": "2024-01-01",
+    "filedTo": "2025-12-31",
+    "exhibitIncludeHints": [
+      "ex19",
+      "ex21",
+      "ex23",
+      "ex31",
+      "ex32",
+      "ex97",
+      "ex99"
+    ],
+    "fileExtensions": [
+      "htm",
+      "html",
+      "pdf"
+    ]
+  },
+  "registrants": [
+    {
+      "cik": "0001045609",
+      "name": "Prologis",
+      "companyFacts": {
+        "path": "xbrl/CIK0001045609.json",
+        "sha256": "42b1e16ac75fb70de369040e3e511da28ae2ad9bbe32c9c6bcd4affa074e55d1",
+        "bytes": 3564170
+      }
+    },
+    {
+      "cik": "0001063761",
+      "name": "Simon Property Group",
+      "companyFacts": {
+        "path": "xbrl/CIK0001063761.json",
+        "sha256": "37cdd1240de5e7962809168b0360723dc199cbbb299a4939e78296862cedb4a2",
+        "bytes": 3263155
+      }
+    },
+    {
+      "cik": "0000726728",
+      "name": "Realty Income",
+      "companyFacts": {
+        "path": "xbrl/CIK0000726728.json",
+        "sha256": "676caac36e22f0d1087ec209f80728d2ab38536a1851d1f226daf27aaef44acb",
+        "bytes": 3235550
+      }
+    },
+    {
+      "cik": "0001393311",
+      "name": "Public Storage",
+      "companyFacts": {
+        "path": "xbrl/CIK0001393311.json",
+        "sha256": "bdc3d4562f1cf8df62c7f07ae0d4337b1597690c59857d5f9d959780f6287e88",
+        "bytes": 3172557
+      }
+    },
+    {
+      "cik": "0001101239",
+      "name": "Equinix",
+      "companyFacts": {
+        "path": "xbrl/CIK0001101239.json",
+        "sha256": "354770cca12b451c5ee670a98a3ff6d7f28e83aa1e2b3ace43b35921f37df395",
+        "bytes": 4860019
+      }
+    },
+    {
+      "cik": "0000915912",
+      "name": "AvalonBay",
+      "companyFacts": {
+        "path": "xbrl/CIK0000915912.json",
+        "sha256": "97bca1b997018d0288e4f0e52d4cbcd6d9fbda05c32a89c71eb24125e962f7ec",
+        "bytes": 3767773
+      }
+    },
+    {
+      "cik": "0001037540",
+      "name": "BXP",
+      "companyFacts": {
+        "path": "xbrl/CIK0001037540.json",
+        "sha256": "3d37574f2cc838fdf137bd98d2ee7442126c345dd316659436f63a0c9431f1a2",
+        "bytes": 4395080
+      }
+    },
+    {
+      "cik": "0000879101",
+      "name": "Kimco",
+      "companyFacts": {
+        "path": "xbrl/CIK0000879101.json",
+        "sha256": "c234dae549259cdff969a4756cab25bdcdd4400d2623f2dc6871a73a82b87f46",
+        "bytes": 4823878
+      }
+    },
+    {
+      "cik": "0000766704",
+      "name": "Welltower",
+      "companyFacts": {
+        "path": "xbrl/CIK0000766704.json",
+        "sha256": "cad053413d5a741d34e5fcc74da09bb64b8f35e75c397b45c9244852924b428f",
+        "bytes": 5375469
+      }
+    },
+    {
+      "cik": "0001297996",
+      "name": "Digital Realty",
+      "companyFacts": {
+        "path": "xbrl/CIK0001297996.json",
+        "sha256": "1f5fcfd178c7d6e26d50f0d0419ed3fba35c68bffa838ed16ee33e436a47ed14",
+        "bytes": 3707577
+      }
+    },
+    {
+      "cik": "0000740260",
+      "name": "Ventas",
+      "companyFacts": {
+        "path": "xbrl/CIK0000740260.json",
+        "sha256": "b29f6acab7eb2c15f274ef21e48a9d11f7ff4946ed83a1d18c830cd755f39eac",
+        "bytes": 4543836
+      }
+    },
+    {
+      "cik": "0001070750",
+      "name": "Host Hotels",
+      "companyFacts": {
+        "path": "xbrl/CIK0001070750.json",
+        "sha256": "a990d422c2499bcad360745e3174395aa3763e44fd48fb309fe78206bb799e69",
+        "bytes": 2963060
+      }
+    },
+    {
+      "cik": "0000899689",
+      "name": "Vornado",
+      "companyFacts": {
+        "path": "xbrl/CIK0000899689.json",
+        "sha256": "92f1c3441c640054f4b360f02fe65bdd116a8296684c9574714c1dfc8e28aa85",
+        "bytes": 4435223
+      }
+    },
+    {
+      "cik": "0000034903",
+      "name": "Federal Realty",
+      "companyFacts": {
+        "path": "xbrl/CIK0000034903.json",
+        "sha256": "223c38e1a66dd5d276ac2fd34034110f229c574c19f5594dcec665dce9d1ecd7",
+        "bytes": 3167945
+      }
+    },
+    {
+      "cik": "0000910606",
+      "name": "Regency Centers",
+      "companyFacts": {
+        "path": "xbrl/CIK0000910606.json",
+        "sha256": "57af8e052d58b1775e4996fad2bf8c0a08547371c325c7602f98b7e690d08042",
+        "bytes": 2473828
+      }
+    },
+    {
+      "cik": "0001289490",
+      "name": "Extra Space Storage",
+      "companyFacts": {
+        "path": "xbrl/CIK0001289490.json",
+        "sha256": "a3f92635c69d1bbe69eaa8572dd21d32f89f99406b7f4b3a1169ca02d658bb8c",
+        "bytes": 3423532
+      }
+    },
+    {
+      "cik": "0000920522",
+      "name": "Essex",
+      "companyFacts": {
+        "path": "xbrl/CIK0000920522.json",
+        "sha256": "8d316c2e147fd3fcbd941671b2860d82c5e38f8e61c591ef5ea628dc2c381e8e",
+        "bytes": 3628203
+      }
+    },
+    {
+      "cik": "0000912595",
+      "name": "Mid-America Apartment",
+      "companyFacts": {
+        "path": "xbrl/CIK0000912595.json",
+        "sha256": "057e68283656c64efa2a38b97bde0ace0367fc9586b099086317c21b4b318477",
+        "bytes": 2438300
+      }
+    },
+    {
+      "cik": "0001035443",
+      "name": "Alexandria",
+      "companyFacts": {
+        "path": "xbrl/CIK0001035443.json",
+        "sha256": "e6e57fff4caf27f9c40a70ef88dfa971fc277929d7969a13326b6a950c8d5656",
+        "bytes": 3949841
+      }
+    }
+  ],
+  "filings": [
+    {
+      "cik": "0001045609",
+      "registrant": "Prologis",
+      "accession": "0001193125-25-253512",
+      "form": "10-Q",
+      "filingDate": "2025-10-28",
+      "reportDate": "2025-09-30",
+      "primaryDocument": "pld-20250930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001045609/000119312525253512/pld-20250930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1045609/000119312525253512/pld-20250930.htm",
+          "sha256": "89349e8aff0db334c26a9bcb33146d9cad5047839f28dacc988cdddfd8ad438a",
+          "bytes": 7459448,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:21.172Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001045609",
+      "registrant": "Prologis",
+      "accession": "0000950170-25-099770",
+      "form": "10-Q",
+      "filingDate": "2025-07-30",
+      "reportDate": "2025-06-30",
+      "primaryDocument": "pld-20250630.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001045609/000095017025099770/pld-20250630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1045609/000095017025099770/pld-20250630.htm",
+          "sha256": "53ceebd92930885bbc2de3261d08270068ad18112e79ff686f6422576a3ee44a",
+          "bytes": 7429238,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:21.452Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001045609",
+      "registrant": "Prologis",
+      "accession": "0000950170-25-060107",
+      "form": "10-Q",
+      "filingDate": "2025-04-29",
+      "reportDate": "2025-03-31",
+      "primaryDocument": "pld-20250331.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001045609/000095017025060107/pld-20250331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1045609/000095017025060107/pld-20250331.htm",
+          "sha256": "17da758cfdaf259967bde77180e7e4af5b1b65bbdf0c004a25b64cfeec957856",
+          "bytes": 5527151,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:21.778Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001045609",
+      "registrant": "Prologis",
+      "accession": "0000950170-25-021272",
+      "form": "10-K",
+      "filingDate": "2025-02-14",
+      "reportDate": "2024-12-31",
+      "primaryDocument": "pld-20241231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001045609/000095017025021272/pld-20241231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1045609/000095017025021272/pld-20241231.htm",
+          "sha256": "a268a6674fa8942a075f4435d8cc704275927e68e00b8b639402324abe0435f7",
+          "bytes": 11157030,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:22.112Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001045609",
+      "registrant": "Prologis",
+      "accession": "0000950170-24-117407",
+      "form": "10-Q",
+      "filingDate": "2024-10-25",
+      "reportDate": "2024-09-30",
+      "primaryDocument": "pld-20240930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001045609/000095017024117407/pld-20240930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1045609/000095017024117407/pld-20240930.htm",
+          "sha256": "296604d8a7d7f393d6e106074385c7157878999a62409b0d530325c24a31d5ac",
+          "bytes": 5857967,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:22.354Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001045609",
+      "registrant": "Prologis",
+      "accession": "0000950170-24-086882",
+      "form": "10-Q",
+      "filingDate": "2024-07-26",
+      "reportDate": "2024-06-30",
+      "primaryDocument": "pld-20240630.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0001045609/000095017024086882/pld-20240630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1045609/000095017024086882/pld-20240630.htm",
+          "sha256": "d185d87c5bc7c9809a4cecefb2d106271f5342d3119c3a024442ea088de8641b",
+          "bytes": 5793611,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:22.647Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001045609",
+      "registrant": "Prologis",
+      "accession": "0000950170-24-048421",
+      "form": "10-Q",
+      "filingDate": "2024-04-25",
+      "reportDate": "2024-03-31",
+      "primaryDocument": "pld-20240331.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0001045609/000095017024048421/pld-20240331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1045609/000095017024048421/pld-20240331.htm",
+          "sha256": "4f57f30264c4bf5158994c35769eb9118c1d2a644f9e85328f8d7d4a82eaee71",
+          "bytes": 4436193,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:22.969Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001045609",
+      "registrant": "Prologis",
+      "accession": "0000950170-24-014539",
+      "form": "10-K",
+      "filingDate": "2024-02-13",
+      "reportDate": "2023-12-31",
+      "primaryDocument": "pld-20231231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001045609/000095017024014539/pld-20231231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1045609/000095017024014539/pld-20231231.htm",
+          "sha256": "378feb33dcbe67a97758428c0d1ff687a980cf48e84b7bef1aa4dd5a073dab10",
+          "bytes": 9118636,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:23.425Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001063761",
+      "registrant": "Simon Property Group",
+      "accession": "0001104659-25-107395",
+      "form": "10-Q",
+      "filingDate": "2025-11-06",
+      "reportDate": "2025-09-30",
+      "primaryDocument": "spg-20250930x10q.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001063761/000110465925107395/spg-20250930x10q.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1063761/000110465925107395/spg-20250930x10q.htm",
+          "sha256": "56a5cffc5763b21926da933f43e71223146801b61d420adeff0bb884010e95bc",
+          "bytes": 4974143,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:24.073Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001063761",
+      "registrant": "Simon Property Group",
+      "accession": "0001558370-25-010639",
+      "form": "10-Q",
+      "filingDate": "2025-08-07",
+      "reportDate": "2025-06-30",
+      "primaryDocument": "spg-20250630x10q.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001063761/000155837025010639/spg-20250630x10q.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1063761/000155837025010639/spg-20250630x10q.htm",
+          "sha256": "ebcd8f7f2345e9af51b57daa6451985c44e2c4f2daae5aea5f1a3dfe18379073",
+          "bytes": 4432314,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:24.323Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001063761",
+      "registrant": "Simon Property Group",
+      "accession": "0001558370-25-007380",
+      "form": "10-Q",
+      "filingDate": "2025-05-12",
+      "reportDate": "2025-03-31",
+      "primaryDocument": "spg-20250331x10q.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001063761/000155837025007380/spg-20250331x10q.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1063761/000155837025007380/spg-20250331x10q.htm",
+          "sha256": "0f9f61e8b4ef01f1d40cc453be9c1d2d54cdf3d7036d4e95c7c0e57ac1cfc780",
+          "bytes": 3191784,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:24.608Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001063761",
+      "registrant": "Simon Property Group",
+      "accession": "0001558370-25-001271",
+      "form": "10-K",
+      "filingDate": "2025-02-21",
+      "reportDate": "2024-12-31",
+      "primaryDocument": "spg-20241231x10k.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001063761/000155837025001271/spg-20241231x10k.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1063761/000155837025001271/spg-20241231x10k.htm",
+          "sha256": "174cd09af9c85bf463cce2dc3f7e3d1b8b71a18a4c0322f3c5107576cc5fa311",
+          "bytes": 11195959,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:25.065Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001063761",
+      "registrant": "Simon Property Group",
+      "accession": "0001558370-24-014946",
+      "form": "10-Q",
+      "filingDate": "2024-11-08",
+      "reportDate": "2024-09-30",
+      "primaryDocument": "spg-20240930x10q.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001063761/000155837024014946/spg-20240930x10q.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1063761/000155837024014946/spg-20240930x10q.htm",
+          "sha256": "821ea40e52f08ca33d9bac5e86837fee5fc0e47614b901c2906afabc619e0766",
+          "bytes": 4542349,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:25.261Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001063761",
+      "registrant": "Simon Property Group",
+      "accession": "0001558370-24-011208",
+      "form": "10-Q",
+      "filingDate": "2024-08-07",
+      "reportDate": "2024-06-30",
+      "primaryDocument": "spg-20240630x10q.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0001063761/000155837024011208/spg-20240630x10q.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1063761/000155837024011208/spg-20240630x10q.htm",
+          "sha256": "e2dff8e182bd5729fe0a024239b385d916a04bff449c83c686d4c422952e4dd7",
+          "bytes": 4026694,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:25.591Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001063761",
+      "registrant": "Simon Property Group",
+      "accession": "0001558370-24-007058",
+      "form": "10-Q",
+      "filingDate": "2024-05-07",
+      "reportDate": "2024-03-31",
+      "primaryDocument": "spg-20240331x10q.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0001063761/000155837024007058/spg-20240331x10q.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1063761/000155837024007058/spg-20240331x10q.htm",
+          "sha256": "c4aa2c59a788b2faec7df86b2093b43c0ddf464a17c761b0c649678966b0f492",
+          "bytes": 2978526,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:25.865Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001063761",
+      "registrant": "Simon Property Group",
+      "accession": "0001558370-24-001532",
+      "form": "10-K",
+      "filingDate": "2024-02-22",
+      "reportDate": "2023-12-31",
+      "primaryDocument": "spg-20231231x10k.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001063761/000155837024001532/spg-20231231x10k.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1063761/000155837024001532/spg-20231231x10k.htm",
+          "sha256": "517ca94e766faca9f432b05e2905980163f7db8ded42f434f33dea8d537ece75",
+          "bytes": 10716918,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:26.239Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000726728",
+      "registrant": "Realty Income",
+      "accession": "0000726728-25-000148",
+      "form": "10-Q",
+      "filingDate": "2025-11-04",
+      "reportDate": "2025-09-30",
+      "primaryDocument": "o-20250930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000726728/000072672825000148/o-20250930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/726728/000072672825000148/o-20250930.htm",
+          "sha256": "3d0b1803e8dd0dc6b3cfe396838c3a4ec9442785993b7021b3cbd56748671ae0",
+          "bytes": 2836340,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:27.035Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000726728",
+      "registrant": "Realty Income",
+      "accession": "0000726728-25-000131",
+      "form": "10-Q",
+      "filingDate": "2025-08-07",
+      "reportDate": "2025-06-30",
+      "primaryDocument": "o-20250630.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000726728/000072672825000131/o-20250630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/726728/000072672825000131/o-20250630.htm",
+          "sha256": "5311d5c57aec436ddbd289ef254ae5738363713e0db26fe011326b58b6aff792",
+          "bytes": 2920049,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:27.361Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000726728",
+      "registrant": "Realty Income",
+      "accession": "0000726728-25-000096",
+      "form": "10-Q",
+      "filingDate": "2025-05-06",
+      "reportDate": "2025-03-31",
+      "primaryDocument": "o-20250331.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000726728/000072672825000096/o-20250331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/726728/000072672825000096/o-20250331.htm",
+          "sha256": "7fec2328f2aed89bd8c8ed0ae5573e53a386b480d0099b097d2e9af172d6c79a",
+          "bytes": 2257529,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:27.652Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000726728",
+      "registrant": "Realty Income",
+      "accession": "0000726728-25-000055",
+      "form": "10-K",
+      "filingDate": "2025-02-25",
+      "reportDate": "2024-12-31",
+      "primaryDocument": "o-20241231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000726728/000072672825000055/o-20241231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/726728/000072672825000055/o-20241231.htm",
+          "sha256": "70262a05c7267db1da169bd9c0e07b769cda747038ae7560222ead9e67b3d48c",
+          "bytes": 4000662,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:27.955Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000726728",
+      "registrant": "Realty Income",
+      "accession": "0000726728-24-000130",
+      "form": "10-Q",
+      "filingDate": "2024-11-05",
+      "reportDate": "2024-09-30",
+      "primaryDocument": "o-20240930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000726728/000072672824000130/o-20240930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/726728/000072672824000130/o-20240930.htm",
+          "sha256": "fce14dc9dd97101c163e21108840236ce7e349c12028e94a643dd6fbe8d0053d",
+          "bytes": 2660814,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:28.252Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000726728",
+      "registrant": "Realty Income",
+      "accession": "0000726728-24-000118",
+      "form": "10-Q",
+      "filingDate": "2024-08-06",
+      "reportDate": "2024-06-30",
+      "primaryDocument": "o-20240630.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000726728/000072672824000118/o-20240630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/726728/000072672824000118/o-20240630.htm",
+          "sha256": "62cb6ffc7942316a7f6204334dda045f32eed016a8e0a308262b40f286bb66dd",
+          "bytes": 2540578,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:28.542Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000726728",
+      "registrant": "Realty Income",
+      "accession": "0000726728-24-000077",
+      "form": "10-Q",
+      "filingDate": "2024-05-07",
+      "reportDate": "2024-03-31",
+      "primaryDocument": "o-20240331.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000726728/000072672824000077/o-20240331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/726728/000072672824000077/o-20240331.htm",
+          "sha256": "7832d050eba5bddac2235a0064d24a973127da67b1ab4b9ffb1505ccc83d98fe",
+          "bytes": 2179098,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:28.852Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000726728",
+      "registrant": "Realty Income",
+      "accession": "0000726728-24-000047",
+      "form": "10-K",
+      "filingDate": "2024-02-21",
+      "reportDate": "2023-12-31",
+      "primaryDocument": "o-20231231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000726728/000072672824000047/o-20231231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/726728/000072672824000047/o-20231231.htm",
+          "sha256": "4e15a5ad4c14a4fa6a83bfb2b8181ff7c81e69d0f8c042f8a775f15ef44cec20",
+          "bytes": 3780884,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:29.144Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001393311",
+      "registrant": "Public Storage",
+      "accession": "0001628280-25-047163",
+      "form": "10-Q",
+      "filingDate": "2025-10-29",
+      "reportDate": "2025-09-30",
+      "primaryDocument": "psa-20250930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001393311/000162828025047163/psa-20250930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1393311/000162828025047163/psa-20250930.htm",
+          "sha256": "acd6a8d6d8a4829f959a6100f0850bf00106bb1c36632f772e3b80565d805eb0",
+          "bytes": 2430959,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:29.977Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001393311",
+      "registrant": "Public Storage",
+      "accession": "0001393311-25-000120",
+      "form": "10-Q",
+      "filingDate": "2025-07-30",
+      "reportDate": "2025-06-30",
+      "primaryDocument": "psa-20250630.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001393311/000139331125000120/psa-20250630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1393311/000139331125000120/psa-20250630.htm",
+          "sha256": "261a40a2c68fdf4eb129226b39ade16311f0e2b755ab563f32611209a3112174",
+          "bytes": 2435919,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:30.252Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001393311",
+      "registrant": "Public Storage",
+      "accession": "0001393311-25-000069",
+      "form": "10-Q",
+      "filingDate": "2025-04-30",
+      "reportDate": "2025-03-31",
+      "primaryDocument": "psa-20250331.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001393311/000139331125000069/psa-20250331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1393311/000139331125000069/psa-20250331.htm",
+          "sha256": "9c703700b6b630b1bcf8df85f0e6a1050a09134f9bee686da0a5d901d4bde3e8",
+          "bytes": 1789504,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:30.553Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001393311",
+      "registrant": "Public Storage",
+      "accession": "0001393311-25-000036",
+      "form": "10-K",
+      "filingDate": "2025-02-24",
+      "reportDate": "2024-12-31",
+      "primaryDocument": "psa-20241231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001393311/000139331125000036/psa-20241231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1393311/000139331125000036/psa-20241231.htm",
+          "sha256": "43d7e9c557d2d2b0b8a6b5bdbd1110d767f0df5665952d8534bad5d54d75c299",
+          "bytes": 3418639,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:30.858Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001393311",
+      "registrant": "Public Storage",
+      "accession": "0001393311-24-000193",
+      "form": "10-Q",
+      "filingDate": "2024-10-30",
+      "reportDate": "2024-09-30",
+      "primaryDocument": "psa-20240930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001393311/000139331124000193/psa-20240930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1393311/000139331124000193/psa-20240930.htm",
+          "sha256": "be0579612896bc6f99f31be5b3a7ccf60ff6e31b93abed5774010189f360392f",
+          "bytes": 2222742,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:31.153Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001393311",
+      "registrant": "Public Storage",
+      "accession": "0001393311-24-000167",
+      "form": "10-Q",
+      "filingDate": "2024-07-30",
+      "reportDate": "2024-06-30",
+      "primaryDocument": "psa-20240630.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0001393311/000139331124000167/psa-20240630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1393311/000139331124000167/psa-20240630.htm",
+          "sha256": "2796e85c88e5fdcbaed9f823cfd8991789c301fa31211b390f24ea0d6b381941",
+          "bytes": 2217525,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:31.470Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001393311",
+      "registrant": "Public Storage",
+      "accession": "0001393311-24-000109",
+      "form": "10-Q",
+      "filingDate": "2024-04-30",
+      "reportDate": "2024-03-31",
+      "primaryDocument": "psa-20240331.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0001393311/000139331124000109/psa-20240331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1393311/000139331124000109/psa-20240331.htm",
+          "sha256": "aa2c7d6731467beebafd54501bb2ea07d77c3887e321b9a70ac457fc7a50478d",
+          "bytes": 1652286,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:31.749Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001393311",
+      "registrant": "Public Storage",
+      "accession": "0001393311-24-000043",
+      "form": "10-K",
+      "filingDate": "2024-02-20",
+      "reportDate": "2023-12-31",
+      "primaryDocument": "psa-20231231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001393311/000139331124000043/psa-20231231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1393311/000139331124000043/psa-20231231.htm",
+          "sha256": "6123fde4a4e0b6b933a9ca2ac39e28117001077e278717464f84797659c27e9f",
+          "bytes": 3365763,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:32.054Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001101239",
+      "registrant": "Equinix",
+      "accession": "0001101239-25-000062",
+      "form": "10-Q",
+      "filingDate": "2025-10-29",
+      "reportDate": "2025-09-30",
+      "primaryDocument": "eqix-20250930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001101239/000110123925000062/eqix-20250930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1101239/000110123925000062/eqix-20250930.htm",
+          "sha256": "978b3a5fd22d77f12525e34493bf49cdcb35e679e18c317b3b97d3389dfbd579",
+          "bytes": 3064609,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:32.716Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001101239",
+      "registrant": "Equinix",
+      "accession": "0001101239-25-000029",
+      "form": "10-Q",
+      "filingDate": "2025-07-30",
+      "reportDate": "2025-06-30",
+      "primaryDocument": "eqix-20250630.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001101239/000110123925000029/eqix-20250630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1101239/000110123925000029/eqix-20250630.htm",
+          "sha256": "f36dceb7f8494f4202b1ea7c19ff9eb348048660bddc11f130bf18b81f47041f",
+          "bytes": 2980244,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:33.048Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001101239",
+      "registrant": "Equinix",
+      "accession": "0001628280-25-021086",
+      "form": "10-Q",
+      "filingDate": "2025-04-30",
+      "reportDate": "2025-03-31",
+      "primaryDocument": "eqix-20250331.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001101239/000162828025021086/eqix-20250331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1101239/000162828025021086/eqix-20250331.htm",
+          "sha256": "84814cd251a46c31159b57970e44436a5be10c3edbde6a0f28a96db3ce0afeab",
+          "bytes": 2317339,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:33.287Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001101239",
+      "registrant": "Equinix",
+      "accession": "0001628280-25-005126",
+      "form": "10-K",
+      "filingDate": "2025-02-12",
+      "reportDate": "2024-12-31",
+      "primaryDocument": "eqix-20241231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001101239/000162828025005126/eqix-20241231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1101239/000162828025005126/eqix-20241231.htm",
+          "sha256": "8ade03c1056b8b9bd07a7734d3088e99ea40115f83c8f394b2f56d568f0f54c7",
+          "bytes": 5205947,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:33.618Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001101239",
+      "registrant": "Equinix",
+      "accession": "0001628280-24-044355",
+      "form": "10-Q",
+      "filingDate": "2024-10-30",
+      "reportDate": "2024-09-30",
+      "primaryDocument": "eqix-20240930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001101239/000162828024044355/eqix-20240930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1101239/000162828024044355/eqix-20240930.htm",
+          "sha256": "a294ea92a872f0ad73fdc66107bf24ec3ac2b5a7192faa1b38389b16b7d645a2",
+          "bytes": 2856854,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:33.927Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001101239",
+      "registrant": "Equinix",
+      "accession": "0001628280-24-035638",
+      "form": "10-Q",
+      "filingDate": "2024-08-07",
+      "reportDate": "2024-06-30",
+      "primaryDocument": "eqix-20240630.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0001101239/000162828024035638/eqix-20240630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1101239/000162828024035638/eqix-20240630.htm",
+          "sha256": "532a0a975429ae685318dfb5b173164adb55329be6d802c52b52bb1d9f2adf9d",
+          "bytes": 2716407,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:34.205Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001101239",
+      "registrant": "Equinix",
+      "accession": "0001628280-24-021647",
+      "form": "10-Q",
+      "filingDate": "2024-05-08",
+      "reportDate": "2024-03-31",
+      "primaryDocument": "eqix-20240331.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0001101239/000162828024021647/eqix-20240331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1101239/000162828024021647/eqix-20240331.htm",
+          "sha256": "e08f0722c2a936cf40cdfedb7138599a068b95b5ea4e4395a63ad06ded602ba1",
+          "bytes": 2127032,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:34.483Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001101239",
+      "registrant": "Equinix",
+      "accession": "0001628280-24-005350",
+      "form": "10-K",
+      "filingDate": "2024-02-16",
+      "reportDate": "2023-12-31",
+      "primaryDocument": "eqix-20231231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001101239/000162828024005350/eqix-20231231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1101239/000162828024005350/eqix-20231231.htm",
+          "sha256": "90f0cae5b18bf162bc2bd8156c09ff84b767bbc55347d49c138dcd37f7ddf3d3",
+          "bytes": 5093866,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:34.880Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000915912",
+      "registrant": "AvalonBay",
+      "accession": "0000915912-25-000025",
+      "form": "10-Q",
+      "filingDate": "2025-11-06",
+      "reportDate": "2025-09-30",
+      "primaryDocument": "avb-20250930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000915912/000091591225000025/avb-20250930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591225000025/avb-20250930.htm",
+          "sha256": "05553f14ecf98a0ba5436be666bf0087bcf8d7c3786d56070f0b179fbb8b0e8e",
+          "bytes": 2185618,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:35.526Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000915912",
+      "registrant": "AvalonBay",
+      "accession": "0000915912-25-000019",
+      "form": "10-Q",
+      "filingDate": "2025-08-07",
+      "reportDate": "2025-06-30",
+      "primaryDocument": "avb-20250630.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000915912/000091591225000019/avb-20250630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591225000019/avb-20250630.htm",
+          "sha256": "1a20dca074c75e022437528c56409a277236ed3e44780c683299f98ad6b841e0",
+          "bytes": 2093643,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:35.839Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000915912",
+      "registrant": "AvalonBay",
+      "accession": "0000915912-25-000012",
+      "form": "10-Q",
+      "filingDate": "2025-05-08",
+      "reportDate": "2025-03-31",
+      "primaryDocument": "avb-20250331.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000915912/000091591225000012/avb-20250331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591225000012/avb-20250331.htm",
+          "sha256": "4d2f042f9dd4d60f9abaf634f6b86489e95c02a9845379eaef73f2a718443170",
+          "bytes": 1703843,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:36.121Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000915912",
+      "registrant": "AvalonBay",
+      "accession": "0000915912-25-000005",
+      "form": "10-K",
+      "filingDate": "2025-02-27",
+      "reportDate": "2024-12-31",
+      "primaryDocument": "avb-20241231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000915912/000091591225000005/avb-20241231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591225000005/avb-20241231.htm",
+          "sha256": "68fbc83c133605b2c5248c7002d3125cec9f56c34506062e0c598dad2392f77c",
+          "bytes": 5986431,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:36.441Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000915912/000091591225000005/ex-1912024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex19",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591225000005/ex-1912024.htm",
+          "sha256": "ecb5d4cddcec36e91b08320f5eedb49c87eb6aa38fe2e216a2838a99cba336c9",
+          "bytes": 110774,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:36.557Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000915912/000091591225000005/ex-2112024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex21",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591225000005/ex-2112024.htm",
+          "sha256": "9f4192831a5416f2dc005144cee0f3bbd0311b9b2c65855c91059ef9ecddb869",
+          "bytes": 195203,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:36.726Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000915912/000091591225000005/ex-2312024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex23",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591225000005/ex-2312024.htm",
+          "sha256": "84b25d36856b5fbd00a35179b5db243b8122a6a4967a629afc71c04f6684a61b",
+          "bytes": 4040,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:36.865Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000915912/000091591225000005/ex-3112024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591225000005/ex-3112024.htm",
+          "sha256": "59299886909adcaf0052cbb25e63f9fbfaef28229f0eb23f7fc4e383f2c573fc",
+          "bytes": 11048,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:37.009Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000915912/000091591225000005/ex-3122024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591225000005/ex-3122024.htm",
+          "sha256": "708b96068408e4a7f332f942002c592fe47622ea62763f3366fc913d946b5b82",
+          "bytes": 11055,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:37.178Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000915912/000091591225000005/ex-322024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591225000005/ex-322024.htm",
+          "sha256": "6d25c6c78848e70fe369746fb1a7b75e05d0182888b5d3a4d5aca97491e08f10",
+          "bytes": 6991,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:37.308Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000915912",
+      "registrant": "AvalonBay",
+      "accession": "0000915912-24-000021",
+      "form": "10-Q",
+      "filingDate": "2024-11-12",
+      "reportDate": "2024-09-30",
+      "primaryDocument": "avb-20240930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000915912/000091591224000021/avb-20240930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591224000021/avb-20240930.htm",
+          "sha256": "8326d46cf9f1c0be10a8d7cff2a99822f360726d5f8b22c72f213557d1b5161d",
+          "bytes": 2136522,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:37.618Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000915912",
+      "registrant": "AvalonBay",
+      "accession": "0000915912-24-000015",
+      "form": "10-Q",
+      "filingDate": "2024-08-06",
+      "reportDate": "2024-06-30",
+      "primaryDocument": "avb-20240630.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000915912/000091591224000015/avb-20240630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591224000015/avb-20240630.htm",
+          "sha256": "0ad40ab21e37014e5dbc48e89c101c1397ace072b066ce1ce9ca88ca120fb435",
+          "bytes": 2048601,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:37.972Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000915912",
+      "registrant": "AvalonBay",
+      "accession": "0000915912-24-000011",
+      "form": "10-Q",
+      "filingDate": "2024-05-03",
+      "reportDate": "2024-03-31",
+      "primaryDocument": "avb-20240331.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000915912/000091591224000011/avb-20240331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591224000011/avb-20240331.htm",
+          "sha256": "af1d96a81ea266aef5bcc2f2d3a9efff8676929fa98ca9f14e2289a026e41de7",
+          "bytes": 1638803,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:38.212Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000915912",
+      "registrant": "AvalonBay",
+      "accession": "0000915912-24-000004",
+      "form": "10-K",
+      "filingDate": "2024-02-23",
+      "reportDate": "2023-12-31",
+      "primaryDocument": "avb-20231231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000915912/000091591224000004/avb-20231231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591224000004/avb-20231231.htm",
+          "sha256": "dd78de21d96a337d7407eae4653cdaf4015077ab530d4a9e1b91f236bcbeb9ee",
+          "bytes": 5950726,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:38.574Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000915912/000091591224000004/ex-2112023.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex21",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591224000004/ex-2112023.htm",
+          "sha256": "2e752b6ea24c4f6284308574766dcd478a94075af237ed32576735f6f769c03d",
+          "bytes": 187240,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:38.677Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000915912/000091591224000004/ex-2312023.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex23",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591224000004/ex-2312023.htm",
+          "sha256": "1589d5d4cf2d233f1500e5f1e3bff7b783e99f98e35a1512dbe38bacf974cb61",
+          "bytes": 4040,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:38.812Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000915912/000091591224000004/ex-3112023.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591224000004/ex-3112023.htm",
+          "sha256": "dab73d8333a55511c0cef3a32e467050914623a380ab90a03fed632a8c327624",
+          "bytes": 11050,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:38.979Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000915912/000091591224000004/ex-3122023.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591224000004/ex-3122023.htm",
+          "sha256": "6bd44ff92bc1eb53dd8bd9acb29932a1f21264eede22b1d793761db35f3408e4",
+          "bytes": 11057,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:39.118Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000915912/000091591224000004/ex-322023.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591224000004/ex-322023.htm",
+          "sha256": "a168fdd195cfd203ae49b38a52fbb60a0755470dfe548848bb828795de375f3d",
+          "bytes": 6991,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:39.287Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000915912/000091591224000004/ex-972023.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex97",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/915912/000091591224000004/ex-972023.htm",
+          "sha256": "b48af140dd0691a9454bf179d933b61a3bf603e58dc8c0a91f3d55f60ee80675",
+          "bytes": 35176,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:39.543Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001037540",
+      "registrant": "BXP",
+      "accession": "0001037540-25-000013",
+      "form": "10-Q",
+      "filingDate": "2025-11-07",
+      "reportDate": "2025-09-30",
+      "primaryDocument": "bxp-20250930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001037540/000103754025000013/bxp-20250930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1037540/000103754025000013/bxp-20250930.htm",
+          "sha256": "258dac8e3879ef085151edbd377a88e6333822dcb8420aaf09e982c9b9444cb0",
+          "bytes": 4586607,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:40.489Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001037540",
+      "registrant": "BXP",
+      "accession": "0001656423-25-000046",
+      "form": "10-Q",
+      "filingDate": "2025-08-06",
+      "reportDate": "2025-06-30",
+      "primaryDocument": "bxp-20250630.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001037540/000165642325000046/bxp-20250630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1037540/000165642325000046/bxp-20250630.htm",
+          "sha256": "642dc7ba9bd8e163db3d497d0733d9f7565fe6256ac20ffcfa1268362c6a502c",
+          "bytes": 4298657,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:40.757Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001037540",
+      "registrant": "BXP",
+      "accession": "0001656423-25-000034",
+      "form": "10-Q",
+      "filingDate": "2025-05-06",
+      "reportDate": "2025-03-31",
+      "primaryDocument": "bxp-20250331.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001037540/000165642325000034/bxp-20250331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1037540/000165642325000034/bxp-20250331.htm",
+          "sha256": "4f1c9ae9ad64ed207bcfe20c5765fa3c745feac3c81812f8895f1e862eab23a1",
+          "bytes": 3066591,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:41.083Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001037540",
+      "registrant": "BXP",
+      "accession": "0001656423-25-000009",
+      "form": "10-K",
+      "filingDate": "2025-02-27",
+      "reportDate": "2024-12-31",
+      "primaryDocument": "bxp-20241231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001037540/000165642325000009/bxp-20241231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1037540/000165642325000009/bxp-20241231.htm",
+          "sha256": "d577f2c54d24a0efff88bec979eccd85a2445c59821516a9222d1a63fc6ebf99",
+          "bytes": 7435641,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:41.379Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001037540",
+      "registrant": "BXP",
+      "accession": "0001656423-24-000059",
+      "form": "10-Q",
+      "filingDate": "2024-11-05",
+      "reportDate": "2024-09-30",
+      "primaryDocument": "bxp-20240930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001037540/000165642324000059/bxp-20240930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1037540/000165642324000059/bxp-20240930.htm",
+          "sha256": "ea7331846dcdb9ba06d4755e48b44a16241a36472011279356d903c3a9dc2ea6",
+          "bytes": 4325961,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:41.707Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001037540",
+      "registrant": "BXP",
+      "accession": "0001656423-24-000046",
+      "form": "10-Q",
+      "filingDate": "2024-08-05",
+      "reportDate": "2024-06-30",
+      "primaryDocument": "bxp-20240630.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0001037540/000165642324000046/bxp-20240630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1037540/000165642324000046/bxp-20240630.htm",
+          "sha256": "44d510e6e332a9455bbee02c4f3f54fc09d498b7fb612be503ff4e458a9905a3",
+          "bytes": 4182235,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:42.102Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001037540",
+      "registrant": "BXP",
+      "accession": "0001656423-24-000028",
+      "form": "10-Q",
+      "filingDate": "2024-05-10",
+      "reportDate": "2024-03-31",
+      "primaryDocument": "bxp-20240331.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0001037540/000165642324000028/bxp-20240331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1037540/000165642324000028/bxp-20240331.htm",
+          "sha256": "2f981dc80e7d77c174427b1aa371de3baedc1dc821cda8bb3c4818b041d7cd2c",
+          "bytes": 3045010,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:42.338Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001037540",
+      "registrant": "BXP",
+      "accession": "0001656423-24-000007",
+      "form": "10-K",
+      "filingDate": "2024-02-27",
+      "reportDate": "2023-12-31",
+      "primaryDocument": "bxp-20231231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001037540/000165642324000007/bxp-20231231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1037540/000165642324000007/bxp-20231231.htm",
+          "sha256": "aa6a563a68310587610673166cf9d3703ccb29c7ccd936bdfd248c6a7caec0a7",
+          "bytes": 7712682,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:42.676Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000879101",
+      "registrant": "Kimco",
+      "accession": "0001193125-25-258133",
+      "form": "10-Q",
+      "filingDate": "2025-10-30",
+      "reportDate": "2025-09-30",
+      "primaryDocument": "kim-20250930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000879101/000119312525258133/kim-20250930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/879101/000119312525258133/kim-20250930.htm",
+          "sha256": "33ad9e4e461e23ebad1ca0bdce5d6d64da8f6dff944a6f08a958f84be9e72bd3",
+          "bytes": 7538444,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:43.547Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000879101",
+      "registrant": "Kimco",
+      "accession": "0000950170-25-101195",
+      "form": "10-Q",
+      "filingDate": "2025-08-01",
+      "reportDate": "2025-06-30",
+      "primaryDocument": "kim-20250630.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000879101/000095017025101195/kim-20250630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/879101/000095017025101195/kim-20250630.htm",
+          "sha256": "3dda0d2b2b9749288d5921e2fe4ff465a0701c164f1fc58b3ca27916994532a2",
+          "bytes": 7329408,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:43.858Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000879101",
+      "registrant": "Kimco",
+      "accession": "0000950170-25-062383",
+      "form": "10-Q",
+      "filingDate": "2025-05-02",
+      "reportDate": "2025-03-31",
+      "primaryDocument": "kim-20250331.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000879101/000095017025062383/kim-20250331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/879101/000095017025062383/kim-20250331.htm",
+          "sha256": "0a61c324bec393d467b028242f553e59c374cccae5877fed84bbad867b4b5da7",
+          "bytes": 5153142,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:44.157Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000879101",
+      "registrant": "Kimco",
+      "accession": "0000950170-25-024723",
+      "form": "10-K",
+      "filingDate": "2025-02-21",
+      "reportDate": "2024-12-31",
+      "primaryDocument": "kim-20241231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000879101/000095017025024723/kim-20241231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/879101/000095017025024723/kim-20241231.htm",
+          "sha256": "b318b87c399ce654342caef5c6a6a8a8d6d86e6e32e33cb825c772dbf4ff26b2",
+          "bytes": 18436874,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:44.592Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000879101",
+      "registrant": "Kimco",
+      "accession": "0000950170-24-119432",
+      "form": "10-Q",
+      "filingDate": "2024-10-31",
+      "reportDate": "2024-09-30",
+      "primaryDocument": "kim-20240930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000879101/000095017024119432/kim-20240930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/879101/000095017024119432/kim-20240930.htm",
+          "sha256": "3cd18e05fa4d6ce85d2defd9f98585b74c21fe2438c68ddd45501fd86de0d6a4",
+          "bytes": 5851179,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:44.784Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000879101",
+      "registrant": "Kimco",
+      "accession": "0000950170-24-089760",
+      "form": "10-Q",
+      "filingDate": "2024-08-02",
+      "reportDate": "2024-06-30",
+      "primaryDocument": "kim-20240630.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000879101/000095017024089760/kim-20240630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/879101/000095017024089760/kim-20240630.htm",
+          "sha256": "4e9fcb022d0cd85e0a7ff8184387d2fc932735d926140186235f5a4c35d53e2e",
+          "bytes": 5442626,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:45.105Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000879101",
+      "registrant": "Kimco",
+      "accession": "0001437749-24-014590",
+      "form": "10-Q",
+      "filingDate": "2024-05-03",
+      "reportDate": "2024-03-31",
+      "primaryDocument": "kim20240331_10q.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000879101/000143774924014590/kim20240331_10q.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/879101/000143774924014590/kim20240331_10q.htm",
+          "sha256": "a435e743254f4f1e713d5bb8b8d939dd23863cd9aff2b410ea489eacef187bd8",
+          "bytes": 2884958,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:45.373Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000879101",
+      "registrant": "Kimco",
+      "accession": "0001437749-24-005407",
+      "form": "10-K",
+      "filingDate": "2024-02-26",
+      "reportDate": "2023-12-31",
+      "primaryDocument": "kim20231231_10k.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000879101/000143774924005407/kim20231231_10k.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/879101/000143774924005407/kim20231231_10k.htm",
+          "sha256": "d59ec37c1dd03ec07fd92260c77c0ba304c5037f118139c89d8ebc25878e4be5",
+          "bytes": 10068015,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:45.767Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000766704",
+      "registrant": "Welltower",
+      "accession": "0000766704-25-000040",
+      "form": "10-Q",
+      "filingDate": "2025-10-28",
+      "reportDate": "2025-09-30",
+      "primaryDocument": "well-20250930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000766704/000076670425000040/well-20250930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/766704/000076670425000040/well-20250930.htm",
+          "sha256": "eb1bcdb9fcb6a5b960655dab6b0df21fa47129ede7e0f51e15bd6f67e8191634",
+          "bytes": 3397425,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:46.439Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000766704",
+      "registrant": "Welltower",
+      "accession": "0000766704-25-000029",
+      "form": "10-Q",
+      "filingDate": "2025-07-29",
+      "reportDate": "2025-06-30",
+      "primaryDocument": "well-20250630.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000766704/000076670425000029/well-20250630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/766704/000076670425000029/well-20250630.htm",
+          "sha256": "ceba4e843b7bf7d1986b09fe2bd174581beb23dbddf98b3c222c1ceb4dea2daa",
+          "bytes": 3241822,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:46.725Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000766704",
+      "registrant": "Welltower",
+      "accession": "0000766704-25-000020",
+      "form": "10-Q",
+      "filingDate": "2025-04-29",
+      "reportDate": "2025-03-31",
+      "primaryDocument": "well-20250331.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000766704/000076670425000020/well-20250331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/766704/000076670425000020/well-20250331.htm",
+          "sha256": "fbce26dee6171917f036c4e858e1a8a5dd8f55fcedaaa860e7da3408469280c8",
+          "bytes": 2652632,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:47.055Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000766704",
+      "registrant": "Welltower",
+      "accession": "0000766704-25-000009",
+      "form": "10-K",
+      "filingDate": "2025-02-12",
+      "reportDate": "2024-12-31",
+      "primaryDocument": "well-20241231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000766704/000076670425000009/well-20241231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/766704/000076670425000009/well-20241231.htm",
+          "sha256": "2b023c3c63033fa776e864ac208706c8b0f4e287957f43f974af2de91ef3a20d",
+          "bytes": 15718284,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:47.451Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000766704",
+      "registrant": "Welltower",
+      "accession": "0000766704-24-000039",
+      "form": "10-Q",
+      "filingDate": "2024-10-29",
+      "reportDate": "2024-09-30",
+      "primaryDocument": "well-20240930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000766704/000076670424000039/well-20240930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/766704/000076670424000039/well-20240930.htm",
+          "sha256": "4f4c93b5f3e22b3044353ca97f7ad3acc81aefa57ed8becc1edcdbb000079968",
+          "bytes": 3511701,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:47.637Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000766704",
+      "registrant": "Welltower",
+      "accession": "0000766704-24-000033",
+      "form": "10-Q",
+      "filingDate": "2024-07-30",
+      "reportDate": "2024-06-30",
+      "primaryDocument": "well-20240630.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000766704/000076670424000033/well-20240630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/766704/000076670424000033/well-20240630.htm",
+          "sha256": "395d2c7d868d073b9e984c2c6e7d33c984aeaafd2b8460d22f662b2df4bb851d",
+          "bytes": 3281596,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:47.947Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000766704",
+      "registrant": "Welltower",
+      "accession": "0000766704-24-000022",
+      "form": "10-Q",
+      "filingDate": "2024-04-30",
+      "reportDate": "2024-03-31",
+      "primaryDocument": "well-20240331.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000766704/000076670424000022/well-20240331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/766704/000076670424000022/well-20240331.htm",
+          "sha256": "a1ebdd060e9d3fd102ffc322c666efa2e6b4dea2807fac8c9e1098759d79d08d",
+          "bytes": 2600111,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:48.241Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000766704",
+      "registrant": "Welltower",
+      "accession": "0000766704-24-000008",
+      "form": "10-K",
+      "filingDate": "2024-02-15",
+      "reportDate": "2023-12-31",
+      "primaryDocument": "well-20231231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000766704/000076670424000008/well-20231231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/766704/000076670424000008/well-20231231.htm",
+          "sha256": "a781f24503fa360eb05b478d5604888a20cd9f93d988e0f688f22020566b2635",
+          "bytes": 15292462,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:48.601Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001297996",
+      "registrant": "Digital Realty",
+      "accession": "0001104659-25-104945",
+      "form": "10-Q",
+      "filingDate": "2025-10-31",
+      "reportDate": "2025-09-30",
+      "primaryDocument": "dlr-20250930x10q.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001297996/000110465925104945/dlr-20250930x10q.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1297996/000110465925104945/dlr-20250930x10q.htm",
+          "sha256": "943abb0c082efd16572d3464401afbc10cf79def7cc8ffb84403b6e75dd5142a",
+          "bytes": 5172040,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:49.293Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001297996",
+      "registrant": "Digital Realty",
+      "accession": "0001558370-25-009991",
+      "form": "10-Q",
+      "filingDate": "2025-08-01",
+      "reportDate": "2025-06-30",
+      "primaryDocument": "dlr-20250630x10q.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001297996/000155837025009991/dlr-20250630x10q.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1297996/000155837025009991/dlr-20250630x10q.htm",
+          "sha256": "fef100c5b4686036a157aa1320e2dbc992ce98ef4f0a36f43d9cd53bf771694a",
+          "bytes": 5132104,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:49.664Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001297996",
+      "registrant": "Digital Realty",
+      "accession": "0001558370-25-006125",
+      "form": "10-Q",
+      "filingDate": "2025-05-01",
+      "reportDate": "2025-03-31",
+      "primaryDocument": "dlr-20250331x10q.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001297996/000155837025006125/dlr-20250331x10q.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1297996/000155837025006125/dlr-20250331x10q.htm",
+          "sha256": "fc48ede01550a3c0bc047a1b54c86cd79b7e1dee6c382efb4f81e3456d028cf8",
+          "bytes": 3728482,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:49.896Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001297996",
+      "registrant": "Digital Realty",
+      "accession": "0001558370-25-001424",
+      "form": "10-K",
+      "filingDate": "2025-02-25",
+      "reportDate": "2024-12-31",
+      "primaryDocument": "dlr-20241231x10k.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001297996/000155837025001424/dlr-20241231x10k.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1297996/000155837025001424/dlr-20241231x10k.htm",
+          "sha256": "93347feef10444d9a5d980bc0aa9cfe6c06059b3b209a974ea4e043360a5f050",
+          "bytes": 8217469,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:50.360Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001297996",
+      "registrant": "Digital Realty",
+      "accession": "0001558370-24-014149",
+      "form": "10-Q",
+      "filingDate": "2024-11-01",
+      "reportDate": "2024-09-30",
+      "primaryDocument": "dlr-20240930x10q.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001297996/000155837024014149/dlr-20240930x10q.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1297996/000155837024014149/dlr-20240930x10q.htm",
+          "sha256": "bcb9e9f393ef82c77372f3f2d73f21ab0bf435eae18c3658af9f7f50fbbca1a5",
+          "bytes": 5199017,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:50.557Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001297996",
+      "registrant": "Digital Realty",
+      "accession": "0001558370-24-010734",
+      "form": "10-Q",
+      "filingDate": "2024-08-02",
+      "reportDate": "2024-06-30",
+      "primaryDocument": "dlr-20240630x10q.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0001297996/000155837024010734/dlr-20240630x10q.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1297996/000155837024010734/dlr-20240630x10q.htm",
+          "sha256": "1fc2ff9de90c0bb088209d2a5699de5ff6d061bdc50a645a6f26d1c911e479d0",
+          "bytes": 5152713,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:50.863Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001297996",
+      "registrant": "Digital Realty",
+      "accession": "0001558370-24-006671",
+      "form": "10-Q",
+      "filingDate": "2024-05-03",
+      "reportDate": "2024-03-31",
+      "primaryDocument": "dlr-20240331x10q.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0001297996/000155837024006671/dlr-20240331x10q.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1297996/000155837024006671/dlr-20240331x10q.htm",
+          "sha256": "2da813dd1f3b8559c3d61e4bd2803ed56c73f4870a79adf53ed5c3201831debb",
+          "bytes": 3734099,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:51.197Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001297996",
+      "registrant": "Digital Realty",
+      "accession": "0001558370-24-001575",
+      "form": "10-K",
+      "filingDate": "2024-02-23",
+      "reportDate": "2023-12-31",
+      "primaryDocument": "dlr-20231231x10k.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001297996/000155837024001575/dlr-20231231x10k.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1297996/000155837024001575/dlr-20231231x10k.htm",
+          "sha256": "2e89df01e112e784ec75f6caf1f2806b36e212aef354d3449a67dac5b3753a30",
+          "bytes": 8304317,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:51.583Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000740260",
+      "registrant": "Ventas",
+      "accession": "0000740260-25-000277",
+      "form": "10-Q",
+      "filingDate": "2025-10-30",
+      "reportDate": "2025-09-30",
+      "primaryDocument": "vtr-20250930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000740260/000074026025000277/vtr-20250930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/740260/000074026025000277/vtr-20250930.htm",
+          "sha256": "562ad5eee8d5edc1e61d5c704461fc77a40c301874f68229efa6f7f87348f45d",
+          "bytes": 2469024,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:52.158Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000740260",
+      "registrant": "Ventas",
+      "accession": "0000740260-25-000231",
+      "form": "10-Q",
+      "filingDate": "2025-07-31",
+      "reportDate": "2025-06-30",
+      "primaryDocument": "vtr-20250630.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000740260/000074026025000231/vtr-20250630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/740260/000074026025000231/vtr-20250630.htm",
+          "sha256": "2e471a05154d5dd5085c3bcac36b3c4f9b57196c69e623adbb8ef4c3298aa1d7",
+          "bytes": 2413831,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:52.458Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000740260",
+      "registrant": "Ventas",
+      "accession": "0000740260-25-000155",
+      "form": "10-Q",
+      "filingDate": "2025-05-01",
+      "reportDate": "2025-03-31",
+      "primaryDocument": "vtr-20250331.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000740260/000074026025000155/vtr-20250331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/740260/000074026025000155/vtr-20250331.htm",
+          "sha256": "165d5f7f9a7d20bda68950ff07d141913835c7fc571a82c05b92bb2803903006",
+          "bytes": 1779040,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:52.796Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000740260",
+      "registrant": "Ventas",
+      "accession": "0000740260-25-000052",
+      "form": "10-K",
+      "filingDate": "2025-02-13",
+      "reportDate": "2024-12-31",
+      "primaryDocument": "vtr-20241231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000740260/000074026025000052/vtr-20241231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/740260/000074026025000052/vtr-20241231.htm",
+          "sha256": "b6ce352fe4c8ee4392d5011edbf61446455989d29dc7ccf583b2a00fcf4e7120",
+          "bytes": 4051874,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:53.071Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000740260",
+      "registrant": "Ventas",
+      "accession": "0000740260-24-000248",
+      "form": "10-Q",
+      "filingDate": "2024-10-31",
+      "reportDate": "2024-09-30",
+      "primaryDocument": "vtr-20240930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000740260/000074026024000248/vtr-20240930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/740260/000074026024000248/vtr-20240930.htm",
+          "sha256": "62954a3a5e811cc8ec52079776ed0bcb3231ba8d20538eb61c55cb9cf6dc78e8",
+          "bytes": 2367471,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:53.362Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000740260",
+      "registrant": "Ventas",
+      "accession": "0000740260-24-000200",
+      "form": "10-Q",
+      "filingDate": "2024-08-02",
+      "reportDate": "2024-06-30",
+      "primaryDocument": "vtr-20240630.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000740260/000074026024000200/vtr-20240630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/740260/000074026024000200/vtr-20240630.htm",
+          "sha256": "e8286386cc7a595c94ae7d9ec48a8280aa65eed7e77e53ae8eba52217156d5e6",
+          "bytes": 2376213,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:53.672Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000740260",
+      "registrant": "Ventas",
+      "accession": "0000740260-24-000139",
+      "form": "10-Q",
+      "filingDate": "2024-05-02",
+      "reportDate": "2024-03-31",
+      "primaryDocument": "vtr-20240331.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000740260/000074026024000139/vtr-20240331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/740260/000074026024000139/vtr-20240331.htm",
+          "sha256": "d1c47f42f83d2f0be6346ae3e98cca966e88875799c276308780d98924920703",
+          "bytes": 1769292,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:53.967Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000740260",
+      "registrant": "Ventas",
+      "accession": "0000740260-24-000067",
+      "form": "10-K",
+      "filingDate": "2024-02-15",
+      "reportDate": "2023-12-31",
+      "primaryDocument": "vtr-20231231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000740260/000074026024000067/vtr-20231231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/740260/000074026024000067/vtr-20231231.htm",
+          "sha256": "45bcbabe67e70bb655b02ce151c2bf16064607d0995cb731aa7811224458a3c8",
+          "bytes": 4094742,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:54.280Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001070750",
+      "registrant": "Host Hotels",
+      "accession": "0001070750-25-000168",
+      "form": "10-Q",
+      "filingDate": "2025-11-07",
+      "reportDate": "2025-09-30",
+      "primaryDocument": "hst-20250930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001070750/000107075025000168/hst-20250930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1070750/000107075025000168/hst-20250930.htm",
+          "sha256": "8ee9cbd38a991216a6a45aaa91ae93ff5d8399dcadaf89c17fc1ba15b3e147f7",
+          "bytes": 2751403,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:54.931Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001070750",
+      "registrant": "Host Hotels",
+      "accession": "0001070750-25-000139",
+      "form": "10-Q",
+      "filingDate": "2025-08-01",
+      "reportDate": "2025-06-30",
+      "primaryDocument": "hst-20250630.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001070750/000107075025000139/hst-20250630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1070750/000107075025000139/hst-20250630.htm",
+          "sha256": "e33aafaaaf2abfc55cb2281dc0c43bb2b3c6915551642e766b95733302026e61",
+          "bytes": 2716302,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:55.227Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001070750",
+      "registrant": "Host Hotels",
+      "accession": "0001070750-25-000097",
+      "form": "10-Q",
+      "filingDate": "2025-05-02",
+      "reportDate": "2025-03-31",
+      "primaryDocument": "hst-20250331.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001070750/000107075025000097/hst-20250331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1070750/000107075025000097/hst-20250331.htm",
+          "sha256": "d0f50e5bc57ffd9de44b272280903dd65c22eddcfea1a00fad188472ee6fdf6d",
+          "bytes": 1678350,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:55.524Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001070750",
+      "registrant": "Host Hotels",
+      "accession": "0001070750-25-000071",
+      "form": "10-K",
+      "filingDate": "2025-02-26",
+      "reportDate": "2024-12-31",
+      "primaryDocument": "hst-20241231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001070750/000107075025000071/hst-20241231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1070750/000107075025000071/hst-20241231.htm",
+          "sha256": "757ffb67af2d39ca84ff6c21c0311eceaa9f977888ff31f2f3e2468d40d6f05b",
+          "bytes": 4075174,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:55.842Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001070750",
+      "registrant": "Host Hotels",
+      "accession": "0001070750-24-000184",
+      "form": "10-Q",
+      "filingDate": "2024-11-08",
+      "reportDate": "2024-09-30",
+      "primaryDocument": "hst-20240930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001070750/000107075024000184/hst-20240930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1070750/000107075024000184/hst-20240930.htm",
+          "sha256": "1b75c23ae86bad12874d58746ffa6b8bc2a81579a472a773170a5da457b2179f",
+          "bytes": 2637574,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:56.140Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001070750",
+      "registrant": "Host Hotels",
+      "accession": "0001070750-24-000167",
+      "form": "10-Q",
+      "filingDate": "2024-08-02",
+      "reportDate": "2024-06-30",
+      "primaryDocument": "hst-20240630.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0001070750/000107075024000167/hst-20240630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1070750/000107075024000167/hst-20240630.htm",
+          "sha256": "f0a5cbbab2a631b0721f87fcf8a68abf0f211131b488347bc6fa2e5626b447e2",
+          "bytes": 2586572,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:56.450Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001070750",
+      "registrant": "Host Hotels",
+      "accession": "0001070750-24-000128",
+      "form": "10-Q",
+      "filingDate": "2024-05-03",
+      "reportDate": "2024-03-31",
+      "primaryDocument": "hst-20240331.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0001070750/000107075024000128/hst-20240331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1070750/000107075024000128/hst-20240331.htm",
+          "sha256": "d6a6c901548019aadfcfc2c75bfdc018c2e9267fb9d9c733d72b1d01bef50abc",
+          "bytes": 1617400,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:56.754Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001070750",
+      "registrant": "Host Hotels",
+      "accession": "0001070750-24-000081",
+      "form": "10-K",
+      "filingDate": "2024-02-28",
+      "reportDate": "2023-12-31",
+      "primaryDocument": "hst-20231231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001070750/000107075024000081/hst-20231231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1070750/000107075024000081/hst-20231231.htm",
+          "sha256": "abc41066ef512e298abd5336ed4f8d0a2eff7a5e3e2bd2118943107ddc57a06b",
+          "bytes": 3860965,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:57.049Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000899689",
+      "registrant": "Vornado",
+      "accession": "0000899689-25-000040",
+      "form": "10-Q",
+      "filingDate": "2025-11-03",
+      "reportDate": "2025-09-30",
+      "primaryDocument": "vno-20250930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000899689/000089968925000040/ex311-093025.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000040/ex311-093025.htm",
+          "sha256": "e531501945e8baf88f737ef9d8f4b172347e7e99d71609c1aa16ea7fdaa4c473",
+          "bytes": 10167,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:57.658Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000040/ex312-093025.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000040/ex312-093025.htm",
+          "sha256": "f789cdd3cf61824c8515bcef933409f51f0bd08102fb071fa67894c24e4fa048",
+          "bytes": 10345,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:57.815Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000040/ex313-093025.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000040/ex313-093025.htm",
+          "sha256": "9101358dea25235d22314d97f63a040a3ed79da2b0e316b89c80e57aa21fcc0f",
+          "bytes": 9044,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:57.959Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000040/ex314-093025.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000040/ex314-093025.htm",
+          "sha256": "6c1db1d11db854ea7c1170dc53a101bb52dbf18f5a7b97a6575c4410cb3dcf4f",
+          "bytes": 9287,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:58.121Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000040/ex321-093025.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000040/ex321-093025.htm",
+          "sha256": "283bfdae4b16efef2ef63d246db0a99b57dadd11b830df0759aa52087d2f3cb4",
+          "bytes": 4877,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:58.263Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000040/ex322-093025.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000040/ex322-093025.htm",
+          "sha256": "c05da81bb486fe07e28ee479403d98aa7cc875736611fcb1e956fb8bba81b159",
+          "bytes": 5109,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:58.417Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000040/ex323-093025.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000040/ex323-093025.htm",
+          "sha256": "99bac24367f4415958beefd5ab6e2953c6cb0d80b3c4c3590c3e9c7bb0fde0b4",
+          "bytes": 5275,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:58.569Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000040/ex324-093025.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000040/ex324-093025.htm",
+          "sha256": "3a850b76fd88a37947172c984a27e3f2f9438485fc71b6d3765ba3c87526d425",
+          "bytes": 5575,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:58.711Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000040/vno-20250930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000040/vno-20250930.htm",
+          "sha256": "219391945115c9b060346bfc0e3b6676111fb00ece68e01e707147b5ece368ec",
+          "bytes": 3500300,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:58.873Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000899689",
+      "registrant": "Vornado",
+      "accession": "0000899689-25-000032",
+      "form": "10-Q",
+      "filingDate": "2025-08-04",
+      "reportDate": "2025-06-30",
+      "primaryDocument": "vno-20250630.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000899689/000089968925000032/ex311-063025.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000032/ex311-063025.htm",
+          "sha256": "9ca5bed514353f53053e853b8cf9a999db51868d151c84dc929de9c42cfb7ff4",
+          "bytes": 10165,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:59.157Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000032/ex312-063025.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000032/ex312-063025.htm",
+          "sha256": "450984eb0f2ed5ca0a418b65558f375a8af223d3fc2bb2abdf29cdc8f9072bd0",
+          "bytes": 10343,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:59.309Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000032/ex313-063025.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000032/ex313-063025.htm",
+          "sha256": "74525f7a1a9613f0021101d4e5d1b794bfe40fda2ffec1f5339897f066bbc157",
+          "bytes": 9042,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:59.464Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000032/ex314-063025.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000032/ex314-063025.htm",
+          "sha256": "0c17983519da14ff2b89a8e1a53177b6cb4980fcbdbb9fd83e0d9c2df35d5996",
+          "bytes": 9285,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:59.623Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000032/ex321-063025.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000032/ex321-063025.htm",
+          "sha256": "1965e3ede13bc6c7a3698d650a73d5ff22183346a2f10d4fd5275ef230242297",
+          "bytes": 4870,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:59.762Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000032/ex322-063025.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000032/ex322-063025.htm",
+          "sha256": "f2a31e9fd31176ec607b1fde0327fb4744b5eb7bdfa40aecf0b8d3519d7f9e29",
+          "bytes": 5102,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:09:59.923Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000032/ex323-063025.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000032/ex323-063025.htm",
+          "sha256": "f3cad74f19c5e36625d20b668fdd02ab8fa9788028ff104a3191eae755b482aa",
+          "bytes": 5268,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:00.061Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000032/ex324-063025.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000032/ex324-063025.htm",
+          "sha256": "f83e26a5be2b31e1b3dc4a853d4e82411a4dcf51e153e4567405eebd22af868a",
+          "bytes": 5568,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:00.228Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000032/vno-20250630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000032/vno-20250630.htm",
+          "sha256": "fede8ec50952296137d643d52acb46fdf5a980d576802a2978914e7cea9e0bf0",
+          "bytes": 3450155,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:00.371Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000899689",
+      "registrant": "Vornado",
+      "accession": "0000899689-25-000019",
+      "form": "10-Q",
+      "filingDate": "2025-05-05",
+      "reportDate": "2025-03-31",
+      "primaryDocument": "vno-20250331.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000899689/000089968925000019/ex311-033125.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000019/ex311-033125.htm",
+          "sha256": "ccf18691d15077bd445a9c62785946c0f6c75e033744f3b44aca8e93f36b9508",
+          "bytes": 10307,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:00.668Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000019/ex312-033125.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000019/ex312-033125.htm",
+          "sha256": "b456c3fac28526e9e7a4caaacf1097a4238111225cee28bf9cdfa821394936d5",
+          "bytes": 10485,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:00.818Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000019/ex313-033125.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000019/ex313-033125.htm",
+          "sha256": "8d1708b1c72fb96b4688eca0aed607cc34ae1ffe6d21c96d12ef258a4f8c8701",
+          "bytes": 9129,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:00.966Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000019/ex314-033125.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000019/ex314-033125.htm",
+          "sha256": "38b498e4016999a07c69f50c857ed62266e86dbd246b4ef8411fd94da0bb56e2",
+          "bytes": 9372,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:01.108Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000019/ex321-033125.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000019/ex321-033125.htm",
+          "sha256": "4a1453ea471d41d6a07d7b5d66438d79abd6f8043d2fe3b5d952bd0fa46b53a9",
+          "bytes": 4928,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:01.260Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000019/ex322-033125.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000019/ex322-033125.htm",
+          "sha256": "6276136701b99ba848e0309f1c80db8fb1b5e0638cb21bec134fa53340af5df8",
+          "bytes": 5160,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:01.411Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000019/ex323-033125.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000019/ex323-033125.htm",
+          "sha256": "ad53cb3b7c2de916807bb6fcb950674e2a21b82829d9b8a5a2d60a1a7abf5dcb",
+          "bytes": 5336,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:01.562Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000019/ex324-033125.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000019/ex324-033125.htm",
+          "sha256": "648a8e430276bc73824b03c2936937c9f3d3a6c68968e0e055419f6e9ad74e52",
+          "bytes": 5636,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:01.714Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000019/vno-20250331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000019/vno-20250331.htm",
+          "sha256": "66122c08542c1b7d2b29c80201ae3cdba6bda5b73f95e2440dbfecb34153c6b1",
+          "bytes": 2336768,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:01.874Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000899689",
+      "registrant": "Vornado",
+      "accession": "0000899689-25-000004",
+      "form": "10-K",
+      "filingDate": "2025-02-10",
+      "reportDate": "2024-12-31",
+      "primaryDocument": "vno-20241231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000899689/000089968925000004/ex191vornado-insidertradin.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex19",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000004/ex191vornado-insidertradin.htm",
+          "sha256": "bfb98b1f94fccb3e6692b1715187e0663dbd567fa5f13b78c632528ada4d1ac5",
+          "bytes": 37953,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:02.167Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000004/ex21123124.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex21",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000004/ex21123124.htm",
+          "sha256": "55081d3c44ad128696795f4d8f64bbe6f2cbd86221c3f453d18eaa7fa5abe0b2",
+          "bytes": 300429,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:02.315Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000004/ex231123124.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex23",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000004/ex231123124.htm",
+          "sha256": "7ac255dad3e9fa601950e333465077f00e663c2e270e2c3ae376b2cc8bf2247c",
+          "bytes": 6552,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:02.476Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000004/ex232123124.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex23",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000004/ex232123124.htm",
+          "sha256": "dabfd6fd38a433461af6e0fadd5d785ce8396b825f056b7a1b57ab63ef42bea8",
+          "bytes": 2242,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:02.613Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000004/ex311123124.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000004/ex311123124.htm",
+          "sha256": "f352f54099a6615b2edd715be6842e4fe898852c7992c8fe44d40d80d4c55916",
+          "bytes": 10604,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:02.765Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000004/ex312123124.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000004/ex312123124.htm",
+          "sha256": "0f10b04ae3b5b62d35c049c41f658d59a11ea934044a2fc6ec1902a3f975ea35",
+          "bytes": 10625,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:02.911Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000004/ex313123124.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000004/ex313123124.htm",
+          "sha256": "4391d145d350122c2f180724f05f7145969f2dfd1a595fc780ef0d95669bb55a",
+          "bytes": 9608,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:03.060Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000004/ex314123124.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000004/ex314123124.htm",
+          "sha256": "a4033f8fec895c748d72109ffb4840049576a911b429cb78acd90ea62e291f09",
+          "bytes": 9420,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:03.212Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000004/ex321123124.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000004/ex321123124.htm",
+          "sha256": "e5c87bc847468a2594b41f4e4d9c54d3b8075b4319cc1e40f9b429526fad0bc9",
+          "bytes": 5360,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:03.361Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000004/ex322123124.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000004/ex322123124.htm",
+          "sha256": "c2067df662f1408d54dcb0ac1b073b4a849c2756c34c004c4e2938e6807c5dec",
+          "bytes": 5584,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:03.513Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000004/ex323123124.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000004/ex323123124.htm",
+          "sha256": "0536eba768c1e084e8b164fe03d7ad296a5ec5e594a16bfa6bbb42ac5ef3291a",
+          "bytes": 5895,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:03.666Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000004/ex324123124.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000004/ex324123124.htm",
+          "sha256": "d551976bd1a9d3d1dc289ed8a9db3a45fc50323c7c1a0a18a2d156bbe23b6557",
+          "bytes": 5894,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:03.814Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968925000004/vno-20241231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968925000004/vno-20241231.htm",
+          "sha256": "0c7c385154e53cad456db0d6fcab7ab3e26c40fbda954f9d54fe49ec0ff45f74",
+          "bytes": 4961817,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:03.981Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000899689",
+      "registrant": "Vornado",
+      "accession": "0000899689-24-000039",
+      "form": "10-Q",
+      "filingDate": "2024-11-04",
+      "reportDate": "2024-09-30",
+      "primaryDocument": "vno-20240930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000899689/000089968924000039/ex311-093024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000039/ex311-093024.htm",
+          "sha256": "182a278158ef3c54d1fe964ceb04b1239a1e4abe222c432c9eda589040994aaa",
+          "bytes": 10312,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:04.279Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000039/ex312-093024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000039/ex312-093024.htm",
+          "sha256": "cdaf5f48fc2769835da041509c560b8eb812ef37e2f12569c488e331a1cff3c1",
+          "bytes": 10490,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:04.432Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000039/ex313-093024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000039/ex313-093024.htm",
+          "sha256": "351c840e14f4911a254bf05873c118bbc07793d3a8a632fb65b02495270b5ac5",
+          "bytes": 9134,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:04.570Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000039/ex314-093024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000039/ex314-093024.htm",
+          "sha256": "aa28a7c088c4ec7313c3ce789a145c7c11307bd5bfd7a8c5bcf355936ba0e00c",
+          "bytes": 9377,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:04.718Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000039/ex321-093024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000039/ex321-093024.htm",
+          "sha256": "ad8f996bee952af2c96a9e1fa0e3ae2907671146944e162db0ca273ab1deb3ba",
+          "bytes": 4937,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:04.862Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000039/ex322-093024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000039/ex322-093024.htm",
+          "sha256": "b2d8637f647dfd0343fc8f1e26b84effb7909ab427a12afdaea5fbafd5ae5ffe",
+          "bytes": 5169,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:05.025Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000039/ex323-093024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000039/ex323-093024.htm",
+          "sha256": "75c6c70d06e10dde2242cdf5c568f560c09168b041432cdf9afe84690b288c63",
+          "bytes": 5345,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:05.174Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000039/ex324-093024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000039/ex324-093024.htm",
+          "sha256": "e538eb7af49d90c0780ee0d2ce2be594c7e6d5af22d33a698c15ea2b83015e34",
+          "bytes": 5645,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:05.319Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000039/vno-20240930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000039/vno-20240930.htm",
+          "sha256": "57f89fa6d7f6b2ce70fe635dcbf7b0244286d2f45d2b34c4c1c9b57d172de81b",
+          "bytes": 3612468,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:05.478Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000899689",
+      "registrant": "Vornado",
+      "accession": "0000899689-24-000033",
+      "form": "10-Q",
+      "filingDate": "2024-08-05",
+      "reportDate": "2024-06-30",
+      "primaryDocument": "vno-20240630.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000899689/000089968924000033/ex311-063024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000033/ex311-063024.htm",
+          "sha256": "0fb9f3649913b893a8d77d35dadbf7b7f93b17a64f2421ebac05ead406eb4fbe",
+          "bytes": 10310,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:05.770Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000033/ex312-063024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000033/ex312-063024.htm",
+          "sha256": "0388976ef2d9adf7da84292e8e76776d7ac586c959c348775828ad9bbfe1449c",
+          "bytes": 10488,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:05.930Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000033/ex313-063024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000033/ex313-063024.htm",
+          "sha256": "fe5fe992096ad22ad8dafa0d7050816a085ce2c087c224a73d74216bcd80b1b8",
+          "bytes": 9132,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:06.063Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000033/ex314-063024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000033/ex314-063024.htm",
+          "sha256": "c42896e0ae9f2ccf34e6e23f818dd1b0c5f2eac5e385f77e8eb7773e79249b1b",
+          "bytes": 9376,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:06.211Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000033/ex321-063024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000033/ex321-063024.htm",
+          "sha256": "1aee2336d9a3dd026d9daa985e30469cdc250077040b3a53b66e4620f4bd4f79",
+          "bytes": 4931,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:06.376Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000033/ex322-063024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000033/ex322-063024.htm",
+          "sha256": "42548fdf29d265ef31ade03a7854aef906f7677309727a6fe941e755f6cd9f18",
+          "bytes": 5163,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:06.512Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000033/ex323-063024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000033/ex323-063024.htm",
+          "sha256": "c4893dc9ad8a0afe51ee0efac5621a90f9ccab5e3c5327b964716525d7ffd4aa",
+          "bytes": 5338,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:06.665Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000033/ex324-063024.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000033/ex324-063024.htm",
+          "sha256": "edaf5575a479019bc04f449d4d2846e2c2659d23158fab666d2f4e181013c0ae",
+          "bytes": 5638,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:06.822Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000033/vno-20240630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000033/vno-20240630.htm",
+          "sha256": "829175955bab4eebc18e3d6be813fd250eec7eec19b0c62f4785f2ad677356d5",
+          "bytes": 3458473,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:07.004Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000899689",
+      "registrant": "Vornado",
+      "accession": "0000899689-24-000021",
+      "form": "10-Q",
+      "filingDate": "2024-05-06",
+      "reportDate": "2024-03-31",
+      "primaryDocument": "vno-20240331.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000899689/000089968924000021/ex311-033124.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000021/ex311-033124.htm",
+          "sha256": "f934342d9d636735e7a804d285933e036f9231ae1c227c618c4450230ee3695c",
+          "bytes": 10307,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:07.266Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000021/ex312-033124.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000021/ex312-033124.htm",
+          "sha256": "19f2fb7112ad4155973eb15eaad4d80c0694274824a71f1f120ac12503718887",
+          "bytes": 10485,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:07.413Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000021/ex313-033124.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000021/ex313-033124.htm",
+          "sha256": "00f1fc4c10e904181f46adc7478cdabb16c3850c1c79a1e1a498aab562fbddd9",
+          "bytes": 9129,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:07.563Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000021/ex314-033124.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000021/ex314-033124.htm",
+          "sha256": "3d9f1920b619cc691c019dc661f636348e305696e07b8a0b28db6250f703f998",
+          "bytes": 9372,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:07.717Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000021/ex321-033124.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000021/ex321-033124.htm",
+          "sha256": "84c00feddd20bbba92cf0c775aedb1d8a714f6ad7c4196548e4a4839290c0f16",
+          "bytes": 4928,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:07.908Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000021/ex322-033124.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000021/ex322-033124.htm",
+          "sha256": "a3771c4849e1669b4381f516af494218ec8732f5cac9e6414411455366d6c277",
+          "bytes": 5160,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:08.013Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000021/ex323-033124.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000021/ex323-033124.htm",
+          "sha256": "4f22f1c1d399f2bec0740474d7ad035693542e6fd5b3a5d9ae92f959b1375b1a",
+          "bytes": 5336,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:08.171Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000021/ex324-033124.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000021/ex324-033124.htm",
+          "sha256": "879252477f6040875a958b783b48b830076eb718a8e6b6315e7aca14c278157f",
+          "bytes": 5636,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:08.313Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000021/vno-20240331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000021/vno-20240331.htm",
+          "sha256": "11a87431b0ae0f71f724deec88cab7e5f1564b0a4bf9fdce960e9ca482cc2ae0",
+          "bytes": 2366363,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:08.470Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000899689",
+      "registrant": "Vornado",
+      "accession": "0000899689-24-000005",
+      "form": "10-K",
+      "filingDate": "2024-02-12",
+      "reportDate": "2023-12-31",
+      "primaryDocument": "vno-20231231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000899689/000089968924000005/ex21123123.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex21",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000005/ex21123123.htm",
+          "sha256": "348cecb2365a5012b44fe49f7f88d01ba87e02e7a8462197780f7c40539c9f14",
+          "bytes": 302436,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:08.764Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000005/ex231123123.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex23",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000005/ex231123123.htm",
+          "sha256": "089ff9e5e882a26b459f3aff18b6acdbc3a0403d1814aa5fba441cd16da925cc",
+          "bytes": 7119,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:08.909Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000005/ex232123123.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex23",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000005/ex232123123.htm",
+          "sha256": "a69a3ed4b035dce4239434b5be33219b96ac2810b7ae5ba6b444482951c6c0a9",
+          "bytes": 2269,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:09.062Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000005/ex311123123.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000005/ex311123123.htm",
+          "sha256": "25f96280f4b0a9f761393bb80c1622ad1c52bdf071cdf1eca3518783aded4691",
+          "bytes": 10604,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:09.220Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000005/ex312123123.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000005/ex312123123.htm",
+          "sha256": "87c13b62d0d71e812ec36a8f69265f005526ddef7c0fd526216f413a416b6fb0",
+          "bytes": 10625,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:09.367Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000005/ex313123123.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000005/ex313123123.htm",
+          "sha256": "6c903b27d0820e9ba87fff5600c57683f457c7e6c6fc2e85fb39c9bfd33e3e21",
+          "bytes": 9607,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:09.513Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000005/ex314123123.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex31",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000005/ex314123123.htm",
+          "sha256": "e0828f31226bdd0c4dd3ed911be1c2c8c44174c836e29765486da3c476c0f829",
+          "bytes": 9420,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:09.663Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000005/ex321123123.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000005/ex321123123.htm",
+          "sha256": "068a1b683a259c1ffd8dc6965122ecef94f4362863bc67f88238cc74a01c3a83",
+          "bytes": 5360,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:09.815Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000005/ex322123123.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000005/ex322123123.htm",
+          "sha256": "91ca6168cfde54c9ce227d4f42348ddf4b3a94ecde6267848d4d2e802bdad8cd",
+          "bytes": 5584,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:09.961Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000005/ex323123123.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000005/ex323123123.htm",
+          "sha256": "ce54fcddab43c75ebf4c5c8dc746c583d78733bdeba43f11672582784ba5a96e",
+          "bytes": 5895,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:10.120Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000005/ex324123123.htm",
+          "role": "exhibit",
+          "exhibitHint": "ex32",
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000005/ex324123123.htm",
+          "sha256": "bd7d72d67eac4e76f9efc428d34314c540ad025043bf5e86451c4fc46dc243d7",
+          "bytes": 5894,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:10.259Z",
+          "duplicateOf": null
+        },
+        {
+          "path": "0000899689/000089968924000005/vno-20231231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/899689/000089968924000005/vno-20231231.htm",
+          "sha256": "187eea3d50d59544326d67cced1fd7ade0c50848b28d675b5da18874be610be6",
+          "bytes": 5271445,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:10.440Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000034903",
+      "registrant": "Federal Realty",
+      "accession": "0000034903-25-000063",
+      "form": "10-Q",
+      "filingDate": "2025-10-31",
+      "reportDate": "2025-09-30",
+      "primaryDocument": "frt-20250930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000034903/000003490325000063/frt-20250930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/34903/000003490325000063/frt-20250930.htm",
+          "sha256": "40b47e3c0398d5f797e5c6944583396d04c6fb585f8517366c8c7df4673b2759",
+          "bytes": 1834982,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:11.157Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000034903",
+      "registrant": "Federal Realty",
+      "accession": "0000034903-25-000052",
+      "form": "10-Q",
+      "filingDate": "2025-08-06",
+      "reportDate": "2025-06-30",
+      "primaryDocument": "frt-20250630.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000034903/000003490325000052/frt-20250630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/34903/000003490325000052/frt-20250630.htm",
+          "sha256": "45f87f95102b0797df0eff9410e6e468fdffb9b98e206a642db9d9fdc4bf30c2",
+          "bytes": 1844263,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:11.456Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000034903",
+      "registrant": "Federal Realty",
+      "accession": "0000034903-25-000037",
+      "form": "10-Q",
+      "filingDate": "2025-05-08",
+      "reportDate": "2025-03-31",
+      "primaryDocument": "frt-20250331.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000034903/000003490325000037/frt-20250331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/34903/000003490325000037/frt-20250331.htm",
+          "sha256": "75ddda3c3fcd4269e5b53c8f92638c836055e805f62ffd3791afd395c8893cee",
+          "bytes": 1338898,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:11.759Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000034903",
+      "registrant": "Federal Realty",
+      "accession": "0000034903-25-000016",
+      "form": "10-K",
+      "filingDate": "2025-02-13",
+      "reportDate": "2024-12-31",
+      "primaryDocument": "frt-20241231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000034903/000003490325000016/frt-20241231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/34903/000003490325000016/frt-20241231.htm",
+          "sha256": "eca8d68aa7b3cfe2b8a81071d3d043f100214012af597d5ed5300980b488b3cc",
+          "bytes": 3773755,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:12.068Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000034903",
+      "registrant": "Federal Realty",
+      "accession": "0000034903-24-000069",
+      "form": "10-Q",
+      "filingDate": "2024-10-30",
+      "reportDate": "2024-09-30",
+      "primaryDocument": "frt-20240930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000034903/000003490324000069/frt-20240930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/34903/000003490324000069/frt-20240930.htm",
+          "sha256": "c898b6a1d36586825d04f485f63741f227daefa525ab2da2eaf85be22690e299",
+          "bytes": 1755496,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:12.363Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000034903",
+      "registrant": "Federal Realty",
+      "accession": "0000034903-24-000056",
+      "form": "10-Q",
+      "filingDate": "2024-08-01",
+      "reportDate": "2024-06-30",
+      "primaryDocument": "frt-20240630.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000034903/000003490324000056/frt-20240630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/34903/000003490324000056/frt-20240630.htm",
+          "sha256": "3b5cc039d8dd21f31f5e4d86374e8f899a67ca02b4a2a5eb4f86a29a16824461",
+          "bytes": 1766941,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:12.669Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000034903",
+      "registrant": "Federal Realty",
+      "accession": "0000034903-24-000046",
+      "form": "10-Q",
+      "filingDate": "2024-05-02",
+      "reportDate": "2024-03-31",
+      "primaryDocument": "frt-20240331.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000034903/000003490324000046/frt-20240331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/34903/000003490324000046/frt-20240331.htm",
+          "sha256": "7b4bf5df41a37eacc394d1555fccbbc6c6564c3d35a266edd9459049b8281674",
+          "bytes": 1299158,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:12.967Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000034903",
+      "registrant": "Federal Realty",
+      "accession": "0000034903-24-000032",
+      "form": "10-K",
+      "filingDate": "2024-02-12",
+      "reportDate": "2023-12-31",
+      "primaryDocument": "frt-20231231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000034903/000003490324000032/frt-20231231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/34903/000003490324000032/frt-20231231.htm",
+          "sha256": "c199c3a2f6e85d404b9d8280af42d4ae1baf400e734c3eaf97933b5e5cd5c4d7",
+          "bytes": 3759384,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:13.270Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000910606",
+      "registrant": "Regency Centers",
+      "accession": "0001193125-25-266456",
+      "form": "10-Q",
+      "filingDate": "2025-11-05",
+      "reportDate": "2025-09-30",
+      "primaryDocument": "reg-20250930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000910606/000119312525266456/reg-20250930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/910606/000119312525266456/reg-20250930.htm",
+          "sha256": "8e4a6300cf3fef5e47748a734f49c02dfdfd03bd65447a7c84a21696a7788fd9",
+          "bytes": 7356307,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:14.281Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000910606",
+      "registrant": "Regency Centers",
+      "accession": "0000950170-25-101867",
+      "form": "10-Q",
+      "filingDate": "2025-08-04",
+      "reportDate": "2025-06-30",
+      "primaryDocument": "reg-20250630.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000910606/000095017025101867/reg-20250630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/910606/000095017025101867/reg-20250630.htm",
+          "sha256": "329540f602db8f2ae32c3da69da9ce6bbdf7c1eb747a30732de8429c927569fa",
+          "bytes": 6987179,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:14.565Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000910606",
+      "registrant": "Regency Centers",
+      "accession": "0000950170-25-062596",
+      "form": "10-Q",
+      "filingDate": "2025-05-02",
+      "reportDate": "2025-03-31",
+      "primaryDocument": "reg-20250331.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000910606/000095017025062596/reg-20250331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/910606/000095017025062596/reg-20250331.htm",
+          "sha256": "22db5807d88b4ca655c3fb38e69b449c58158ac7987bd68e7eb5a9bd26575dd9",
+          "bytes": 4805773,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:14.854Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000910606",
+      "registrant": "Regency Centers",
+      "accession": "0000950170-25-021359",
+      "form": "10-K",
+      "filingDate": "2025-02-14",
+      "reportDate": "2024-12-31",
+      "primaryDocument": "reg-20241231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000910606/000095017025021359/reg-20241231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/910606/000095017025021359/reg-20241231.htm",
+          "sha256": "258ea9e8d308170fbee09280b1951e87dbbc90979a4e55404bea6a3d4b455579",
+          "bytes": 21255149,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:15.242Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000910606",
+      "registrant": "Regency Centers",
+      "accession": "0000950170-24-120019",
+      "form": "10-Q",
+      "filingDate": "2024-11-01",
+      "reportDate": "2024-09-30",
+      "primaryDocument": "reg-20240930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000910606/000095017024120019/reg-20240930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/910606/000095017024120019/reg-20240930.htm",
+          "sha256": "aa9efc4dd8df21c6a10a934c9ec9cc9484249425475c7d166cf05e6423671810",
+          "bytes": 5343932,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:15.457Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000910606",
+      "registrant": "Regency Centers",
+      "accession": "0000950170-24-089720",
+      "form": "10-Q",
+      "filingDate": "2024-08-02",
+      "reportDate": "2024-06-30",
+      "primaryDocument": "reg-20240630.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000910606/000095017024089720/reg-20240630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/910606/000095017024089720/reg-20240630.htm",
+          "sha256": "daff59bd6c7c14039d563cc95e7baaea2678513fae5849719ce949b204c62eff",
+          "bytes": 5069000,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:15.759Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000910606",
+      "registrant": "Regency Centers",
+      "accession": "0000950170-24-052749",
+      "form": "10-Q",
+      "filingDate": "2024-05-03",
+      "reportDate": "2024-03-31",
+      "primaryDocument": "reg-20240331.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000910606/000095017024052749/reg-20240331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/910606/000095017024052749/reg-20240331.htm",
+          "sha256": "ba6e25341eba15a020fac43525b87fe3bd71ea36042962f15122d492dce9dd81",
+          "bytes": 3650778,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:16.043Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000910606",
+      "registrant": "Regency Centers",
+      "accession": "0000950170-24-016260",
+      "form": "10-K",
+      "filingDate": "2024-02-16",
+      "reportDate": "2023-12-31",
+      "primaryDocument": "reg-20231231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000910606/000095017024016260/reg-20231231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/910606/000095017024016260/reg-20231231.htm",
+          "sha256": "f80cbe24e368a5340581561db0809e8ba2716516c55395c275375e6ba0eee9ba",
+          "bytes": 15519329,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:16.396Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001289490",
+      "registrant": "Extra Space Storage",
+      "accession": "0001289490-25-000024",
+      "form": "10-Q",
+      "filingDate": "2025-10-31",
+      "reportDate": "2025-09-30",
+      "primaryDocument": "exr-20250930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001289490/000128949025000024/exr-20250930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1289490/000128949025000024/exr-20250930.htm",
+          "sha256": "75c5d18892294031be4bef542019f13237e5142dd34e91a97926ef7fc0f18c9e",
+          "bytes": 1930236,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:16.952Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001289490",
+      "registrant": "Extra Space Storage",
+      "accession": "0001289490-25-000011",
+      "form": "10-Q",
+      "filingDate": "2025-08-01",
+      "reportDate": "2025-06-30",
+      "primaryDocument": "exr-20250630.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001289490/000128949025000011/exr-20250630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1289490/000128949025000011/exr-20250630.htm",
+          "sha256": "8b5e216773318a674af1ed39dd858a6d98c9cd947404ae28029be8baba8dde6b",
+          "bytes": 1851960,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:17.252Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001289490",
+      "registrant": "Extra Space Storage",
+      "accession": "0001628280-25-021878",
+      "form": "10-Q",
+      "filingDate": "2025-05-02",
+      "reportDate": "2025-03-31",
+      "primaryDocument": "exr-20250331.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001289490/000162828025021878/exr-20250331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1289490/000162828025021878/exr-20250331.htm",
+          "sha256": "9dfce2c223fad10b231bac18a99124e18a00ff2f9b4ff40a4a0d0aae4571b213",
+          "bytes": 1483246,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:17.548Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001289490",
+      "registrant": "Extra Space Storage",
+      "accession": "0001628280-25-009060",
+      "form": "10-K",
+      "filingDate": "2025-02-28",
+      "reportDate": "2024-12-31",
+      "primaryDocument": "exr-20241231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001289490/000162828025009060/exr-20241231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1289490/000162828025009060/exr-20241231.htm",
+          "sha256": "a341d77819b3e8c9a71f29ab0c898d961ed30e8402a47813ebab2ff331a6df75",
+          "bytes": 2802189,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:17.855Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001289490",
+      "registrant": "Extra Space Storage",
+      "accession": "0001628280-24-045038",
+      "form": "10-Q",
+      "filingDate": "2024-11-04",
+      "reportDate": "2024-09-30",
+      "primaryDocument": "exr-20240930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001289490/000162828024045038/exr-20240930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1289490/000162828024045038/exr-20240930.htm",
+          "sha256": "8b50b46747c18b403a860f50f4edd878a66ceff45390143fbaf19132eb0bee49",
+          "bytes": 1876018,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:18.156Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001289490",
+      "registrant": "Extra Space Storage",
+      "accession": "0001628280-24-034445",
+      "form": "10-Q",
+      "filingDate": "2024-08-02",
+      "reportDate": "2024-06-30",
+      "primaryDocument": "exr-20240630.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0001289490/000162828024034445/exr-20240630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1289490/000162828024034445/exr-20240630.htm",
+          "sha256": "66f825ca9ee439d1b78dde603bca75dd4864be4d084c690b4a308aee91434040",
+          "bytes": 1781088,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:18.453Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001289490",
+      "registrant": "Extra Space Storage",
+      "accession": "0001628280-24-020317",
+      "form": "10-Q",
+      "filingDate": "2024-05-03",
+      "reportDate": "2024-03-31",
+      "primaryDocument": "exr-20240331.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0001289490/000162828024020317/exr-20240331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1289490/000162828024020317/exr-20240331.htm",
+          "sha256": "6fa4af94c2383d915d6394990a8a204e7712d68f3fe0a28f6cb3238839f2fe5e",
+          "bytes": 1429116,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:18.750Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001289490",
+      "registrant": "Extra Space Storage",
+      "accession": "0001628280-24-008044",
+      "form": "10-K",
+      "filingDate": "2024-02-29",
+      "reportDate": "2023-12-31",
+      "primaryDocument": "exr-20231231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001289490/000162828024008044/exr-20231231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1289490/000162828024008044/exr-20231231.htm",
+          "sha256": "bde07e92ce09403cfc1a65217fdcd3e759e022c8b7a278311a9f121d3a228b63",
+          "bytes": 2786774,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:19.056Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000920522",
+      "registrant": "Essex",
+      "accession": "0000920522-25-000082",
+      "form": "10-Q",
+      "filingDate": "2025-10-30",
+      "reportDate": "2025-09-30",
+      "primaryDocument": "ess-20250930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000920522/000092052225000082/ess-20250930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/920522/000092052225000082/ess-20250930.htm",
+          "sha256": "f546a36552653e00c01fa6605c0306e0f5db4f8e14f90b3bd187a33fb7253c64",
+          "bytes": 2307847,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:20.127Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000920522",
+      "registrant": "Essex",
+      "accession": "0000920522-25-000078",
+      "form": "10-Q",
+      "filingDate": "2025-07-30",
+      "reportDate": "2025-06-30",
+      "primaryDocument": "ess-20250630.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000920522/000092052225000078/ess-20250630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/920522/000092052225000078/ess-20250630.htm",
+          "sha256": "a21874fbe8b26e22f4f2135aca9f385892db7ee4b79e10a370c584ac0ba3c389",
+          "bytes": 2190406,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:20.439Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000920522",
+      "registrant": "Essex",
+      "accession": "0000920522-25-000040",
+      "form": "10-Q",
+      "filingDate": "2025-04-30",
+      "reportDate": "2025-03-31",
+      "primaryDocument": "ess-20250331.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000920522/000092052225000040/ess-20250331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/920522/000092052225000040/ess-20250331.htm",
+          "sha256": "96683ef384ec881c9b3d88de9fab87a819310834dd1d8ec7d7c7364a49de7b5b",
+          "bytes": 1594087,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:20.733Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000920522",
+      "registrant": "Essex",
+      "accession": "0000920522-25-000024",
+      "form": "10-K",
+      "filingDate": "2025-02-21",
+      "reportDate": "2024-12-31",
+      "primaryDocument": "ess-20241231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000920522/000092052225000024/ess-20241231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/920522/000092052225000024/ess-20241231.htm",
+          "sha256": "f323c1cc99ae7982e62245453241e7737e8b0d7d8cdcb4b3a6358c6c27b67190",
+          "bytes": 5707661,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:21.073Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000920522",
+      "registrant": "Essex",
+      "accession": "0000920522-24-000092",
+      "form": "10-Q",
+      "filingDate": "2024-10-30",
+      "reportDate": "2024-09-30",
+      "primaryDocument": "ess-20240930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000920522/000092052224000092/ess-20240930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/920522/000092052224000092/ess-20240930.htm",
+          "sha256": "e6cdc2022a45d98697f533a3f329d054b90cdb6750857ec95f0b5d70b2204377",
+          "bytes": 2125587,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:21.332Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000920522",
+      "registrant": "Essex",
+      "accession": "0000920522-24-000075",
+      "form": "10-Q",
+      "filingDate": "2024-07-31",
+      "reportDate": "2024-06-30",
+      "primaryDocument": "ess-20240630.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000920522/000092052224000075/ess-20240630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/920522/000092052224000075/ess-20240630.htm",
+          "sha256": "1fb850ca10e30bf41ee4bde0a8d1fc3570df7204125ab6d089377fe4b66e438b",
+          "bytes": 2054551,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:21.643Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000920522",
+      "registrant": "Essex",
+      "accession": "0000920522-24-000045",
+      "form": "10-Q",
+      "filingDate": "2024-05-01",
+      "reportDate": "2024-03-31",
+      "primaryDocument": "ess-20240331.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000920522/000092052224000045/ess-20240331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/920522/000092052224000045/ess-20240331.htm",
+          "sha256": "d0d50f8edbd258f23281e757320d31dfdc86ad7d203849459441e4785bd6702e",
+          "bytes": 1536893,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:21.964Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000920522",
+      "registrant": "Essex",
+      "accession": "0000920522-24-000033",
+      "form": "10-K",
+      "filingDate": "2024-02-23",
+      "reportDate": "2023-12-31",
+      "primaryDocument": "ess-20231231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000920522/000092052224000033/ess-20231231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/920522/000092052224000033/ess-20231231.htm",
+          "sha256": "895e4b55de81de107adb5a1fa47b7aab803c2d587cc85ee6505ec8cb43cce7c8",
+          "bytes": 5564356,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:22.255Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000912595",
+      "registrant": "Mid-America Apartment",
+      "accession": "0001193125-25-258570",
+      "form": "10-Q",
+      "filingDate": "2025-10-30",
+      "reportDate": "2025-09-30",
+      "primaryDocument": "maa-20250930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000912595/000119312525258570/maa-20250930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/912595/000119312525258570/maa-20250930.htm",
+          "sha256": "0a6a10cdd0b86d8cccea166fedeaa88ca44278853571833be8c457cc3a8fe52f",
+          "bytes": 4437621,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:23.186Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000912595",
+      "registrant": "Mid-America Apartment",
+      "accession": "0000950170-25-100919",
+      "form": "10-Q",
+      "filingDate": "2025-07-31",
+      "reportDate": "2025-06-30",
+      "primaryDocument": "maa-20250630.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000912595/000095017025100919/maa-20250630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/912595/000095017025100919/maa-20250630.htm",
+          "sha256": "dde27f72fca419b8ceababd9c3252e7dcd261c917e4526a0583f9e75d93e7df5",
+          "bytes": 4425112,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:24.244Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000912595",
+      "registrant": "Mid-America Apartment",
+      "accession": "0000950170-25-061849",
+      "form": "10-Q",
+      "filingDate": "2025-05-01",
+      "reportDate": "2025-03-31",
+      "primaryDocument": "maa-20250331.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000912595/000095017025061849/maa-20250331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/912595/000095017025061849/maa-20250331.htm",
+          "sha256": "36e25c6c044688b1aa1f1864296254fe3afb7378f3c4bc05018be5883caf9653",
+          "bytes": 2997933,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:24.656Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000912595",
+      "registrant": "Mid-America Apartment",
+      "accession": "0000950170-25-016287",
+      "form": "10-K",
+      "filingDate": "2025-02-07",
+      "reportDate": "2024-12-31",
+      "primaryDocument": "maa-20241231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000912595/000095017025016287/maa-20241231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/912595/000095017025016287/maa-20241231.htm",
+          "sha256": "a1e48e629d6437443c9fe0c084975c3a8d45984f57bfaddc4042ef327d43694c",
+          "bytes": 13435977,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:25.231Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000912595",
+      "registrant": "Mid-America Apartment",
+      "accession": "0000950170-24-119555",
+      "form": "10-Q",
+      "filingDate": "2024-10-31",
+      "reportDate": "2024-09-30",
+      "primaryDocument": "maa-20240930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000912595/000095017024119555/maa-20240930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/912595/000095017024119555/maa-20240930.htm",
+          "sha256": "7d44bc9decc26c03b5ceedd3b38dbc0866123e312256d7c2fd5986ff465be46f",
+          "bytes": 3477741,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:25.921Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000912595",
+      "registrant": "Mid-America Apartment",
+      "accession": "0000950170-24-089308",
+      "form": "10-Q",
+      "filingDate": "2024-08-01",
+      "reportDate": "2024-06-30",
+      "primaryDocument": "maa-20240630.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000912595/000095017024089308/maa-20240630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/912595/000095017024089308/maa-20240630.htm",
+          "sha256": "bf99b4c010c5069910942a0fb1d5880b747cdd2c2974f46c0e755f1e87bd5303",
+          "bytes": 3402290,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:26.357Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000912595",
+      "registrant": "Mid-America Apartment",
+      "accession": "0000950170-24-052131",
+      "form": "10-Q",
+      "filingDate": "2024-05-02",
+      "reportDate": "2024-03-31",
+      "primaryDocument": "maa-20240331.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0000912595/000095017024052131/maa-20240331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/912595/000095017024052131/maa-20240331.htm",
+          "sha256": "c831aa7ad3883e2e99b9edea9b0cb8da646a1217c4aed36870048f8432dd4617",
+          "bytes": 2384880,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:27.067Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0000912595",
+      "registrant": "Mid-America Apartment",
+      "accession": "0000950170-24-013275",
+      "form": "10-K",
+      "filingDate": "2024-02-09",
+      "reportDate": "2023-12-31",
+      "primaryDocument": "maa-20231231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0000912595/000095017024013275/maa-20231231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/912595/000095017024013275/maa-20231231.htm",
+          "sha256": "2816dd1af452fcd443f638852aa8eb0d4aaf4ecbb4ee7a192bdcbca06d4fdfbd",
+          "bytes": 10357027,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:27.610Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001035443",
+      "registrant": "Alexandria",
+      "accession": "0001035443-25-000198",
+      "form": "10-Q",
+      "filingDate": "2025-10-27",
+      "reportDate": "2025-09-30",
+      "primaryDocument": "are-20250930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001035443/000103544325000198/are-20250930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1035443/000103544325000198/are-20250930.htm",
+          "sha256": "f1d4ad4795e70cf085e570664ad6c06a43d325f1a5f829823034c1218dd1598b",
+          "bytes": 10093824,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:28.664Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001035443",
+      "registrant": "Alexandria",
+      "accession": "0001035443-25-000179",
+      "form": "10-Q",
+      "filingDate": "2025-07-21",
+      "reportDate": "2025-06-30",
+      "primaryDocument": "are-20250630.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001035443/000103544325000179/are-20250630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1035443/000103544325000179/are-20250630.htm",
+          "sha256": "1b7e3d82fde3a92d1890e70784dfb7bdf7f610cef668894d5527274dcedc0593",
+          "bytes": 9370213,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:29.252Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001035443",
+      "registrant": "Alexandria",
+      "accession": "0001035443-25-000136",
+      "form": "10-Q",
+      "filingDate": "2025-04-28",
+      "reportDate": "2025-03-31",
+      "primaryDocument": "are-20250331.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001035443/000103544325000136/are-20250331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1035443/000103544325000136/are-20250331.htm",
+          "sha256": "30eaa20f3d4cea6e02c22bd03023e2a42db989642572cdd7a0926ff7953a50ba",
+          "bytes": 7706003,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:29.873Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001035443",
+      "registrant": "Alexandria",
+      "accession": "0001035443-25-000067",
+      "form": "10-K",
+      "filingDate": "2025-01-27",
+      "reportDate": "2024-12-31",
+      "primaryDocument": "are-20241231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001035443/000103544325000067/are-20241231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1035443/000103544325000067/are-20241231.htm",
+          "sha256": "006577c37e283113581b0db6a49075a7f1b1fbbbe322d2f13a00d57751a5ada0",
+          "bytes": 14122345,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:30.641Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001035443",
+      "registrant": "Alexandria",
+      "accession": "0001035443-24-000298",
+      "form": "10-Q",
+      "filingDate": "2024-10-21",
+      "reportDate": "2024-09-30",
+      "primaryDocument": "are-20240930.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001035443/000103544324000298/are-20240930.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1035443/000103544324000298/are-20240930.htm",
+          "sha256": "656e60c85f4e42954bfb4b86d6ced06cdfc3789b4714d05af299a0169ada2e25",
+          "bytes": 9271703,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:31.093Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001035443",
+      "registrant": "Alexandria",
+      "accession": "0001035443-24-000225",
+      "form": "10-Q",
+      "filingDate": "2024-07-22",
+      "reportDate": "2024-06-30",
+      "primaryDocument": "are-20240630.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0001035443/000103544324000225/are-20240630.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1035443/000103544324000225/are-20240630.htm",
+          "sha256": "cae2791a144fcd3583878f3346a7b5c68806396707ec51887d59dc0b4eebb5ad",
+          "bytes": 8768230,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:31.483Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001035443",
+      "registrant": "Alexandria",
+      "accession": "0001035443-24-000158",
+      "form": "10-Q",
+      "filingDate": "2024-04-22",
+      "reportDate": "2024-03-31",
+      "primaryDocument": "are-20240331.htm",
+      "selected": false,
+      "files": [
+        {
+          "path": "0001035443/000103544324000158/are-20240331.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1035443/000103544324000158/are-20240331.htm",
+          "sha256": "8a60e8e8e03a3cc3c4153ded505db8a51846b53afa35554ad14eef97f7027002",
+          "bytes": 3591869,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:40.513Z",
+          "duplicateOf": null
+        }
+      ]
+    },
+    {
+      "cik": "0001035443",
+      "registrant": "Alexandria",
+      "accession": "0001035443-24-000072",
+      "form": "10-K",
+      "filingDate": "2024-01-29",
+      "reportDate": "2023-12-31",
+      "primaryDocument": "are-20231231.htm",
+      "selected": true,
+      "files": [
+        {
+          "path": "0001035443/000103544324000072/are-20231231.htm",
+          "role": "primary",
+          "exhibitHint": null,
+          "sourceUrl": "https://www.sec.gov/Archives/edgar/data/1035443/000103544324000072/are-20231231.htm",
+          "sha256": "3995e0069dc08f596ba707b778110daf581b8e2536b580030c7cd88970b57a95",
+          "bytes": 6495560,
+          "mimeType": "text/html",
+          "fetchedAt": "2026-09-08T14:10:40.895Z",
+          "duplicateOf": null
+        }
+      ]
+    }
+  ]
+}

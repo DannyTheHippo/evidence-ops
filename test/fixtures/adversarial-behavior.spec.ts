@@ -34,7 +34,6 @@ import { CsvParser } from '../../src/features/evidence/ingestion/parsers/csv.par
 import { DocxParser } from '../../src/features/evidence/ingestion/parsers/docx.parser';
 import {
   HTML_MAX_BYTES,
-  HTML_MAX_NESTING_DEPTH,
   HtmlParser,
 } from '../../src/features/evidence/ingestion/parsers/html.parser';
 import { HostileArchiveException } from '../../src/features/evidence/ingestion/parsers/safe-zip';
@@ -359,14 +358,20 @@ describe('adversarial fixture parser behaviour', () => {
     );
   });
 
-  it('a paragraph nested 5,000 <div> deep refuses at the depth scan, naming the cap', async () => {
+  // Inside `HTML_MAX_NESTING_DEPTH`, so this parses: the bound sits above the depth real filings
+  // reach, and refusal past it is exercised in memory by `html.parser.spec.ts` rather than by a
+  // committed fixture over half a megabyte. What this fixture still proves is that the walk is
+  // iterative — a recursive one overflows the stack an order of magnitude shallower than this.
+  it('a paragraph nested 5,000 <div> deep parses through an iterative walk', async () => {
     const buffer = await readFixture('nested-tags.html');
     const outcome = await observe('nested-tags.html', htmlParser, buffer);
     observations.push(outcome);
 
-    expect(outcome.result).toBe('threw');
-    await expect(htmlParser.parse(buffer)).rejects.toBeInstanceOf(MalformedHtmlException);
-    await expect(htmlParser.parse(buffer)).rejects.toThrow(new RegExp(`${HTML_MAX_NESTING_DEPTH}`));
+    expect(outcome.result).toBe('parsed');
+    const parsed = await htmlParser.parse(buffer);
+    expect(parsed.elements.map((element) => element.text)).toContain(
+      'Deeply nested paragraph text.',
+    );
   });
 
   it('never-closed <li> items and a trailing never-closed <p> still recover into one block each', async () => {

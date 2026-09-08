@@ -131,4 +131,25 @@ describe('buildWorksheet', () => {
   it('says none when the gate accepted no citation', () => {
     expect(buildWorksheet(makeInput())).toContain('**Citations the gate accepted:** none');
   });
+
+  it('prints the draft window under a claim drafted from a windowed document', () => {
+    const worksheet = buildWorksheet(
+      makeInput({
+        sampled: [
+          makeOutcome({
+            claimId: 'c002',
+            verdict: 'not_grounded',
+            sourceFilename: 'om.pdf',
+            draftWindow: { chunkCount: 5, tokenCount: 50_000, documentTokenCount: 80_000 },
+          }),
+        ],
+      }),
+    );
+
+    expect(worksheet).toContain('- **Draft window:** 50000 of 80000 tokens');
+  });
+
+  it('omits the draft window line for a claim drafted from the whole document', () => {
+    expect(buildWorksheet(makeInput())).not.toContain('- **Draft window:**');
+  });
 });

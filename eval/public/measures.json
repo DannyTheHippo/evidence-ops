@@ -1,0 +1,296 @@
+[
+  {
+    "slug": "total_revenues",
+    "label": "Total Revenues",
+    "aliases": ["Total revenues", "Total revenue", "Revenues"],
+    "valueType": "currency",
+    "canonicalUnit": "usd",
+    "units": [
+      { "id": "usd", "toCanonicalFactor": 1 },
+      { "id": "usd_thousands", "toCanonicalFactor": 1000 },
+      { "id": "usd_millions", "toCanonicalFactor": 1000000 }
+    ],
+    "toleranceKind": "relative",
+    "tolerance": 0.005,
+    "status": "confirmed",
+    "origin": "manual"
+  },
+  {
+    "slug": "rental_revenue",
+    "label": "Rental Revenue",
+    "aliases": [
+      "Rental revenue",
+      "Rental and other property revenues",
+      "Rental income",
+      "Minimum rents"
+    ],
+    "valueType": "currency",
+    "canonicalUnit": "usd",
+    "units": [
+      { "id": "usd", "toCanonicalFactor": 1 },
+      { "id": "usd_thousands", "toCanonicalFactor": 1000 },
+      { "id": "usd_millions", "toCanonicalFactor": 1000000 }
+    ],
+    "toleranceKind": "relative",
+    "tolerance": 0.005,
+    "status": "confirmed",
+    "origin": "manual"
+  },
+  {
+    "slug": "net_income",
+    "label": "Net Income",
+    "aliases": [
+      "Net income",
+      "Net income (loss)",
+      "Net income attributable to common stockholders"
+    ],
+    "valueType": "currency",
+    "canonicalUnit": "usd",
+    "units": [
+      { "id": "usd", "toCanonicalFactor": 1 },
+      { "id": "usd_thousands", "toCanonicalFactor": 1000 },
+      { "id": "usd_millions", "toCanonicalFactor": 1000000 }
+    ],
+    "toleranceKind": "relative",
+    "tolerance": 0.005,
+    "status": "confirmed",
+    "origin": "manual"
+  },
+  {
+    "slug": "total_assets",
+    "label": "Total Assets",
+    "aliases": ["Total assets"],
+    "valueType": "currency",
+    "canonicalUnit": "usd",
+    "units": [
+      { "id": "usd", "toCanonicalFactor": 1 },
+      { "id": "usd_thousands", "toCanonicalFactor": 1000 },
+      { "id": "usd_millions", "toCanonicalFactor": 1000000 }
+    ],
+    "toleranceKind": "relative",
+    "tolerance": 0.005,
+    "status": "confirmed",
+    "origin": "manual"
+  },
+  {
+    "slug": "total_liabilities",
+    "label": "Total Liabilities",
+    "aliases": ["Total liabilities"],
+    "valueType": "currency",
+    "canonicalUnit": "usd",
+    "units": [
+      { "id": "usd", "toCanonicalFactor": 1 },
+      { "id": "usd_thousands", "toCanonicalFactor": 1000 },
+      { "id": "usd_millions", "toCanonicalFactor": 1000000 }
+    ],
+    "toleranceKind": "relative",
+    "tolerance": 0.005,
+    "status": "confirmed",
+    "origin": "manual"
+  },
+  {
+    "slug": "stockholders_equity",
+    "label": "Stockholders' Equity",
+    "aliases": ["Total stockholders' equity", "Total equity", "Stockholders' equity"],
+    "valueType": "currency",
+    "canonicalUnit": "usd",
+    "units": [
+      { "id": "usd", "toCanonicalFactor": 1 },
+      { "id": "usd_thousands", "toCanonicalFactor": 1000 },
+      { "id": "usd_millions", "toCanonicalFactor": 1000000 }
+    ],
+    "toleranceKind": "relative",
+    "tolerance": 0.005,
+    "status": "confirmed",
+    "origin": "manual"
+  },
+  {
+    "slug": "total_debt",
+    "label": "Total Debt",
+    "aliases": ["Total debt", "Total indebtedness", "Long-term debt"],
+    "valueType": "currency",
+    "canonicalUnit": "usd",
+    "units": [
+      { "id": "usd", "toCanonicalFactor": 1 },
+      { "id": "usd_thousands", "toCanonicalFactor": 1000 },
+      { "id": "usd_millions", "toCanonicalFactor": 1000000 }
+    ],
+    "toleranceKind": "relative",
+    "tolerance": 0.005,
+    "status": "confirmed",
+    "origin": "manual"
+  },
+  {
+    "slug": "interest_expense",
+    "label": "Interest Expense",
+    "aliases": ["Interest expense"],
+    "valueType": "currency",
+    "canonicalUnit": "usd",
+    "units": [
+      { "id": "usd", "toCanonicalFactor": 1 },
+      { "id": "usd_thousands", "toCanonicalFactor": 1000 },
+      { "id": "usd_millions", "toCanonicalFactor": 1000000 }
+    ],
+    "toleranceKind": "relative",
+    "tolerance": 0.005,
+    "status": "confirmed",
+    "origin": "manual"
+  },
+  {
+    "slug": "depreciation_amortization",
+    "label": "Depreciation and Amortization",
+    "aliases": ["Depreciation and amortization", "Depreciation expense"],
+    "valueType": "currency",
+    "canonicalUnit": "usd",
+    "units": [
+      { "id": "usd", "toCanonicalFactor": 1 },
+      { "id": "usd_thousands", "toCanonicalFactor": 1000 },
+      { "id": "usd_millions", "toCanonicalFactor": 1000000 }
+    ],
+    "toleranceKind": "relative",
+    "tolerance": 0.005,
+    "status": "confirmed",
+    "origin": "manual"
+  },
+  {
+    "slug": "real_estate_net",
+    "label": "Real Estate Investments, Net",
+    "aliases": [
+      "Real estate investments, net",
+      "Total real estate investments, net",
+      "Investment in real estate, net"
+    ],
+    "valueType": "currency",
+    "canonicalUnit": "usd",
+    "units": [
+      { "id": "usd", "toCanonicalFactor": 1 },
+      { "id": "usd_thousands", "toCanonicalFactor": 1000 },
+      { "id": "usd_millions", "toCanonicalFactor": 1000000 }
+    ],
+    "toleranceKind": "relative",
+    "tolerance": 0.005,
+    "status": "confirmed",
+    "origin": "manual"
+  },
+  {
+    "slug": "real_estate_gross",
+    "label": "Real Estate Investments, at Cost",
+    "aliases": ["Real estate investments, at cost", "Investment in real estate, at cost"],
+    "valueType": "currency",
+    "canonicalUnit": "usd",
+    "units": [
+      { "id": "usd", "toCanonicalFactor": 1 },
+      { "id": "usd_thousands", "toCanonicalFactor": 1000 },
+      { "id": "usd_millions", "toCanonicalFactor": 1000000 }
+    ],
+    "toleranceKind": "relative",
+    "tolerance": 0.005,
+    "status": "confirmed",
+    "origin": "manual"
+  },
+  {
+    "slug": "cash_and_equivalents",
+    "label": "Cash and Cash Equivalents",
+    "aliases": ["Cash and cash equivalents"],
+    "valueType": "currency",
+    "canonicalUnit": "usd",
+    "units": [
+      { "id": "usd", "toCanonicalFactor": 1 },
+      { "id": "usd_thousands", "toCanonicalFactor": 1000 },
+      { "id": "usd_millions", "toCanonicalFactor": 1000000 }
+    ],
+    "toleranceKind": "relative",
+    "tolerance": 0.005,
+    "status": "confirmed",
+    "origin": "manual"
+  },
+  {
+    "slug": "operating_cash_flow",
+    "label": "Cash Flow from Operations",
+    "aliases": [
+      "Net cash provided by operating activities",
+      "Cash flows from operating activities"
+    ],
+    "valueType": "currency",
+    "canonicalUnit": "usd",
+    "units": [
+      { "id": "usd", "toCanonicalFactor": 1 },
+      { "id": "usd_thousands", "toCanonicalFactor": 1000 },
+      { "id": "usd_millions", "toCanonicalFactor": 1000000 }
+    ],
+    "toleranceKind": "relative",
+    "tolerance": 0.005,
+    "status": "confirmed",
+    "origin": "manual"
+  },
+  {
+    "slug": "dividends_per_share",
+    "label": "Dividends Declared per Common Share",
+    "aliases": ["Dividends declared per common share", "Dividends per share"],
+    "valueType": "currency",
+    "canonicalUnit": "usd_per_share",
+    "units": [{ "id": "usd_per_share", "toCanonicalFactor": 1 }],
+    "toleranceKind": "relative",
+    "tolerance": 0.005,
+    "status": "confirmed",
+    "origin": "manual"
+  },
+  {
+    "slug": "eps_diluted",
+    "label": "Diluted Earnings per Share",
+    "aliases": [
+      "Diluted earnings per share",
+      "Earnings per share - diluted",
+      "Net income per diluted share"
+    ],
+    "valueType": "currency",
+    "canonicalUnit": "usd_per_share",
+    "units": [{ "id": "usd_per_share", "toCanonicalFactor": 1 }],
+    "toleranceKind": "relative",
+    "tolerance": 0.005,
+    "status": "confirmed",
+    "origin": "manual"
+  },
+  {
+    "slug": "diluted_shares",
+    "label": "Diluted Weighted Average Shares Outstanding",
+    "aliases": ["Weighted average diluted shares outstanding", "Diluted weighted average shares"],
+    "valueType": "count",
+    "canonicalUnit": "shares",
+    "units": [
+      { "id": "shares", "toCanonicalFactor": 1 },
+      { "id": "shares_thousands", "toCanonicalFactor": 1000 }
+    ],
+    "toleranceKind": "relative",
+    "tolerance": 0.005,
+    "status": "confirmed",
+    "origin": "manual"
+  },
+  {
+    "slug": "property_count",
+    "label": "Property Count",
+    "aliases": ["Number of properties", "Total properties"],
+    "valueType": "count",
+    "canonicalUnit": "properties",
+    "units": [{ "id": "properties", "toCanonicalFactor": 1 }],
+    "toleranceKind": "relative",
+    "tolerance": 0.005,
+    "status": "confirmed",
+    "origin": "manual"
+  },
+  {
+    "slug": "rentable_area",
+    "label": "Total Rentable Square Feet",
+    "aliases": ["Total rentable square feet", "Rentable square feet"],
+    "valueType": "area",
+    "canonicalUnit": "sf",
+    "units": [
+      { "id": "sf", "toCanonicalFactor": 1 },
+      { "id": "thousand_sf", "toCanonicalFactor": 1000 }
+    ],
+    "toleranceKind": "relative",
+    "tolerance": 0.005,
+    "status": "confirmed",
+    "origin": "manual"
+  }
+]

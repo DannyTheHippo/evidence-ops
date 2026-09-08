@@ -303,6 +303,69 @@ describe('computeMetrics', () => {
     expect(computeMetrics(results).ledgerGateSurvivalRate).toBe(0);
   });
 
+  it('should compute answer rate over answerable cases only', () => {
+    const results: CaseResult[] = [
+      makeCase({ id: 'ans-001', category: 'answerable', actualOutcomeKind: 'answered' }),
+      makeCase({
+        id: 'ans-002',
+        category: 'answerable',
+        actualOutcomeKind: 'insufficient_evidence',
+      }),
+      // A correct unanswerable case must not inflate the answerable-only denominator.
+      makeCase({
+        id: 'una-001',
+        category: 'unanswerable',
+        actualOutcomeKind: 'insufficient_evidence',
+      }),
+    ];
+
+    expect(computeMetrics(results).answerRate).toBeCloseTo(0.5);
+  });
+
+  it('should return 0 answer rate when there are no answerable cases', () => {
+    const results: CaseResult[] = [makeCase({ id: 'una-001', category: 'unanswerable' })];
+
+    expect(computeMetrics(results).answerRate).toBe(0);
+  });
+
+  it('should leave retrieval latency undefined when no case carries retrievalMs', () => {
+    const results: CaseResult[] = [makeCase({ id: 'ans-001', category: 'answerable' })];
+
+    expect(computeMetrics(results).retrievalLatency).toBeUndefined();
+  });
+
+  it('should leave retrieval latency undefined when only some cases carry retrievalMs', () => {
+    const results: CaseResult[] = [
+      makeCase({ id: 'ans-001', category: 'answerable', retrievalMs: 100 }),
+      makeCase({ id: 'ans-002', category: 'answerable' }),
+    ];
+
+    expect(computeMetrics(results).retrievalLatency).toBeUndefined();
+  });
+
+  it('should compute nearest-rank p50/p95 over a single sample as that sample', () => {
+    const results: CaseResult[] = [
+      makeCase({ id: 'ans-001', category: 'answerable', retrievalMs: 42 }),
+    ];
+
+    expect(computeMetrics(results).retrievalLatency).toEqual({ p50Ms: 42, p95Ms: 42 });
+  });
+
+  it('should compute nearest-rank p50/p95 over twenty samples', () => {
+    // 1..20 ms, in reverse input order — nearest-rank sorts before ranking, so the input order
+    // must not matter.
+    const results: CaseResult[] = Array.from({ length: 20 }, (_, index) =>
+      makeCase({
+        id: `ans-${String(20 - index).padStart(3, '0')}`,
+        category: 'answerable',
+        retrievalMs: 20 - index,
+      }),
+    );
+
+    // p50: ceil(0.50 * 20) = 10th smallest = 10. p95: ceil(0.95 * 20) = 19th smallest = 19.
+    expect(computeMetrics(results).retrievalLatency).toEqual({ p50Ms: 10, p95Ms: 19 });
+  });
+
   it('should count every category, including zero-count ones', () => {
     const results: CaseResult[] = [
       makeCase({ id: 'ans-001', category: 'answerable' }),

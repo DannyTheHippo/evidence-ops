@@ -175,6 +175,7 @@ async function buildRetrievedOverlaps(
   observation: VarianceCaseRun,
   evalCase: EvalCase,
   corpusChunkById: ReadonlyMap<string, OverlapCandidateChunk>,
+  corpusDir?: string,
 ): Promise<readonly boolean[]> {
   // Mirrors `eval/run.ts`'s own `hasGroundTruth` gate: a case with no expected locator has nothing
   // to score recall against, and an empty array (not a run of `false`s) is what keeps it out of
@@ -184,7 +185,11 @@ async function buildRetrievedOverlaps(
   }
   return Promise.all(
     observation.retrievedChunkIds.map((chunkId) =>
-      chunkOverlapsAnyLocator(resolveChunk(chunkId, corpusChunkById), evalCase.expectedLocators),
+      chunkOverlapsAnyLocator(
+        resolveChunk(chunkId, corpusChunkById),
+        evalCase.expectedLocators,
+        corpusDir,
+      ),
     ),
   );
 }
@@ -201,6 +206,7 @@ export async function computeRecallForPass(
   observations: readonly VarianceCaseRun[],
   cases: readonly EvalCase[],
   corpusChunkById: ReadonlyMap<string, OverlapCandidateChunk>,
+  corpusDir?: string,
 ): Promise<RecallByPass> {
   const caseById = new Map(cases.map((evalCase) => [evalCase.id, evalCase]));
   const runObservations = observations.filter((observation) => observation.runIndex === runIndex);
@@ -218,7 +224,12 @@ export async function computeRecallForPass(
         id: evalCase.id,
         category: evalCase.category,
         actualOutcomeKind: observation.outcomeKind,
-        retrievedOverlaps: await buildRetrievedOverlaps(observation, evalCase, corpusChunkById),
+        retrievedOverlaps: await buildRetrievedOverlaps(
+          observation,
+          evalCase,
+          corpusChunkById,
+          corpusDir,
+        ),
         citationOverlaps: [],
         canaryOwnVoiceLeaked: false,
         canaryVerifiedQuoteLeaked: false,
@@ -262,6 +273,7 @@ export async function findUnmatchedLocators(
   observations: readonly VarianceCaseRun[],
   cases: readonly EvalCase[],
   corpusChunkById: ReadonlyMap<string, OverlapCandidateChunk>,
+  corpusDir?: string,
 ): Promise<readonly UnmatchedLocator[]> {
   const retrievedChunkIdsByCaseId = new Map<string, Set<string>>();
   for (const observation of observations) {
@@ -279,7 +291,7 @@ export async function findUnmatchedLocators(
 
     for (const locator of evalCase.expectedLocators) {
       const matches = await Promise.all(
-        chunks.map((chunk) => chunkOverlapsLocator(chunk, locator)),
+        chunks.map((chunk) => chunkOverlapsLocator(chunk, locator, corpusDir)),
       );
       if (!matches.some(Boolean)) {
         unmatched.push({ caseId: evalCase.id, locator });
@@ -302,6 +314,7 @@ export async function recallFromVariance(
   observations: readonly VarianceCaseRun[],
   cases: readonly EvalCase[],
   corpusChunkById: ReadonlyMap<string, OverlapCandidateChunk>,
+  corpusDir?: string,
 ): Promise<RecallFromVarianceResult> {
   assertEveryCaseObserved(cases, observations);
   assertRetrievedChunksResolve(observations, corpusChunkById);
@@ -311,11 +324,16 @@ export async function recallFromVariance(
   );
   const byPass = await Promise.all(
     runIndexes.map((runIndex) =>
-      computeRecallForPass(runIndex, observations, cases, corpusChunkById),
+      computeRecallForPass(runIndex, observations, cases, corpusChunkById, corpusDir),
     ),
   );
 
-  const unmatchedLocators = await findUnmatchedLocators(observations, cases, corpusChunkById);
+  const unmatchedLocators = await findUnmatchedLocators(
+    observations,
+    cases,
+    corpusChunkById,
+    corpusDir,
+  );
 
   return {
     byPass,

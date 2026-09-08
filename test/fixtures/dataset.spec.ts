@@ -108,6 +108,8 @@ const locatorKey = (locator: Locator): string => {
       return `${locator.file}#${locator.page}`;
     case 'docx-paragraph':
       return `${locator.file}¶${locator.paragraphIndex}`;
+    case 'text-block':
+      return `${locator.file}§${locator.blockIndex}`;
   }
 };
 

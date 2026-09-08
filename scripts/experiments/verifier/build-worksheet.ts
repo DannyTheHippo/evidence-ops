@@ -94,12 +94,18 @@ function buildCitationSection(outcome: ClaimOutcome, context: ClaimContext | und
 }
 
 function buildClaimSection(outcome: ClaimOutcome, context: ClaimContext | undefined): string {
+  const { draftWindow } = outcome;
   return [
     `### claim ${outcome.claimId}`,
     '',
     `- **Verdict:** ${outcome.verdict}`,
     `- **Reason code:** ${outcome.reasonCode ?? 'none'}`,
     `- **Drafted from:** ${outcome.sourceFilename}`,
+    ...(draftWindow === undefined
+      ? []
+      : [
+          `- **Draft window:** ${draftWindow.tokenCount} of ${draftWindow.documentTokenCount} tokens`,
+        ]),
     '',
     '**Claim**',
     '',

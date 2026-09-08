@@ -104,7 +104,7 @@
     {
       "path": "nested-tags.html",
       "sha256": "b04b7d2d23e9a78f199b725f275c028f1c52525b2ab0c47a9d148e758660832c",
-      "description": "One paragraph wrapped in 5,000 levels of nested <div>."
+      "description": "One paragraph wrapped in 5,000 levels of nested <div> — deep enough to need an iterative walk, inside the depth bound so it parses."
     },
     {
       "path": "ragged-table.html",

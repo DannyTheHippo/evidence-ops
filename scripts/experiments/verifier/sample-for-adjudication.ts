@@ -9,7 +9,7 @@ export const MAX_ADJUDICATION_SAMPLE = 20;
  * reproducible draw recorded alongside its seed, not statistical quality — and the drawn claim ids
  * are persisted with the sample, so a run stays reproducible even if this generator is replaced.
  */
-function createRandom(seed: number): () => number {
+export function createSeededRandom(seed: number): () => number {
   let state = seed >>> 0;
   return () => {
     state = (state + 0x6d2b79f5) >>> 0;
@@ -37,7 +37,7 @@ export function sampleForAdjudication(
   }
 
   const indices = population.map((_, index) => index);
-  const random = createRandom(seed);
+  const random = createSeededRandom(seed);
   for (let index = indices.length - 1; index > 0; index -= 1) {
     const swapWith = Math.floor(random() * (index + 1));
     [indices[index], indices[swapWith]] = [indices[swapWith], indices[index]];

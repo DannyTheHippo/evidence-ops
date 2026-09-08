@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { conflictValuesOverlapExpectedLocators } from '../../../eval/metrics/conflict-scope-check';
 import {
@@ -113,5 +114,43 @@ describe('conflictValuesOverlapExpectedLocators', () => {
     );
 
     expect(result).toBe(false);
+  });
+
+  // Regression: without forwarding `corpusDir` down to `chunkOverlapsAnyLocator`, this would try
+  // to read 'sample.htm' from the default fixtures/data-room corpus, where it does not exist, and
+  // reject instead of resolving — proving the parameter reaches the text-containment fallback.
+  it('should forward an explicit corpusDir through to the text-containment resolution', async () => {
+    const corpusDir = await mkdtemp(path.join(tmpdir(), 'conflict-scope-check-'));
+    try {
+      await writeFile(
+        path.join(corpusDir, 'sample.htm'),
+        '<html><body><p>Alpha unique marker qwerty123</p></body></html>',
+      );
+      const chunk = {
+        filename: 'sample.htm',
+        text: 'Alpha unique marker qwerty123',
+        locator: {
+          kind: 'text-block' as const,
+          blockIndex: 0,
+          headingPath: [],
+          extractorVersion: 'v1',
+        },
+      };
+      const chunkById = new Map([['value', chunk]]);
+      const publicExpectedLocators: Locator[] = [
+        { kind: 'text-block', file: 'sample.htm', blockIndex: 0 },
+      ];
+
+      const result = await conflictValuesOverlapExpectedLocators(
+        ['value'],
+        (chunkId) => chunkById.get(chunkId),
+        publicExpectedLocators,
+        corpusDir,
+      );
+
+      expect(result).toBe(true);
+    } finally {
+      await rm(corpusDir, { recursive: true, force: true });
+    }
   });
 });

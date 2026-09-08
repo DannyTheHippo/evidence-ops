@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import type { EvalCase, Locator } from '../../../eval/dataset/schema';
 import type { OverlapCandidateChunk } from '../../../eval/metrics/locator-overlap';
 import { resolveLocatorText } from '../../../eval/resolve-locator';
@@ -345,5 +348,45 @@ describe('text-containment scoring (chunk carries no retained elements)', () => 
     const { recall } = await computeRecallForPass(1, observations, cases, corpusChunkById);
 
     expect(recall.recallAt5).toBe(1);
+  });
+
+  // Regression: without forwarding `corpusDir` through `computeRecallForPass` ->
+  // `buildRetrievedOverlaps` -> `chunkOverlapsAnyLocator`, this would try to read 'sample.htm' from
+  // the default fixtures/data-room corpus, where it does not exist, and reject instead of
+  // resolving.
+  it('should score a hit resolved from an explicit corpusDir', async () => {
+    const corpusDir = await mkdtemp(path.join(tmpdir(), 'recall-from-observations-'));
+    try {
+      await writeFile(
+        path.join(corpusDir, 'sample.htm'),
+        '<html><body><p>Alpha unique marker qwerty123</p></body></html>',
+      );
+      const locator: Locator = { kind: 'text-block', file: 'sample.htm', blockIndex: 0 };
+      const corpusChunkById = buildCorpusChunkById(
+        [
+          {
+            _id: 'c1',
+            text: 'Alpha unique marker qwerty123',
+            locator: { kind: 'text-block', blockIndex: 0, headingPath: [], extractorVersion: 'v1' },
+            documentVersionId: 'dv1',
+          },
+        ],
+        new Map([['dv1', 'sample.htm']]),
+      );
+      const cases = [evalCase('ans-001', [locator])];
+      const observations = [observation('ans-001', 1, ['c1'])];
+
+      const { recall } = await computeRecallForPass(
+        1,
+        observations,
+        cases,
+        corpusChunkById,
+        corpusDir,
+      );
+
+      expect(recall.recallAt5).toBe(1);
+    } finally {
+      await rm(corpusDir, { recursive: true, force: true });
+    }
   });
 });

@@ -1,10 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { CsvParser } from '../src/features/evidence/ingestion/parsers/csv.parser';
-import { DocxParser } from '../src/features/evidence/ingestion/parsers/docx.parser';
 import type { ParsedElement } from '../src/features/evidence/ingestion/parsers/parsed-element.type';
-import { PdfParser } from '../src/features/evidence/ingestion/parsers/pdf.parser';
-import { XlsxParser } from '../src/features/evidence/ingestion/parsers/xlsx.parser';
+import { parserForFile } from './parser-for-file';
 import type { Locator } from './dataset/schema';
 
 export const DATA_ROOM_DIR = path.join(__dirname, '../fixtures/data-room');
@@ -18,31 +15,27 @@ export const DATA_ROOM_DIR = path.join(__dirname, '../fixtures/data-room');
  * page) both agreed, both were wrong, and every test stayed green. The only authority on what a
  * document contains is the document.
  *
- * Parsing is cached per file: a 32-case dataset otherwise re-parses the same four fixtures dozens
- * of times.
+ * Parsing is cached per `${corpusDir}:${file}`: a 32-case dataset otherwise re-parses the same four
+ * fixtures dozens of times, and the corpus dir is part of the key because the same filename can
+ * exist under more than one lane's corpus (each lane's own tenant).
  */
 const cache = new Map<string, Promise<readonly ParsedElement[]>>();
 
-function parseFixture(file: string): Promise<readonly ParsedElement[]> {
-  const cached = cache.get(file);
+function parseFixture(corpusDir: string, file: string): Promise<readonly ParsedElement[]> {
+  const cacheKey = `${corpusDir}:${file}`;
+  const cached = cache.get(cacheKey);
   if (cached) {
     return cached;
   }
 
   const pending = (async (): Promise<readonly ParsedElement[]> => {
-    const content = await readFile(path.join(DATA_ROOM_DIR, file));
-    const parser = file.endsWith('.pdf')
-      ? new PdfParser()
-      : file.endsWith('.docx')
-        ? new DocxParser()
-        : file.endsWith('.csv')
-          ? new CsvParser(',', ['text/csv'])
-          : new XlsxParser();
+    const content = await readFile(path.join(corpusDir, file));
+    const parser = parserForFile(file);
 
     return (await parser.parse(content)).elements;
   })();
 
-  cache.set(file, pending);
+  cache.set(cacheKey, pending);
   return pending;
 }
 
@@ -82,10 +75,14 @@ export function addressMatches(spec: string, cell: string): boolean {
 /**
  * Every parsed element the locator covers. A range locator legitimately covers many elements; a
  * locator covering none is a broken case, and callers should treat an empty result as a failure
- * rather than as "no match".
+ * rather than as "no match". `corpusDir` defaults to the synthetic lane's fixtures — the benchmark
+ * and public lanes pass their own (`LaneConfig.corpusDir`, `eval/lanes.ts`).
  */
-export async function resolveLocatorElements(locator: Locator): Promise<readonly ParsedElement[]> {
-  const elements = await parseFixture(locator.file);
+export async function resolveLocatorElements(
+  locator: Locator,
+  corpusDir: string = DATA_ROOM_DIR,
+): Promise<readonly ParsedElement[]> {
+  const elements = await parseFixture(corpusDir, locator.file);
 
   switch (locator.kind) {
     case 'pdf-page':
@@ -105,11 +102,20 @@ export async function resolveLocatorElements(locator: Locator): Promise<readonly
           element.locator.sheetName === locator.sheet &&
           addressMatches(locator.cell, element.locator.cell),
       );
+    case 'text-block':
+      return elements.filter(
+        (element) =>
+          element.locator.kind === 'text-block' &&
+          element.locator.blockIndex === locator.blockIndex,
+      );
   }
 }
 
 /** The concatenated text a locator points at, for substring assertions. */
-export async function resolveLocatorText(locator: Locator): Promise<string> {
-  const elements = await resolveLocatorElements(locator);
+export async function resolveLocatorText(
+  locator: Locator,
+  corpusDir: string = DATA_ROOM_DIR,
+): Promise<string> {
+  const elements = await resolveLocatorElements(locator, corpusDir);
   return elements.map((element) => element.text).join('\n');
 }

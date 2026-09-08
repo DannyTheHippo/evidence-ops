@@ -1,4 +1,5 @@
 import type { EvalCategory, EvalOutcome } from './dataset/schema';
+import type { EvalLane } from './lanes';
 import type { BaselineComparison } from './metrics/compare-baseline';
 import type { CaseOutcomeKind, EvalMetrics } from './metrics/compute-metrics';
 import type { EvalCacheMode } from './bootstrap';
@@ -48,15 +49,107 @@ export interface ScoringMethodSplit {
   readonly textContainmentChunks: number;
 }
 
+/** Every `EvalMetrics` leaf a lane's `bars.json` can register a hard bar against — the public
+ * lane's counterpart to the synthetic lane's fixed floor constants below, sourced from a tracked
+ * file instead so the bound and its provenance (`LaneBars.registeredIn`) travel together. */
+export type BarMetric =
+  | 'recallAt5'
+  | 'recallAt10'
+  | 'mrr'
+  | 'citationPrecision'
+  | 'claimCoverageMean'
+  | 'abstentionAccuracy'
+  | 'conflictRecall'
+  | 'conflictScopeAccuracy'
+  | 'answerContentAccuracy'
+  | 'answerRate'
+  | 'canaryOwnVoiceLeakRate';
+
+/** The shape of a lane's tracked `bars.json` — `eval/public/bars.json` for the public lane. */
+export interface LaneBars {
+  /** Path to the ADR that pre-registered these bounds (`docs/adr/0031-…`) — carried so a reader of
+   * a result file can trace a bound back to where it was fixed, before any run existed to tempt it. */
+  readonly registeredIn: string;
+  readonly hard: Partial<Record<BarMetric, { readonly min?: number; readonly max?: number }>>;
+  /** Metrics measured on this lane but not gated by it — printed in the report, never checked
+   * against a bound. */
+  readonly reported: readonly string[];
+  readonly datasetMinimums: Record<string, number>;
+}
+
+export interface BarOutcome {
+  readonly metric: BarMetric;
+  readonly observed: number;
+  readonly bound: { readonly min?: number; readonly max?: number };
+  readonly met: boolean;
+}
+
+function barMetricValue(metrics: EvalMetrics, metric: BarMetric): number {
+  switch (metric) {
+    case 'recallAt5':
+      return metrics.retrieval.recallAt5;
+    case 'recallAt10':
+      return metrics.retrieval.recallAt10;
+    case 'mrr':
+      return metrics.retrieval.mrr;
+    case 'citationPrecision':
+      return metrics.citationPrecision;
+    case 'claimCoverageMean':
+      return metrics.claimCoverageMean;
+    case 'abstentionAccuracy':
+      return metrics.abstentionAccuracy;
+    case 'conflictRecall':
+      return metrics.conflictRecall;
+    case 'conflictScopeAccuracy':
+      return metrics.conflictScopeAccuracy;
+    case 'answerContentAccuracy':
+      return metrics.answerContentAccuracy;
+    case 'answerRate':
+      return metrics.answerRate;
+    case 'canaryOwnVoiceLeakRate':
+      return metrics.canaryOwnVoiceLeakRate;
+  }
+}
+
+/**
+ * Reads every hard bar in `bars.hard` against `metrics`, one `BarOutcome` per bar — the public
+ * lane's counterpart to the synthetic lane's fixed floors (`RECALL_AT_5_FLOOR` etc., below). A
+ * bound with both `min` and `max` absent can never fail to match `bars.json`'s own shape, but
+ * `met` is still computed generically rather than assuming one direction, so a future bar with
+ * only a `max` (a leak rate) and one with only a `min` (a recall floor) share the same evaluation.
+ */
+export function evaluateBars(metrics: EvalMetrics, bars: LaneBars): readonly BarOutcome[] {
+  return (Object.entries(bars.hard) as readonly [BarMetric, { min?: number; max?: number }][]).map(
+    ([metric, bound]) => {
+      const observed = barMetricValue(metrics, metric);
+      const met =
+        (bound.min === undefined || observed >= bound.min) &&
+        (bound.max === undefined || observed <= bound.max);
+      return { metric, observed, bound, met };
+    },
+  );
+}
+
+/** Whether any bar in `outcomes` was missed — the one predicate `eval/run.ts` sets
+ * `process.exitCode = 1` on for a lane scored against `bars.json`, and `buildMarkdownReport`'s
+ * "## Pre-registered bars" section reads for the same anti-drift reason `hasOwnVoiceLeak` etc. do. */
+export function hasMissedBar(outcomes: readonly BarOutcome[]): boolean {
+  return outcomes.some((outcome) => !outcome.met);
+}
+
 export interface EvalRunResult {
   readonly gitSha: string;
   readonly generatedAt: string;
+  readonly lane: EvalLane;
   readonly cacheMode: EvalCacheMode;
   /** sha256 over the tenant's sorted `evidence_chunks._id` values at run time — what a replay
    * asserts against the value recorded in `eval/cache/manifest.json` (see `run.ts`). Carried in
    * the JSON report as run provenance; not rendered into the markdown table, which is about case
    * outcomes, not cache bookkeeping. */
   readonly corpusFingerprint: string;
+  /** sha256 over the dataset file's bytes at run time — what a lane with a `datasetManifestPath`
+   * asserts against `manifest.json`'s `casesSha256` before any case runs (`eval/run.ts`). */
+  readonly datasetFingerprint: string;
   readonly metrics: EvalMetrics;
   readonly perCase: readonly PerCaseReport[];
   readonly scoringMethodSplit: ScoringMethodSplit;
@@ -65,6 +158,10 @@ export interface EvalRunResult {
    * against. */
   readonly baselineComparison?: BaselineComparison;
   readonly baselinePath?: string;
+  /** Present exactly on a lane with a `barsPath` (`eval/run.ts`'s `laneConfig`) — the outcome of
+   * every hard bar in that lane's tracked `bars.json` against this run's metrics. Absent on the
+   * synthetic lane, which gates on the fixed floors below instead. */
+  readonly barOutcomes?: readonly BarOutcome[];
 }
 
 const pct = (value: number): string => `${(value * 100).toFixed(1)}%`;
@@ -76,7 +173,7 @@ function metricsTable(metrics: EvalMetrics): string {
     `| ${label} | ${format(metrics)} |`;
   const tabularGroundedLabel = `**Tabular grounded rate (n=${metrics.tabularClaimCount}; hard gate vs. baseline)**`;
 
-  return [
+  const rows = [
     '| Metric | Value |',
     '| --- | --- |',
     row('**Recall@5 (hard gate, floor)**', (m) => `**${pct(m.retrieval.recallAt5)}**`),
@@ -86,6 +183,7 @@ function metricsTable(metrics: EvalMetrics): string {
     row('Mean claim coverage', (m) => pct(m.claimCoverageMean)),
     row('Abstention accuracy (unanswerable)', (m) => pct(m.abstentionAccuracy)),
     row('Conflict recall (conflicting)', (m) => pct(m.conflictRecall)),
+    row('Answer rate (answerable)', (m) => pct(m.answerRate)),
     row(
       '**Answer content accuracy (answerable, conflicting; hard gate, floor)**',
       (m) => `**${pct(m.answerContentAccuracy)}**`,
@@ -104,7 +202,14 @@ function metricsTable(metrics: EvalMetrics): string {
     row(tabularGroundedLabel, (m) => `**${pct(m.tabularGroundedRate)}**`),
     row('Coverage drop rate (informational, not gated)', (m) => pct(m.coverageDropRate)),
     row('Contradiction drop rate (informational, not gated)', (m) => pct(m.contradictionDropRate)),
-  ].join('\n');
+  ];
+
+  if (metrics.retrievalLatency) {
+    const { p50Ms, p95Ms } = metrics.retrievalLatency;
+    rows.push(row('Retrieval latency p50/p95 (ms)', () => `${p50Ms}/${p95Ms}`));
+  }
+
+  return rows.join('\n');
 }
 
 /** Renders the tri-state `boolean | null` the two measured-only checks carry: `-` for `null`
@@ -266,6 +371,24 @@ function baselineComparisonSection(result: EvalRunResult): string[] {
   ];
 }
 
+function formatBarBound(bound: { readonly min?: number; readonly max?: number }): string {
+  return [
+    bound.min === undefined ? undefined : `min=${bound.min}`,
+    bound.max === undefined ? undefined : `max=${bound.max}`,
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join(' ');
+}
+
+/** One MET/MISSED line per bar — the markdown counterpart to the `eval: bar …` lines
+ * `eval/run.ts` prints for the same `BarOutcome[]`. */
+function barOutcomeLine(outcome: BarOutcome): string {
+  return (
+    `- \`${outcome.metric}\`: ${outcome.met ? 'MET' : '**MISSED**'} — observed ` +
+    `${outcome.observed}, bound ${formatBarBound(outcome.bound)}`
+  );
+}
+
 export function buildMarkdownReport(result: EvalRunResult): string {
   const failing = failingCases(result.perCase);
   const caseCounts = result.metrics.caseCounts;
@@ -305,6 +428,28 @@ export function buildMarkdownReport(result: EvalRunResult): string {
       `${pct(RECALL_AT_5_FLOOR)} floor. See the Recall@5 row in the Metrics table.**`
     : 'Passed — recall@5 is at or above the floor.';
 
+  // A lane with `barOutcomes` (the public lane) is scored against pre-registered bars instead of
+  // the fixed floors above — the synthetic lane's own section is unchanged either way.
+  const gatesOrBarsSection: readonly string[] =
+    result.barOutcomes === undefined
+      ? [
+          '## Hard gates',
+          '',
+          failingLine,
+          '',
+          gateLine,
+          '',
+          quotedLine,
+          '',
+          answerContentLine,
+          '',
+          conflictScopeLine,
+          '',
+          recallAt5Line,
+          '',
+        ]
+      : ['## Pre-registered bars', '', ...result.barOutcomes.map(barOutcomeLine), ''];
+
   return [
     `# Eval run ${result.gitSha}`,
     '',
@@ -313,20 +458,7 @@ export function buildMarkdownReport(result: EvalRunResult): string {
     `Cases: ${caseCounts.total} (answerable ${caseCounts.answerable}, unanswerable ${caseCounts.unanswerable}, conflicting ${caseCounts.conflicting}, adversarial ${caseCounts.adversarial})`,
     `Failing cases: ${failing.length}`,
     '',
-    '## Hard gates',
-    '',
-    failingLine,
-    '',
-    gateLine,
-    '',
-    quotedLine,
-    '',
-    answerContentLine,
-    '',
-    conflictScopeLine,
-    '',
-    recallAt5Line,
-    '',
+    ...gatesOrBarsSection,
     '## Metrics',
     '',
     metricsTable(result.metrics),

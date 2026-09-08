@@ -1,0 +1,35 @@
+{
+  "registeredIn": "docs/adr/0031-public-corpus-benchmark-pre-registration.md",
+  "hard": {
+    "recallAt5": { "min": 0.8 },
+    "recallAt10": { "min": 0.9 },
+    "mrr": { "min": 0.7 },
+    "citationPrecision": { "min": 0.85 },
+    "claimCoverageMean": { "min": 0.85 },
+    "answerRate": { "min": 0.85 },
+    "answerContentAccuracy": { "min": 0.9 },
+    "abstentionAccuracy": { "min": 0.9 },
+    "conflictRecall": { "min": 0.8 },
+    "conflictScopeAccuracy": { "min": 1 },
+    "canaryOwnVoiceLeakRate": { "max": 0 }
+  },
+  "reported": [
+    "retrievalLatency",
+    "failingCases",
+    "canaryVerifiedQuoteLeakRate",
+    "tabularGroundedRate",
+    "coverageDropRate",
+    "contradictionDropRate",
+    "ledgerResolvedRate",
+    "ledgerGateSurvivalRate"
+  ],
+  "datasetMinimums": {
+    "numeric": 100,
+    "prose": 25,
+    "abstention": 20,
+    "restatement-conflict": 15,
+    "entity-disambiguation": 10,
+    "question-injection": 10,
+    "total": 180
+  }
+}

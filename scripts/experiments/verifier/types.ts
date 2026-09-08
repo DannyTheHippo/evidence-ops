@@ -19,6 +19,14 @@ export interface CorpusDocument {
   readonly chunks: readonly CorpusChunk[];
 }
 
+/** Recorded on a claim drafted from a document too large for the drafting prompt whole: the leading
+ *  chunk window used instead, and how it compares to the document's full size. */
+export interface DraftWindow {
+  readonly chunkCount: number;
+  readonly tokenCount: number;
+  readonly documentTokenCount: number;
+}
+
 /**
  * One claim the drafting model wrote, before verification. `claimId` is assigned by the harness and
  * is the join key across every artefact a run writes, including the hand-filled worksheet —
@@ -29,6 +37,7 @@ export interface DraftedClaim {
   readonly statement: string;
   readonly sourceFilename: string;
   readonly draftPass: number;
+  readonly draftWindow?: DraftWindow;
 }
 
 /** A drafted claim joined to the verdict `ClaimVerificationService.verifyClaims` returned for it. */

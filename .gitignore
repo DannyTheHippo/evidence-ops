@@ -33,6 +33,18 @@ logs
 /eval/results/*-dirty.json
 /eval/results/*-dirty.md
 
+# The public eval lane (`eval/run.ts`'s `--lane public`) fetches SEC EDGAR filings and ingests them
+# through the eval harness path — the fetched bytes, the XBRL companyfacts JSON, the ingest ledger
+# and every cache entry are excluded wholesale, the same confidentiality-boundary shape as the
+# benchmark lane above, so a re-fetch or a re-record can never land fetched filing content or a
+# model-response fixture in git history. Dataset, manifests and clean-sha results stay tracked
+# deliberately — the claims rewrite cites them.
+/eval/public/corpus/
+/eval/public/cache/
+/eval/public/results/*-dirty.json
+/eval/public/results/*-dirty.md
+/eval/public/results/verifier/**/cache/
+
 # Environment
 .env
 .env.local

@@ -78,6 +78,10 @@ export interface CaseResult {
    * synthesis path runs through (`outcome.kind !== 'insufficient_evidence'`) — `undefined`
    * whenever `ledgerResolved` is not `true`, since there was nothing for the gate to check. */
   readonly ledgerSurvived?: boolean;
+  /** Milliseconds spent in the scoring loop's `retrieveEvidence` call — `eval/run.ts` times this
+   * only on a lane with a `barsPath`, so it stays `undefined` on the synthetic lane. See
+   * `EvalMetrics.retrievalLatency`'s doc comment for why that matters. */
+  readonly retrievalMs?: number;
 }
 
 export interface RecallMetrics {
@@ -147,6 +151,16 @@ export interface EvalMetrics {
    * rules that belongs in `build-ledger-claim.ts`'s own parameterised tests, not a baseline
    * comparison over a fixed synthetic corpus. */
   readonly ledgerGateSurvivalRate: number;
+  /** Share of `answerable` cases whose actual outcome was `answered`, 0 when there are no
+   * answerable cases. Reported on every lane; gated on a lane with a `barsPath` via
+   * `eval/report.ts`'s `evaluateBars` rather than `GATED_METRICS` — the synthetic lane's
+   * `--compare` regression check is a separate mechanism from a lane's own hard bars. */
+  readonly answerRate: number;
+  /** Nearest-rank p50/p95 over `CaseResult.retrievalMs`, present only when every case in the run
+   * carries a value — i.e. only on a lane with a `barsPath`. Absent, not zero, on the synthetic
+   * lane: it never times retrieval, so this field is missing from its committed results rather
+   * than reporting a meaningless 0ms figure. */
+  readonly retrievalLatency?: { readonly p50Ms: number; readonly p95Ms: number };
   readonly caseCounts: {
     readonly total: number;
     readonly answerable: number;
@@ -260,6 +274,30 @@ function computeLedgerGateSurvivalRate(results: readonly CaseResult[]): number {
   return resolved.filter((result) => result.ledgerSurvived === true).length / resolved.length;
 }
 
+/** Nearest-rank percentile over an already-sorted ascending array: `Math.ceil` biases toward the
+ * next-higher observed value rather than interpolating between two, so a single-sample run returns
+ * that one value at every percentile and every returned figure is one the run actually observed. */
+function nearestRankPercentile(sortedAscending: readonly number[], percentile: number): number {
+  const rank = Math.min(
+    sortedAscending.length,
+    Math.max(1, Math.ceil((percentile / 100) * sortedAscending.length)),
+  );
+  return sortedAscending[rank - 1];
+}
+
+/** `undefined` unless every case carries `retrievalMs` — a partial set (a mixed corpus, or a lane
+ * that never times retrieval) would otherwise report a percentile computed over a silently smaller
+ * sample than `caseCounts.total` says. */
+function computeRetrievalLatency(
+  results: readonly CaseResult[],
+): { p50Ms: number; p95Ms: number } | undefined {
+  if (results.length === 0 || results.some((result) => result.retrievalMs === undefined)) {
+    return undefined;
+  }
+  const sorted = [...results].map((result) => result.retrievalMs as number).sort((a, b) => a - b);
+  return { p50Ms: nearestRankPercentile(sorted, 50), p95Ms: nearestRankPercentile(sorted, 95) };
+}
+
 export function computeMetrics(results: readonly CaseResult[]): EvalMetrics {
   const countOf = (category: EvalCategory): number =>
     results.filter((result) => result.category === category).length;
@@ -306,6 +344,12 @@ export function computeMetrics(results: readonly CaseResult[]): EvalMetrics {
     ),
     ledgerResolvedRate: computeLedgerResolvedRate(results),
     ledgerGateSurvivalRate: computeLedgerGateSurvivalRate(results),
+    answerRate: computeCategoryRate(
+      results,
+      'answerable',
+      (result) => result.actualOutcomeKind === 'answered',
+    ),
+    retrievalLatency: computeRetrievalLatency(results),
     caseCounts: {
       total: results.length,
       answerable: countOf('answerable'),

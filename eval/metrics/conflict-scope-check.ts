@@ -14,11 +14,15 @@ import type { Locator } from '../dataset/schema';
  * overlapping rather than throwing, so one malformed value fails the check instead of aborting the
  * case's scoring. An outcome with no values at all (never produced — `conflictingEvidenceOutcomeSchema`
  * requires at least two) is treated as failing rather than vacuously passing.
+ *
+ * `corpusDir` is forwarded to `chunkOverlapsAnyLocator` unchanged — see that function's own doc
+ * comment for why the benchmark and public lanes need it.
  */
 export async function conflictValuesOverlapExpectedLocators(
   sourceChunkIds: readonly string[],
   resolveChunk: (chunkId: string) => OverlapCandidateChunk | undefined,
   expectedLocators: readonly Locator[],
+  corpusDir?: string,
 ): Promise<boolean> {
   if (sourceChunkIds.length === 0) {
     return false;
@@ -29,7 +33,7 @@ export async function conflictValuesOverlapExpectedLocators(
       if (!chunk) {
         return false;
       }
-      return chunkOverlapsAnyLocator(chunk, expectedLocators);
+      return chunkOverlapsAnyLocator(chunk, expectedLocators, corpusDir);
     }),
   );
   return overlaps.every(Boolean);

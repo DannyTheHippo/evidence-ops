@@ -94,15 +94,15 @@ function rangesOverlap(rangeA: string, rangeB: string): boolean {
  * rectangle intersection between the dataset's cell-or-range and the chunk's declared range
  * (`rangesOverlap`, below) is exact and cheap.
  *
- * `pdf-page`/`docx-paragraph` takes one of two paths, chosen by whether `chunk.elements` is
- * populated:
+ * `pdf-page`/`docx-paragraph`/`text-block` each take one of two paths, chosen by whether
+ * `chunk.elements` is populated:
  *
  * - **With retained element locators** (a chunk read straight off `evidenceChunkModel`, carrying
- *   `EvidenceChunk.elements`): page/paragraph-index equality against *every* element the chunk
- *   spans, not only `chunk.locator`'s anchor — `chunker.ts`'s `anchorLocator` names only the
- *   chunk's *first* spanned element (see that function's doc comment), so equality against the
- *   anchor alone would silently undercount recall for exactly the multi-page/multi-paragraph
- *   chunks a token-budget window is likely to produce.
+ *   `EvidenceChunk.elements`): page/paragraph-index/block-index equality against *every* element
+ *   the chunk spans, not only `chunk.locator`'s anchor — `chunker.ts`'s `anchorLocator` names only
+ *   the chunk's *first* spanned element (see that function's doc comment), so equality against the
+ *   anchor alone would silently undercount recall for exactly the multi-page/multi-paragraph/
+ *   multi-block chunks a token-budget window is likely to produce.
  * - **Without them** (a chunk resolved through `RetrievedChunk`, which carries no per-element
  *   retention): this resolves the dataset locator's own text (the same parsers ingestion used, via
  *   `resolveLocatorText`) and checks whether that text is actually present in the chunk —
@@ -110,10 +110,15 @@ function rangesOverlap(rangeA: string, rangeB: string): boolean {
  *   citation's quote against its cited chunk, applied here to a whole element instead of a
  *   citation-length excerpt. A text-containment approximation of span overlap, not a byte-range
  *   intersection (see `docs/adr/0007-eval-replay-cache.md` for that bound).
+ *
+ * `corpusDir` defaults to the synthetic lane's fixtures (`resolveLocatorText`'s own default); the
+ * benchmark and public lanes pass their own so this text-containment path resolves against the
+ * right corpus.
  */
 export async function chunkOverlapsLocator(
   chunk: OverlapCandidateChunk,
   locator: Locator,
+  corpusDir?: string,
 ): Promise<boolean> {
   if (chunk.filename !== locator.file) {
     return false;
@@ -134,17 +139,23 @@ export async function chunkOverlapsLocator(
   if (locator.kind === 'docx-paragraph' && chunk.locator.kind !== 'docx-paragraph') {
     return false;
   }
+  if (locator.kind === 'text-block' && chunk.locator.kind !== 'text-block') {
+    return false;
+  }
 
   if (chunk.elements && chunk.elements.length > 0) {
     return chunk.elements.some((element) =>
       locator.kind === 'pdf-page'
         ? element.locator.kind === 'pdf-page' && element.locator.page === locator.page
-        : element.locator.kind === 'docx-paragraph' &&
-          element.locator.paragraphIndex === locator.paragraphIndex,
+        : locator.kind === 'docx-paragraph'
+          ? element.locator.kind === 'docx-paragraph' &&
+            element.locator.paragraphIndex === locator.paragraphIndex
+          : element.locator.kind === 'text-block' &&
+            element.locator.blockIndex === locator.blockIndex,
     );
   }
 
-  const expectedText = await resolveLocatorText(locator);
+  const expectedText = await resolveLocatorText(locator, corpusDir);
   if (expectedText.trim() === '') {
     return false;
   }
@@ -160,9 +171,10 @@ export async function chunkOverlapsLocator(
 export async function chunkOverlapsAnyLocator(
   chunk: OverlapCandidateChunk,
   locators: readonly Locator[],
+  corpusDir?: string,
 ): Promise<boolean> {
   for (const locator of locators) {
-    if (await chunkOverlapsLocator(chunk, locator)) {
+    if (await chunkOverlapsLocator(chunk, locator, corpusDir)) {
       return true;
     }
   }

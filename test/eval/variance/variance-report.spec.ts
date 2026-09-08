@@ -21,13 +21,19 @@ function caseRun(overrides: Partial<VarianceCaseRun> & Pick<VarianceCaseRun, 'ca
 
 function report(observations: readonly VarianceCaseRun[], runCount: number): VarianceRunResult {
   return {
-    gitSha: 'abc123-dirty',
+    baseGitSha: 'abc123',
+    datasetFingerprint: 'dataset-fingerprint',
     generatedAt: '2026-08-27T12:00:00.000Z',
     runCount,
     requestedRunCount: runCount,
     corpusFingerprint: 'fingerprint',
     modelCacheMode: 'off',
     embeddingCacheMode: 'replay',
+    passLabels: Array.from({ length: runCount }, (_unused, index) => ({
+      runIndex: index + 1,
+      gitSha: 'abc123-dirty',
+      startedAt: `2026-08-27T12:0${index}:00.000Z`,
+    })),
     observations,
     aggregate: aggregateVariance(observations, runCount),
   };
@@ -136,5 +142,29 @@ describe('buildVarianceMarkdownReport', () => {
     );
 
     expect(markdown).toContain('| c1 | 1 | conflicting_evidence | 0 | - |');
+  });
+
+  it('should render the dataset fingerprint and one pass line per completed pass', () => {
+    const markdown = buildVarianceMarkdownReport(
+      report([caseRun({ caseId: 'c1', runIndex: 1 }), caseRun({ caseId: 'c1', runIndex: 2 })], 2),
+    );
+
+    expect(markdown).toContain('Dataset fingerprint: dataset-fingerprint');
+    expect(markdown).toContain('Pass 1: abc123-dirty (2026-08-27T12:00:00.000Z)');
+    expect(markdown).toContain('Pass 2: abc123-dirty (2026-08-27T12:01:00.000Z)');
+  });
+
+  it('should render the header without bars, summary or per-question tables when no pass has completed', () => {
+    const incomplete = report([caseRun({ caseId: 'c1', runIndex: 1 })], 1);
+    const markdown = buildVarianceMarkdownReport({
+      ...incomplete,
+      runCount: 0,
+      aggregate: undefined,
+    });
+
+    expect(markdown).toContain('No pass has completed yet');
+    expect(markdown).not.toContain('## Bars');
+    expect(markdown).not.toContain('## Summary');
+    expect(markdown).not.toContain('## Per-question spread');
   });
 });
