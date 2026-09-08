@@ -63,6 +63,7 @@ describe('ProposalsQueue', () => {
       />,
     );
 
+    expect(screen.getByRole('heading', { name: 'Proposed aliases' })).toBeInTheDocument();
     expect(
       screen.getByRole('table', { name: 'Proposed aliases awaiting confirmation.' }),
     ).toBeInTheDocument();

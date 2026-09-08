@@ -26,6 +26,9 @@ export interface RecordListPageProps {
   description: string;
   /** Rendered beside the title, on the trailing edge of `.page-head`. */
   actions?: ReactNode;
+  /** Rendered between the header and the toolbar — a page-level composer or callout, never a
+   * filter (`filters` is the toolbar's own slot for that). */
+  lead?: ReactNode;
   /** Rendered below the header, ahead of the status region — typically a `FilterBar`. */
   filters?: ReactNode;
   /** Rendered on the trailing edge of the same toolbar row as `filters` — typically a result
@@ -49,10 +52,11 @@ export interface RecordListPageProps {
 
 /**
  * Shared scaffold for a list page: header (`eyebrow`/`title`/`description` plus an optional
- * `actions` slot), an optional `filters` slot, an optional `error` alert independent of `status`,
- * one region driven by `status` — loading renders `Skeleton`, blank renders nothing, empty renders
- * `EmptyState`, and ready renders `children` — and an optional `footer` rendered after that region
- * regardless of `status.kind`.
+ * `actions` slot), an optional `lead` slot between the header and the toolbar, an optional
+ * `filters` slot, an optional `error` alert independent of `status`, one region driven by
+ * `status` — loading renders `Skeleton`, blank renders nothing, empty renders `EmptyState`, and
+ * ready renders `children` — and an optional `footer` rendered after that region regardless of
+ * `status.kind`.
  *
  * Accessibility contract a consumer owes: when `children` scrolls horizontally inside `Panel` (a
  * wide table between 768px and 1023px), `Panel` documents that fallback scrollbar as one the app
@@ -66,6 +70,7 @@ export default function RecordListPage({
   title,
   description,
   actions,
+  lead,
   filters,
   toolbarEnd,
   error,
@@ -77,6 +82,8 @@ export default function RecordListPage({
   return (
     <div className="view">
       <PageHeader eyebrow={eyebrow} title={title} description={description} actions={actions} />
+
+      {lead}
 
       <Toolbar start={filters} end={toolbarEnd} />
 

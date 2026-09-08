@@ -149,6 +149,33 @@ describe('RecordListPage', () => {
     expect(screen.queryByText('Filter form')).not.toBeInTheDocument();
   });
 
+  it('renders the lead slot before the toolbar and omits it when absent', () => {
+    const { rerender } = render(
+      <RecordListPage
+        {...baseProps}
+        status={{ kind: 'ready' }}
+        lead={<p>Composer</p>}
+        filters={<div>Filter form</div>}
+      >
+        <p>Body</p>
+      </RecordListPage>,
+    );
+
+    const lead = screen.getByText('Composer');
+    const filterForm = screen.getByText('Filter form');
+    expect(
+      lead.compareDocumentPosition(filterForm) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    rerender(
+      <RecordListPage {...baseProps} status={{ kind: 'ready' }} filters={<div>Filter form</div>}>
+        <p>Body</p>
+      </RecordListPage>,
+    );
+
+    expect(screen.queryByText('Composer')).not.toBeInTheDocument();
+  });
+
   it('renders the footer slot after the status region, under every status kind', () => {
     const statuses: RecordListStatus[] = [
       { kind: 'loading' },

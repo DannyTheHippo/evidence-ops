@@ -28,7 +28,7 @@ describe('DataRoomPage', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole('heading', { name: 'Data Room' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Data room' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Upload' })).toBeInTheDocument();
   });
 

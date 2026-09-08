@@ -17,6 +17,7 @@ import FilterBar from '../components/ui/FilterBar';
 import IconButton from '../components/ui/IconButton';
 import Input from '../components/ui/Input';
 import Pager from '../components/ui/Pager';
+import Panel from '../components/ui/Panel';
 import Select from '../components/ui/Select';
 import SortableHeaderCell from '../components/ui/SortableHeaderCell';
 import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
@@ -318,8 +319,8 @@ export default function AuditEventsPage() {
 
   return (
     <RecordListPage
-      eyebrow="Organisation"
-      title="Audit Log"
+      eyebrow="Admin"
+      title="Audit events"
       description="Every recorded action, filterable by action, entity type, id, origin or refusal reason."
       filters={
         <div className="audit-filters">
@@ -384,12 +385,7 @@ export default function AuditEventsPage() {
       }
     >
       {events && events.length > 0 && (
-        <section
-          className="panel"
-          tabIndex={0}
-          role="region"
-          aria-label="Audit events matching the current filters"
-        >
+        <Panel aria-label="Audit events matching the current filters">
           <Table caption="Audit events matching the current filters">
             <thead>
               <tr>
@@ -465,7 +461,7 @@ export default function AuditEventsPage() {
               ))}
             </tbody>
           </Table>
-        </section>
+        </Panel>
       )}
     </RecordListPage>
   );

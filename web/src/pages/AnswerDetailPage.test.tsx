@@ -1,8 +1,9 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { Link, MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clearSession } from '../lib/auth';
 import { getBreadcrumbTrail } from '../lib/breadcrumbs';
+import { truncateSha256 } from '../lib/identifiers';
 import { FakeEventSource } from '../test/fake-event-source';
 import AnswerDetailPage from './AnswerDetailPage';
 
@@ -19,6 +20,39 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
     resolve = res;
   });
   return { promise, resolve };
+}
+
+// A minimal bundle satisfying `AttestationBundleView`'s render — the fields under test here never
+// exercise its claim/decision rendering, only that the section mounts.
+function attestationResponse(subjectId: string, question: string): Response {
+  return jsonResponse({
+    schemaVersion: 1,
+    kind: 'answer',
+    subjectId,
+    tenantId: 't',
+    producedAt: new Date().toISOString(),
+    subject: { question },
+    outcome: 'insufficient_evidence',
+    claims: [],
+    decisions: [],
+    measures: [],
+    integrity: { algorithm: 'sha256', contentHash: 'abc' },
+  });
+}
+
+// Dispatches by URL rather than answering every call with the answer body — once the answer is
+// completed, AttestationBundleView also fetches its own `/attestation` and
+// `/documents/versions/lookup`, and a catch-all stub would answer those with the answer body too.
+function mockAnswerFetch(answer: { id: string; questionText: string }) {
+  return vi.fn((url: string) => {
+    if (url === `/api/v1/answers/${answer.id}/attestation`) {
+      return Promise.resolve(attestationResponse(answer.id, answer.questionText));
+    }
+    if (url.startsWith('/api/v1/documents/versions/lookup')) {
+      return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+    }
+    return Promise.resolve(jsonResponse(answer));
+  });
 }
 
 const completedAnswer = {
@@ -72,7 +106,7 @@ describe('AnswerDetailPage', () => {
   });
 
   it('renders a completed answer through AnswerView', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(completedAnswer)));
+    vi.stubGlobal('fetch', mockAnswerFetch(completedAnswer));
 
     renderAt('answer-1');
 
@@ -138,8 +172,16 @@ describe('AnswerDetailPage', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn((input: RequestInfo | URL) => {
-        const isFirst = typeof input === 'string' && input.includes('/answers/answer-1');
-        return isFirst ? first.promise : Promise.resolve(jsonResponse(answerTwo));
+        const url = typeof input === 'string' ? input : '';
+        if (url === '/api/v1/answers/answer-1') return first.promise;
+        if (url === '/api/v1/answers/answer-1/attestation') {
+          return Promise.resolve(attestationResponse('answer-1', answerOne.questionText));
+        }
+        if (url === '/api/v1/answers/answer-2') return Promise.resolve(jsonResponse(answerTwo));
+        if (url === '/api/v1/answers/answer-2/attestation') {
+          return Promise.resolve(attestationResponse('answer-2', answerTwo.questionText));
+        }
+        return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
       }),
     );
 
@@ -251,7 +293,7 @@ describe('AnswerDetailPage', () => {
   });
 
   it('renders the asked timestamp, short id, and a copy control once the answer loads', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(completedAnswer)));
+    vi.stubGlobal('fetch', mockAnswerFetch(completedAnswer));
 
     renderAt('answer-1');
 
@@ -261,7 +303,7 @@ describe('AnswerDetailPage', () => {
   });
 
   it('offers Back to answers and Ask a follow-up from the header actions', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(completedAnswer)));
+    vi.stubGlobal('fetch', mockAnswerFetch(completedAnswer));
 
     renderAt('answer-1');
     await screen.findByText('No document mentions the cap rate.');
@@ -270,7 +312,10 @@ describe('AnswerDetailPage', () => {
       'href',
       '/answers',
     );
-    expect(screen.getByRole('link', { name: 'Ask a follow-up' })).toHaveAttribute('href', '/ask');
+    expect(screen.getByRole('link', { name: 'Ask a follow-up' })).toHaveAttribute(
+      'href',
+      '/answers',
+    );
   });
 
   it('offers a link back to the list from the not-found empty state', async () => {
@@ -288,20 +333,19 @@ describe('AnswerDetailPage', () => {
     );
   });
 
-  it('publishes the Ask › Answers › question breadcrumb trail once the answer loads', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(completedAnswer)));
+  it('publishes the Answers › question breadcrumb trail once the answer loads', async () => {
+    vi.stubGlobal('fetch', mockAnswerFetch(completedAnswer));
 
     renderAt('answer-1');
     await screen.findByText('No document mentions the cap rate.');
 
     expect(getBreadcrumbTrail()).toEqual([
-      { label: 'Ask', to: '/ask' },
       { label: 'Answers', to: '/answers' },
       { label: 'What is the cap rate?' },
     ]);
   });
 
-  it('offers to ask a failed run again, carrying the original question as router state', async () => {
+  it('offers to ask a failed run again, carrying the original question as a query param', async () => {
     const failedAnswer = {
       id: 'answer-1',
       questionText: 'What is the cap rate?',
@@ -312,28 +356,61 @@ describe('AnswerDetailPage', () => {
     };
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(failedAnswer)));
 
-    function LocationProbe() {
-      const location = useLocation();
-      return (
-        <output aria-label="current location">
-          {location.pathname}::{JSON.stringify(location.state)}
-        </output>
-      );
-    }
+    renderAt('answer-1');
 
-    render(
-      <MemoryRouter initialEntries={['/answers/answer-1']}>
-        <Routes>
-          <Route path="/answers/:id" element={<AnswerDetailPage />} />
-        </Routes>
-        <LocationProbe />
-      </MemoryRouter>,
+    expect(await screen.findByRole('link', { name: 'Ask this question again' })).toHaveAttribute(
+      'href',
+      `/answers?q=${encodeURIComponent('What is the cap rate?')}`,
     );
+  });
 
-    fireEvent.click(await screen.findByRole('link', { name: 'Ask this question again' }));
+  it('renders the answerPath badge and the attestation hash chip once the answer loads', async () => {
+    const ledgerAnswer = {
+      ...completedAnswer,
+      answerPath: 'ledger',
+      attestationHash: 'a'.repeat(64),
+    };
+    vi.stubGlobal('fetch', mockAnswerFetch(ledgerAnswer));
 
-    expect(screen.getByRole('status', { name: 'current location' })).toHaveTextContent(
-      `/ask::${JSON.stringify({ questionText: 'What is the cap rate?' })}`,
-    );
+    renderAt('answer-1');
+    await screen.findByText('No document mentions the cap rate.');
+
+    expect(screen.getByText('ledger')).toBeInTheDocument();
+    expect(screen.getByTitle('a'.repeat(64))).toHaveTextContent(truncateSha256('a'.repeat(64)));
+  });
+
+  it('does not render the answerPath badge or the hash chip when neither is present', async () => {
+    vi.stubGlobal('fetch', mockAnswerFetch(completedAnswer));
+
+    renderAt('answer-1');
+    await screen.findByText('No document mentions the cap rate.');
+
+    expect(screen.queryByText('ledger')).not.toBeInTheDocument();
+    expect(screen.queryByText('synthesis')).not.toBeInTheDocument();
+  });
+
+  it('renders the attestation section only once the run has completed', async () => {
+    vi.stubGlobal('fetch', mockAnswerFetch(completedAnswer));
+
+    renderAt('answer-1');
+
+    expect(await screen.findByRole('heading', { name: 'Attestation' })).toBeInTheDocument();
+  });
+
+  it('does not render the attestation section for a run still in flight', async () => {
+    const runningAnswer = {
+      id: 'answer-2',
+      questionText: 'What is the vacancy rate?',
+      runStatus: 'running',
+      citations: [],
+      conflictIds: [],
+      createdAt: new Date().toISOString(),
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(runningAnswer)));
+
+    renderAt('answer-2');
+
+    await screen.findByText('running');
+    expect(screen.queryByRole('heading', { name: 'Attestation' })).not.toBeInTheDocument();
   });
 });

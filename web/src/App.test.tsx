@@ -147,7 +147,7 @@ describe('App / admin-only nav link', () => {
     );
   }
 
-  it('shows the Audit Log link to an admin', async () => {
+  it('shows the Audit events link to an admin', async () => {
     vi.spyOn(auth, 'ensureSession').mockResolvedValue({
       id: 'user-1',
       email: 'admin@example.com',
@@ -158,10 +158,10 @@ describe('App / admin-only nav link', () => {
 
     renderAtHome();
 
-    expect(await screen.findByRole('link', { name: 'Audit Log' })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Audit events' })).toBeInTheDocument();
   });
 
-  it('hides the Audit Log link from a member', async () => {
+  it('hides the Audit events link from a member', async () => {
     vi.spyOn(auth, 'ensureSession').mockResolvedValue({
       id: 'user-2',
       email: 'member@example.com',
@@ -175,10 +175,10 @@ describe('App / admin-only nav link', () => {
     // The protected page rendering is what proves the probe resolved, so the absence below is the
     // role gate holding rather than the session still being in flight.
     expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Audit Log' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Audit events' })).not.toBeInTheDocument();
   });
 
-  it('renders no Audit Log link while the session probe is still pending', () => {
+  it('renders no Audit events link while the session probe is still pending', () => {
     vi.spyOn(auth, 'ensureSession').mockReturnValue(new Promise(() => {}));
 
     renderAtHome();
@@ -186,7 +186,7 @@ describe('App / admin-only nav link', () => {
     // The chrome is route-based, so the rest of the nav is already on screen — the link is absent
     // because the role is unknown, not because the header has yet to render.
     expect(screen.getByRole('link', { name: 'Home' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Audit Log' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Audit events' })).not.toBeInTheDocument();
   });
 });
 
@@ -350,12 +350,30 @@ describe('App / shell', () => {
       createdAt: new Date().toISOString(),
     });
     // Dispatched by URL rather than answering everything alike: a completed answer also drives the
-    // batch version lookup, which reads a `{ docs, count }` envelope off its response.
+    // batch version lookup, which reads a `{ docs, count }` envelope off its response, and its own
+    // `AttestationBundleView`, which fetches `/attestation` once `runStatus` is `completed`.
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string) => {
         if (url.startsWith('/api/v1/documents/versions/lookup')) {
           return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+        }
+        if (url === '/api/v1/answers/answer-1/attestation') {
+          return Promise.resolve(
+            jsonResponse({
+              schemaVersion: 1,
+              kind: 'answer',
+              subjectId: 'answer-1',
+              tenantId: 't',
+              producedAt: new Date().toISOString(),
+              subject: { question: 'What is the cap rate?' },
+              outcome: 'insufficient_evidence',
+              claims: [],
+              decisions: [],
+              measures: [],
+              integrity: { algorithm: 'sha256', contentHash: 'abc' },
+            }),
+          );
         }
         return Promise.resolve(
           jsonResponse({
@@ -382,6 +400,71 @@ describe('App / shell', () => {
 
     expect(
       await screen.findByRole('heading', { name: 'What is the cap rate?' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Page not found')).not.toBeInTheDocument();
+  });
+
+  // Regression: /answers/:id and /answers/verifications/:id share the /answers prefix — a route
+  // table that ranked them wrong would render the answer detail page with id === 'verifications'
+  // instead of the verification detail page.
+  it('renders the verification detail page, not the answer detail view, at /answers/verifications/:id', async () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue({
+      id: 'user-1',
+      email: 'user@example.com',
+      role: 'member',
+      createdAt: new Date().toISOString(),
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (url.startsWith('/api/v1/documents/versions/lookup')) {
+          return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+        }
+        if (url === '/api/v1/verifications/ver-1/attestation') {
+          return Promise.resolve(
+            jsonResponse({
+              schemaVersion: 1,
+              kind: 'verification',
+              subjectId: 'ver-1',
+              tenantId: 't',
+              producedAt: new Date().toISOString(),
+              subject: { claims: ['The cap rate is approximately 6.10%.'] },
+              outcome: null,
+              claims: [],
+              decisions: [],
+              measures: [],
+              integrity: { algorithm: 'sha256', contentHash: 'abc' },
+            }),
+          );
+        }
+        if (url === '/api/v1/verifications/ver-1') {
+          return Promise.resolve(
+            jsonResponse({
+              id: 'ver-1',
+              requestedBy: { kind: 'pat', id: 'pat-1' },
+              claims: ['The cap rate is approximately 6.10%.'],
+              results: [{ claimIndex: 0, verdict: 'grounded', citations: [] }],
+              advisory:
+                'This check does not certify the source values are correct, only that they are cited.',
+              retrievedChunkIds: [],
+              atoms: [],
+              usage: { promptTokens: 100, completionTokens: 20, costUsd: 0.0025 },
+              createdAt: new Date().toISOString(),
+            }),
+          );
+        }
+        return Promise.resolve(jsonResponse({}, 404));
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/answers/verifications/ver-1']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByRole('heading', { name: 'The cap rate is approximately 6.10%.' }),
     ).toBeInTheDocument();
     expect(screen.queryByText('Page not found')).not.toBeInTheDocument();
   });

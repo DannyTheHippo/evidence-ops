@@ -41,7 +41,7 @@ corpus for exactly that reason.
 ```mermaid
 flowchart TB
   subgraph SPA["SPA — web/"]
-    Pages["LoginPage / InvitePage / HomePage / DataRoomPage / SourcesPage /<br/>SourceDetailPage / AskPage / AnswersPage / AnswerDetailPage / SearchPage /<br/>ConflictsPage / ApprovalsPage / RunsPage / WorkflowRunPage /<br/>ApiKeysPage / AuditEventsPage / InvitationsPage / CanonicalEntitiesPage"]
+    Pages["LoginPage / InvitePage / HomePage / SourcesPage / SourceDetailPage /<br/>DataRoomPage / DocumentWorkbenchPage / LedgerPage / VerificationDetailPage / MeasuresPage /<br/>CanonicalEntitiesPage / AdjudicationPage / AnswersPage / AnswerDetailPage / RunsPage /<br/>WorkflowRunPage / PeoplePage / AuditEventsPage / ApiKeysPage / InvitationsPage"]
     Client["api/client.ts — relative base '/api/v1',<br/>HttpOnly session cookie, no client-held credential"]
     Pages --> Client
   end
@@ -181,7 +181,7 @@ answered questions cited an identical citation set, against pre-registered bars 
 ```mermaid
 sequenceDiagram
   autonumber
-  participant U as SPA AskPage
+  participant U as SPA Answers composer
   participant A as QaController / QaService
   participant T as Temporal
   participant W as answerQuestion workflow
@@ -217,10 +217,12 @@ Two things this diagram is making explicit:
   (`src/features/evidence/qa/contracts/answer.contract.ts`). The model has no field to write them
   into, so it cannot forge its own verification result.
 
-`AskPage` opens the stream before it has anything to show and never reopens it once opened — a
-completed answer closes the connection server-side, and the client treats that as a clean finish
-rather than a dropped one. Polling `GET /api/v1/answers/:id` only runs once the stream has given up
-(a server-authored error frame, exhausted reconnect attempts, or no `EventSource` at all) and stops
+Both `AnswerComposer` (which seeds `initialAnswer` from its own optimistic snapshot on submit) and
+`AnswerDetailPage` (which has nothing to seed and always fetches) drive `useAnswerRun`, which opens
+the stream before it has anything to show and never reopens it once opened — a completed answer
+closes the connection server-side, and the client treats that as a clean finish rather than a
+dropped one. Polling `GET /api/v1/answers/:id` only runs once the stream has given up (a
+server-authored error frame, exhausted reconnect attempts, or no `EventSource` at all) and stops
 the moment `runStatus` reaches a terminal value. See [Live updates](#live-updates-server-sent-events)
 for the other two streams and the controls shared across all three.
 
@@ -316,9 +318,10 @@ grounding gate or citation contract in between, since there is no model output h
 the only ungated path to raw corpus text on the browser surface, so `RolesGuard` gates it explicitly
 (`@RequireRole(Member, Admin)`) rather than relying on the guard's default, and it carries its own
 per-tenant `@Throttle()` window narrower than the global default, because every call spends a live
-embedding request. `SearchPage` is the SPA consumer. MCP's `search_evidence` tool reaches the same
-`EvidenceRetrievalService` through a different path — `ToolExecutorService`, not `RolesGuard` — so
-the two entry points enforce the access floor with different mechanisms over the same read.
+embedding request. The SPA has no search surface; MCP's `search_evidence` tool is the consumer,
+reaching the same `EvidenceRetrievalService` through a different path — `ToolExecutorService`, not
+`RolesGuard` — so the two entry points enforce the access floor with different mechanisms over the
+same read.
 
 ## Evidence lifecycle: sync, quarantine and withdrawal
 

@@ -10,8 +10,8 @@ export interface ApprovalDecisionDialogProps {
    * button's tone. */
   decision: ApprovalDecision | null;
   summary: string;
-  /** Whether deciding this approval resumes a parked workflow run — `ApprovalsPage`'s detail pane
-   * passes `!!approval.workflowId`, `WorkflowRunPage` always `true`, since the approval it decides
+  /** Whether deciding this approval resumes a parked workflow run — `DecisionCase` and `HomePage`
+   * pass `!!approval.workflowId`, `WorkflowRunPage` always `true`, since the approval it decides
    * is by definition the one gating the run it renders. */
   resumesWorkflow: boolean;
   onClose: () => void;
@@ -101,7 +101,7 @@ function DecisionForm({
   );
 }
 
-/** Approve/reject dialog shared by `ApprovalsPage`'s detail pane, `WorkflowRunPage`'s inline
+/** Approve/reject dialog shared by `DecisionCase`'s detail pane, `WorkflowRunPage`'s inline
  * timeline, and `HomePage`'s pending-approvals card — all three park a workflow on the identical
  * decision shape. Owns the reason input and its submit lifecycle via `useFormSubmit`; the caller
  * owns persistence, notifying, and closing. */

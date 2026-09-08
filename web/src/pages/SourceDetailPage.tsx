@@ -23,6 +23,7 @@ import ErrorSummary from '../components/ui/ErrorSummary';
 import Input from '../components/ui/Input';
 import LinkButton from '../components/ui/LinkButton';
 import PageHeader from '../components/ui/PageHeader';
+import Panel from '../components/ui/Panel';
 import RadioGroup, { type RadioOption } from '../components/ui/RadioGroup';
 import Select from '../components/ui/Select';
 import Skeleton from '../components/ui/Skeleton';
@@ -287,7 +288,7 @@ export default function SourceDetailPage({ pollIntervalMs }: SourceDetailPagePro
   return (
     <div className="view">
       <PageHeader
-        eyebrow="Evidence"
+        eyebrow="Estate"
         title={source ? source.name : 'Source'}
         description="Per-file sync state for this source."
         actions={
@@ -514,12 +515,7 @@ export default function SourceDetailPage({ pollIntervalMs }: SourceDetailPagePro
             </section>
           )}
 
-          <section
-            className="panel"
-            tabIndex={0}
-            role="region"
-            aria-label="Per-file sync status for this source"
-          >
+          <Panel aria-label="Per-file sync status for this source">
             {source.fileStates.length === 0 ? (
               <EmptyState
                 icon={<IconDatabase size={24} />}
@@ -560,7 +556,7 @@ export default function SourceDetailPage({ pollIntervalMs }: SourceDetailPagePro
                 </tbody>
               </Table>
             )}
-          </section>
+          </Panel>
         </>
       )}
     </div>

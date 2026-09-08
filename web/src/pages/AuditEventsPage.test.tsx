@@ -626,7 +626,7 @@ describe('AuditEventsPage', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('Audit Log')).toBeInTheDocument();
+    expect(await screen.findByText('Audit events')).toBeInTheDocument();
   });
 
   it('bounces a member away from the route wrapped in RequireAdmin', async () => {
@@ -651,6 +651,6 @@ describe('AuditEventsPage', () => {
     );
 
     expect(await screen.findByText('home probe')).toBeInTheDocument();
-    expect(screen.queryByText('Audit Log')).not.toBeInTheDocument();
+    expect(screen.queryByText('Audit events')).not.toBeInTheDocument();
   });
 });

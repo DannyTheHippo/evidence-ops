@@ -41,9 +41,8 @@ function chunkCountLabel(count: number): string {
   return `${count} chunk${count === 1 ? '' : 's'}`;
 }
 
-// Wraps every case-insensitive occurrence of `query` in `text` with a `<mark>`, matching
-// SearchPage's own result highlighting. Renders `text` unchanged for an empty or whitespace-only
-// query.
+// Wraps every case-insensitive occurrence of `query` in `text` with a `<mark>`. Renders `text`
+// unchanged for an empty or whitespace-only query.
 function highlightMatches(text: string, query: string): ReactNode {
   const trimmed = query.trim();
   if (trimmed.length === 0) return text;

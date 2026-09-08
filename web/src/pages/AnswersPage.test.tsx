@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Answer } from '../api/client';
+import type { Answer, Verification } from '../api/client';
+import { FakeEventSource } from '../test/fake-event-source';
 import AnswersPage from './AnswersPage';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -51,6 +52,7 @@ const answered: Answer = {
   createdAt: '2026-08-01T12:00:00.000Z',
   atoms: [],
   withdrawnCitedDocVersionIds: [],
+  answerPath: 'synthesis',
 };
 
 const conflicting: Answer = {
@@ -92,6 +94,21 @@ const running: Answer = {
   withdrawnCitedDocVersionIds: [],
 };
 
+const verification: Verification = {
+  id: 'verification-1',
+  requestedBy: { kind: 'pat', id: 'pat-1' },
+  claims: ['The cap rate is 6.2%', 'Occupancy is 92%'],
+  results: [
+    { claimIndex: 0, verdict: 'grounded' },
+    { claimIndex: 1, verdict: 'not_grounded' },
+  ],
+  advisory: 'A verdict is not a legal or financial opinion.',
+  retrievedChunkIds: [],
+  atoms: [],
+  usage: { promptTokens: 10, completionTokens: 5, costUsd: 0.001 },
+  createdAt: '2026-08-05T12:00:00.000Z',
+};
+
 describe('AnswersPage', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -118,13 +135,20 @@ describe('AnswersPage', () => {
     expect(within(conflictingRow).getByText('conflicting evidence')).toBeInTheDocument();
     expect(within(insufficientRow).getByText('insufficient evidence')).toBeInTheDocument();
 
-    expect(
-      screen.getByRole('table', { name: 'Answered questions and their grounding' }),
-    ).toBeInTheDocument();
+    // The Kind column marks every row an answer, and the Path column reads the server's
+    // answerPath verbatim when present, falling back to a placeholder when it is not.
+    expect(within(answeredRow).getByText('answer')).toBeInTheDocument();
+    expect(within(answeredRow).getByText('synthesis')).toBeInTheDocument();
+    expect(insufficientRow.querySelector('[data-label="Path"]')).toHaveTextContent('—');
 
     expect(
-      screen.getByRole('region', { name: 'Answered questions and their grounding' }),
-    ).toHaveAttribute('tabindex', '0');
+      screen.getByRole('table', { name: 'Answers and verifications with their grounding' }),
+    ).toBeInTheDocument();
+
+    expect(screen.getByRole('region', { name: 'Answers and verifications' })).toHaveAttribute(
+      'tabindex',
+      '0',
+    );
 
     expect(screen.getByRole('link', { name: answered.questionText })).toHaveAttribute(
       'href',
@@ -187,7 +211,7 @@ describe('AnswersPage', () => {
 
     const row = (await screen.findByText(insufficient.questionText)).closest('tr');
     if (!row) throw new Error('row not found');
-    expect(within(row).getByText('—')).toBeInTheDocument();
+    expect(within(row).getAllByText('—').length).toBeGreaterThan(0);
     expect(within(row).queryByText('0%')).not.toBeInTheDocument();
   });
 
@@ -226,7 +250,7 @@ describe('AnswersPage', () => {
     expect(within(otherRow).queryByText('citation withdrawn')).not.toBeInTheDocument();
   });
 
-  it('shows the no-answers-yet empty state with a link to Ask when there is no filter', async () => {
+  it('shows the no-answers-yet empty state with no action button when there is no filter', async () => {
     stubFetch({
       '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc': () =>
         jsonResponse({ docs: [], count: 0 }),
@@ -235,7 +259,9 @@ describe('AnswersPage', () => {
     renderPage();
 
     expect(await screen.findByText('No answers yet')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Ask a question' })).toHaveAttribute('href', '/ask');
+    expect(screen.getByText('Ask a question above to see it appear here.')).toBeInTheDocument();
+    // The composer lives on this page now, so the empty state carries no `Ask a question` link.
+    expect(screen.queryByRole('link', { name: 'Ask a question' })).not.toBeInTheDocument();
   });
 
   it('shows a filter-specific empty state when a run status filter matches nothing', async () => {
@@ -355,7 +381,7 @@ describe('AnswersPage', () => {
     renderPage();
     await screen.findByText(answered.questionText);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sort by Claim coverage' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sort by Coverage' }));
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.some(
@@ -364,9 +390,7 @@ describe('AnswersPage', () => {
       ).toBe(true);
     });
 
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Sort by Claim coverage, sorted descending' }),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'Sort by Coverage, sorted descending' }));
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.some(
@@ -416,5 +440,117 @@ describe('AnswersPage', () => {
     renderPage();
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Answers unavailable');
+  });
+
+  it('renders the composer above the history', () => {
+    stubFetch({
+      '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc': () =>
+        jsonResponse({ docs: [], count: 0 }),
+    });
+
+    renderPage();
+
+    expect(screen.getByLabelText('Question')).toBeInTheDocument();
+  });
+
+  it('prefills the composer from ?q= and strips it from the address bar', async () => {
+    stubFetch({
+      '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc': () =>
+        jsonResponse({ docs: [], count: 0 }),
+    });
+
+    renderPage(['/answers?q=What%20is%20the%20cap%20rate%3F']);
+
+    expect(screen.getByLabelText('Question')).toHaveValue('What is the cap rate?');
+    await waitFor(() =>
+      expect(screen.getByRole('status', { name: 'current search' })).toBeEmptyDOMElement(),
+    );
+  });
+
+  it('seeds a run from the composer in place, and refetches the history once it starts', async () => {
+    FakeEventSource.reset();
+    vi.stubGlobal('EventSource', FakeEventSource);
+
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url === '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc') {
+        return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+      }
+      if (url === '/api/v1/questions' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({ id: 'answer-9', runStatus: 'queued' }, 201));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+    await screen.findByText('No answers yet');
+
+    fireEvent.change(screen.getByLabelText('Question'), {
+      target: { value: 'What is the cap rate?' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
+
+    // The seeded run renders in place, directly below the composer — never a navigation to
+    // `/answers/:id`.
+    expect(await screen.findByText('queued')).toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'current search' })).toBeEmptyDOMElement();
+
+    await waitFor(() => {
+      const answerRequests = fetchMock.mock.calls.filter(
+        ([url]) => url === '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc',
+      );
+      expect(answerRequests.length).toBeGreaterThan(1);
+    });
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) => url === '/api/v1/questions' && init?.method === 'POST',
+      ),
+    ).toBe(true);
+  });
+
+  it('switches to the verifications kind, resetting paging and sort, and renders the tally, badge and detail link', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/answers?skip=0&limit=25&sort=createdAt&sortDir=desc') {
+        return Promise.resolve(jsonResponse({ docs: [answered], count: 30 }));
+      }
+      if (url === '/api/v1/answers?skip=25&limit=25&sort=createdAt&sortDir=desc') {
+        return Promise.resolve(
+          jsonResponse({ docs: [{ ...answered, id: 'answer-page-2' }], count: 30 }),
+        );
+      }
+      if (url === '/api/v1/verifications?skip=0&limit=25&sort=createdAt&sortDir=desc') {
+        return Promise.resolve(jsonResponse({ docs: [verification], count: 1 }));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+    await screen.findByText(answered.questionText);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText('26–30 of 30');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Verifications' }));
+
+    expect(await screen.findByText('1 grounded · 1 not grounded')).toBeInTheDocument();
+    const row = screen.getByText('1 grounded · 1 not grounded').closest('tr');
+    if (!row) throw new Error('row not found');
+    expect(within(row).getByText('verification')).toBeInTheDocument();
+    expect(within(row).getByRole('link')).toHaveAttribute(
+      'href',
+      '/answers/verifications/verification-1',
+    );
+
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => url === '/api/v1/verifications?skip=0&limit=25&sort=createdAt&sortDir=desc',
+      ),
+    ).toBe(true);
+
+    // Paging (`skip=25`) reset along with the switch — only the non-default `kind` remains.
+    expect(screen.getByRole('status', { name: 'current search' })).toHaveTextContent(
+      '?kind=verifications',
+    );
   });
 });

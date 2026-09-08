@@ -105,7 +105,7 @@ describe('RunsPage', () => {
     expect(screen.getByTitle('wf-1')).toHaveTextContent('wf-1');
   });
 
-  it('shows the no-runs-yet empty state with a link to Ask when there is no filter', async () => {
+  it('shows the no-runs-yet empty state with a link to add a source when there is no filter', async () => {
     stubFetch({
       '/api/v1/workflow-runs?skip=0&limit=25&sort=createdAt&sortDir=desc': () =>
         jsonResponse({ docs: [], count: 0 }),
@@ -116,10 +116,10 @@ describe('RunsPage', () => {
     const title = await screen.findByText('No runs yet');
     expect(title).toBeInTheDocument();
     // The earned-zero-inbox treatment distinguishes "nothing has ever run" from a filter that
-    // simply matches nothing, matching ApprovalsPage's identical split.
+    // simply matches nothing.
     expect(title.closest('.empty-state--zero')).not.toBeNull();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Ask a question' })).toHaveAttribute('href', '/ask');
+    expect(screen.getByRole('link', { name: 'Add a source' })).toHaveAttribute('href', '/sources');
   });
 
   it('shows a filter-specific empty state with a Show-all action when a filter matches nothing', async () => {
@@ -145,7 +145,7 @@ describe('RunsPage', () => {
     const title = await screen.findByText('No runs match this filter');
     expect(title).toBeInTheDocument();
     expect(title.closest('.empty-state--zero')).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Ask a question' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Add a source' })).not.toBeInTheDocument();
 
     const showAll = screen.getByRole('button', { name: 'Show all runs' });
     fireEvent.click(showAll);

@@ -7,12 +7,12 @@ describe('LinkButton', () => {
   it('renders a react-router Link when given to', () => {
     render(
       <MemoryRouter>
-        <LinkButton to="/ask">Ask a question</LinkButton>
+        <LinkButton to="/answers">Ask a question</LinkButton>
       </MemoryRouter>,
     );
 
     const link = screen.getByRole('link', { name: 'Ask a question' });
-    expect(link).toHaveAttribute('href', '/ask');
+    expect(link).toHaveAttribute('href', '/answers');
   });
 
   it('renders a plain anchor when given href', () => {

@@ -31,7 +31,7 @@ export default function DocumentDetail({ id }: { id: string }) {
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  // Fails CLOSED on the still-loading probe too, matching ApprovalsPage's `canDecide` — a member
+  // Fails CLOSED on the still-loading probe too, matching AdjudicationPage's `canDecide` — a member
   // (or a session that hasn't resolved yet) never sees the delete control flash in before the
   // check lands. The server's RolesGuard on DELETE /documents/:id is the actual boundary.
   const canDelete = session.status === 'authed' && session.me.role === 'admin';
@@ -56,7 +56,7 @@ export default function DocumentDetail({ id }: { id: string }) {
   }, [id]);
 
   useBreadcrumbs([
-    { label: 'Data Room', to: '/documents' },
+    { label: 'Data room', to: '/documents' },
     { label: doc ? doc.title : 'Document' },
   ]);
 
@@ -77,7 +77,7 @@ export default function DocumentDetail({ id }: { id: string }) {
   return (
     <div className="view">
       <PageHeader
-        eyebrow="Evidence"
+        eyebrow="Estate"
         title={doc?.title ?? 'Document'}
         actions={
           <LinkButton to="/documents" variant="secondary" size="sm">

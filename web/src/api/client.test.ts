@@ -2,10 +2,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiError,
   TransportError,
+  confirmMeasure,
+  getAttestation,
   getDashboardSummary,
   getMe,
+  getVerificationById,
   isFieldValidationError,
+  listConflicts,
+  listLedgerCells,
+  listLedgerFacts,
+  listMeasures,
   listSources,
+  listVerifications,
+  rejectMeasure,
+  updateMeasure,
   uploadDocument,
 } from './client';
 
@@ -361,5 +371,199 @@ describe('getDashboardSummary', () => {
 
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('/api/v1/dashboard/summary');
+  });
+});
+
+describe('listConflicts', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('comma-joins ids into a single query parameter', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ docs: [], count: 0 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listConflicts({ ids: ['a', 'b'] });
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/v1/conflicts?ids=a%2Cb');
+  });
+});
+
+describe('listLedgerCells', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('serialises only the filters it was given', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ docs: [], count: 0 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listLedgerCells({ entity: 'Northgate Business Park', state: 'conflicted' });
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/v1/ledger?entity=Northgate+Business+Park&state=conflicted');
+  });
+});
+
+describe('listLedgerFacts', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('omits period from the query when it is absent', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ docs: [], count: 0 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listLedgerFacts({ entity: 'Northgate Business Park', measure: 'cap_rate' });
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/v1/ledger/facts?entity=Northgate+Business+Park&measure=cap_rate');
+  });
+});
+
+describe('listMeasures', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('serialises status and limit', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ docs: [], count: 0 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listMeasures({ status: 'proposed', limit: 20 });
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/v1/measures?status=proposed&limit=20');
+  });
+});
+
+describe('confirmMeasure', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('sends the edits as the request body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 'measure-1' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await confirmMeasure('measure-1', { label: 'Cap Rate', tolerance: 0.0025 });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/v1/measures/measure-1/confirm');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ label: 'Cap Rate', tolerance: 0.0025 });
+  });
+});
+
+describe('rejectMeasure', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('sends an empty body when no reason is given', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 'measure-1' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await rejectMeasure('measure-1');
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({});
+  });
+
+  it('sends the reason when one is given', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 'measure-1' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await rejectMeasure('measure-1', 'duplicate');
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ reason: 'duplicate' });
+  });
+});
+
+describe('updateMeasure', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('issues a PATCH carrying the edits', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 'measure-1' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await updateMeasure('measure-1', { tolerance: 0.005 });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/v1/measures/measure-1');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body as string)).toEqual({ tolerance: 0.005 });
+  });
+});
+
+describe('listVerifications', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('serialises sort, sortDir, skip and limit', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ docs: [], count: 0 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await listVerifications({ sort: 'createdAt', sortDir: 'desc', skip: 20, limit: 10 });
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/v1/verifications?skip=20&limit=10&sort=createdAt&sortDir=desc');
+  });
+});
+
+describe('getVerificationById', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('builds the by-id path', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 'verification-1' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getVerificationById('verification-1');
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/v1/verifications/verification-1');
+  });
+});
+
+describe('getAttestation', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('builds the answers attestation path', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ schemaVersion: 1 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getAttestation('answers', 'answer-1');
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/v1/answers/answer-1/attestation');
+  });
+
+  it('builds the verifications attestation path', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ schemaVersion: 1 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await getAttestation('verifications', 'verification-1');
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/v1/verifications/verification-1/attestation');
   });
 });

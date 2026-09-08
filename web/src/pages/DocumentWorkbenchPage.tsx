@@ -102,7 +102,7 @@ export default function DocumentWorkbenchPage() {
   );
 
   useBreadcrumbs([
-    { label: 'Data Room', to: '/documents' },
+    { label: 'Data room', to: '/documents' },
     {
       label: doc ? doc.title : 'Document',
       to: documentId ? `/documents/${documentId}` : undefined,
@@ -113,7 +113,7 @@ export default function DocumentWorkbenchPage() {
   return (
     <div className="view">
       <PageHeader
-        eyebrow="Evidence"
+        eyebrow="Estate"
         title={doc ? doc.title : 'Document'}
         description={
           version

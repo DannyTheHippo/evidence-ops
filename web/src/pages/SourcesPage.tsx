@@ -20,6 +20,7 @@ import FilterBar from '../components/ui/FilterBar';
 import Input from '../components/ui/Input';
 import Pager from '../components/ui/Pager';
 import PageHeader from '../components/ui/PageHeader';
+import Panel from '../components/ui/Panel';
 import RadioGroup from '../components/ui/RadioGroup';
 import SegmentedControl from '../components/ui/SegmentedControl';
 import Skeleton from '../components/ui/Skeleton';
@@ -537,7 +538,7 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
   return (
     <div className="view">
       <PageHeader
-        eyebrow="Evidence"
+        eyebrow="Estate"
         title="Sources"
         description="Point at a folder and watch it sync documents in."
         actions={
@@ -600,12 +601,7 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
       )}
 
       {status.kind === 'ready' && activeSources && view === 'tracked' && (
-        <section
-          className="panel"
-          tabIndex={0}
-          role="region"
-          aria-label="Sources syncing documents into this data room"
-        >
+        <Panel aria-label="Sources syncing documents into this data room">
           <Table caption="Sources syncing documents into this data room">
             <thead>
               <tr>
@@ -655,16 +651,11 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
               ))}
             </tbody>
           </Table>
-        </section>
+        </Panel>
       )}
 
       {status.kind === 'ready' && activeSources && view === 'inventory' && (
-        <section
-          className="panel"
-          tabIndex={0}
-          role="region"
-          aria-label="Repositories catalogued for the estate but never synced"
-        >
+        <Panel aria-label="Repositories catalogued for the estate but never synced">
           <Table caption="Repositories catalogued for the estate but never synced">
             <thead>
               <tr>
@@ -699,7 +690,7 @@ export default function SourcesPage({ pollIntervalMs }: SourcesPageProps) {
               ))}
             </tbody>
           </Table>
-        </section>
+        </Panel>
       )}
 
       {activeSources && (

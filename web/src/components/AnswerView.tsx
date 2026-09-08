@@ -124,14 +124,18 @@ function insufficientEvidenceAction(
       );
     case 'evidence_does_not_address_question':
       return (
-        <Link to="/ask" state={{ questionText }} className="btn btn--secondary btn--sm">
+        <LinkButton
+          to={`/answers?q=${encodeURIComponent(questionText)}`}
+          variant="secondary"
+          size="sm"
+        >
           Rephrase the question
-        </Link>
+        </LinkButton>
       );
     case 'retrieved_evidence_contradicts_itself':
       return (
-        <LinkButton to="/conflicts" variant="secondary" size="sm">
-          Check the conflicts queue
+        <LinkButton to="/adjudication?kind=conflicts&status=open" variant="secondary" size="sm">
+          Check the adjudication queue
         </LinkButton>
       );
     default:
@@ -144,7 +148,7 @@ function insufficientEvidenceAction(
 }
 
 /**
- * The completed-answer presentation shared by AskPage's live view and AnswerDetailPage's
+ * The completed-answer presentation shared by AnswerComposer's live view and AnswerDetailPage's
  * historical view: the verification ledger's retrieval funnel, the provenance rail for
  * `answered`/`insufficient_evidence`, the value-compare markup for `conflicting_evidence` (the
  * rail's node for that outcome states only the fact key, not the compared values or their
@@ -207,14 +211,14 @@ export default function AnswerView({ answer, documentIndex, conflictChunkIndex }
             </ul>
           )}
           {answer.conflictIds.length > 0 && (
-            // Best-effort until a server-side conflicts `ids` filter lands: this links straight
-            // into `/conflicts` with `selected` set, the same query param `ConflictsPage` already
-            // reads, rather than guaranteeing the row is on whatever page loads first there.
+            // Deep-links into `/adjudication` with `kind=conflicts` and `selected` set to the
+            // conflict id; `AdjudicationPage` documents the first-row fallback for a `selected`
+            // id that is off its current page.
             <ul className="conflict-handoff" aria-label="Conflicts to review">
               {answer.conflictIds.map((conflictId) => (
                 <li key={conflictId}>
                   <Link
-                    to={`/conflicts?selected=${conflictId}`}
+                    to={`/adjudication?kind=conflicts&selected=${conflictId}`}
                     className="btn btn--secondary btn--sm"
                   >
                     Review conflict

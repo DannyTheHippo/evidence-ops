@@ -109,14 +109,14 @@ describe('ApiKeysPage', () => {
     vi.unstubAllGlobals();
   });
 
-  it('names its sidebar group in the eyebrow, since this route is signed-in-only, not admin-gated', async () => {
+  it('names the Admin area in the eyebrow; the route itself stays signed-in-only, not admin-gated', async () => {
     stubFetch({
       [DEFAULT_LIST_URL]: () => jsonResponse({ docs: [], count: 0 }),
     });
 
     renderPage();
 
-    expect(await screen.findByText('Account')).toBeInTheDocument();
+    expect(await screen.findByText('Admin')).toBeInTheDocument();
   });
 
   it('lists existing keys, showing only the prefix, never a token', async () => {

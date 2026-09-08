@@ -11,6 +11,7 @@ import RecordListPage, { type RecordListStatus } from '../components/RecordListP
 import Button from '../components/ui/Button';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Pager from '../components/ui/Pager';
+import Panel from '../components/ui/Panel';
 import SortableHeaderCell from '../components/ui/SortableHeaderCell';
 import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
 import { notify } from '../components/ui/toast';
@@ -160,8 +161,8 @@ export default function CanonicalEntitiesPage() {
 
   return (
     <RecordListPage
-      eyebrow="Admin"
-      title="Aliases"
+      eyebrow="Ledger"
+      title="Aliases and entities"
       description="Confirm or reject proposed spellings below, or register one yourself — an unregistered property never has its conflicts surfaced, and renaming or deleting a row here does not retroactively regroup facts already extracted."
       actions={
         <Button variant="primary" onClick={() => setEditorTarget('new')}>
@@ -191,12 +192,7 @@ export default function CanonicalEntitiesPage() {
       }
     >
       {entities && entities.length > 0 && (
-        <section
-          className="panel"
-          tabIndex={0}
-          role="region"
-          aria-label="Alias groups and the names they resolve to"
-        >
+        <Panel aria-label="Alias groups and the names they resolve to">
           <Table caption="Alias groups and the names they resolve to.">
             <thead>
               <tr>
@@ -222,7 +218,7 @@ export default function CanonicalEntitiesPage() {
               ))}
             </tbody>
           </Table>
-        </section>
+        </Panel>
       )}
 
       {editorTarget && (

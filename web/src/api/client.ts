@@ -459,8 +459,20 @@ export type InsufficientEvidenceReasonCode =
   | 'evidence_does_not_address_question'
   | 'retrieved_evidence_contradicts_itself';
 
+// `AnswerOutcomeResponseDto`'s `answered` branch — present only when the answer resolved via the
+// ledger rather than synthesis (`Answer.answerPath === 'ledger'`).
+export type LedgerProvenance = {
+  entity: string;
+  measure: string;
+  period?: string;
+  state: 'single' | 'adjudicated';
+  factId: string;
+  winnerWithdrawn?: boolean;
+  decision?: LedgerDecision;
+};
+
 export type AnswerOutcome =
-  | { kind: 'answered'; claims: Claim[] }
+  | { kind: 'answered'; claims: Claim[]; ledger?: LedgerProvenance }
   // `reasonCode` is present only for a model-authored abstention (absent on legacy answers and on
   // the grounding gate's own degraded insufficient_evidence — see `answer.contract.ts`'s doc
   // comment on the API side). It never changes what is rendered here on its own: the API only ever
@@ -524,58 +536,6 @@ export function answerEventsUrl(id: string): string {
   return `${API}/answers/${id}/events`;
 }
 
-// ── Retrieval ────────────────────────────────────────────────────────────
-
-/** What `search_evidence` returns for one retrieved chunk, including the owning document's
- * `sourceClass` and `documentCreatedAt` for display alongside a result group. `score` is a fused
- * hybrid-retrieval relevance value — bounded above by a small constant, not a 0-1 similarity, per
- * the generated schema's own doc comment: rank this response's hits against each other with it,
- * never render it as a percentage, compare it across queries, or test it against a threshold. */
-export type RetrievedChunkView = StrictOmit<Schemas['RetrievedChunkResponseDto'], 'locator'> & {
-  // The document types a locator as a bare object: `Locator` is a discriminated union the API
-  // describes in prose, and OpenAPI carries no schema for it.
-  locator: Locator;
-};
-
-/**
- * `docs` plus `hasMore`, never a total. The store over-fetches non-deterministically, a
- * fail-closed score floor drops hits after fusion, and withdrawn versions are dropped after
- * that, so page boundaries can shift between two identical calls and a filter can leave a page
- * short while more results exist — a count taken at any single point would already be wrong by
- * the time it renders. `hasMore` is the only claim this endpoint can make honestly.
- */
-export interface SearchEvidenceResult {
-  docs: RetrievedChunkView[];
-  hasMore: boolean;
-}
-
-/** The only field `/retrieval/search` sorts by — it exists only after fusion runs, unlike every
- * other list endpoint, which sorts a Mongo query directly. */
-export type RetrievalSortField = 'score';
-
-export function searchEvidence(params: {
-  query: string;
-  skip?: number;
-  limit?: number;
-  documentId?: string;
-  sourceClass?: DocumentSourceClass;
-  createdAfter?: string;
-  createdBefore?: string;
-  sort?: RetrievalSortField;
-  sortDir?: SortDirection;
-}): Promise<SearchEvidenceResult> {
-  const query = new URLSearchParams({ query: params.query });
-  if (params.skip !== undefined) query.set('skip', String(params.skip));
-  if (params.limit !== undefined) query.set('limit', String(params.limit));
-  if (params.documentId !== undefined) query.set('documentId', params.documentId);
-  if (params.sourceClass !== undefined) query.set('sourceClass', params.sourceClass);
-  if (params.createdAfter !== undefined) query.set('createdAfter', params.createdAfter);
-  if (params.createdBefore !== undefined) query.set('createdBefore', params.createdBefore);
-  if (params.sort !== undefined) query.set('sort', params.sort);
-  if (params.sortDir !== undefined) query.set('sortDir', params.sortDir);
-  return request<SearchEvidenceResult>(`/retrieval/search?${query.toString()}`);
-}
-
 // ── Conflicts ────────────────────────────────────────────────────────────
 
 export type ConflictStatus = 'open' | 'resolved' | 'dismissed';
@@ -623,6 +583,9 @@ export interface Conflict {
   proposedWinnerFactId?: string;
   ruleFired?: ConflictRuleFired;
   explanation?: string;
+  // `ConflictResponseDto.resolution` — present once a human or the timeout branch has decided
+  // this conflict; absent while it is still open.
+  resolution?: ConflictResolution;
 }
 
 // Deliberately excludes `magnitude`: each row carries its own `magnitudeUnit`, so ordering by the
@@ -635,6 +598,8 @@ export function listConflicts(params?: {
   status?: ConflictStatus;
   sort?: ConflictSortField;
   sortDir?: SortDirection;
+  // The server drops skip/limit when ids is present — an exact join fetches every named row.
+  ids?: string[];
 }): Promise<WithCount<Conflict>> {
   const query = new URLSearchParams();
   if (params?.skip !== undefined) query.set('skip', String(params.skip));
@@ -642,6 +607,7 @@ export function listConflicts(params?: {
   if (params?.status) query.set('status', params.status);
   if (params?.sort !== undefined) query.set('sort', params.sort);
   if (params?.sortDir !== undefined) query.set('sortDir', params.sortDir);
+  if (params?.ids !== undefined) query.set('ids', params.ids.join(','));
   const qs = query.toString();
   return request<WithCount<Conflict>>(`/conflicts${qs ? `?${qs}` : ''}`);
 }
@@ -1187,4 +1153,277 @@ export function revokeHarvestedAlias(id: string, alias: string): Promise<Canonic
     method: 'POST',
     ...jsonBody({ alias }),
   });
+}
+
+// ── Ledger ───────────────────────────────────────────────────────────────
+
+// `LedgerCellResponseDto.value` / `LedgerResolutionResponseDto.value` — a bare object in the
+// document, so the resolved amount is hand-written rather than derived.
+export interface LedgerValue {
+  amount: number;
+  unit: string;
+  canonicalAmount?: number;
+}
+
+// `ConflictResponseDto.resolution` (Phase 3B) — the same shape a ledger decision carries.
+export interface ConflictResolution {
+  outcome: 'resolved' | 'rejected' | 'timed_out' | 'superseded' | 'retracted';
+  winningFactId?: string;
+  decidedBy?: string;
+  reason?: string;
+  resolvedAt: string;
+  ruleFired?: ConflictRuleFired;
+  followedProposal?: boolean;
+}
+
+// `LedgerCellResponseDto.decision` / `LedgerResolutionResponseDto.decision` — a resolution
+// attributed to the conflict it decided.
+export type LedgerDecision = ConflictResolution & { conflictId: string };
+
+// `LedgerResolutionResponseDto.citations` (array entry) — a bare object in the document.
+export interface LedgerCitation {
+  factId: string;
+  documentId: string;
+  documentVersionId: string;
+  sha256: string;
+  locator: Locator;
+  extractorVersion: string;
+  quote: string;
+  withdrawn: boolean;
+}
+
+// `FactResponseDto.factKey` — a bare object in the document.
+export interface FactKey {
+  entity: string;
+  metric: string;
+  period: string;
+}
+
+export type LedgerCell = StrictOmit<
+  Schemas['LedgerCellListResponseDto']['docs'][number],
+  'value' | 'decision'
+> & {
+  value?: LedgerValue;
+  decision?: LedgerDecision;
+};
+
+export type LedgerCellState = LedgerCell['state'];
+
+export function listLedgerCells(params?: {
+  skip?: number;
+  limit?: number;
+  entity?: string;
+  measure?: string;
+  state?: LedgerCellState;
+  period?: string;
+}): Promise<WithCount<LedgerCell>> {
+  const query = new URLSearchParams();
+  if (params?.skip !== undefined) query.set('skip', String(params.skip));
+  if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  if (params?.entity !== undefined) query.set('entity', params.entity);
+  if (params?.measure !== undefined) query.set('measure', params.measure);
+  if (params?.state !== undefined) query.set('state', params.state);
+  if (params?.period !== undefined) query.set('period', params.period);
+  const qs = query.toString();
+  return request<WithCount<LedgerCell>>(`/ledger${qs ? `?${qs}` : ''}`);
+}
+
+export type LedgerFact = StrictOmit<
+  Schemas['FactListResponseDto']['docs'][number],
+  'factKey' | 'value' | 'citation'
+> & {
+  factKey: FactKey;
+  value: LedgerValue;
+  citation: LedgerCitation;
+};
+
+// The drill-down behind one cell: entity and measure address the cell the same way
+// `listLedgerCells`'s filters do, and period narrows to the cell's own period.
+export function listLedgerFacts(params: {
+  entity: string;
+  measure: string;
+  period?: string;
+}): Promise<WithCount<LedgerFact>> {
+  const query = new URLSearchParams();
+  query.set('entity', params.entity);
+  query.set('measure', params.measure);
+  if (params.period !== undefined) query.set('period', params.period);
+  return request<WithCount<LedgerFact>>(`/ledger/facts?${query.toString()}`);
+}
+
+// ── Measures ─────────────────────────────────────────────────────────────
+
+// `MeasureResponseDto.units` (array entry) — a bare object in the document.
+export interface MeasureUnit {
+  id: string;
+  toCanonicalFactor: number;
+}
+
+// `MeasureResponseDto.proposedFrom` (array entry) — a bare object in the document.
+export interface MeasureProposedFrom {
+  documentVersionId: string;
+  locator: Locator;
+  headerText: string;
+}
+
+export type Measure = StrictOmit<
+  Schemas['MeasureListResponseDto']['docs'][number],
+  'units' | 'proposedFrom' | 'lastRescan'
+> & {
+  units: MeasureUnit[];
+  proposedFrom: MeasureProposedFrom[];
+  // `MeasureResponseDto.lastRescan` — a bare object in the document. Absent until this measure
+  // has been confirmed or edited at least once.
+  lastRescan?: { at: string; status: 'completed' | 'failed'; durationMs: number; error?: string };
+};
+
+export type MeasureStatus = Measure['status'];
+
+export interface MeasureEdits {
+  label?: string;
+  aliases?: string[];
+  valueType?: Measure['valueType'];
+  canonicalUnit?: string;
+  toleranceKind?: Measure['toleranceKind'];
+  tolerance?: number;
+  stalenessWindowMs?: number;
+}
+
+export function listMeasures(params?: {
+  status?: MeasureStatus;
+  skip?: number;
+  limit?: number;
+}): Promise<WithCount<Measure>> {
+  const query = new URLSearchParams();
+  if (params?.status !== undefined) query.set('status', params.status);
+  if (params?.skip !== undefined) query.set('skip', String(params.skip));
+  if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  const qs = query.toString();
+  return request<WithCount<Measure>>(`/measures${qs ? `?${qs}` : ''}`);
+}
+
+// Admin-only server-side: confirming a proposed measure authorizes fact extraction to mint facts
+// under it tenant-wide, and triggers a synchronous rescan of every fact it already stamped.
+export function confirmMeasure(id: string, edits: MeasureEdits): Promise<Measure> {
+  return request<Measure>(`/measures/${id}/confirm`, { method: 'POST', ...jsonBody(edits) });
+}
+
+export function rejectMeasure(id: string, reason?: string): Promise<Measure> {
+  return request<Measure>(`/measures/${id}/reject`, {
+    method: 'POST',
+    ...jsonBody(reason ? { reason } : {}),
+  });
+}
+
+// Admin-only server-side: editing a confirmed measure's definition changes how every fact under
+// it, past and future, is interpreted tenant-wide, and triggers the same synchronous rescan.
+export function updateMeasure(id: string, edits: MeasureEdits): Promise<Measure> {
+  return request<Measure>(`/measures/${id}`, { method: 'PATCH', ...jsonBody(edits) });
+}
+
+// ── Verifications ────────────────────────────────────────────────────────
+
+// `VerifyClaimResultResponseDto.verdict` — enum-annotated by the schema.
+export type ClaimVerdict = Schemas['VerifyClaimResultResponseDto']['verdict'];
+
+// `VerifyClaimResultResponseDto` (array entry of `VerificationResponseDto.results`) — its own
+// `citations` field is a bare object in the document.
+export interface VerifyClaimResult {
+  claimIndex: number;
+  verdict: ClaimVerdict;
+  reasonCode?: string;
+  citations?: Citation[];
+}
+
+// `VerificationResponseDto.atoms` (array entry) — a bare object in the document.
+export interface ClaimAtoms {
+  claimIndex: number;
+  statement: string;
+  atoms: string[];
+}
+
+export type Verification = StrictOmit<Schemas['VerificationResponseDto'], 'results' | 'atoms'> & {
+  results: VerifyClaimResult[];
+  atoms: ClaimAtoms[];
+};
+
+export function listVerifications(params?: {
+  skip?: number;
+  limit?: number;
+  sort?: 'createdAt';
+  sortDir?: SortDirection;
+}): Promise<WithCount<Verification>> {
+  const query = new URLSearchParams();
+  if (params?.skip !== undefined) query.set('skip', String(params.skip));
+  if (params?.limit !== undefined) query.set('limit', String(params.limit));
+  if (params?.sort !== undefined) query.set('sort', params.sort);
+  if (params?.sortDir !== undefined) query.set('sortDir', params.sortDir);
+  const qs = query.toString();
+  return request<WithCount<Verification>>(`/verifications${qs ? `?${qs}` : ''}`);
+}
+
+export function getVerificationById(id: string): Promise<Verification> {
+  return request<Verification>(`/verifications/${id}`);
+}
+
+// ── Attestations ─────────────────────────────────────────────────────────
+
+// The REST path segment an attestation bundle is fetched under — not a UI label.
+export type AttestationKind = 'answers' | 'verifications';
+
+// `AttestationBundleResponseDto.subject` — a bare object in the document, shaped by `kind`: the
+// question text for an answer bundle, the submitted claim list for a verification bundle.
+export type AttestationSubject = { question: string } | { claims: string[] };
+
+// `AttestationBundleResponseDto.claims` (array entry, nested `citations`) — a bare object in the
+// document.
+export interface AttestationCitation {
+  documentId: string | null;
+  documentVersionId: string;
+  sha256: string;
+  locator: Locator;
+  extractorVersion: string;
+  quote: string;
+}
+
+// `AttestationBundleResponseDto.claims` (array entry) — every claim considered for the subject,
+// survived or dropped, each with the checks that decided its verdict.
+export interface AttestationClaim {
+  statement: string;
+  atoms?: string[];
+  verdict: ClaimVerdict | 'survived' | 'dropped';
+  citations: AttestationCitation[];
+  checks: { name: string; passed: boolean; detail?: string }[];
+}
+
+// `AttestationBundleResponseDto.decisions` (array entry) — a ledger decision attributed to the
+// fact it decided, rather than the conflict `LedgerDecision` already carries.
+export type AttestationDecision = LedgerDecision & { factKey: FactKey };
+
+// `AttestationBundleResponseDto.measures` (array entry) — a bare object in the document.
+export interface AttestationMeasure {
+  slug: string;
+  version: number;
+  status: MeasureStatus;
+}
+
+// `AttestationBundleResponseDto.integrity` — a bare object in the document.
+export interface AttestationIntegrity {
+  algorithm: 'sha256';
+  contentHash: string;
+}
+
+export type AttestationBundle = StrictOmit<
+  Schemas['AttestationBundleResponseDto'],
+  'subject' | 'claims' | 'decisions' | 'measures' | 'integrity'
+> & {
+  subject: AttestationSubject;
+  claims: AttestationClaim[];
+  decisions: AttestationDecision[];
+  measures: AttestationMeasure[];
+  integrity: AttestationIntegrity;
+};
+
+export function getAttestation(kind: AttestationKind, id: string): Promise<AttestationBundle> {
+  return request<AttestationBundle>(`/${kind}/${id}/attestation`);
 }

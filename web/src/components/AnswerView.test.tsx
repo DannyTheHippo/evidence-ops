@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 import type { Answer } from '../api/client';
 import type { ResolvedVersion } from '../lib/document-index';
@@ -328,7 +328,7 @@ describe('AnswerView', () => {
     );
   });
 
-  it('maps retrieved_evidence_contradicts_itself to the conflicts queue', () => {
+  it('maps retrieved_evidence_contradicts_itself to the adjudication queue', () => {
     renderView(
       baseAnswer({
         outcome: {
@@ -339,44 +339,27 @@ describe('AnswerView', () => {
       }),
     );
 
-    expect(screen.getByRole('link', { name: 'Check the conflicts queue' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Check the adjudication queue' })).toHaveAttribute(
       'href',
-      '/conflicts',
+      '/adjudication?kind=conflicts&status=open',
     );
   });
 
-  it('maps evidence_does_not_address_question to a rephrase link carrying the question as router state', () => {
-    function LocationProbe() {
-      const location = useLocation();
-      return (
-        <output aria-label="current location">
-          {location.pathname}::{JSON.stringify(location.state)}
-        </output>
-      );
-    }
-
-    render(
-      <MemoryRouter>
-        <AnswerView
-          answer={baseAnswer({
-            questionText: 'What is the cap rate?',
-            outcome: {
-              kind: 'insufficient_evidence',
-              reason: 'The evidence does not address the question.',
-              reasonCode: 'evidence_does_not_address_question',
-            },
-          })}
-          documentIndex={new Map()}
-          conflictChunkIndex={new Map()}
-        />
-        <LocationProbe />
-      </MemoryRouter>,
+  it('maps evidence_does_not_address_question to a rephrase link carrying the question in the query string', () => {
+    renderView(
+      baseAnswer({
+        questionText: 'What is the cap rate?',
+        outcome: {
+          kind: 'insufficient_evidence',
+          reason: 'The evidence does not address the question.',
+          reasonCode: 'evidence_does_not_address_question',
+        },
+      }),
     );
 
-    fireEvent.click(screen.getByRole('link', { name: 'Rephrase the question' }));
-
-    expect(screen.getByRole('status', { name: 'current location' })).toHaveTextContent(
-      `/ask::${JSON.stringify({ questionText: 'What is the cap rate?' })}`,
+    expect(screen.getByRole('link', { name: 'Rephrase the question' })).toHaveAttribute(
+      'href',
+      '/answers?q=What%20is%20the%20cap%20rate%3F',
     );
   });
 
@@ -427,7 +410,7 @@ describe('AnswerView', () => {
 
     const links = screen.getAllByRole('link', { name: 'Review conflict' });
     expect(links).toHaveLength(2);
-    expect(links[0]).toHaveAttribute('href', '/conflicts?selected=conflict-1');
-    expect(links[1]).toHaveAttribute('href', '/conflicts?selected=conflict-2');
+    expect(links[0]).toHaveAttribute('href', '/adjudication?kind=conflicts&selected=conflict-1');
+    expect(links[1]).toHaveAttribute('href', '/adjudication?kind=conflicts&selected=conflict-2');
   });
 });

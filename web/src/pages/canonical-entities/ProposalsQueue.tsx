@@ -10,6 +10,7 @@ import { IconClipboard } from '../../components/icons';
 import Button from '../../components/ui/Button';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import EmptyState from '../../components/ui/EmptyState';
+import Panel from '../../components/ui/Panel';
 import Table, { TableCell, TableHeaderCell } from '../../components/ui/Table';
 import { notify } from '../../components/ui/toast';
 import { formatLocator } from '../../lib/locator';
@@ -186,7 +187,7 @@ export default function ProposalsQueue({
     <>
       <section className="card">
         <div className="card-head">
-          <h2 className="card-title">Review queue</h2>
+          <h2 className="card-title">Proposed aliases</h2>
           {proposals.length > 0 && (
             <div className="queue-head-actions">
               {/* Counts only the entities this page loaded — the queue has no server-side filter
@@ -226,12 +227,7 @@ export default function ProposalsQueue({
       </section>
 
       {proposals.length > 0 && (
-        <section
-          className="panel"
-          tabIndex={0}
-          role="region"
-          aria-label="Proposed aliases awaiting confirmation"
-        >
+        <Panel aria-label="Proposed aliases awaiting confirmation">
           <Table caption="Proposed aliases awaiting confirmation.">
             <thead>
               <tr>
@@ -252,7 +248,7 @@ export default function ProposalsQueue({
               ))}
             </tbody>
           </Table>
-        </section>
+        </Panel>
       )}
     </>
   );

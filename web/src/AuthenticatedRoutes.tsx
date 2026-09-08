@@ -3,23 +3,23 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-
 import Button from './components/ui/Button';
 import LinkButton from './components/ui/LinkButton';
 import { useSession } from './lib/use-session';
+import AdjudicationPage from './pages/AdjudicationPage';
 import AnswerDetailPage from './pages/AnswerDetailPage';
 import AnswersPage from './pages/AnswersPage';
 import ApiKeysPage from './pages/ApiKeysPage';
-import ApprovalsPage from './pages/ApprovalsPage';
-import AskPage from './pages/AskPage';
 import AuditEventsPage from './pages/AuditEventsPage';
 import CanonicalEntitiesPage from './pages/CanonicalEntitiesPage';
-import ConflictsPage from './pages/ConflictsPage';
 import DataRoomPage from './pages/DataRoomPage';
 import DocumentWorkbenchPage from './pages/DocumentWorkbenchPage';
 import HomePage from './pages/HomePage';
 import InvitationsPage from './pages/InvitationsPage';
+import LedgerPage from './pages/LedgerPage';
+import MeasuresPage from './pages/MeasuresPage';
 import PeoplePage from './pages/PeoplePage';
 import RunsPage from './pages/RunsPage';
-import SearchPage from './pages/SearchPage';
 import SourceDetailPage from './pages/SourceDetailPage';
 import SourcesPage from './pages/SourcesPage';
+import VerificationDetailPage from './pages/VerificationDetailPage';
 import WorkflowRunPage from './pages/WorkflowRunPage';
 
 function NotFoundView() {
@@ -70,9 +70,11 @@ export function RequireAdmin({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-/** Everything reachable only after RequireAuth/RequireAdmin passes. Statically imported so the
- * single `lazy(() => import('./AuthenticatedRoutes'))` call in `App.tsx` resolves one dynamic
- * import against one static module graph, producing one chunk instead of one per page. */
+/** Every authenticated route, covering the seven sidebar areas (Home, Estate, Ledger,
+ * Adjudication, Answers, Runs, Admin) plus the admin-only Aliases and entities page and the
+ * ungated `/invitations` shim. Statically imported so the single
+ * `lazy(() => import('./AuthenticatedRoutes'))` call in `App.tsx` resolves one dynamic import
+ * against one static module graph, producing one chunk instead of one per page. */
 export default function AuthenticatedRoutes() {
   return (
     <Routes>
@@ -81,14 +83,6 @@ export default function AuthenticatedRoutes() {
         element={
           <RequireAuth>
             <HomePage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/ask"
-        element={
-          <RequireAuth>
-            <AskPage />
           </RequireAuth>
         }
       />
@@ -109,10 +103,10 @@ export default function AuthenticatedRoutes() {
         }
       />
       <Route
-        path="/search"
+        path="/answers/verifications/:id"
         element={
           <RequireAuth>
-            <SearchPage />
+            <VerificationDetailPage />
           </RequireAuth>
         }
       />
@@ -157,18 +151,26 @@ export default function AuthenticatedRoutes() {
         }
       />
       <Route
-        path="/conflicts"
+        path="/ledger"
         element={
           <RequireAuth>
-            <ConflictsPage />
+            <LedgerPage />
           </RequireAuth>
         }
       />
       <Route
-        path="/approvals"
+        path="/measures"
         element={
           <RequireAuth>
-            <ApprovalsPage />
+            <MeasuresPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/adjudication"
+        element={
+          <RequireAuth>
+            <AdjudicationPage />
           </RequireAuth>
         }
       />

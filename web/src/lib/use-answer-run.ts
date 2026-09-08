@@ -14,7 +14,7 @@ export interface UseAnswerRunOptions {
   answerId: string | null;
   pollIntervalMs?: number;
   /**
-   * Seeds state for `answerId` without the hook's own fetch — AskPage passes the optimistic
+   * Seeds state for `answerId` without the hook's own fetch — AnswerComposer passes the optimistic
    * snapshot it already built from `startQuestion()`'s response, so the hook's own GET on that
    * same id would only replay the 'queued' state the caller already has. Only consulted while
    * `answerId` is transitioning to this value: a caller that later replaces the object (or the
@@ -37,8 +37,9 @@ export interface UseAnswerRunResult {
  * environment with no `EventSource` at all, and the API's own 30-minute stream ceiling
  * (`qa.service.ts`'s `takeUntil`) ending the connection out from under a browser that would
  * otherwise keep retrying it — in every case the run still reaches its terminal state on screen,
- * carried by the poll instead of the stream. Shared by AskPage, which seeds `initialAnswer` from
- * its own optimistic snapshot, and AnswerDetailPage, which has nothing to seed and always fetches.
+ * carried by the poll instead of the stream. Shared by AnswerComposer, which seeds `initialAnswer`
+ * from its own optimistic snapshot, and AnswerDetailPage, which has nothing to seed and always
+ * fetches.
  */
 export function useAnswerRun({
   answerId,

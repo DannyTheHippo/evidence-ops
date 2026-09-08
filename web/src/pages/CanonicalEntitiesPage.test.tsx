@@ -42,7 +42,7 @@ const southpark = {
   createdAt: '2026-07-02T00:00:00.000Z',
 };
 
-// Dispatches by URL, matching ApprovalsPage.test.tsx's stubFetch shape.
+// Dispatches by URL.
 function stubFetch(routes: Record<string, (init?: RequestInit) => Response>): void {
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     const handler = routes[url];
@@ -409,7 +409,9 @@ describe('CanonicalEntitiesPage', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Aliases' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: 'Aliases and entities' }),
+    ).toBeInTheDocument();
   });
 
   it('bounces a member away from the route wrapped in RequireAdmin', async () => {
@@ -434,6 +436,6 @@ describe('CanonicalEntitiesPage', () => {
     );
 
     expect(await screen.findByText('home probe')).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Aliases' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Aliases and entities' })).not.toBeInTheDocument();
   });
 });

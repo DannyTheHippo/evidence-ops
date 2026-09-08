@@ -1,19 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
-import { useLocation } from 'react-router-dom';
-import { startQuestion, type Answer } from '../api/client';
-import AnswerWorkspace from '../components/AnswerWorkspace';
-import Button from '../components/ui/Button';
-import PageHeader from '../components/ui/PageHeader';
-import { useAnswerRun } from '../lib/use-answer-run';
-import { useFormSubmit } from '../lib/use-form-submit';
+import { startQuestion, type Answer } from '../../api/client';
+import AnswerWorkspace from '../../components/AnswerWorkspace';
+import Button from '../../components/ui/Button';
+import { useAnswerRun } from '../../lib/use-answer-run';
+import { useFormSubmit } from '../../lib/use-form-submit';
 
-interface AskPageProps {
+interface AnswerComposerProps {
+  /** A question to seed the draft with — the Answers page's `?q=` query param, itself set by a
+   * rephrase/prefill link elsewhere. Adopted at mount via a lazy initializer and again, without a
+   * remount, by the render-time check below. */
+  initialQuestion?: string;
+  /** Runs once `startQuestion()` resolves and the run has been seeded, so the page can refresh
+   * its history list to pick up the new `queued` row. */
+  onRunStarted?: () => void;
   // Overridable so tests can poll on a short interval instead of stubbing timers.
   pollIntervalMs?: number;
-}
-
-interface AskLocationState {
-  questionText?: string;
 }
 
 // Static suggestions, not a recent-query history: a localStorage history would persist tenant
@@ -24,15 +25,27 @@ const EXAMPLE_QUESTIONS = [
   'Are there any conflicting rent roll figures this quarter?',
 ];
 
-export default function AskPage({ pollIntervalMs }: AskPageProps) {
-  const location = useLocation();
-  // The redundant-entry prefill contract (WCAG 3.3.7): an "Ask again"/"Rephrase" link elsewhere
-  // navigates here with router state rather than a query string, since a question can carry
-  // characters a URL would need to encode. Read once, at mount — a later state change on the same
-  // route (e.g. the user typing) must never overwrite what they've typed.
-  const [questionText, setQuestionText] = useState(
-    () => (location.state as AskLocationState | null)?.questionText ?? '',
-  );
+export default function AnswerComposer({
+  initialQuestion,
+  onRunStarted,
+  pollIntervalMs,
+}: AnswerComposerProps) {
+  // The lazy initializer covers a fresh mount, reading before first paint. On its own it would
+  // never re-fire on this route: AnswerView's rephrase link renders inside this same composer on
+  // /answers, so following it changes `?q=` without remounting the page — the render-time check
+  // below is what adopts that later change instead.
+  const [questionText, setQuestionText] = useState(() => initialQuestion ?? '');
+  // Tracks the `initialQuestion` already reacted to, so a later prop change is adopted at most
+  // once per value — the sanctioned "adjusting state when a prop changes" pattern
+  // (react.dev/learn/you-might-not-need-an-effect; use-answer-run.ts's own `resetForId` uses the
+  // same escape hatch), applied during render rather than a subsequent effect. A non-empty value
+  // is adopted into the draft; an empty one (the page strips `?q=` right after adoption) is only
+  // recorded here, never applied, so a draft typed since is never cleared.
+  const [adoptedQuestion, setAdoptedQuestion] = useState(initialQuestion);
+  if (initialQuestion !== adoptedQuestion) {
+    setAdoptedQuestion(initialQuestion);
+    if (initialQuestion) setQuestionText(initialQuestion);
+  }
   const [answerId, setAnswerId] = useState<string | null>(null);
   // The optimistic snapshot built from startQuestion()'s own response, seeded into
   // useAnswerRun() so its initial fetch is skipped — the server has nothing more to say about a
@@ -59,6 +72,7 @@ export default function AskPage({ pollIntervalMs }: AskPageProps) {
         withdrawnCitedDocVersionIds: [],
       });
       setAnswerId(result.id);
+      onRunStarted?.();
     },
   });
   const { id: questionId, error: questionError } = fieldProps('questionText');
@@ -82,21 +96,15 @@ export default function AskPage({ pollIntervalMs }: AskPageProps) {
   });
 
   return (
-    <div className="view view--roomy">
-      <PageHeader
-        eyebrow="Ask"
-        title="Ask"
-        description="Ask a question grounded in the uploaded evidence."
-      />
-
-      {/* Untitled, unlike a filter card — the question field is the page's purpose, not a
-          refinement of something below it, and a heading under a page title that already reads
-          Ask would repeat itself. */}
+    <>
       <section className="card">
+        <div className="card-head">
+          <h2 className="card-title">Ask a question</h2>
+        </div>
         <form onSubmit={onSubmit} className="form" noValidate>
           <div className="composer-row">
-            {/* The app's one sanctioned label-less input: a visible label would only repeat the
-                page title directly above it. */}
+            {/* Label-less against the heading above, not the page title — the page itself is
+                titled "Answers", which the question field would only repeat. */}
             <input
               ref={inputRef}
               id={questionId}
@@ -155,6 +163,6 @@ export default function AskPage({ pollIntervalMs }: AskPageProps) {
           {runError}
         </p>
       )}
-    </div>
+    </>
   );
 }

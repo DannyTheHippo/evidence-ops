@@ -31,9 +31,9 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-// Dispatches by URL and method, matching ApprovalsPage.test.tsx's stubFetch shape. Both list URLs
-// default to an empty page so a test only has to override what it cares about — both fetches fire
-// on every render regardless of which view is on screen, so both need a default.
+// Dispatches by URL and method. Both list URLs default to an empty page so a test only has to
+// override what it cares about — both fetches fire on every render regardless of which view is on
+// screen, so both need a default.
 type RouteHandler = (init?: RequestInit) => Response | Promise<Response>;
 
 function stubFetch(

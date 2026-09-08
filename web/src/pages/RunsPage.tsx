@@ -123,8 +123,8 @@ export default function RunsPage() {
   const hasFilter = appliedStatus !== '' || appliedWorkflowType !== '';
 
   // Zero rows still resolves to `ready` rather than RecordListPage's own `empty` kind — that kind's
-  // EmptyState carries no `className`, and the unfiltered case needs `empty-state--zero`, matching
-  // ApprovalsPage's identical split between an earned-zero state and a filtered-empty one.
+  // EmptyState carries no `className`, and the unfiltered case needs `empty-state--zero` to read as
+  // an earned-zero state rather than a filtered-empty one.
   let status: RecordListStatus;
   if (runs === null) {
     status = error ? { kind: 'blank' } : { kind: 'loading', label: 'Loading workflow runs…' };
@@ -134,7 +134,7 @@ export default function RunsPage() {
 
   return (
     <RecordListPage
-      eyebrow="Review"
+      eyebrow="Runs"
       title="Runs"
       description="Workflow runs across ingestion, sync, and resolution. Status is the last recorded value, not a live read of the workflow engine — open a run for its current state."
       filters={
@@ -185,7 +185,7 @@ export default function RunsPage() {
           icon={<IconActivity size={24} />}
           title="No runs yet"
           description="Runs appear here once a question, ingestion, sync, or conflict resolution starts."
-          action={<LinkButton to="/ask">Ask a question</LinkButton>}
+          action={<LinkButton to="/sources">Add a source</LinkButton>}
         />
       )}
 

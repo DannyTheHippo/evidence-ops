@@ -89,8 +89,7 @@ function renderAt(id: string, pollIntervalMs = 5) {
 
 // Every test now probes /auth/me (the decide-from-run-page path added a useSession() call), so
 // dispatch by URL rather than call order, and clear the module-scope session cache between tests
-// — otherwise whichever role the first test resolves would leak into every later one, matching
-// ApprovalsPage.test.tsx's own afterEach.
+// — otherwise whichever role the first test resolves would leak into every later one.
 function meRoute(me: typeof admin | typeof member) {
   return (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : '';
@@ -348,7 +347,7 @@ describe('WorkflowRunPage', () => {
 
     expect(await screen.findByRole('link', { name: 'View conflict' })).toHaveAttribute(
       'href',
-      '/conflicts?selected=conflict-1',
+      '/adjudication?kind=conflicts&selected=conflict-1',
     );
   });
 

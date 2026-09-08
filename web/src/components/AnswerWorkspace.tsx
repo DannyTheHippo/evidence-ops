@@ -11,21 +11,21 @@ import Skeleton from './ui/Skeleton';
 interface AnswerWorkspaceProps {
   answer: Answer;
   /**
-   * 'ask' repeats the question as the card's own heading, since AskPage's page title is the
-   * static "Ask" rather than the question, and shows a full skeleton while in flight — there is
-   * nothing else on the page yet for a reader to look at. 'detail' leaves the heading to the
-   * page's own title (already the question text, so a second copy here would duplicate it). The
-   * two variants also carry different sr-only text for `RunStageStrip`, describing the same
-   * in-flight state each reader already sees visually.
+   * 'ask' repeats the question as the card's own heading, since AnswerComposer sits under the
+   * static "Answers" page title rather than the question, and shows a full skeleton while in
+   * flight — there is nothing else on the page yet for a reader to look at. 'detail' leaves the
+   * heading to the page's own title (already the question text, so a second copy here would
+   * duplicate it). The two variants also carry different sr-only text for `RunStageStrip`,
+   * describing the same in-flight state each reader already sees visually.
    */
   variant: 'ask' | 'detail';
 }
 
 /**
- * The answer surface shared by AskPage's live view and AnswerDetailPage's historical view: the
- * status badge, the in-flight and failed notices, `AnswerView`'s outcome rendering, and — admin
- * only — the run's model cost. Reads its own session rather than taking `isAdmin` as a prop, so
- * neither caller has to thread it through.
+ * The answer surface shared by AnswerComposer's live view and AnswerDetailPage's historical view:
+ * the status badge, the in-flight and failed notices, `AnswerView`'s outcome rendering, and —
+ * admin only — the run's model cost. Reads its own session rather than taking `isAdmin` as a
+ * prop, so neither caller has to thread it through.
  */
 export default function AnswerWorkspace({ answer, variant }: AnswerWorkspaceProps) {
   const session = useSession();

@@ -257,19 +257,6 @@
   font-style: italic;
 }
 
-/* ── Search results ──────────────────────────────────────────────────────── */
-
-/* One block per matched document inside the results card; .citations already carries its own
-   gap, so this only needs the spacing between one document's block and the next. */
-.search-result-group + .search-result-group {
-  margin-top: var(--space-5);
-}
-.search-result-group-title {
-  margin: 0 0 var(--space-3);
-  font-size: var(--text-md);
-  font-weight: 600;
-}
-
 /* ── Document workbench ──────────────────────────────────────────────────── */
 
 /* The PDF pane's `<iframe>`, sized to fill the reading column `SplitView`'s 'reader' ratio gives
@@ -382,8 +369,8 @@
 
 /* ── Ask composer ────────────────────────────────────────────────────────── */
 
-/* The composer is the full-width, untitled `.card` AskPage.tsx renders — see that file's own
-   comment for why it carries no heading. Everything below styles what sits inside it. */
+/* The composer is the `.card` `AnswerComposer.tsx` renders above the Answers page's run history.
+   Everything below styles what sits inside it. */
 .composer-row {
   display: flex;
   align-items: center;
@@ -858,71 +845,6 @@
   border-color: var(--signal-line);
   border-left: 2px solid var(--signal-line);
   background: var(--signal-soft);
-}
-
-/* ── Search composer ─────────────────────────────────────────────────────── */
-
-/* The full-width, untitled `.card` SearchPage.tsx renders above its filters — see that file's own
-   comment for why it carries no heading. Sits at the app's ordinary --control-h, not
-   --control-h-hero: Search and Ask are visual siblings with distinct promises, and only Ask earns
-   the taller hero control. */
-.search-composer-row {
-  display: flex;
-  align-items: flex-end;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-}
-.search-composer-row .field {
-  flex: 1;
-  min-width: 0;
-}
-.search-composer-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-/* The countdown moved off the button and onto its own chip so the button's accessible name stops
-   changing every second while disabled; aria-hidden on the caller's span keeps this decorative for
-   assistive tech, which already gets the disabled state from the button itself. */
-.search-cooldown-chip {
-  display: inline-flex;
-  align-items: center;
-  height: var(--control-h);
-  padding: 0 var(--control-pad-x);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  color: var(--muted);
-  font-size: var(--text-sm);
-}
-.search-ask-link {
-  font-size: var(--text-xs);
-}
-
-/* ── Search result groups ────────────────────────────────────────────────── */
-
-.search-result-group-meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  margin: 0 0 var(--space-3);
-  color: var(--muted);
-  font-size: var(--text-xs);
-}
-.search-result-group-class {
-  font-weight: 600;
-  letter-spacing: var(--tracking-mono-id);
-  text-transform: uppercase;
-}
-/* Locator and citation link on one row, the locator leading and the citation chip trailing —
-   distinct from ProvenanceRail's apparatus-meta, which right-aligns both because it has no
-   leading label to balance against. */
-.search-citation-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  margin-top: var(--space-2);
 }
 
 /* ── W8c: conflicts queue & value comparison ─────────────────────────────── */

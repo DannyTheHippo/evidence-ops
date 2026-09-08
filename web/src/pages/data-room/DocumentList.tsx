@@ -300,8 +300,8 @@ export default function DocumentList() {
   return (
     <div className="view">
       <PageHeader
-        eyebrow="Evidence"
-        title="Data Room"
+        eyebrow="Estate"
+        title="Data room"
         description="Upload source documents and track ingestion."
       />
 

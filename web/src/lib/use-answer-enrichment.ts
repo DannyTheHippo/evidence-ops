@@ -12,7 +12,7 @@ interface AnswerEnrichment {
  * Resolves the two display enrichments a completed answer needs beyond what the answer payload
  * itself carries: citation/conflict-value document titles, and — for `conflicting_evidence` —
  * each compared value's source chunk resolved to a document version and locator. Shared by
- * AskPage's live view and AnswerDetailPage's historical view, which both render the same
+ * AnswerComposer's live view and AnswerDetailPage's historical view, which both render the same
  * `AnswerView`.
  *
  * Neither resolution can fail the caller — see `document-index.ts`'s own doc comment — so both

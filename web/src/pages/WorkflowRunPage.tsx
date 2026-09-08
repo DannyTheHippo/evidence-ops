@@ -136,8 +136,7 @@ export default function WorkflowRunPage({
         : 'Rejected — the workflow resumes.',
     );
     // `decide()` (`approvals.service.ts`) only ever accepts a pending approval, so a success
-    // response means it has left the pending inbox `listApprovals()` returns — matching
-    // ApprovalsPage's own `handleDecided`.
+    // response means it has left the pending inbox `listApprovals()` returns.
     setApprovalDocs((current) => current.filter((approval) => approval.id !== pendingApproval.id));
     setPendingDecision(null);
   }
@@ -242,7 +241,7 @@ export default function WorkflowRunPage({
   return (
     <div className="view">
       <PageHeader
-        eyebrow="Review"
+        eyebrow="Runs"
         title={run ? workflowTypeLabel(run.workflowType) : 'Run timeline'}
         description="Watch a run pause for a human decision and resume after it."
         actions={
@@ -263,7 +262,11 @@ export default function WorkflowRunPage({
               carries neither, so presence alone is enough to gate this without guessing a
               target for the pair that's missing one. */}
           {run.subjectId && run.subjectType && (
-            <LinkButton to={`/conflicts?selected=${run.subjectId}`} variant="ghost" size="sm">
+            <LinkButton
+              to={`/adjudication?kind=conflicts&selected=${run.subjectId}`}
+              variant="ghost"
+              size="sm"
+            >
               View conflict
             </LinkButton>
           )}

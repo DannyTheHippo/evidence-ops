@@ -27,6 +27,7 @@ import LinkButton from '../components/ui/LinkButton';
 import Menu from '../components/ui/Menu';
 import Pager from '../components/ui/Pager';
 import PageHeader from '../components/ui/PageHeader';
+import Panel from '../components/ui/Panel';
 import RadioGroup, { type RadioOption } from '../components/ui/RadioGroup';
 import SegmentedControl from '../components/ui/SegmentedControl';
 import Skeleton from '../components/ui/Skeleton';
@@ -536,7 +537,7 @@ export default function PeoplePage() {
   return (
     <div className="view">
       <PageHeader
-        eyebrow="Organisation"
+        eyebrow="Admin"
         title="People"
         description="Manage this tenant's members and outstanding invitations."
         actions={
@@ -583,12 +584,7 @@ export default function PeoplePage() {
           )}
 
           {members && members.length > 0 && (
-            <section
-              className="panel"
-              tabIndex={0}
-              role="region"
-              aria-label="Members of this tenant and their roles"
-            >
+            <Panel aria-label="Members of this tenant and their roles">
               <Table caption="Members of this tenant and their roles.">
                 <thead>
                   <tr>
@@ -628,7 +624,7 @@ export default function PeoplePage() {
                   ))}
                 </tbody>
               </Table>
-            </section>
+            </Panel>
           )}
 
           {members && (
@@ -680,12 +676,7 @@ export default function PeoplePage() {
           )}
 
           {invitations && invitations.length > 0 && (
-            <section
-              className="panel"
-              tabIndex={0}
-              role="region"
-              aria-label="Invitations minted for this tenant"
-            >
+            <Panel aria-label="Invitations minted for this tenant">
               <Table caption="Invitations minted for this tenant.">
                 <thead>
                   <tr>
@@ -707,7 +698,7 @@ export default function PeoplePage() {
                   ))}
                 </tbody>
               </Table>
-            </section>
+            </Panel>
           )}
 
           {invitations && (

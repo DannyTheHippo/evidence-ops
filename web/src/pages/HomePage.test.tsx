@@ -268,13 +268,13 @@ describe('HomePage', () => {
     expect(screen.getByText('4').className).toContain('stat-row-value--caution');
     expect(screen.getByRole('link', { name: /Pending approvals/ })).toHaveAttribute(
       'href',
-      '/approvals',
+      '/adjudication?kind=decisions&state=pending',
     );
 
     expect(screen.getByText('2').className).toContain('stat-row-value--caution');
     expect(screen.getByRole('link', { name: /Open conflicts/ })).toHaveAttribute(
       'href',
-      '/conflicts',
+      '/adjudication?kind=conflicts&status=open',
     );
 
     expect(screen.getByText('3').className).toContain('stat-row-value--rejected');
@@ -334,7 +334,7 @@ describe('HomePage', () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole('link', { name: 'Approve resolving the occupancy rate conflict' }),
-    ).toHaveAttribute('href', '/approvals');
+    ).toHaveAttribute('href', '/adjudication?kind=decisions&state=pending&selected=approval-1');
     // An approval is a process state awaiting a decision, badged `info`; a conflict is data
     // actually in contention, badged `caution` — the two kinds of row must not look identical.
     expect(screen.getByText('Approval').className).toContain('badge--info');
@@ -342,7 +342,7 @@ describe('HomePage', () => {
     expect(screen.getByText('Northgate — occupancy (2025-03)')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Northgate — occupancy (2025-03)' })).toHaveAttribute(
       'href',
-      '/conflicts',
+      '/adjudication?kind=conflicts&selected=conflict-1',
     );
     expect(screen.getByText('Conflict').className).toContain('badge--possible');
   });

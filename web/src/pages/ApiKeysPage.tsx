@@ -18,6 +18,7 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Dialog from '../components/ui/Dialog';
 import Input from '../components/ui/Input';
 import Pager from '../components/ui/Pager';
+import Panel from '../components/ui/Panel';
 import SortableHeaderCell from '../components/ui/SortableHeaderCell';
 import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
 import Timestamp from '../components/ui/Timestamp';
@@ -363,8 +364,8 @@ export default function ApiKeysPage() {
   return (
     <>
       <RecordListPage
-        eyebrow="Account"
-        title="API Keys"
+        eyebrow="Admin"
+        title="API keys"
         description="Tokens an MCP client uses to authenticate as you."
         actions={
           <Button type="button" variant="primary" onClick={() => setMintOpen(true)}>
@@ -400,12 +401,7 @@ export default function ApiKeysPage() {
         }
       >
         {keys && keys.length > 0 && (
-          <section
-            className="panel"
-            tabIndex={0}
-            role="region"
-            aria-label="API keys that authenticate an MCP client as you"
-          >
+          <Panel aria-label="API keys that authenticate an MCP client as you">
             <Table caption="API keys that authenticate an MCP client as you.">
               <thead>
                 <tr>
@@ -453,7 +449,7 @@ export default function ApiKeysPage() {
                 ))}
               </tbody>
             </Table>
-          </section>
+          </Panel>
         )}
       </RecordListPage>
 

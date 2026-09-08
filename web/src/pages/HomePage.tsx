@@ -138,7 +138,7 @@ type WorkQueueItem =
  * kind of thing to a reader: a specific item that needs a decision. Each row also carries the
  * control that decides it, so the item can be cleared without leaving Home; the row still links
  * to the list page for anything the inline control does not cover (e.g. a conflict with no
- * policy recommendation, which needs the value picker `ConflictsPage` holds). `onChanged` is the
+ * policy recommendation, which needs the value picker `AdjudicationPage` holds). `onChanged` is the
  * page's own `load`, re-run after a decision persists so the queue reflects the server's state
  * rather than the stale item this row was rendered from.
  *
@@ -168,14 +168,15 @@ function WorkQueueSection({
   const [resolving, setResolving] = useState(false);
   const [resolveError, setResolveError] = useState<string | null>(null);
   // Blocks a double submit between the confirm click and the re-render that disables
-  // ConfirmDialog's own buttons, matching ConflictsPage.tsx's resolveInFlightRef.
+  // ConfirmDialog's own buttons, the same double-submit guard a conflict resolution request uses
+  // elsewhere in the app.
   const resolveInFlightRef = useRef(false);
 
   const items: WorkQueueItem[] = [
     ...(approvals.docs ?? []).map((approval): WorkQueueItem => ({
       key: `approval-${approval.id}`,
       name: approval.summary,
-      to: '/approvals',
+      to: `/adjudication?kind=decisions&state=pending&selected=${approval.id}`,
       typeLabel: 'Approval',
       createdAt: approval.createdAt,
       kind: 'approval',
@@ -184,7 +185,7 @@ function WorkQueueSection({
     ...(conflicts.docs ?? []).map((conflict): WorkQueueItem => ({
       key: `conflict-${conflict.id}`,
       name: `${conflict.factKey.entity} — ${metricLabel(conflict.factKey.metric, metricLabels)} (${conflict.factKey.period})`,
-      to: '/conflicts',
+      to: `/adjudication?kind=conflicts&selected=${conflict.id}`,
       typeLabel: 'Conflict',
       createdAt: conflict.createdAt,
       // ISO 8601 timestamps sort correctly as plain strings, so no Date parsing is needed here.
@@ -223,7 +224,7 @@ function WorkQueueSection({
 
   // Requests resolution using the conflict's own policy-recommended value — the row shows the
   // action only when one exists (`proposedWinnerFactId` set); a conflict with no recommendation
-  // needs the value picker on ConflictsPage instead, which this compact row has no room for.
+  // needs the value picker on AdjudicationPage instead, which this compact row has no room for.
   async function confirmResolution() {
     if (!pendingConflict?.proposedWinnerFactId || resolveInFlightRef.current) return;
     resolveInFlightRef.current = true;
@@ -502,7 +503,7 @@ function ReplaceVersionDialog({
 
 /** Failed ingestions, documents with no extracted facts, and failed syncs as one queue, the same
  * "specific item, not a count" shape as the work queue above. An ingestion failure has no other
- * alert anywhere in the app today — Data Room shows `ingestionStatus` per row, but only to someone
+ * alert anywhere in the app today — Data room shows `ingestionStatus` per row, but only to someone
  * already browsing it — and `lastSyncError` is otherwise visible only on the Sources pages. Reads
  * the server's own status-filtered queries rather than scanning a fixed-size page client-side, so a
  * failure older than any window is still visible here.
@@ -517,7 +518,7 @@ function ReplaceVersionDialog({
  * `needsOcrCount` surfaces only in the stat row above, never as itemized rows here — a scanned PDF
  * is a gap in the corpus to flag for attention, not the kind of broken-ingest item this queue
  * otherwise lists, and a tenant with a hundred scans should not push every one of them into this
- * list one row at a time. The full, browsable set of any of these three is the Data Room's own
+ * list one row at a time. The full, browsable set of any of these three is the Data room's own
  * `ingestionStatus` filter (`DocumentList.tsx`). */
 function CorpusHealthSection({
   failedDocuments,
@@ -853,7 +854,7 @@ export default function HomePage() {
       key: 'ask',
       label: 'Ask a question',
       done: hasAnswer,
-      to: '/ask',
+      to: '/answers',
       cta: 'Ask a question',
     },
   ];
@@ -921,14 +922,14 @@ export default function HomePage() {
               value={data ? data.pendingApprovalCount : '—'}
               tone={data ? (data.pendingApprovalCount > 0 ? 'caution' : 'neutral') : 'neutral'}
               hint={data ? undefined : 'unavailable'}
-              to="/approvals"
+              to="/adjudication?kind=decisions&state=pending"
             />
             <Stat
               label="Open conflicts"
               value={data ? data.openConflictCount : '—'}
               tone={data ? (data.openConflictCount > 0 ? 'caution' : 'neutral') : 'neutral'}
               hint={data ? undefined : 'unavailable'}
-              to="/conflicts"
+              to="/adjudication?kind=conflicts&status=open"
             />
             <Stat
               label="Corpus failures"
