@@ -214,3 +214,23 @@ Appended in 5.12 from the sizing probe.
 ## Result
 
 Appended after the runs.
+
+## Status update, 2026-09-08 — pre-registered, not measured
+
+The public-corpus benchmark this ADR pre-registers **was not run**. Phase 5 stopped after the corpus
+fetch and the zero-cost sizing probe, when the sample ingest reached the operator's
+`MODEL_SPEND_DAILY_LIMIT_INGEST_USD` ceiling and the operator chose to stop rather than raise it.
+
+Every bar above therefore stands **unmeasured**. Nothing in this document is a result, and `## Result`
+remains a placeholder. The repository's published numbers continue to come from the nine
+self-authored files ADR-0024 records.
+
+The bars are left exactly as written. They were fixed before any data existed, which is the only
+property that makes them worth anything later; revising them now, with a sizing probe's output in
+hand and no scored run, would forfeit precisely that. If the benchmark is resumed, it resumes
+against these thresholds.
+
+Cost evidence gathered before stopping, indicative only: an aborted sample extracted 28 prose chunks
+for $1.0847, implying $0.0387 per chunk against this phase's analytic estimate of $0.0360 — 7.6%
+low, and enough to carry the projected full ingest from $96.12 past its own $100 bound. It is not a
+measurement: `corpus:size` correctly declines to promote a truncated sample to `measured-ledger`.
