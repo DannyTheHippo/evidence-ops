@@ -3073,6 +3073,67 @@
                       ],
                       "count": 1
                     }
+                  },
+                  "resolved": {
+                    "summary": "One resolved conflict",
+                    "value": {
+                      "docs": [
+                        {
+                          "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "factKey": {
+                            "entity": "Northgate Business Park",
+                            "metric": "cap_rate",
+                            "period": "2025-03"
+                          },
+                          "factIds": [
+                            "65f1c2e4a1b2c3d4e5f6a7b9",
+                            "65f1c2e4a1b2c3d4e5f6a7ba"
+                          ],
+                          "values": [
+                            {
+                              "factId": "65f1c2e4a1b2c3d4e5f6a7b9",
+                              "value": 5.25,
+                              "unit": "percent",
+                              "sourceChunkId": "chunk-xlsx",
+                              "documentVersionId": "65f1c2e4a1b2c3d4e5f6a7c0",
+                              "locator": {
+                                "kind": "xlsx-cell",
+                                "extractorVersion": "v1",
+                                "sheetName": "Comps",
+                                "cell": "F2"
+                              }
+                            },
+                            {
+                              "factId": "65f1c2e4a1b2c3d4e5f6a7ba",
+                              "value": 6.1,
+                              "unit": "percent",
+                              "sourceChunkId": "chunk-prose",
+                              "documentVersionId": "65f1c2e4a1b2c3d4e5f6a7c1",
+                              "locator": {
+                                "kind": "pdf-page",
+                                "extractorVersion": "v1",
+                                "page": 2
+                              }
+                            }
+                          ],
+                          "magnitude": 0.0085,
+                          "magnitudeUnit": "ratio",
+                          "status": "resolved",
+                          "createdAt": "2026-07-01T00:00:00.000Z",
+                          "ruleFired": "none",
+                          "explanation": "No authorityOrder is configured for this metric.",
+                          "resolution": {
+                            "outcome": "resolved",
+                            "winningFactId": "65f1c2e4a1b2c3d4e5f6a7b9",
+                            "decidedBy": "reviewer@example.com",
+                            "reason": "Confirmed via source memo.",
+                            "resolvedAt": "2026-07-02T00:00:00.000Z",
+                            "ruleFired": "none"
+                          }
+                        }
+                      ],
+                      "count": 1
+                    }
                   }
                 }
               }
@@ -4412,7 +4473,8 @@
                             "promptTokens": 1240,
                             "completionTokens": 180,
                             "costUsd": 0.0042
-                          }
+                          },
+                          "answerPath": "synthesis"
                         }
                       ],
                       "count": 1
@@ -4480,7 +4542,8 @@
                         "promptTokens": 1240,
                         "completionTokens": 180,
                         "costUsd": 0.0042
-                      }
+                      },
+                      "answerPath": "synthesis"
                     }
                   }
                 }
@@ -4723,6 +4786,259 @@
         },
         "tags": [
           "verifications"
+        ]
+      }
+    },
+    "/answers/{id}/attestation": {
+      "get": {
+        "operationId": "AttestationsController_getAnswerAttestation",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tamper-evident export of a completed answer or a verification. integrity.contentHash is a sha256 over the canonical JSON of every other field, pinned on the subject the first time it is exported — a second export of an unchanged subject reproduces the same bundle and hash.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttestationBundleResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Answer attestation bundle",
+                    "value": {
+                      "schemaVersion": 1,
+                      "kind": "answer",
+                      "subjectId": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "tenantId": "tenant-a",
+                      "producedAt": "2026-07-01T00:00:00.000Z",
+                      "subject": {
+                        "question": "What is the cap rate for Northgate Business Park in Q1 2025?"
+                      },
+                      "outcome": "answered",
+                      "claims": [
+                        {
+                          "statement": "The cap rate is approximately 6.10%.",
+                          "verdict": "survived",
+                          "citations": [
+                            {
+                              "documentId": "65f1c2e4a1b2c3d4e5f6a7b9",
+                              "documentVersionId": "65f1c2e4a1b2c3d4e5f6a7ba",
+                              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                              "locator": {
+                                "kind": "pdf-page",
+                                "page": 3,
+                                "extractorVersion": "v1"
+                              },
+                              "extractorVersion": "v1",
+                              "quote": "at a cap rate of approximately 6.10%"
+                            }
+                          ],
+                          "checks": [
+                            {
+                              "name": "retrieval-containment",
+                              "passed": true
+                            },
+                            {
+                              "name": "quote-containment",
+                              "passed": true
+                            },
+                            {
+                              "name": "quote-alignment",
+                              "passed": true
+                            },
+                            {
+                              "name": "numeric-support",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      ],
+                      "decisions": [],
+                      "measures": [
+                        {
+                          "slug": "cap_rate",
+                          "version": 3,
+                          "status": "confirmed"
+                        }
+                      ],
+                      "integrity": {
+                        "algorithm": "sha256",
+                        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Answer or verification does not exist.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown subject",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Answer '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The answer has not finished running yet.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Queued answer",
+                    "value": {
+                      "statusCode": 409,
+                      "message": "Answer '65f1c2e4a1b2c3d4e5f6a7b8' is not completed",
+                      "error": "Conflict"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "attestations"
+        ]
+      }
+    },
+    "/verifications/{id}/attestation": {
+      "get": {
+        "operationId": "AttestationsController_getVerificationAttestation",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tamper-evident export of a completed answer or a verification. integrity.contentHash is a sha256 over the canonical JSON of every other field, pinned on the subject the first time it is exported — a second export of an unchanged subject reproduces the same bundle and hash.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttestationBundleResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Answer attestation bundle",
+                    "value": {
+                      "schemaVersion": 1,
+                      "kind": "answer",
+                      "subjectId": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "tenantId": "tenant-a",
+                      "producedAt": "2026-07-01T00:00:00.000Z",
+                      "subject": {
+                        "question": "What is the cap rate for Northgate Business Park in Q1 2025?"
+                      },
+                      "outcome": "answered",
+                      "claims": [
+                        {
+                          "statement": "The cap rate is approximately 6.10%.",
+                          "verdict": "survived",
+                          "citations": [
+                            {
+                              "documentId": "65f1c2e4a1b2c3d4e5f6a7b9",
+                              "documentVersionId": "65f1c2e4a1b2c3d4e5f6a7ba",
+                              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                              "locator": {
+                                "kind": "pdf-page",
+                                "page": 3,
+                                "extractorVersion": "v1"
+                              },
+                              "extractorVersion": "v1",
+                              "quote": "at a cap rate of approximately 6.10%"
+                            }
+                          ],
+                          "checks": [
+                            {
+                              "name": "retrieval-containment",
+                              "passed": true
+                            },
+                            {
+                              "name": "quote-containment",
+                              "passed": true
+                            },
+                            {
+                              "name": "quote-alignment",
+                              "passed": true
+                            },
+                            {
+                              "name": "numeric-support",
+                              "passed": true
+                            }
+                          ]
+                        }
+                      ],
+                      "decisions": [],
+                      "measures": [
+                        {
+                          "slug": "cap_rate",
+                          "version": 3,
+                          "status": "confirmed"
+                        }
+                      ],
+                      "integrity": {
+                        "algorithm": "sha256",
+                        "contentHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Answer or verification does not exist.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown subject",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Answer '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "tags": [
+          "attestations"
         ]
       }
     },
@@ -7388,6 +7704,19 @@
             "type": "string",
             "example": "Fact 65f1c2e4a1b2c3d4e5f6a7b9's source class 'crm-export' outranks 'memo' in the configured authorityOrder.",
             "description": "Human-readable justification for ruleFired/proposedWinnerFactId's value. Absent when unscorable is true."
+          },
+          "resolution": {
+            "type": "object",
+            "example": {
+              "outcome": "resolved",
+              "winningFactId": "65f1c2e4a1b2c3d4e5f6a7b9",
+              "decidedBy": "reviewer@example.com",
+              "reason": "Confirmed via source memo.",
+              "resolvedAt": "2026-07-02T00:00:00.000Z",
+              "ruleFired": "authority",
+              "followedProposal": true
+            },
+            "description": "The persisted decision for this conflict — outcome, decider, reason and when. Present only once a resolveConflict run has recorded a resolution; absent on every conflict still 'open'."
           }
         },
         "required": [
@@ -8170,6 +8499,18 @@
                 "$ref": "#/components/schemas/AnswerUsageResponseDto"
               }
             ]
+          },
+          "answerPath": {
+            "type": "string",
+            "enum": [
+              "ledger",
+              "synthesis"
+            ],
+            "description": "How the answer was produced — 'ledger' (resolved from the fact ledger, no model call) or 'synthesis'; present only once runStatus is 'completed'."
+          },
+          "attestationHash": {
+            "type": "string",
+            "description": "sha256 of the canonical attestation bundle, set on first export."
           }
         },
         "required": [
@@ -8329,6 +8670,10 @@
             "type": "string",
             "example": "2026-07-01T00:00:00.000Z",
             "description": "Verification run creation timestamp."
+          },
+          "attestationHash": {
+            "type": "string",
+            "description": "sha256 of the canonical attestation bundle, set on first export."
           }
         },
         "required": [
@@ -8362,6 +8707,88 @@
         "required": [
           "count",
           "docs"
+        ]
+      },
+      "AttestationBundleResponseDto": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "type": "number",
+            "example": 1,
+            "description": "Attestation bundle schema version."
+          },
+          "kind": {
+            "type": "string",
+            "example": "answer",
+            "enum": [
+              "answer",
+              "verification"
+            ],
+            "description": "Whether this bundle exports an Answer or a Verification."
+          },
+          "subjectId": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Id of the answer or verification this bundle exports."
+          },
+          "tenantId": {
+            "type": "string",
+            "example": "tenant-a",
+            "description": "The subject's tenant."
+          },
+          "producedAt": {
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "The subject's own creation timestamp, not the time it was exported."
+          },
+          "subject": {
+            "type": "object",
+            "description": "The question text for an answer bundle, or the submitted claim list for a verification bundle."
+          },
+          "outcome": {
+            "type": "string",
+            "nullable": true,
+            "example": "answered",
+            "description": "The answer's outcome kind, or null for a verification bundle or an answer with no outcome."
+          },
+          "claims": {
+            "description": "Every claim considered for this subject, survived or dropped, each with its own citations and the checks that decided its verdict.",
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "decisions": {
+            "description": "Human decisions behind the conflicts this subject touches; empty for a verification bundle.",
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "measures": {
+            "description": "Measure definitions referenced by the chunks this subject cites.",
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "integrity": {
+            "type": "object",
+            "description": "sha256 over the sorted-key canonical JSON of every other field in this bundle. Proves integrity for a recipient who already trusts the channel the hash arrived through, never authenticity — there is no signing key."
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "kind",
+          "subjectId",
+          "tenantId",
+          "producedAt",
+          "subject",
+          "outcome",
+          "claims",
+          "decisions",
+          "measures",
+          "integrity"
         ]
       },
       "RetrievedChunkResponseDto": {
@@ -8463,7 +8890,7 @@
           "path": {
             "type": "string",
             "example": "deal-room",
-            "description": "The connector's location for this source — a folder path for 'local-folder'."
+            "description": "The connector's location for this source — a folder path for 'local-folder'; the submitting client's label for 'mcp-submit'."
           },
           "intervalMs": {
             "type": "number",
@@ -8548,14 +8975,15 @@
             "type": "string",
             "example": "local-folder",
             "enum": [
-              "local-folder"
+              "local-folder",
+              "mcp-submit"
             ],
             "description": "Which connector syncs this source."
           },
           "path": {
             "type": "string",
             "example": "deal-room",
-            "description": "The connector's location for this source — a folder path for 'local-folder'."
+            "description": "The connector's location for this source — a folder path for 'local-folder'; the submitting client's label for 'mcp-submit'."
           },
           "enabled": {
             "type": "boolean",
@@ -8724,14 +9152,15 @@
             "type": "string",
             "example": "local-folder",
             "enum": [
-              "local-folder"
+              "local-folder",
+              "mcp-submit"
             ],
             "description": "Which connector syncs this source."
           },
           "path": {
             "type": "string",
             "example": "deal-room",
-            "description": "The connector's location for this source — a folder path for 'local-folder'."
+            "description": "The connector's location for this source — a folder path for 'local-folder'; the submitting client's label for 'mcp-submit'."
           },
           "enabled": {
             "type": "boolean",

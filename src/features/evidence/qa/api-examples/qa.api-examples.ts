@@ -25,6 +25,7 @@ const exampleCompletedAnswer = {
   createdAt: '2026-07-01T00:00:00.000Z',
   // QA synthesis spend only — not embedding or extraction spend.
   usage: { promptTokens: 1240, completionTokens: 180, costUsd: 0.0042 },
+  answerPath: 'synthesis',
 };
 
 export const qaApiExamples: Record<string, ApiResponseOptions> = {

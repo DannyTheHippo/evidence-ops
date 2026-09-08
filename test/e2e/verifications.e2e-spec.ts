@@ -38,6 +38,7 @@ interface VerificationBody {
   atoms: unknown[];
   usage: { promptTokens: number; completionTokens: number; costUsd: number };
   createdAt: string;
+  attestationHash?: string;
 }
 
 describe('Verifications (e2e)', () => {
@@ -104,6 +105,7 @@ describe('Verifications (e2e)', () => {
       retrievedChunkIds: ['chunk-1'],
       atoms: [{ claimIndex: 0, statement: claims[0], atoms: [claims[0]] }],
       usage,
+      attestationHash: 'c'.repeat(64),
     });
     otherTenantVerification = await verificationModel.create({
       tenantId: 'verifications-e2e-other-tenant',
@@ -227,6 +229,18 @@ describe('Verifications (e2e)', () => {
         'subject.entityId': new Types.ObjectId(patVerification._id.toString()),
       });
       expect(events).toHaveLength(1);
+    });
+
+    it('exposes attestationHash when set and withholds it when absent', async () => {
+      const withHash = await request(getTestServer(app))
+        .get(`/api/v1/verifications/${userVerification._id.toString()}`)
+        .set('Cookie', cookie);
+      const withoutHash = await request(getTestServer(app))
+        .get(`/api/v1/verifications/${patVerification._id.toString()}`)
+        .set('Cookie', cookie);
+
+      expect((withHash.body as VerificationBody).attestationHash).toBe('c'.repeat(64));
+      expect(Object.keys(withoutHash.body as VerificationBody)).not.toContain('attestationHash');
     });
 
     // Cross-tenant isolation: a 403 would confirm the row exists in someone else's tenant, so a

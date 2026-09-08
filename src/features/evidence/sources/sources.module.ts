@@ -4,6 +4,7 @@ import { Source, SourceSchema } from '../../../database/schemas/evidence/source/
 import { ProvidersModule } from '../../../providers/providers.module';
 import { DocumentsModule } from '../documents/documents.module';
 import { WorkflowRunsModule } from '../workflow-runs/workflow-runs.module';
+import { EvidenceSubmissionService } from './evidence-submission.service';
 import { SourcesController } from './sources.controller';
 import { SourcesService } from './sources.service';
 
@@ -13,7 +14,8 @@ import { SourcesService } from './sources.service';
  * projection `ConflictsService.requestResolution` does), and `DocumentsModule` for
  * `DocumentsService` — `SourcesService.runSync` uploads a synced file's bytes through the exact
  * same content-addressed, ingestion-workflow-starting path a manual upload uses, rather than
- * duplicating it.
+ * duplicating it. `EvidenceSubmissionService` lives here rather than in `documents/` because it
+ * also owns the `Source` model this module already imports for `mcp-submit` rows.
  */
 @Module({
   imports: [
@@ -23,7 +25,7 @@ import { SourcesService } from './sources.service';
     DocumentsModule,
   ],
   controllers: [SourcesController],
-  providers: [SourcesService],
-  exports: [SourcesService],
+  providers: [SourcesService, EvidenceSubmissionService],
+  exports: [SourcesService, EvidenceSubmissionService],
 })
 export class SourcesModule {}

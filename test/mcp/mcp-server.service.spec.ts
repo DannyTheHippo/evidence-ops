@@ -1,17 +1,27 @@
 import { Client } from '@modelcontextprotocol/sdk/client';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { HttpStatus } from '@nestjs/common';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { TypedConfigService } from '../../src/config/environment/typed-config.service';
+import { AttestationService } from '../../src/features/evidence/attestations/attestation.service';
+import { AttestationSubjectRequiredException } from '../../src/features/evidence/attestations/exceptions/attestations.exception';
 import { ClaimVerificationService } from '../../src/features/evidence/qa/claim-verification.service';
 import { ConflictsService } from '../../src/features/evidence/conflicts/conflicts.service';
+import { LedgerService } from '../../src/features/evidence/ledger/ledger.service';
 import { EvidenceRetrievalService } from '../../src/features/evidence/qa/evidence-retrieval.service';
 import { QaService } from '../../src/features/evidence/qa/qa.service';
 import {
   SEARCH_EVIDENCE_TOOL_NAME,
   searchEvidenceToolDefinition,
 } from '../../src/features/evidence/retrieval/evidence-tools';
+import { UnsupportedContentTypeException } from '../../src/features/evidence/documents/exceptions/documents.exception';
+import {
+  EvidenceSubmissionService,
+  SUBMIT_EVIDENCE_MAX_BASE64_CHARS,
+} from '../../src/features/evidence/sources/evidence-submission.service';
+import { InvalidBase64ContentException } from '../../src/features/evidence/sources/exceptions/sources.exception';
 import {
   TOKEN_VERIFIER,
   type TokenVerifier,
@@ -22,15 +32,21 @@ import { ToolExecutorService } from '../../src/features/platform/authz/tool-exec
 import type { ToolExecutionStep } from '../../src/features/platform/authz/types/tool-definition.type';
 import { AnswerNotFoundException } from '../../src/features/evidence/qa/exceptions/qa.exception';
 import { McpServerService } from '../../src/mcp/mcp-server.service';
+import { BaseException } from '../../src/shared/exceptions/base.exception';
 import {
   ASK_EVIDENCE_QUESTION_MAX_LENGTH,
   ASK_EVIDENCE_TOOL_NAME,
+  ATTESTATION_ID_MAX_LENGTH,
   GET_ANSWER_TOOL_NAME,
+  GET_ATTESTATION_TOOL_NAME,
+  LOOKUP_FACT_TOOL_NAME,
   MCP_ASK_STEP,
   MCP_MUTATE_STEP,
   MCP_READ_STEP,
+  MCP_SUBMIT_STEP,
   MCP_VERIFY_STEP,
   REQUEST_RESOLUTION_TOOL_NAME,
+  SUBMIT_EVIDENCE_TOOL_NAME,
   VERIFY_CLAIMS_CLAIM_MAX_LENGTH,
   VERIFY_CLAIMS_MAX_CLAIMS,
   VERIFY_CLAIMS_TOOL_NAME,
@@ -87,6 +103,56 @@ function buildVerifyClaimsResult() {
   };
 }
 
+function buildSubmitEvidenceResult() {
+  return {
+    documentId: 'document-1',
+    documentVersionId: 'version-1',
+    sha256: 'a'.repeat(64),
+    ingestionStatus: 'queued' as const,
+    isNewVersion: true,
+    sourceId: 'source-1',
+  };
+}
+
+function buildLedgerResolution() {
+  return {
+    entity: 'Northgate Business Park',
+    measure: 'cap_rate',
+    period: '2026-Q1',
+    state: 'single' as const,
+    value: { amount: 6.1, unit: 'percent' },
+    factIds: ['fact-1'],
+    citations: [
+      {
+        factId: 'fact-1',
+        documentId: 'document-1',
+        documentVersionId: 'version-1',
+        sha256: 'a'.repeat(64),
+        locator: { kind: 'pdf-page' as const, page: 3, extractorVersion: 'v1' },
+        extractorVersion: 'v1',
+        quote: 'traded at a cap rate of approximately 6.10%',
+        withdrawn: false,
+      },
+    ],
+  };
+}
+
+function buildAttestationBundle() {
+  return {
+    schemaVersion: 1 as const,
+    kind: 'answer' as const,
+    subjectId: 'answer-1',
+    tenantId: 'tenant-a',
+    producedAt: '2026-01-01T00:00:00.000Z',
+    subject: { question: 'What was the cap rate?' },
+    outcome: 'answered' as const,
+    claims: [],
+    decisions: [],
+    measures: [],
+    integrity: { algorithm: 'sha256' as const, contentHash: 'b'.repeat(64) },
+  };
+}
+
 function buildAnswerEnvelope() {
   return {
     id: 'answer-1',
@@ -132,6 +198,9 @@ interface Harness {
   readonly qaService: { getAnswerById: jest.Mock; startQuestion: jest.Mock };
   readonly conflictsService: { requestResolution: jest.Mock };
   readonly claimVerificationService: { verifyClaims: jest.Mock };
+  readonly evidenceSubmissionService: { submit: jest.Mock };
+  readonly ledgerService: { resolveValue: jest.Mock };
+  readonly attestationService: { exportForAnswer: jest.Mock; exportForVerification: jest.Mock };
   readonly auditService: { record: jest.Mock };
   readonly als: AsyncLocalStorage<AlsContext>;
   readonly logger: MockLogger;
@@ -152,6 +221,14 @@ async function buildHarness(
   const conflictsService = { requestResolution: jest.fn().mockResolvedValue(buildRunResult()) };
   const claimVerificationService = {
     verifyClaims: jest.fn().mockResolvedValue(buildVerifyClaimsResult()),
+  };
+  const evidenceSubmissionService = {
+    submit: jest.fn().mockResolvedValue(buildSubmitEvidenceResult()),
+  };
+  const ledgerService = { resolveValue: jest.fn().mockResolvedValue(buildLedgerResolution()) };
+  const attestationService = {
+    exportForAnswer: jest.fn().mockResolvedValue(buildAttestationBundle()),
+    exportForVerification: jest.fn().mockResolvedValue(buildAttestationBundle()),
   };
   const auditService = { record: jest.fn().mockResolvedValue(undefined) };
   const als = new AsyncLocalStorage<AlsContext>();
@@ -179,6 +256,9 @@ async function buildHarness(
       { provide: QaService, useValue: qaService },
       { provide: ConflictsService, useValue: conflictsService },
       { provide: ClaimVerificationService, useValue: claimVerificationService },
+      { provide: EvidenceSubmissionService, useValue: evidenceSubmissionService },
+      { provide: LedgerService, useValue: ledgerService },
+      { provide: AttestationService, useValue: attestationService },
       { provide: AuditService, useValue: auditService },
       McpServerService,
     ],
@@ -192,6 +272,9 @@ async function buildHarness(
     qaService,
     conflictsService,
     claimVerificationService,
+    evidenceSubmissionService,
+    ledgerService,
+    attestationService,
     auditService,
     als,
     logger,
@@ -213,7 +296,7 @@ describe('McpServerService', () => {
   });
 
   describe('tools/list', () => {
-    it('should advertise search_evidence, get_answer, request_resolution, ask_evidence, and verify_claims with strict, object-rooted schemas', async () => {
+    it('should advertise all eight tools, with strict, object-rooted schemas', async () => {
       const { service } = await buildHarness();
       const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
 
@@ -226,6 +309,9 @@ describe('McpServerService', () => {
           REQUEST_RESOLUTION_TOOL_NAME,
           ASK_EVIDENCE_TOOL_NAME,
           VERIFY_CLAIMS_TOOL_NAME,
+          SUBMIT_EVIDENCE_TOOL_NAME,
+          LOOKUP_FACT_TOOL_NAME,
+          GET_ATTESTATION_TOOL_NAME,
         ].sort(),
       );
 
@@ -300,6 +386,57 @@ describe('McpServerService', () => {
         additionalProperties: false,
       });
       expect(Object.keys(verifyClaimsSchema.properties ?? {})).toEqual(['claims']);
+
+      const submitEvidence = tools.find((tool) => tool.name === SUBMIT_EVIDENCE_TOOL_NAME);
+      const submitEvidenceSchema = submitEvidence?.inputSchema as {
+        type: string;
+        properties?: Record<string, unknown>;
+        required?: string[];
+        additionalProperties?: boolean;
+      };
+      expect(submitEvidenceSchema).toMatchObject({
+        type: 'object',
+        required: ['filename', 'mimeType', 'contentBase64'],
+        additionalProperties: false,
+      });
+      expect(Object.keys(submitEvidenceSchema.properties ?? {}).sort()).toEqual(
+        ['filename', 'mimeType', 'contentBase64', 'sourceLabel'].sort(),
+      );
+
+      const lookupFact = tools.find((tool) => tool.name === LOOKUP_FACT_TOOL_NAME);
+      const lookupFactSchema = lookupFact?.inputSchema as {
+        type: string;
+        properties?: Record<string, unknown>;
+        required?: string[];
+        additionalProperties?: boolean;
+      };
+      expect(lookupFactSchema).toMatchObject({
+        type: 'object',
+        required: ['entity', 'measure'],
+        additionalProperties: false,
+      });
+      expect(Object.keys(lookupFactSchema.properties ?? {}).sort()).toEqual(
+        ['entity', 'measure', 'period'].sort(),
+      );
+
+      const getAttestation = tools.find((tool) => tool.name === GET_ATTESTATION_TOOL_NAME);
+      const getAttestationSchema = getAttestation?.inputSchema as {
+        type: string;
+        properties?: Record<string, unknown>;
+        required?: string[];
+        additionalProperties?: boolean;
+      };
+      expect(getAttestationSchema).toMatchObject({
+        type: 'object',
+        // Neither argument is individually required — exactly-one is enforced in the handler, not
+        // the schema (`ToolExecutorService`'s `applyStrictRecursively` does not cover `ZodUnion` or
+        // refinements — see `buildGetAttestationTool`'s own doc comment).
+        additionalProperties: false,
+      });
+      expect(getAttestationSchema.required ?? []).toEqual([]);
+      expect(Object.keys(getAttestationSchema.properties ?? {}).sort()).toEqual(
+        ['answerId', 'verificationId'].sort(),
+      );
     });
 
     // ADR-0014's whole point for this surface: the tool that *proposes* a conflict resolution
@@ -327,12 +464,21 @@ describe('McpServerService', () => {
           REQUEST_RESOLUTION_TOOL_NAME,
           ASK_EVIDENCE_TOOL_NAME,
           VERIFY_CLAIMS_TOOL_NAME,
+          SUBMIT_EVIDENCE_TOOL_NAME,
+          LOOKUP_FACT_TOOL_NAME,
+          GET_ATTESTATION_TOOL_NAME,
         ].sort(),
       );
-      expect(MCP_READ_STEP.allowedTools).toEqual([SEARCH_EVIDENCE_TOOL_NAME, GET_ANSWER_TOOL_NAME]);
+      expect(MCP_READ_STEP.allowedTools).toEqual([
+        SEARCH_EVIDENCE_TOOL_NAME,
+        GET_ANSWER_TOOL_NAME,
+        LOOKUP_FACT_TOOL_NAME,
+        GET_ATTESTATION_TOOL_NAME,
+      ]);
       expect(MCP_MUTATE_STEP.allowedTools).toEqual([REQUEST_RESOLUTION_TOOL_NAME]);
       expect(MCP_ASK_STEP.allowedTools).toEqual([ASK_EVIDENCE_TOOL_NAME]);
       expect(MCP_VERIFY_STEP.allowedTools).toEqual([VERIFY_CLAIMS_TOOL_NAME]);
+      expect(MCP_SUBMIT_STEP.allowedTools).toEqual([SUBMIT_EVIDENCE_TOOL_NAME]);
     });
 
     // A tool description is the only instruction an MCP client gets about what a call returns, and
@@ -728,6 +874,300 @@ describe('McpServerService', () => {
     });
   });
 
+  describe('tools/call — submit_evidence', () => {
+    it('should delegate to EvidenceSubmissionService using the tenant derived from the token, not any tool argument', async () => {
+      const { service, evidenceSubmissionService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: SUBMIT_EVIDENCE_TOOL_NAME,
+        arguments: {
+          filename: 'lease.pdf',
+          mimeType: 'application/pdf',
+          contentBase64: 'JVBERi0xLjQK',
+          sourceLabel: 'Deal room upload',
+        },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(evidenceSubmissionService.submit).toHaveBeenCalledWith({
+        filename: 'lease.pdf',
+        mimeType: 'application/pdf',
+        contentBase64: 'JVBERi0xLjQK',
+        sourceLabel: 'Deal room upload',
+        tenantId: 'tenant-a',
+      });
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(JSON.parse(content[0].text)).toEqual(buildSubmitEvidenceResult());
+    });
+
+    it('should submit without a sourceLabel argument', async () => {
+      const { service, evidenceSubmissionService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: SUBMIT_EVIDENCE_TOOL_NAME,
+        arguments: {
+          filename: 'lease.pdf',
+          mimeType: 'application/pdf',
+          contentBase64: 'JVBERi0xLjQK',
+        },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(evidenceSubmissionService.submit).toHaveBeenCalledWith({
+        filename: 'lease.pdf',
+        mimeType: 'application/pdf',
+        contentBase64: 'JVBERi0xLjQK',
+        sourceLabel: undefined,
+        tenantId: 'tenant-a',
+      });
+    });
+
+    it('should refuse a contentBase64 over SUBMIT_EVIDENCE_MAX_BASE64_CHARS at the schema chokepoint, never calling the service', async () => {
+      const { service, evidenceSubmissionService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: SUBMIT_EVIDENCE_TOOL_NAME,
+        arguments: {
+          filename: 'lease.pdf',
+          mimeType: 'application/pdf',
+          contentBase64: 'a'.repeat(SUBMIT_EVIDENCE_MAX_BASE64_CHARS + 4),
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0].text).toContain('invalid-arguments');
+      expect(evidenceSubmissionService.submit).not.toHaveBeenCalled();
+    });
+
+    it('should refuse an unknown extra argument key rather than silently stripping it', async () => {
+      const { service, evidenceSubmissionService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: SUBMIT_EVIDENCE_TOOL_NAME,
+        arguments: {
+          filename: 'lease.pdf',
+          mimeType: 'application/pdf',
+          contentBase64: 'JVBERi0xLjQK',
+          tenantId: 'tenant-evil',
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0].text).toContain('invalid-arguments');
+      expect(evidenceSubmissionService.submit).not.toHaveBeenCalled();
+    });
+
+    // `mcp-submit` floors at `UserRole.Member` — the lowest rank `ROLE_RANK` defines — so no
+    // *recognized* role sits below it, the same reasoning `MCP_ASK_STEP`'s equivalent test above
+    // documents.
+    it("should refuse a caller whose role does not meet mcp-submit's Member minimum, without calling the service", async () => {
+      const { service, evidenceSubmissionService } = await buildHarness();
+      const unrecognizedRoleContext = {
+        actorId: 'actor-x',
+        tenantId: 'tenant-a',
+        role: 'guest' as UserRole,
+      };
+      const client = await connectClient(service.buildServer(unrecognizedRoleContext));
+
+      const result = await client.callTool({
+        name: SUBMIT_EVIDENCE_TOOL_NAME,
+        arguments: {
+          filename: 'lease.pdf',
+          mimeType: 'application/pdf',
+          contentBase64: 'JVBERi0xLjQK',
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0].text).toContain('authz-denied');
+      expect(evidenceSubmissionService.submit).not.toHaveBeenCalled();
+    });
+
+    // The typed-4xx mapping (3B.11) is what turns the service's own refusal classes into readable
+    // text on this surface, rather than the fixed generic message every other throw collapses to.
+    it.each([
+      [
+        'InvalidBase64ContentException',
+        new InvalidBase64ContentException('contentBase64 is not well-formed base64'),
+        'InvalidBase64ContentException: contentBase64 is not well-formed base64',
+      ],
+      [
+        'UnsupportedContentTypeException',
+        new UnsupportedContentTypeException("Unsupported content type 'image/gif' for file 'x'"),
+        "UnsupportedContentTypeException: Unsupported content type 'image/gif' for file 'x'",
+      ],
+    ])(
+      'should surface a %s from the service as typed isError text',
+      async (_label, thrown, expectedText) => {
+        const { service, evidenceSubmissionService } = await buildHarness();
+        evidenceSubmissionService.submit.mockRejectedValue(thrown);
+        const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+        const result = await client.callTool({
+          name: SUBMIT_EVIDENCE_TOOL_NAME,
+          arguments: {
+            filename: 'x',
+            mimeType: 'image/gif',
+            contentBase64: 'JVBERi0xLjQK',
+          },
+        });
+
+        expect(result.isError).toBe(true);
+        const content = result.content as Array<{ type: string; text: string }>;
+        expect(content[0].text).toBe(expectedText);
+      },
+    );
+  });
+
+  describe('tools/call — lookup_fact', () => {
+    it('should delegate to LedgerService.resolveValue using the tenant derived from the token, not any tool argument', async () => {
+      const { service, ledgerService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: LOOKUP_FACT_TOOL_NAME,
+        arguments: { entity: 'Northgate Business Park', measure: 'cap_rate', period: '2026-Q1' },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(ledgerService.resolveValue).toHaveBeenCalledWith({
+        tenantId: 'tenant-a',
+        entity: 'Northgate Business Park',
+        measure: 'cap_rate',
+        period: '2026-Q1',
+      });
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(JSON.parse(content[0].text)).toEqual(buildLedgerResolution());
+    });
+
+    it('should resolve without a period argument', async () => {
+      const { service, ledgerService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: LOOKUP_FACT_TOOL_NAME,
+        arguments: { entity: 'Northgate Business Park', measure: 'cap_rate' },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(ledgerService.resolveValue).toHaveBeenCalledWith({
+        tenantId: 'tenant-a',
+        entity: 'Northgate Business Park',
+        measure: 'cap_rate',
+        period: undefined,
+      });
+    });
+
+    it('should refuse a call carrying a tenantId argument rather than let it reach the handler', async () => {
+      const { service, ledgerService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: LOOKUP_FACT_TOOL_NAME,
+        arguments: {
+          entity: 'Northgate Business Park',
+          measure: 'cap_rate',
+          tenantId: 'tenant-evil',
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0].text).toContain('invalid-arguments');
+      expect(ledgerService.resolveValue).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('tools/call — get_attestation', () => {
+    it('should export for an answer when only answerId is given, delegating to AttestationService.exportForAnswer', async () => {
+      const { service, attestationService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: GET_ATTESTATION_TOOL_NAME,
+        arguments: { answerId: 'answer-1' },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(attestationService.exportForAnswer).toHaveBeenCalledWith('answer-1', 'tenant-a');
+      expect(attestationService.exportForVerification).not.toHaveBeenCalled();
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(JSON.parse(content[0].text)).toEqual(buildAttestationBundle());
+    });
+
+    it('should export for a verification when only verificationId is given, delegating to AttestationService.exportForVerification', async () => {
+      const { service, attestationService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: GET_ATTESTATION_TOOL_NAME,
+        arguments: { verificationId: 'verification-1' },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(attestationService.exportForVerification).toHaveBeenCalledWith(
+        'verification-1',
+        'tenant-a',
+      );
+      expect(attestationService.exportForAnswer).not.toHaveBeenCalled();
+    });
+
+    it('should refuse with a typed 400 when both answerId and verificationId are given', async () => {
+      const { service, attestationService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: GET_ATTESTATION_TOOL_NAME,
+        arguments: { answerId: 'answer-1', verificationId: 'verification-1' },
+      });
+
+      expect(result.isError).toBe(true);
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0].text).toBe(
+        `${AttestationSubjectRequiredException.name}: Exactly one of answerId or verificationId is required`,
+      );
+      expect(attestationService.exportForAnswer).not.toHaveBeenCalled();
+      expect(attestationService.exportForVerification).not.toHaveBeenCalled();
+    });
+
+    it('should refuse with a typed 400 when neither answerId nor verificationId is given', async () => {
+      const { service, attestationService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({ name: GET_ATTESTATION_TOOL_NAME, arguments: {} });
+
+      expect(result.isError).toBe(true);
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0].text).toBe(
+        `${AttestationSubjectRequiredException.name}: Exactly one of answerId or verificationId is required`,
+      );
+      expect(attestationService.exportForAnswer).not.toHaveBeenCalled();
+      expect(attestationService.exportForVerification).not.toHaveBeenCalled();
+    });
+
+    it('should refuse an id over ATTESTATION_ID_MAX_LENGTH at the schema chokepoint, never calling the service', async () => {
+      const { service, attestationService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: GET_ATTESTATION_TOOL_NAME,
+        arguments: { answerId: 'a'.repeat(ATTESTATION_ID_MAX_LENGTH + 1) },
+      });
+
+      expect(result.isError).toBe(true);
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0].text).toContain('invalid-arguments');
+      expect(attestationService.exportForAnswer).not.toHaveBeenCalled();
+    });
+  });
+
   describe('spend gate', () => {
     it('should advertise and register search_evidence, ask_evidence, and verify_claims when the daily spend ceiling is positive', async () => {
       const { service, evidenceRetrievalService, claimVerificationService } = await buildHarness(
@@ -787,7 +1227,13 @@ describe('McpServerService', () => {
 
       const { tools } = await client.listTools();
       expect(tools.map((tool) => tool.name).sort()).toEqual(
-        [GET_ANSWER_TOOL_NAME, REQUEST_RESOLUTION_TOOL_NAME].sort(),
+        [
+          GET_ANSWER_TOOL_NAME,
+          REQUEST_RESOLUTION_TOOL_NAME,
+          SUBMIT_EVIDENCE_TOOL_NAME,
+          LOOKUP_FACT_TOOL_NAME,
+          GET_ATTESTATION_TOOL_NAME,
+        ].sort(),
       );
 
       const searchResult = await client.callTool({
@@ -821,6 +1267,15 @@ describe('McpServerService', () => {
         expect.stringContaining('MODEL_SPEND_DAILY_LIMIT_USD'),
       );
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(SEARCH_EVIDENCE_TOOL_NAME));
+
+      // `submit_evidence`, `lookup_fact`, and `get_attestation` spend nothing in-call
+      // (`McpServerService`'s own doc comment) — they stay reachable with the ceiling disabled,
+      // unlike the three tools withheld above.
+      const lookupResult = await client.callTool({
+        name: LOOKUP_FACT_TOOL_NAME,
+        arguments: { entity: 'Northgate Business Park', measure: 'cap_rate' },
+      });
+      expect(lookupResult.isError).toBeUndefined();
     });
   });
 
@@ -988,7 +1443,10 @@ describe('McpServerService', () => {
         }),
       ],
       ['a plain Error', new Error('a very specific internal detail')],
-      ['a BaseException', new AnswerNotFoundException("Answer 'missing' not found")],
+      [
+        'a 5xx BaseException',
+        new BaseException('internal detail', HttpStatus.INTERNAL_SERVER_ERROR),
+      ],
       ['a thrown non-Error value', 'a thrown string'],
     ])(
       'should return the fixed message and leave a failed-action audit row for %s, never the exception detail',
@@ -1029,6 +1487,41 @@ describe('McpServerService', () => {
         expect(MCP_TOOL_CALL_FAILED_ACTION).not.toBe(MCP_TOOL_CALL_REFUSED_ACTION);
       },
     );
+
+    it('should surface a 4xx HttpException as its own class name and message, still leaving a failed-action audit row', async () => {
+      const { service, auditService, qaService, logger } = await buildHarness();
+      qaService.getAnswerById.mockRejectedValue(
+        new AnswerNotFoundException("Answer 'missing' not found"),
+      );
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+
+      const result = await client.callTool({
+        name: GET_ANSWER_TOOL_NAME,
+        arguments: { answerId: 'missing' },
+      });
+
+      expect(result.isError).toBe(true);
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content[0].text).toBe("AnswerNotFoundException: Answer 'missing' not found");
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("AnswerNotFoundException: Answer 'missing' not found"),
+      );
+
+      expect(auditService.record.mock.calls).toEqual([
+        [
+          {
+            action: MCP_TOOL_CALL_FAILED_ACTION,
+            actorId: 'actor-a',
+            subject: { entityType: 'User', entityId: 'actor-a' },
+            tenantId: 'tenant-a',
+            origin: 'mcp',
+            toolName: GET_ANSWER_TOOL_NAME,
+            refusalReason: undefined,
+          },
+        ],
+      ]);
+    });
   });
 
   describe('authenticate', () => {

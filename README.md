@@ -211,23 +211,129 @@ tooling a person already trusts rather than being one more destination app — a
 assistant's own drafted claims can be checked against this corpus without that assistant ever
 needing to trust this system's synthesis path. The MCP server is its own process — `npm run
 mcp:dev` on the host loop, the `mcp` service under the `full` profile in a containerized stack. It
-authenticates with the personal access tokens the API Keys page mints, and exposes five tools:
+authenticates with the personal access tokens the API Keys page mints, and exposes eight tools:
 `search_evidence`, `ask_evidence` (starts a question without waiting on it), `get_answer` (polls a
 started question), `verify_claims` (checks claims an assistant drafted itself against the corpus),
-and `request_resolution` (proposes a conflict resolution). Every tool call goes through
-`ToolExecutorService`, the same deterministic chokepoint every tool call in this codebase is
-required to route through, and each handler then calls the very service method the REST surface
-calls. Nothing here re-implements validation, authorization, or the work itself.
+`request_resolution` (proposes a conflict resolution), `submit_evidence` (pushes a file's bytes an
+assistant already holds into the same ingest pipeline a browser upload runs through — a 20 MiB
+base64 cap, reachable at the Member floor), `lookup_fact` (resolves one entity/measure/period cell
+of the fact ledger — `single`, `adjudicated` with its decision record, `conflicted`, or `unknown`),
+and `get_attestation` (exports a hashed bundle for a completed answer or a verification run). Every
+tool call goes through `ToolExecutorService`, the same deterministic chokepoint every tool call in
+this codebase is required to route through, and each handler then calls the very service method the
+REST surface calls. Nothing here re-implements validation, authorization, or the work itself.
 
 The three tools that spend model or embedding budget — `search_evidence`, `ask_evidence`,
 `verify_claims` — are withheld from `tools/list` entirely while the tenant's daily spend ceiling
-(`MODEL_SPEND_DAILY_LIMIT_USD`) is disabled; only `get_answer` and `request_resolution` stay
-reachable in that state. `.env.example` ships that ceiling on, so a fresh deployment advertises all
-five tools by default.
+(`MODEL_SPEND_DAILY_LIMIT_USD`) is disabled; `get_answer`, `request_resolution`, `submit_evidence`,
+`lookup_fact`, and `get_attestation` stay reachable in that state — none of the three new tools
+spends model or embedding budget at call time. `.env.example` ships that ceiling on, so a fresh
+deployment advertises all eight tools by default.
 
 There is deliberately no tool that approves anything. The one mutating tool can only start a
 workflow that parks on a human's approval, and the approval itself has no AI-reachable surface at
 all.
+
+### Connecting an assistant
+
+Both paths below authenticate with a personal access token minted on the **API Keys** page — the
+full value is shown once, at creation, and only a hash is stored afterward. The endpoint is
+`http://localhost:3002/mcp` on the host loop or the containerized stack alike; `3002` is
+`MCP_HOST_PORT`'s default, so a stack started with that variable overridden needs the same number
+here instead.
+
+**Claude Desktop.** Claude Desktop speaks stdio, not this surface's Streamable HTTP directly, so the
+`mcpServers` entry runs it through the [`mcp-remote`](https://github.com/geelen/mcp-remote) stdio
+bridge, verified against that project's own README:
+
+```json
+{
+  "mcpServers": {
+    "evidence-ops": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "http://localhost:3002/mcp",
+        "--allow-http",
+        "--header",
+        "Authorization: Bearer ${EO_PAT}"
+      ],
+      "env": {
+        "EO_PAT": "<paste the token from the API Keys page>"
+      }
+    }
+  }
+}
+```
+
+`--allow-http` is required: `mcp-remote` refuses a plain-HTTP endpoint by default, and the local
+stack serves plain HTTP, not TLS, on `3002`.
+
+**Cowork.** Add a custom connector at the same URL, `http://localhost:3002/mcp`, with an
+`Authorization: Bearer <token>` header carrying the same personal access token. Cowork's exact
+custom-connector field labels were not independently verified against current documentation for
+this walkthrough — confirm them in its own UI before relying on this description.
+
+### Verify, then attest
+
+A worked flow through five of the eight tools. MCP is the surface an assistant reaches; the browser
+session below is an operator's own check on what the assistant did, never a second integration
+path. JSON is abbreviated per step, and ids stand in for whatever the previous step actually
+returned.
+
+**1. The assistant submits a file it already holds.** Tool call `submit_evidence`:
+
+```json
+{ "filename": "rent-roll.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "contentBase64": "…" }
+```
+
+```json
+{ "documentId": "65f…a7b8", "documentVersionId": "65f…a7b9", "sha256": "…", "ingestionStatus": "pending", "isNewVersion": true, "sourceId": "65f…" }
+```
+
+**2. An operator, signed in to the browser, polls until ingestion finishes.** `GET
+/api/v1/documents/65f…a7b8` — poll until `currentVersion.ingestionStatus` reads `"completed"`;
+`submit_evidence` returns before extraction runs, the same asynchronous contract a browser upload
+carries.
+
+**3. The assistant resolves a fact against the newly ingested evidence.** Tool call `lookup_fact`:
+
+```json
+{ "entity": "Meridian Logistics Park", "measure": "building_area_sf" }
+```
+
+```json
+{ "entity": "Meridian Logistics Park", "measure": "building_area_sf", "period": "undated", "state": "single", "value": { "amount": 42000, "unit": "sf" }, "factIds": ["…"], "citations": [{ "quote": "…", "sha256": "…", "locator": { "kind": "xlsx-cell", "…": "…" } }] }
+```
+
+**4. The assistant checks a claim it drafted against the corpus.** Tool call `verify_claims`:
+
+```json
+{ "claims": ["Meridian Logistics Park's building area is 42,000 square feet."] }
+```
+
+```json
+{ "advisory": "…", "results": [{ "claimIndex": 0, "verdict": "grounded", "citations": [{ "docVersionId": "65f…a7b9", "sha256": "…", "locator": { "…": "…" }, "quote": "…" }] }], "verificationId": "65f…c1d2" }
+```
+
+**5. The assistant exports an attestation bundle for that verification run.** Tool call
+`get_attestation`:
+
+```json
+{ "verificationId": "65f…c1d2" }
+```
+
+```json
+{ "schemaVersion": 1, "kind": "verification", "subjectId": "65f…c1d2", "producedAt": "…", "subject": { "claims": ["…"] }, "claims": ["…"], "decisions": [], "measures": [], "integrity": { "algorithm": "sha256", "contentHash": "e3b0c4…" } }
+```
+
+**6. The operator confirms the hash independently, from the browser session.** `GET
+/api/v1/verifications/65f…c1d2` — `attestationHash` on that row equals `integrity.contentHash` from
+step 5. That match proves the bundle has not changed since export; it proves nothing about who
+produced it, because this cycle ships no signing key. A recipient who wants tamper-evidence needs to
+have obtained `attestationHash` from somewhere other than this same server before comparing —
+reading it here and comparing it to itself proves nothing at all.
 
 ## Each mechanism is one layer
 

@@ -27,6 +27,10 @@ than a listed one.
 ## Layered defence, in the order a hostile document meets it
 
 1. **Upload.** MIME allowlist and a compressed-size cap, both before any hashing or storage write.
+   `submit_evidence` (ADR-0030) is a second upload ingress, PAT-authenticated rather than
+   session-authenticated, but it hands its decoded bytes to the identical
+   `resolveUploadKind`/`contentMatchesDeclaredKind`/dedupe gate a browser upload runs through —
+   nothing downstream of this step can tell which ingress a document entered by.
 2. **Archive.** `assertSafeArchive` on every OOXML container: entry count, declared sizes, ratio,
    path traversal. Fails closed on the whole archive rather than handing a partially-checked buffer
    to a parser.
@@ -53,12 +57,14 @@ than a listed one.
 8. **Tool use.** Meets the deny-by-default chokepoint (`ToolExecutorService`) on every call —
    the MCP surface (ADR-0014) is the chokepoint's sole live caller and routes every tool call
    through it, never around it.
-9. **MCP surface.** A fourth, external-facing entry point (ADR-0014, ADR-0020): a PAT-authenticated
-   process that advertises up to five tools — `search_evidence`, `get_answer`, `request_resolution`,
-   `ask_evidence` and `verify_claims` — to a caller's own AI tooling. `authenticate` and
-   `checkRateLimit` gate every request before any MCP protocol work starts, both fail closed;
-   `request_resolution` writes, but only ever *proposes*, and `ask_evidence` writes only a new
-   queued question — see residuals §8 and §12 for what that surface bounds and does not.
+9. **MCP surface.** A fourth, external-facing entry point (ADR-0014, ADR-0020, ADR-0030): a
+   PAT-authenticated process that advertises eight tools — `search_evidence`, `get_answer`,
+   `request_resolution`, `ask_evidence`, `verify_claims`, `submit_evidence`, `lookup_fact` and
+   `get_attestation` — to a caller's own AI tooling. `authenticate` and `checkRateLimit` gate every
+   request before any MCP protocol work starts, both fail closed; `request_resolution` writes, but
+   only ever *proposes*, `ask_evidence` writes only a new queued question, and `submit_evidence`
+   writes a new document version into the corpus through the same content-identity gate a browser
+   upload clears — see residuals §8, §12, and §16 for what that surface bounds and does not.
 10. **Canaries.** `test/security/canary.spec.ts` reads the two planted injection markers from the
    fixture generator's own source (never re-typed, so they cannot drift), asserts they appear only
    inside their own evidence fence and never in the system prompt, and includes a permanent negative
@@ -649,6 +655,35 @@ example — accept and refuse verified on both sides of `MAX_TERM_WORDS`, `MAX_T
 them are wrong. That is an operational measurement, not a test, and nothing has run it. An approval
 queue nobody can keep up with approves badly.
 
+### 16. `submit_evidence` lets a PAT-holding AI client write bytes into the corpus, with no human ever asked
+
+Every other write on the MCP surface either only ever proposes (`request_resolution`) or creates
+nothing but a queued question (`ask_evidence`). `submit_evidence` (ADR-0030) is different in kind: a
+caller holding nothing but a Member-floored PAT can add a document a human has never seen to the
+corpus every other tenant member's `search_evidence`/`get_answer`/`ask_evidence` calls read from,
+without a review step, an approval gate, or any notification beyond an `attestations.exported`-style
+audit row an operator has to go looking for.
+
+The bound is the same one every other ingress into this corpus carries, not a weaker one built for
+this path: `resolveUploadKind`/`contentMatchesDeclaredKind` verify the bytes against their declared
+type before anything is stored, the sha256 dedupe means a resubmission of existing content is a
+no-op rather than a second row, and the file enters the identical asynchronous extraction pipeline a
+browser upload's file does — nothing downstream can distinguish a `submit_evidence` document from an
+uploaded one once ingestion starts. What stays open: nothing checks whether the *content* a caller
+submits is trustworthy, only whether its declared type matches its bytes. A compromised or malicious
+MCP client with a valid PAT can seed the corpus with a document engineered to be retrieved for a
+specific future question and then, through the exact prompt-injection mechanism residual §3 already
+describes, shape the answer synthesized from it — the only new fact this tool adds to that existing
+risk is that the planted document no longer needs a human to click "upload" first.
+
+**The attestation hash is integrity, not authenticity.** `AttestationService`'s
+`integrity.contentHash` (ADR-0030) proves a bundle has not changed since it was exported, to a
+recipient who already holds that exact hash through a channel they trust independently of the bundle
+itself. It does not prove who produced the bundle, and a recipient who received only the bundle, with
+no separately obtained hash to check it against, has no way to detect tampering at all. There is no
+signing key this cycle, and nothing in this document or ADR-0030 should be read as claiming the
+bundle is self-authenticating.
+
 ## Explicitly out of scope
 
 Not threats this design has considered, listed so their absence is not read as coverage: role
@@ -681,3 +716,5 @@ edge; secret rotation; PII detection or redaction in uploaded documents.
   deterministic gate alone can be walked to a false `grounded` verdict.
 - `docs/adr/0024-what-the-first-measurements-say.md` — the measured numbers residual §7 states, the
   correction of the scoring-method explanation, and what none of it covers.
+- `docs/adr/0030-attestation-bundles-and-mcp-evidence-submission.md` — `submit_evidence` and
+  `get_attestation`, the write and export tools residual §16 states the bounds of.

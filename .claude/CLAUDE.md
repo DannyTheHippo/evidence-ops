@@ -25,10 +25,11 @@ human approval signal with a timeout branch, which is why the approval survives 
 
 **The MCP surface is a third process** (ADR-0014): `src/mcp/main.ts` boots `McpModule` on the same
 `WorkerModule` slice pattern and serves stateless Streamable HTTP, authenticated per call by a
-personal access token rather than the SPA's session cookie. It advertises five tools —
-`search_evidence`, `ask_evidence`, `get_answer`, `verify_claims` and `request_resolution` — and no
-approval-deciding tool, deliberately, because the surface that proposes a resolution must not also
-convey approval. `src/workflows/**` sits behind a determinism fence (ADR-0003,
+personal access token rather than the SPA's session cookie. It advertises eight tools —
+`search_evidence`, `ask_evidence`, `get_answer`, `verify_claims`, `request_resolution`,
+`submit_evidence`, `lookup_fact` and `get_attestation` — and no approval-deciding tool, deliberately,
+because the surface that proposes a resolution must not also convey approval.
+`src/workflows/**` sits behind a determinism fence (ADR-0003,
 `eslint.config.mjs`, enforced again by Temporal's own workflow-bundling step in `Worker.create`):
 it may only import from `src/workflows/**` itself and pure type-only files, never services, Mongoose,
 or `src/providers/**` directly. `ProvidersModule` binds `WORKFLOW_ENGINE` to the real

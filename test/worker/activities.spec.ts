@@ -19,6 +19,7 @@ import type { Claim } from '../../src/features/evidence/qa/contracts/answer.cont
 import { ContradictionCheckService } from '../../src/features/evidence/qa/contradiction-check.service';
 import { EvidenceRetrievalService } from '../../src/features/evidence/qa/evidence-retrieval.service';
 import { GroundingGateService } from '../../src/features/evidence/qa/grounding-gate.service';
+import { LedgerAnswerService } from '../../src/features/evidence/qa/ledger-answer.service';
 import { SynthesisService } from '../../src/features/evidence/qa/synthesis.service';
 import type { RetrievedChunk } from '../../src/features/evidence/qa/types/retrieved-chunk.type';
 import { SourcesService } from '../../src/features/evidence/sources/sources.service';
@@ -91,6 +92,7 @@ function buildApp(overrides: {
   findConflictedFactGroupsForChunks?: jest.Mock;
   findConflictedFactGroupsForTenant?: jest.Mock;
   persist?: jest.Mock;
+  resolveFromLedger?: jest.Mock;
   loadConflictForResolution?: jest.Mock;
   recordResolution?: jest.Mock;
   requestApproval?: jest.Mock;
@@ -147,6 +149,7 @@ function buildApp(overrides: {
     [TypedConfigService, overrides.config ?? getMockTypedConfig()],
     [GroundingGateService, { verify: overrides.verify ?? jest.fn() }],
     [AnswerPersistenceService, { persist: overrides.persist ?? jest.fn() }],
+    [LedgerAnswerService, { resolve: overrides.resolveFromLedger ?? jest.fn() }],
     [
       APPROVAL_CHANNEL,
       {
@@ -1145,6 +1148,35 @@ describe('createActivities', () => {
     });
   });
 
+  it('should carry the ledger provenance through onto the gate-verified answered outcome, when the input outcome carries one', async () => {
+    const claim = buildClaim();
+    const ledger = {
+      entity: 'Northgate Business Park',
+      measure: 'cap_rate',
+      state: 'single' as const,
+      factId: 'fact-1',
+    };
+    const mockVerify = jest.fn().mockReturnValue({
+      outcomeKind: 'answered',
+      claims: [claim],
+      droppedClaims: [],
+      violations: [],
+      claimCoverage: 1,
+    });
+    const app = buildApp({ verify: mockVerify });
+    const outcome = { kind: 'answered' as const, claims: [claim], ledger };
+    const retrievedChunks: RetrievedChunk[] = [buildRetrievedChunk()];
+
+    const activities = createActivities(app);
+    const result = await activities.groundingCheck({
+      outcome,
+      retrievedChunks,
+      tenantId: 'default',
+    });
+
+    expect(result.outcome).toEqual({ kind: 'answered', claims: [claim], ledger });
+  });
+
   it('should load cell facts and conflicted fact keys scoped to the retrieved chunks and tenant, and project them for GroundingGateService.verify', async () => {
     const claim = buildClaim();
     const chunk = buildRetrievedChunk({ chunkId: 'chunk-xlsx' });
@@ -2008,6 +2040,7 @@ describe('createActivities', () => {
       retrievedChunkIds: [],
       outcome: { kind: 'insufficient_evidence' as const, reason: 'none' },
       claims: [],
+      answerPath: 'synthesis' as const,
     };
 
     const activities = createActivities(app);
@@ -2015,6 +2048,33 @@ describe('createActivities', () => {
 
     expect(mockPersist).toHaveBeenCalledWith(input);
     expect(result).toBe(persistResult);
+  });
+
+  it('should delegate resolveFromLedger to LedgerAnswerService.resolve', async () => {
+    const resolveResult = { kind: 'unresolved' as const, reason: 'no-entity' };
+    const mockResolve = jest.fn().mockResolvedValue(resolveResult);
+    const app = buildApp({ resolveFromLedger: mockResolve });
+    const input = { questionText: 'What is the cap rate?', tenantId: 'default' };
+
+    const activities = createActivities(app);
+    const result = await activities.resolveFromLedger(input);
+
+    expect(mockResolve).toHaveBeenCalledWith(input);
+    expect(result).toBe(resolveResult);
+  });
+
+  it('should reject a missing tenantId for resolveFromLedger and do no work', async () => {
+    const mockResolve = jest.fn();
+    const app = buildApp({ resolveFromLedger: mockResolve });
+    const activities = createActivities(app);
+
+    await expect(
+      activities.resolveFromLedger({
+        questionText: 'What is the cap rate?',
+        tenantId: undefined as unknown as string,
+      }),
+    ).rejects.toThrow(/no tenantId/);
+    expect(mockResolve).not.toHaveBeenCalled();
   });
 
   it('should delegate loadConflict to ConflictsService.loadConflictForResolution, positionally', async () => {

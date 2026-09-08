@@ -62,6 +62,10 @@ export class Verification extends AuditableDocument {
     required: true,
   })
   usage: VerificationUsage;
+
+  // Set once by `AttestationService` on first export, never overwritten.
+  @Prop({ type: String, minlength: 64, maxlength: 64, lowercase: true })
+  attestationHash?: string;
 }
 
 export const VerificationSchema = SchemaFactory.createForClass(Verification);

@@ -60,6 +60,10 @@ import {
   GroundingGateService,
 } from '../features/evidence/qa/grounding-gate.service';
 import {
+  LedgerAnswerService,
+  type LedgerAnswerResult,
+} from '../features/evidence/qa/ledger-answer.service';
+import {
   SynthesisService,
   type SynthesizeAnswerResult,
 } from '../features/evidence/qa/synthesis.service';
@@ -265,6 +269,11 @@ export interface LoadConflictActivityInput {
   readonly tenantId: string;
 }
 
+export interface ResolveFromLedgerActivityInput {
+  readonly questionText: string;
+  readonly tenantId: string;
+}
+
 export interface SynthesizeAnswerActivityInput {
   readonly questionText: string;
   readonly chunks: readonly RetrievedChunk[];
@@ -371,6 +380,12 @@ export interface Activities {
   ): Promise<CheckContradictionsActivityResult>;
   groundingCheck(input: GroundingCheckActivityInput): Promise<GroundingCheckActivityResult>;
   persistAnswer(input: PersistAnswerInput): Promise<PersistAnswerResult>;
+  /** Answers a question straight from the fact ledger, when `LedgerAnswerService.resolve` can pin
+   *  it to exactly one cell — see that service's own doc comment for the fail-closed rules behind
+   *  `'unresolved'`. `'resolved'` carries a server-built `AnswerContract` that
+   *  `answer-question.workflow.ts` still runs through `groundingCheck` before persisting — this
+   *  activity never verifies its own claim, only builds one. */
+  resolveFromLedger(input: ResolveFromLedgerActivityInput): Promise<LedgerAnswerResult>;
   loadConflict(input: LoadConflictActivityInput): Promise<ConflictResolutionCandidate>;
   requestConflictApproval(request: ApprovalRequest): Promise<ApprovalHandle>;
   // Same underlying `ApprovalChannel.requestApproval` call as `requestConflictApproval` above —
@@ -494,6 +509,7 @@ export function createActivities(app: INestApplicationContext): Activities {
   const synthesisService = app.get(SynthesisService);
   const groundingGateService = app.get(GroundingGateService);
   const answerPersistenceService = app.get(AnswerPersistenceService);
+  const ledgerAnswerService = app.get(LedgerAnswerService);
   const approvalChannel = app.get<ApprovalChannel>(APPROVAL_CHANNEL);
   const approvalsService = app.get(ApprovalsService);
   const sourcesService = app.get(SourcesService);
@@ -828,7 +844,14 @@ export function createActivities(app: INestApplicationContext): Activities {
             // actually survived the gate. Persisting the former here would contradict this
             // function's own doc comment above ("the application disposes") and the `claims`/
             // `verificationReport` fields returned below, which already reflect the survivors.
-            outcome = { kind: 'answered', claims: [...report.claims] };
+            // `input.outcome.ledger` (set only on a `resolveFromLedger`-built outcome) is carried
+            // through untouched: the gate re-verifies the claim itself, never the provenance that
+            // names which ledger cell it came from.
+            outcome = {
+              kind: 'answered',
+              claims: [...report.claims],
+              ...(input.outcome.ledger ? { ledger: input.outcome.ledger } : {}),
+            };
           }
         } else if (report.outcomeKind === 'insufficient_evidence') {
           outcome = {
@@ -895,6 +918,9 @@ export function createActivities(app: INestApplicationContext): Activities {
 
     persistAnswer: (input) =>
       withTenantScope(als, input.tenantId, () => answerPersistenceService.persist(input)),
+
+    resolveFromLedger: (input) =>
+      withTenantScope(als, input.tenantId, () => ledgerAnswerService.resolve(input)),
 
     loadConflict: (input) =>
       withTenantScope(als, input.tenantId, () =>

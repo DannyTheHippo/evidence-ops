@@ -2,8 +2,19 @@ import type { Express } from 'express';
 import request from 'supertest';
 import { createMcpHttpApp } from '../../src/mcp/mcp-http-app';
 import type { McpServerService } from '../../src/mcp/mcp-server.service';
+import type { ToolExecutionContext } from '../../src/features/platform/authz/types/tool-definition.type';
+import { UserRole } from '../../src/shared/enums/user-role.enum';
 
 const JSON_RPC_BODY = { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} };
+
+/** A JSON-RPC body whose serialized size clears `MCP_JSON_BODY_LIMIT` (21mb) — used to prove the
+ *  pre-body gate runs, and refuses, before `express.json` ever attempts to buffer it. */
+const OVERSIZED_BODY = {
+  jsonrpc: '2.0',
+  id: 1,
+  method: 'tools/call',
+  params: { data: 'A'.repeat(22 * 1024 * 1024) },
+};
 
 /** One proxy hop, the value a deployment behind `docs/deployment/reverse-proxy.md` sets. */
 const ONE_PROXY_HOP = 1;
@@ -49,6 +60,34 @@ function buildApp(trustProxyHops: number, budgetPerKey = 1): Harness {
   return {
     app: createMcpHttpApp(mcpServerService as unknown as McpServerService, trustProxyHops),
     keys,
+  };
+}
+
+const AUTHENTICATED_CONTEXT: ToolExecutionContext = {
+  actorId: 'actor-a',
+  tenantId: 'tenant-a',
+  role: UserRole.Member,
+};
+
+/**
+ * Unlike `buildApp` above, `authenticate` resolves a real context — used to prove that a body
+ * over `MCP_JSON_BODY_LIMIT` is refused by `express.json` itself (413) once a caller has cleared
+ * the pre-body gate, never reaching `buildServer`.
+ */
+function buildAuthenticatedApp(): { app: Express; buildServer: jest.Mock } {
+  const buildServer = jest.fn(() => {
+    throw new Error('unreachable: express.json refuses the oversized body first');
+  });
+  const mcpServerService = {
+    checkPreAuthIpRateLimit: (): boolean => true,
+    authenticate: (): Promise<ToolExecutionContext> => Promise.resolve(AUTHENTICATED_CONTEXT),
+    checkRateLimit: (): boolean => true,
+    buildServer,
+  };
+
+  return {
+    app: createMcpHttpApp(mcpServerService as unknown as McpServerService, NO_PROXY_HOPS),
+    buildServer,
   };
 }
 
@@ -124,6 +163,30 @@ describe('createMcpHttpApp', () => {
         expect.stringContaining('127.0.0.1') as string,
         expect.stringContaining('127.0.0.1') as string,
       ]);
+    });
+  });
+
+  describe('body size ceiling', () => {
+    // The pre-body gate runs ahead of express.json, so an unauthenticated caller is refused
+    // before this process ever attempts to buffer an oversized body — proven here by getting a
+    // clean 401, not the connection-level failure a body over the limit would otherwise cause.
+    it('should 401 an oversized body with no PAT, having called authenticate but never buildServer', async () => {
+      const { app, keys } = buildApp(NO_PROXY_HOPS);
+
+      await request(app).post('/mcp').send(OVERSIZED_BODY).expect(401);
+
+      expect(keys).toHaveLength(1);
+    });
+
+    // Once the pre-body gate admits a caller, express.json applies MCP_JSON_BODY_LIMIT and
+    // refuses the oversized body itself — buildServer is never reached because the body never
+    // finishes parsing.
+    it('should 413 an oversized body from an authenticated caller, never reaching buildServer', async () => {
+      const { app, buildServer } = buildAuthenticatedApp();
+
+      await request(app).post('/mcp').send(OVERSIZED_BODY).expect(413);
+
+      expect(buildServer).not.toHaveBeenCalled();
     });
   });
 

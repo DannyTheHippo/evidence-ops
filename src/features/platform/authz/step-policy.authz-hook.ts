@@ -31,6 +31,12 @@ const STEP_MINIMUM_ROLE: Readonly<Record<string, UserRole>> = {
   // bounded by the same rate limiter and spend ceiling `mcp-ask` is. Floored at Member: a read of
   // this tenant's own evidence, gated on spend rather than on write risk.
   'mcp-verify': UserRole.Member,
+  // `submit_evidence` over MCP — REST upload parity: `DocumentsController.upload` is deliberately
+  // member-accessible, and this tool runs through the same content-identity gate. It writes
+  // evidence into the corpus, never a decision about it, so it floors at Member alongside the
+  // other read/write-evidence steps rather than at `mcp-mutate`'s Admin bar, which is reserved for
+  // a step that can move a conflict toward a human's approval.
+  'mcp-submit': UserRole.Member,
 };
 
 /** Ranks `UserRole` for a "does the caller's role meet the minimum" comparison; higher outranks

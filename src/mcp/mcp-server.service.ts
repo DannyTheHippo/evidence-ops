@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { HttpException, Inject, Injectable } from '@nestjs/common';
 import { Server } from '@modelcontextprotocol/sdk/server';
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -6,11 +6,14 @@ import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { toJSONSchema } from 'zod/v4';
 import { TypedConfigService } from '../config/environment/typed-config.service';
+import { AttestationService } from '../features/evidence/attestations/attestation.service';
 import { ClaimVerificationService } from '../features/evidence/qa/claim-verification.service';
 import { ConflictsService } from '../features/evidence/conflicts/conflicts.service';
+import { LedgerService } from '../features/evidence/ledger/ledger.service';
 import { EvidenceRetrievalService } from '../features/evidence/qa/evidence-retrieval.service';
 import { QaService } from '../features/evidence/qa/qa.service';
 import { buildSearchEvidenceTool } from '../features/evidence/retrieval/evidence-tools';
+import { EvidenceSubmissionService } from '../features/evidence/sources/evidence-submission.service';
 import type { ToolExecutionResult } from '../features/platform/authz/tool-executor.service';
 import { ToolExecutorService } from '../features/platform/authz/tool-executor.service';
 import type {
@@ -26,16 +29,24 @@ import {
   ASK_EVIDENCE_TOOL_NAME,
   buildAskEvidenceTool,
   buildGetAnswerTool,
+  buildGetAttestationTool,
+  buildLookupFactTool,
   buildRequestResolutionTool,
+  buildSubmitEvidenceTool,
   buildVerifyClaimsTool,
   getAnswerToolDefinition,
+  getAttestationToolDefinition,
+  lookupFactToolDefinition,
   MCP_ASK_STEP,
   MCP_MUTATE_STEP,
   MCP_READ_STEP,
+  MCP_SUBMIT_STEP,
   MCP_VERIFY_STEP,
   mcpSearchEvidenceToolDefinition,
   REQUEST_RESOLUTION_TOOL_NAME,
   requestResolutionToolDefinition,
+  SUBMIT_EVIDENCE_TOOL_NAME,
+  submitEvidenceToolDefinition,
   VERIFY_CLAIMS_TOOL_NAME,
   verifyClaimsToolDefinition,
 } from './mcp-tools';
@@ -72,6 +83,9 @@ const SPEND_GATED_TOOL_NAMES: readonly string[] = SPEND_GATED_TOOL_DEFINITIONS.m
 const ADVERTISED_TOOLS_BASE: readonly ModelToolDefinition[] = [
   getAnswerToolDefinition,
   requestResolutionToolDefinition,
+  submitEvidenceToolDefinition,
+  lookupFactToolDefinition,
+  getAttestationToolDefinition,
 ];
 
 const ADVERTISED_TOOLS: readonly ModelToolDefinition[] = [
@@ -92,6 +106,9 @@ function stepForTool(toolName: string): ToolExecutionStep {
   }
   if (toolName === VERIFY_CLAIMS_TOOL_NAME) {
     return MCP_VERIFY_STEP;
+  }
+  if (toolName === SUBMIT_EVIDENCE_TOOL_NAME) {
+    return MCP_SUBMIT_STEP;
   }
   return MCP_READ_STEP;
 }
@@ -125,11 +142,14 @@ function toCallToolResult(result: ToolExecutionResult): CallToolResult {
 }
 
 /** Returned to the MCP client in place of anything a tool handler (or the audit write around it)
- *  throws — mirrors `GlobalExceptionFilter`'s and the SSE streams' withheld-detail text
- *  (`SSE_STREAM_ERROR_MESSAGE`) so a Mongo duplicate-key message, a validation error, or any other
- *  exception this process did not itself construct as a refusal never reaches this surface
- *  verbatim, regardless of the thrown value's type. The real error is logged server-side wherever
- *  this constant is returned. */
+ *  throws, except a 4xx `HttpException` — mirrors `GlobalExceptionFilter`'s and the SSE streams'
+ *  withheld-detail text (`SSE_STREAM_ERROR_MESSAGE`) so a Mongo duplicate-key message, a Mongoose
+ *  validation error, a 5xx `HttpException`, or any other exception this process did not itself
+ *  construct as a refusal never reaches this surface verbatim, regardless of the thrown value's
+ *  type. A 4xx `HttpException` — a feature exception like `AnswerNotFoundException` — instead
+ *  reaches the caller as `${error.name}: ${error.message}`, since that class of failure tells the
+ *  caller what they did wrong rather than exposing an internal. The real error is logged
+ *  server-side wherever this constant is returned. */
 const MCP_TOOL_HANDLER_ERROR_RESULT: CallToolResult = {
   isError: true,
   content: [{ type: 'text', text: 'Internal server error' }],
@@ -221,16 +241,19 @@ function sweepExpiredBatch(store: RollingWindowStore, cutoff: number): void {
 
 /**
  * The MCP protocol layer: builds one low-level `Server` per verified caller, advertises
- * `get_answer`/`request_resolution` unconditionally, plus every spend-gated tool
- * (`SPEND_GATED_TOOL_DEFINITIONS`: `search_evidence`, `ask_evidence`, `verify_claims`) while
- * `config.spend.dailyLimitUsd > 0`, via `tools/list` from the same zod schemas
- * `ToolExecutorService` validates against (`this.advertisedTools`, `toMcpTool`), and routes
- * `tools/call` through `ToolExecutorService.execute` — the single chokepoint every tool call in
- * this codebase must route through (see that class's own doc comment). Never re-implements
- * validation or authorization itself. `stepForTool` presents `MCP_MUTATE_STEP` for
- * `request_resolution`, `MCP_ASK_STEP` for `ask_evidence`, `MCP_VERIFY_STEP` for `verify_claims`,
- * and `MCP_READ_STEP` for everything else (`search_evidence` and `get_answer`), so each tool kind
- * is policed under its own `STEP_MINIMUM_ROLE` floor even though all route through the same call.
+ * `get_answer`/`request_resolution`/`submit_evidence`/`lookup_fact`/`get_attestation`
+ * unconditionally, plus every spend-gated tool (`SPEND_GATED_TOOL_DEFINITIONS`: `search_evidence`,
+ * `ask_evidence`, `verify_claims`) while `config.spend.dailyLimitUsd > 0`, via `tools/list` from
+ * the same zod schemas `ToolExecutorService` validates against (`this.advertisedTools`,
+ * `toMcpTool`), and routes `tools/call` through `ToolExecutorService.execute` — the single
+ * chokepoint every tool call in this codebase must route through (see that class's own doc
+ * comment). Never re-implements validation or authorization itself. `stepForTool` presents
+ * `MCP_MUTATE_STEP` for `request_resolution`, `MCP_ASK_STEP` for `ask_evidence`, `MCP_VERIFY_STEP`
+ * for `verify_claims`, `MCP_SUBMIT_STEP` for `submit_evidence`, and `MCP_READ_STEP` for everything
+ * else (`search_evidence`, `get_answer`, `lookup_fact`, `get_attestation`), so each tool kind is
+ * policed under its own `STEP_MINIMUM_ROLE` floor even though all route through the same call.
+ * There is deliberately no approval-deciding tool on any step: the surface that proposes a
+ * resolution (`request_resolution`) must never also convey approval.
  *
  * The spend gate fails CLOSED: an unmeasurable spend ceiling (`dailyLimitUsd <= 0`, the same
  * disable convention `SpendGuardModelProvider`/`SpendGuardEmbeddingProvider` read) withdraws every
@@ -249,13 +272,20 @@ function sweepExpiredBatch(store: RollingWindowStore, cutoff: number): void {
  * ontology) and calls `workflowEngine.start`, which enqueues the `resolveConflict` workflow
  * without waiting for it — any model spend that workflow's own activities might later incur
  * happens on a Temporal worker process, outside this call and outside this gate's reach.
+ * `submit_evidence` stays gate-exempt for the same reason: `EvidenceSubmissionService.submit`
+ * writes a document version and starts the ingest workflow without waiting for it — any spend that
+ * workflow's own extraction activities later incur lands on a Temporal worker process under its
+ * own `ingestDailyLimitUsd` ceiling, not this one. `lookup_fact` and `get_attestation` stay
+ * gate-exempt because each is a Mongo read plus, for the latter, an audit write — neither calls a
+ * model or a paid embedding provider.
  *
- * With the ceiling disabled, the surface that remains is deliberately narrower than three tools —
- * only `get_answer`/`request_resolution` stay reachable, so a client that starts a question or
- * proposes a resolution can still be told how it turned out, but nothing on this surface can
- * search the corpus or spend further budget. That is the intended fail-closed posture, not a gap:
- * the constructor's `logger.warn` below names exactly which tools were withheld
- * (`SPEND_GATED_TOOL_NAMES`), so an operator watching a client's `tools/list` shrink has a
+ * With the ceiling disabled, the surface that remains is deliberately narrower than the three
+ * spend-gated tools — `get_answer`/`request_resolution`/`submit_evidence`/`lookup_fact`/
+ * `get_attestation` stay reachable, so a client that starts a question or proposes a resolution
+ * can still be told how it turned out, evidence can still be submitted and looked up, but nothing
+ * on this surface can search the corpus or spend further budget. That is the intended fail-closed
+ * posture, not a gap: the constructor's `logger.warn` below names exactly which tools were
+ * withheld (`SPEND_GATED_TOOL_NAMES`), so an operator watching a client's `tools/list` shrink has a
  * corresponding server-side line explaining why.
  *
  * `registerTool` runs once, in the constructor, against the single `ToolExecutorService`
@@ -310,10 +340,16 @@ export class McpServerService {
     qaService: QaService,
     conflictsService: ConflictsService,
     claimVerificationService: ClaimVerificationService,
+    evidenceSubmissionService: EvidenceSubmissionService,
+    ledgerService: LedgerService,
+    attestationService: AttestationService,
   ) {
     this.logger.init(McpServerService.name);
     this.toolExecutor.registerTool(buildGetAnswerTool(qaService));
     this.toolExecutor.registerTool(buildRequestResolutionTool(conflictsService));
+    this.toolExecutor.registerTool(buildSubmitEvidenceTool(evidenceSubmissionService));
+    this.toolExecutor.registerTool(buildLookupFactTool(ledgerService));
+    this.toolExecutor.registerTool(buildGetAttestationTool(attestationService));
 
     const spendGateOpen = this.config.spend.dailyLimitUsd > 0;
     if (spendGateOpen) {
@@ -466,14 +502,18 @@ export class McpServerService {
    * call, not after it returns: a registered, authorized, well-formed call whose handler itself
    * throws — a `get_answer` for an id that does not exist, for one — still leaves a row, carrying
    * `MCP_TOOL_CALL_FAILED_ACTION` rather than either of the other two actions, so a thrown handler
-   * is never silently indistinguishable from a miss with no row at all. The row carries the tool
-   * name, the outcome, and — on a refusal — the chokepoint's reason, but never the arguments: those
-   * are model-controlled and can carry corpus text, so what is recorded answers "who called what,
+   * is never silently indistinguishable from a miss with no row at all. That action is the same
+   * whether the throw reaches the caller as a 4xx `HttpException`'s own class name and message or
+   * collapses to the fixed `MCP_TOOL_HANDLER_ERROR_RESULT` text — only the tool result text
+   * branches on the exception, never the audit row. The row carries the tool name, the outcome,
+   * and — on a refusal — the chokepoint's reason, but never the arguments: those are
+   * model-controlled and can carry corpus text, so what is recorded answers "who called what,
    * when", not "what did the payload say". The write fails CLOSED: it is awaited inside the
    * `finally` before the result goes back, so a failed audit write still replaces whatever the
-   * handler produced with `MCP_TOOL_HANDLER_ERROR_RESULT` — the same fixed result a handler throw
-   * itself gets — via the outer `catch` below, rather than either disclosing the handler's result
-   * with no record of the call or letting the audit write's own error reach the client verbatim.
+   * handler produced with `MCP_TOOL_HANDLER_ERROR_RESULT` — the same fixed result an unrecognized
+   * handler throw itself gets — via the outer `catch` below, rather than either disclosing the
+   * handler's result with no record of the call or letting the audit write's own error reach the
+   * client verbatim.
    */
   buildServer(context: ToolExecutionContext): Server {
     const server = new Server(MCP_SERVER_INFO, { capabilities: { tools: {} } });
@@ -508,12 +548,26 @@ export class McpServerService {
               return toCallToolResult(executed);
             } catch (error) {
               // A handler's own throw (a Mongo duplicate key, a Mongoose validation error, an
-              // unexpected `BaseException`, a thrown non-Error value) is the tool's own failure, not
-              // a chokepoint refusal — `ToolExecutorService.execute` leaves it to propagate rather
-              // than folding it into a `ToolExecutionRefusal`. This process has neither
+              // unrecognized exception type, a thrown non-Error value) is the tool's own failure,
+              // not a chokepoint refusal — `ToolExecutorService.execute` leaves it to propagate
+              // rather than folding it into a `ToolExecutionRefusal`. This process has neither
               // `GlobalExceptionFilter` nor the SSE streams' `catchError`, so this is the only place
               // standing between that throw and the client; without it the error's own message (and,
               // for a Mongo duplicate key, its `code`) would reach the caller verbatim.
+              if (error instanceof HttpException && error.getStatus() < 500) {
+                // A 4xx tells the caller what they did wrong — `AnswerNotFoundException`, for one —
+                // so it is safe to surface as-is. Anything this branch cannot classify this way
+                // (a 5xx `HttpException`, a Mongo error, any other thrown value) falls through to
+                // the generic branch below rather than widening this one to guess at more types.
+                this.logger.warn(
+                  `Tool call for "${name}" refused: ${error.name}: ${error.message}`,
+                );
+                return {
+                  isError: true,
+                  content: [{ type: 'text', text: `${error.name}: ${error.message}` }],
+                };
+              }
+
               this.logger.error(
                 `Tool call for "${name}" threw: ` +
                   `${error instanceof Error ? error.message : String(error)}`,

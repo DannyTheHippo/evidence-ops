@@ -68,4 +68,11 @@ export class VerificationResponseDto {
     description: 'Verification run creation timestamp.',
   })
   createdAt: Date;
+
+  @Expose()
+  @ApiProperty({
+    required: false,
+    description: 'sha256 of the canonical attestation bundle, set on first export.',
+  })
+  attestationHash?: string;
 }

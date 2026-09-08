@@ -10,9 +10,18 @@ import {
   DocumentVersion,
   DocumentVersionSchema,
 } from '../../../database/schemas/evidence/document-version/document-version.schema';
+import {
+  EvidenceChunk,
+  EvidenceChunkSchema,
+} from '../../../database/schemas/evidence/evidence-chunk/evidence-chunk.schema';
+import {
+  ExtractedFact,
+  ExtractedFactSchema,
+} from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import { ProvidersModule } from '../../../providers/providers.module';
 import { ConflictsModule } from '../conflicts/conflicts.module';
 import { FactsModule } from '../facts/facts.module';
+import { LedgerModule } from '../ledger/ledger.module';
 import { MeasuresModule } from '../measures/measures.module';
 import { VerificationsModule } from '../verifications/verifications.module';
 import { AnswerPersistenceService } from './answer-persistence.service';
@@ -21,8 +30,10 @@ import { ClaimVerificationService } from './claim-verification.service';
 import { ContradictionCheckService } from './contradiction-check.service';
 import { EvidenceRetrievalService } from './evidence-retrieval.service';
 import { GroundingGateService } from './grounding-gate.service';
+import { LedgerAnswerService } from './ledger-answer.service';
 import { QaController } from './qa.controller';
 import { QaService } from './qa.service';
+import { QuestionResolverService } from './question-resolver.service';
 import { QueryEmbeddingCacheService } from './query-embedding-cache.service';
 import { SynthesisService } from './synthesis.service';
 
@@ -40,18 +51,23 @@ import { SynthesisService } from './synthesis.service';
 // exports only that and `FactsService`, never `MeasuresService`, so `MeasuresModule` is imported
 // separately for `MeasuresService.listConfirmedDefinitions`. `VerificationsModule` is for
 // `VerificationsService.record`, the persistence `ClaimVerificationService.verifyClaims` calls once
-// per run.
+// per run. `ExtractedFact`/`EvidenceChunk` are registered here (alongside the already-present
+// `DocumentVersion`) for `LedgerAnswerService`'s own representative-fact/chunk/version loads;
+// `LedgerModule` is imported for `LedgerService.resolveValue`.
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: Answer.name, schema: AnswerSchema },
       { name: Document.name, schema: DocumentSchema },
       { name: DocumentVersion.name, schema: DocumentVersionSchema },
+      { name: EvidenceChunk.name, schema: EvidenceChunkSchema },
+      { name: ExtractedFact.name, schema: ExtractedFactSchema },
       { name: User.name, schema: UserSchema },
     ]),
     ProvidersModule,
     FactsModule,
     ConflictsModule,
+    LedgerModule,
     MeasuresModule,
     VerificationsModule,
   ],
@@ -66,6 +82,8 @@ import { SynthesisService } from './synthesis.service';
     ContradictionCheckService,
     ClaimVerificationService,
     QaService,
+    QuestionResolverService,
+    LedgerAnswerService,
   ],
   exports: [
     SynthesisService,
@@ -74,6 +92,8 @@ import { SynthesisService } from './synthesis.service';
     AnswerPersistenceService,
     ClaimVerificationService,
     QaService,
+    QuestionResolverService,
+    LedgerAnswerService,
   ],
 })
 export class QaModule {}

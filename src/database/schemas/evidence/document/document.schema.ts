@@ -147,7 +147,8 @@ export class Document extends AuditableDocument {
    * The `Source` this document's bytes were ingested from, absent for a browser upload (no source
    * to attribute) and for a document created before this field existed and never touched by the
    * `0026-document-source-backlink` backfill's first-wins resolution. `DocumentsService.upload`
-   * sets it going forward from the sync path only — a browser upload has no source to attribute.
+   * sets it going forward from the sync path and from an MCP submission (an `'mcp-submit'`
+   * source, never synced) — a browser upload still has no source to attribute.
    */
   @Prop({ type: Types.ObjectId, ref: 'Source' })
   sourceId?: Types.ObjectId;

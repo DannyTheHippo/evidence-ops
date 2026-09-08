@@ -12,6 +12,7 @@ import { InfoModule } from './features/common/info/info.module';
 import { InvitationsModule } from './features/common/invitations/invitations.module';
 import { UsersModule } from './features/common/users/users.module';
 import { ApprovalsModule } from './features/evidence/approvals/approvals.module';
+import { AttestationsModule } from './features/evidence/attestations/attestations.module';
 import { ConflictsModule } from './features/evidence/conflicts/conflicts.module';
 import { DocumentsModule } from './features/evidence/documents/documents.module';
 import { FactsModule } from './features/evidence/facts/facts.module';
@@ -97,6 +98,7 @@ class ThrottlingModule {}
     LedgerModule,
     ConflictsModule,
     QaModule,
+    AttestationsModule,
     VerificationsModule,
     RetrievalModule,
     ApprovalsModule,

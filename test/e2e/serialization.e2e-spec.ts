@@ -300,6 +300,81 @@ describe('Serialization (e2e)', () => {
     expect(body.withdrawnCitedDocVersionIds).toEqual([withdrawnVersion._id.toString()]);
   });
 
+  it('exposes answerPath and attestationHash on a completed answer and withholds answerPath until completion', async () => {
+    const { cookie, tenantId } = await registerTestUser(app, {
+      email: 'serialization-answer-path-e2e@example.com',
+      password: 'correct-horse-battery',
+    });
+
+    const answerModel = app.get<Model<AnswerDocument>>(getModelToken(Answer.name));
+
+    const citation: Citation = {
+      docVersionId: 'version-1',
+      sha256: 'a'.repeat(64),
+      chunkId: 'chunk-1',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 1 },
+      quote: 'a cap rate of approximately 6.10%',
+    };
+    const factId = new Types.ObjectId().toString();
+    const ledgerOutcome = {
+      kind: 'answered' as const,
+      claims: [{ statement: 'The cap rate is approximately 6.10%.', citations: [citation] }],
+      ledger: {
+        entity: 'Northgate Business Park',
+        measure: 'cap_rate',
+        state: 'single' as const,
+        factId,
+      },
+    };
+    const completed = await answerModel.create({
+      tenantId,
+      questionText: 'What is the cap rate for Northgate Business Park?',
+      runStatus: 'completed',
+      outcome: ledgerOutcome,
+      claims: ledgerOutcome.claims,
+      claimCoverage: 1,
+      answerPath: 'ledger',
+      attestationHash: 'c'.repeat(64),
+    });
+    const queued = await answerModel.create({
+      tenantId,
+      questionText: 'What is the vacancy rate?',
+      runStatus: 'queued',
+      claims: [],
+      answerPath: 'synthesis',
+    });
+
+    const completedResponse = await request(getTestServer(app))
+      .get(`/api/v1/answers/${completed._id.toString()}`)
+      .set('Cookie', cookie);
+    const completedBody = completedResponse.body as Record<string, unknown>;
+    const outcome = completedBody.outcome as Record<string, unknown>;
+
+    expect(completedResponse.status).toBe(200);
+    expect(completedBody.answerPath).toBe('ledger');
+    expect(completedBody.attestationHash).toBe('c'.repeat(64));
+    expect(Object.keys(outcome).sort()).toEqual(['kind', 'claims', 'ledger'].sort());
+    expect(Object.keys(outcome.ledger as Record<string, unknown>).sort()).toEqual(
+      ['entity', 'measure', 'state', 'factId'].sort(),
+    );
+
+    const queuedResponse = await request(getTestServer(app))
+      .get(`/api/v1/answers/${queued._id.toString()}`)
+      .set('Cookie', cookie);
+    const queuedBody = queuedResponse.body as Record<string, unknown>;
+
+    expect(queuedResponse.status).toBe(200);
+    expect(Object.keys(queuedBody)).not.toContain('answerPath');
+
+    const listResponse = await request(getTestServer(app))
+      .get('/api/v1/answers')
+      .set('Cookie', cookie);
+    const listBody = listResponse.body as { docs: Array<Record<string, unknown>> };
+    const completedDoc = listBody.docs.find((doc) => doc.id === completed._id.toString());
+
+    expect(completedDoc?.answerPath).toBe('ledger');
+  });
+
   // Regression for the grounding-gate persistence fix: `outcome.claims` on a persisted `answered`
   // Answer is the gate's own survivor set, never a model claim the gate already dropped — this
   // seeds an Answer the way `groundingCheck`/`AnswerPersistenceService` now produce one (one
@@ -449,6 +524,94 @@ describe('Serialization (e2e)', () => {
     expect(body.docs[0].magnitudeUnit).toBe('ratio');
   });
 
+  // Regression for the Adjudication queue's second-query gap: a resolved conflict's decision,
+  // decider and reason must arrive on the same GET /conflicts row that lists it — this is the gate
+  // that catches ConflictResponseDto.resolution losing its @Expose(), and proves an unresolved
+  // row carries no resolution key at all rather than an undefined one.
+  it('exposes the persisted resolution on a resolved conflict row, and carries no resolution key on an open one', async () => {
+    const { cookie, tenantId } = await registerTestUser(app, {
+      email: 'serialization-conflicts-resolution-e2e@example.com',
+      password: 'correct-horse-battery',
+    });
+
+    const conflictModel = app.get<Model<ConflictDocument>>(getModelToken(Conflict.name));
+    const winningFactId = new Types.ObjectId();
+    const resolvedFactKey = {
+      entity: 'Serialization Test Property (resolved)',
+      metric: 'cap_rate',
+      period: '2025-03',
+    };
+    await conflictModel.create({
+      tenantId,
+      factKey: resolvedFactKey,
+      groupKeyNormalized: groupKey(resolvedFactKey),
+      factIds: [winningFactId, new Types.ObjectId()],
+      magnitude: 0.0085,
+      magnitudeUnit: 'ratio',
+      packId: ACTIVE_PACK_ID,
+      packVersion: ACTIVE_PACK_VERSION,
+      status: 'resolved',
+      resolution: {
+        outcome: 'resolved',
+        winningFactId,
+        decidedBy: 'reviewer@example.com',
+        reason: 'Confirmed via source memo.',
+        resolvedAt: new Date('2026-07-02T00:00:00.000Z'),
+        ruleFired: 'authority',
+        followedProposal: true,
+      },
+    });
+    const openFactKey = {
+      entity: 'Serialization Test Property (open)',
+      metric: 'cap_rate',
+      period: '2025-03',
+    };
+    await conflictModel.create({
+      tenantId,
+      factKey: openFactKey,
+      groupKeyNormalized: groupKey(openFactKey),
+      factIds: [new Types.ObjectId(), new Types.ObjectId()],
+      magnitude: 0.0085,
+      magnitudeUnit: 'ratio',
+      packId: ACTIVE_PACK_ID,
+      packVersion: ACTIVE_PACK_VERSION,
+      status: 'open',
+    });
+
+    const response = await request(getTestServer(app))
+      .get('/api/v1/conflicts')
+      .set('Cookie', cookie);
+    const body = response.body as { docs: Array<Record<string, unknown>> };
+
+    expect(response.status).toBe(200);
+    expect(body.docs).toHaveLength(2);
+    const entityOf = (doc: Record<string, unknown>) => (doc.factKey as { entity: string }).entity;
+    const resolvedRow = body.docs.find((doc) => entityOf(doc) === resolvedFactKey.entity);
+    const openRow = body.docs.find((doc) => entityOf(doc) === openFactKey.entity);
+
+    expect(Object.keys(resolvedRow?.resolution as object).sort()).toEqual(
+      [
+        'decidedBy',
+        'followedProposal',
+        'outcome',
+        'reason',
+        'resolvedAt',
+        'ruleFired',
+        'winningFactId',
+      ].sort(),
+    );
+    expect(resolvedRow?.resolution).toEqual({
+      outcome: 'resolved',
+      winningFactId: winningFactId.toString(),
+      decidedBy: 'reviewer@example.com',
+      reason: 'Confirmed via source memo.',
+      resolvedAt: '2026-07-02T00:00:00.000Z',
+      ruleFired: 'authority',
+      followedProposal: true,
+    });
+    expect(openRow).not.toHaveProperty('resolution');
+  });
+
   // Regression for the workflow-runs list widening: subjectId/subjectType are computed fields
   // (never spread from the schema document), and status/workflowType are new query filters — this
   // is the gate that catches either losing its @Expose()/validator decorator, and proves the
@@ -487,5 +650,80 @@ describe('Serialization (e2e)', () => {
     expect(body.docs[0].id).toBe(matching._id.toString());
     expect(body.docs[0].subjectId).toBe(subjectId.toString());
     expect(body.docs[0].subjectType).toBe('Conflict');
+  });
+
+  // Regression for the attestation bundle nesting (3B.10): AttestationBundleResponseDto exposes
+  // claims/citations/integrity as untyped Object/[Object], not through a nested response class —
+  // this is the gate proving a citation's own fields arrive over HTTP rather than being stripped by
+  // excludeExtraneousValues one level down, and that integrity.contentHash is a genuine sha256 hex
+  // digest, not just present.
+  it('exposes every claim and citation field, and a sha256 integrity.contentHash, on the answer attestation bundle', async () => {
+    const { cookie, tenantId } = await registerTestUser(app, {
+      email: 'serialization-attestation-bundle-e2e@example.com',
+      password: 'correct-horse-battery',
+    });
+
+    const documentVersionModel = app.get<Model<DocumentVersionDocument>>(
+      getModelToken(DocumentVersion.name),
+    );
+    const answerModel = app.get<Model<AnswerDocument>>(getModelToken(Answer.name));
+
+    const version = await documentVersionModel.create({
+      tenantId,
+      documentId: new Types.ObjectId(),
+      versionNumber: 1,
+      sha256: 'd'.repeat(64),
+      sizeBytes: 100,
+      storageKey: 'serialization-attestation-bundle-e2e',
+    });
+    const citation: Citation = {
+      docVersionId: version._id.toString(),
+      sha256: 'd'.repeat(64),
+      chunkId: 'chunk-1',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 1 },
+      quote: 'a cap rate of approximately 6.10%',
+    };
+    const claims = [{ statement: 'The cap rate is approximately 6.10%.', citations: [citation] }];
+    const answer = await answerModel.create({
+      tenantId,
+      questionText: 'What is the cap rate?',
+      runStatus: 'completed',
+      outcome: { kind: 'answered', claims },
+      claims,
+      claimCoverage: 1,
+    });
+
+    const response = await request(getTestServer(app))
+      .get(`/api/v1/answers/${answer._id.toString()}/attestation`)
+      .set('Cookie', cookie);
+    const body = response.body as {
+      claims: Array<{
+        statement: string;
+        verdict: string;
+        citations: Array<Record<string, unknown>>;
+        checks: unknown[];
+      }>;
+      integrity: { algorithm: string; contentHash: string };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.claims).toHaveLength(1);
+    expect(Object.keys(body.claims[0]).sort()).toEqual(
+      ['statement', 'verdict', 'citations', 'checks'].sort(),
+    );
+    expect(body.claims[0].citations).toHaveLength(1);
+    expect(Object.keys(body.claims[0].citations[0]).sort()).toEqual(
+      ['documentId', 'documentVersionId', 'sha256', 'locator', 'extractorVersion', 'quote'].sort(),
+    );
+    expect(body.claims[0].citations[0]).toEqual({
+      documentId: version.documentId.toString(),
+      documentVersionId: version._id.toString(),
+      sha256: 'd'.repeat(64),
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 1 },
+      extractorVersion: 'v1',
+      quote: 'a cap rate of approximately 6.10%',
+    });
+    expect(body.integrity.algorithm).toBe('sha256');
+    expect(body.integrity.contentHash).toMatch(/^[0-9a-f]{64}$/);
   });
 });

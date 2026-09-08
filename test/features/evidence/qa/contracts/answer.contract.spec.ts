@@ -1,13 +1,19 @@
+import type {
+  ConflictResolutionOutcome,
+  ConflictRuleFired,
+} from '../../../../../src/database/schemas/evidence/conflict/conflict.schema';
 import type { EvidenceLocator } from '../../../../../src/database/schemas/evidence/evidence-chunk/evidence-locator.type';
 import {
   answerContractSchema,
   citationSchema,
   claimSchema,
+  ledgerDecisionSchema,
   locatorSchema,
   modelAnswerContractSchema,
   modelCitationSchema,
   modelInsufficientEvidenceOutcomeSchema,
   verificationReportSchema,
+  type LedgerDecision,
   type Locator,
 } from '../../../../../src/features/evidence/qa/contracts/answer.contract';
 import { toStructuredOutputFormat } from '../../../../../src/providers/model/structured-output-format.util';
@@ -94,6 +100,37 @@ describe('locatorSchema', () => {
     assertAssignable<EvidenceLocator>(contractLocator);
 
     expect(true).toBe(true);
+  });
+});
+
+describe('ledgerDecisionSchema', () => {
+  it("keeps 'outcome' and 'ruleFired' structurally in sync with ConflictResolutionOutcome and ConflictRuleFired", () => {
+    // Compile-time-only assertions: if the two unions drift apart, one of these assignments
+    // fails `tsc`, catching the drift before an adjudicated ledger answer misreports the decision.
+    function assertAssignable<T>(_value: T): void {
+      // no-op — the check happens at the type level, not at runtime.
+    }
+
+    const dbOutcome = 'resolved' as ConflictResolutionOutcome;
+    const contractOutcome = 'resolved' satisfies LedgerDecision['outcome'];
+    const dbRuleFired = 'authority' as ConflictRuleFired;
+    const contractRuleFired = 'authority' satisfies NonNullable<LedgerDecision['ruleFired']>;
+
+    assertAssignable<LedgerDecision['outcome']>(dbOutcome);
+    assertAssignable<ConflictResolutionOutcome>(contractOutcome);
+    assertAssignable<NonNullable<LedgerDecision['ruleFired']>>(dbRuleFired);
+    assertAssignable<ConflictRuleFired>(contractRuleFired);
+
+    // Runtime confirmation alongside the compile-time check above: a value typed as
+    // ConflictResolutionOutcome/ConflictRuleFired actually parses.
+    expect(
+      ledgerDecisionSchema.safeParse({
+        conflictId: 'conflict-1',
+        outcome: dbOutcome,
+        resolvedAt: '2026-01-01T00:00:00.000Z',
+        ruleFired: dbRuleFired,
+      }).success,
+    ).toBe(true);
   });
 });
 
@@ -225,6 +262,99 @@ describe('answerContractSchema', () => {
     };
 
     expect(answerContractSchema.safeParse(outcome).success).toBe(true);
+  });
+
+  it('accepts a valid "answered" outcome with no ledger provenance', () => {
+    const outcome = {
+      kind: 'answered',
+      claims: [
+        {
+          statement: 'Revenue grew 12% year over year.',
+          citations: [buildCitation(xlsxCellLocator)],
+        },
+      ],
+    };
+
+    const result = answerContractSchema.safeParse(outcome);
+
+    expect(result.success).toBe(true);
+    expect(result.success && (result.data as Record<string, unknown>).ledger).toBeUndefined();
+  });
+
+  it('accepts a valid "answered" outcome carrying ledger provenance for a single fact', () => {
+    const outcome = {
+      kind: 'answered',
+      claims: [
+        {
+          statement: 'Revenue grew 12% year over year.',
+          citations: [buildCitation(xlsxCellLocator)],
+        },
+      ],
+      ledger: {
+        entity: 'Acme Corp',
+        measure: 'revenue',
+        period: 'Q3-2025',
+        state: 'single',
+        factId: 'fact-1',
+      },
+    };
+
+    const result = answerContractSchema.safeParse(outcome);
+
+    expect(result.success).toBe(true);
+    expect(result.success && result.data.kind === 'answered' && result.data.ledger).toEqual(
+      outcome.ledger,
+    );
+  });
+
+  it('accepts a valid "answered" outcome carrying ledger provenance for an adjudicated conflict', () => {
+    const outcome = {
+      kind: 'answered',
+      claims: [
+        {
+          statement: 'Revenue grew 12% year over year.',
+          citations: [buildCitation(xlsxCellLocator)],
+        },
+      ],
+      ledger: {
+        entity: 'Acme Corp',
+        measure: 'revenue',
+        period: 'Q3-2025',
+        state: 'adjudicated',
+        factId: 'fact-2',
+        winnerWithdrawn: false,
+        decision: {
+          conflictId: 'conflict-1',
+          outcome: 'resolved',
+          winningFactId: 'fact-2',
+          resolvedAt: '2026-01-01T00:00:00.000Z',
+          ruleFired: 'authority',
+          followedProposal: true,
+        },
+      },
+    };
+
+    expect(answerContractSchema.safeParse(outcome).success).toBe(true);
+  });
+
+  it('rejects an "answered" outcome carrying a malformed ledger state', () => {
+    const outcome = {
+      kind: 'answered',
+      claims: [
+        {
+          statement: 'Revenue grew 12% year over year.',
+          citations: [buildCitation(xlsxCellLocator)],
+        },
+      ],
+      ledger: {
+        entity: 'Acme Corp',
+        measure: 'revenue',
+        state: 'conflicted',
+        factId: 'fact-1',
+      },
+    };
+
+    expect(answerContractSchema.safeParse(outcome).success).toBe(false);
   });
 
   it('accepts a valid "insufficient_evidence" outcome', () => {

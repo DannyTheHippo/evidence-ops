@@ -1,6 +1,10 @@
-import type { Request, Response } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import type { ToolExecutionContext } from '../../src/features/platform/authz/types/tool-definition.type';
-import { createMcpRequestHandler, JSON_RPC_ERROR } from '../../src/mcp/mcp-request-handler';
+import {
+  createMcpPreBodyGate,
+  createMcpRequestHandler,
+  JSON_RPC_ERROR,
+} from '../../src/mcp/mcp-request-handler';
 import type { McpServerService } from '../../src/mcp/mcp-server.service';
 import { UserRole } from '../../src/shared/enums/user-role.enum';
 
@@ -31,8 +35,14 @@ function buildRequest(overrides: Partial<Request> = {}): Request {
     ip: '1.2.3.4',
     headers: {},
     body: { jsonrpc: '2.0', id: 1, method: 'tools/call', params: {} },
+    // The gate's drain-before-refuse path is exercised at the HTTP level
+    // (`mcp-http-app.spec.ts`), against a real stream — a mock request is always already fully
+    // received, so `refuse` takes its synchronous branch here.
+    readableEnded: true,
+    resume: jest.fn(),
+    once: jest.fn(),
     ...overrides,
-  } as Request;
+  } as unknown as Request;
 }
 
 /**
@@ -48,11 +58,17 @@ function buildResponse(): {
 } {
   const json = jest.fn<void, [Record<string, unknown>]>();
   const status = jest.fn<{ json: typeof json }, [number]>().mockReturnValue({ json });
-  const res = { status, json, on: jest.fn(), headersSent: false } as unknown as Response;
+  const res = {
+    status,
+    json,
+    on: jest.fn(),
+    headersSent: false,
+    locals: {},
+  } as unknown as Response;
   return { res, status, json };
 }
 
-describe('createMcpRequestHandler', () => {
+describe('createMcpPreBodyGate', () => {
   afterEach(() => {
     jest.resetAllMocks();
   });
@@ -64,16 +80,16 @@ describe('createMcpRequestHandler', () => {
   it('should refuse a request over the pre-auth IP budget without ever calling authenticate', async () => {
     const mcpServerService = buildMcpServerService();
     mcpServerService.checkPreAuthIpRateLimit.mockReturnValue(false);
-    const handler = createMcpRequestHandler(mcpServerService as unknown as McpServerService);
+    const gate = createMcpPreBodyGate(mcpServerService as unknown as McpServerService);
     const req = buildRequest();
     const { res, status, json } = buildResponse();
+    const next: NextFunction = jest.fn();
 
-    await handler(req, res);
+    await gate(req, res, next);
 
     expect(mcpServerService.checkPreAuthIpRateLimit).toHaveBeenCalledWith('1.2.3.4');
     expect(mcpServerService.authenticate).not.toHaveBeenCalled();
-    expect(mcpServerService.checkRateLimit).not.toHaveBeenCalled();
-    expect(mcpServerService.buildServer).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
     expect(status).toHaveBeenCalledWith(429);
     expect(json).toHaveBeenCalledWith(
       expect.objectContaining({ error: JSON_RPC_ERROR.rateLimited }),
@@ -82,38 +98,80 @@ describe('createMcpRequestHandler', () => {
 
   it('should key the pre-auth limiter on the caller IP, falling back to a fixed tracker when unresolved', async () => {
     const mcpServerService = buildMcpServerService();
-    // Refused, so the handler returns right after the gate check — this test only cares what key
-    // reached the limiter, not the rest of the request lifecycle the other tests already cover.
+    // Refused, so the gate returns right after the check — this test only cares what key reached
+    // the limiter, not the rest of the request lifecycle the other tests already cover.
     mcpServerService.checkPreAuthIpRateLimit.mockReturnValue(false);
-    const handler = createMcpRequestHandler(mcpServerService as unknown as McpServerService);
+    const gate = createMcpPreBodyGate(mcpServerService as unknown as McpServerService);
     const req = buildRequest({ ip: undefined });
     const { res } = buildResponse();
+    const next: NextFunction = jest.fn();
 
-    await handler(req, res);
+    await gate(req, res, next);
 
     expect(mcpServerService.checkPreAuthIpRateLimit).toHaveBeenCalledWith('unresolved');
   });
 
-  it('should call authenticate once the pre-auth limiter admits the request', async () => {
+  it('should call authenticate once the pre-auth limiter admits the request, and 401 on a failed verify', async () => {
     const mcpServerService = buildMcpServerService();
     mcpServerService.authenticate.mockResolvedValue(null);
-    const handler = createMcpRequestHandler(mcpServerService as unknown as McpServerService);
+    const gate = createMcpPreBodyGate(mcpServerService as unknown as McpServerService);
     const req = buildRequest({ headers: { authorization: 'Bearer x' } });
     const { res, status } = buildResponse();
+    const next: NextFunction = jest.fn();
 
-    await handler(req, res);
+    await gate(req, res, next);
 
     expect(mcpServerService.checkPreAuthIpRateLimit).toHaveBeenCalledWith('1.2.3.4');
     expect(mcpServerService.authenticate).toHaveBeenCalledWith('Bearer x');
     expect(status).toHaveBeenCalledWith(401);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('should stamp res.locals.mcpContext and call next once authenticate resolves a context', async () => {
+    const mcpServerService = buildMcpServerService();
+    const gate = createMcpPreBodyGate(mcpServerService as unknown as McpServerService);
+    const req = buildRequest({ headers: { authorization: 'Bearer x' } });
+    const { res } = buildResponse();
+    const next: NextFunction = jest.fn();
+
+    await gate(req, res, next);
+
+    expect(res.locals.mcpContext).toEqual(TENANT_A_CONTEXT);
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('createMcpRequestHandler', () => {
+  afterEach(() => {
+    jest.resetAllMocks();
+  });
+
+  // Fails CLOSED: absent `res.locals.mcpContext` means either the pre-body gate genuinely refused
+  // this request, or the route was wired without the gate ahead of the handler. Either way the
+  // handler must 401 rather than fall through to some default identity.
+  it('should 401 without res.locals.mcpContext, never reaching checkRateLimit or buildServer', async () => {
+    const mcpServerService = buildMcpServerService();
+    const handler = createMcpRequestHandler(mcpServerService as unknown as McpServerService);
+    const req = buildRequest();
+    const { res, status, json } = buildResponse();
+
+    await handler(req, res);
+
+    expect(mcpServerService.checkRateLimit).not.toHaveBeenCalled();
+    expect(mcpServerService.buildServer).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(401);
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({ error: JSON_RPC_ERROR.unauthorized }),
+    );
   });
 
   it('should refuse an authenticated caller over the post-auth budget without touching buildServer', async () => {
     const mcpServerService = buildMcpServerService();
     mcpServerService.checkRateLimit.mockReturnValue(false);
     const handler = createMcpRequestHandler(mcpServerService as unknown as McpServerService);
-    const req = buildRequest({ headers: { authorization: 'Bearer x' } });
+    const req = buildRequest();
     const { res, status } = buildResponse();
+    res.locals.mcpContext = TENANT_A_CONTEXT;
 
     await handler(req, res);
 

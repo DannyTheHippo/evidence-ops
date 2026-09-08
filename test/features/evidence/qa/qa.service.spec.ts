@@ -328,6 +328,7 @@ describe('QaService', () => {
         conflictIds: [],
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
         retrievedChunkIds: [],
+        answerPath: 'synthesis',
       });
       mockAuditService.record.mockResolvedValueOnce(undefined);
 
@@ -339,6 +340,33 @@ describe('QaService', () => {
       expect(result.conflictIds).toEqual([]);
       expect(result.retrievedChunkCount).toBeUndefined();
       expect(result.withdrawnCitedDocVersionIds).toEqual([]);
+      // Same withholding rule as `outcome` — a non-completed answer must not report a path yet,
+      // even though the document already carries one from a prior attempt.
+      expect(result.answerPath).toBeUndefined();
+    });
+
+    it('should expose answerPath and attestationHash for a completed answer', async () => {
+      const answerId = new Types.ObjectId();
+      mockAnswerModel.findOne.mockResolvedValueOnce({
+        _id: answerId,
+        questionText: 'What is the cap rate?',
+        runStatus: 'completed',
+        outcome: { kind: 'insufficient_evidence' as const, reason: 'No evidence found.' },
+        claimCoverage: 0,
+        verificationReport: { verifiedClaimCount: 0, totalClaimCount: 0, droppedClaims: [] },
+        claims: [],
+        conflictIds: [],
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        retrievedChunkIds: [],
+        answerPath: 'ledger',
+        attestationHash: 'c'.repeat(64),
+      });
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      const result = await service.getAnswerById(answerId.toString(), 'actor', 'tenant-a');
+
+      expect(result.answerPath).toBe('ledger');
+      expect(result.attestationHash).toBe('c'.repeat(64));
     });
 
     it('should report a cited document version as withdrawn, and leave a live one out', async () => {

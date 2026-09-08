@@ -1,6 +1,10 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose } from 'class-transformer';
-import type { ConflictStatus } from '../../../../../database/schemas/evidence/conflict/conflict.schema';
+import type {
+  ConflictResolutionOutcome,
+  ConflictRuleFired,
+  ConflictStatus,
+} from '../../../../../database/schemas/evidence/conflict/conflict.schema';
 import { CONFLICT_STATUSES } from '../../../../../database/schemas/evidence/conflict/conflict.schema';
 import type { EvidenceLocator } from '../../../../../database/schemas/evidence/evidence-chunk/evidence-locator.type';
 import type { FactKey } from '../../../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
@@ -25,6 +29,22 @@ export interface ConflictValueShape {
   // conflict) is untouched: a reviewer weighing the two sides should know one is withdrawn, but
   // the conflict still needs a human resolution the same as any other open one.
   withdrawn: boolean;
+}
+
+/** Plain shape, not a nested response-DTO class with its own `@Expose()`s — same convention as
+ *  `ConflictValueShape` above, for the same reason: `ConflictsService.toConflictDto` copies
+ *  `conflict.resolution` into this shape field-for-field (stringifying `winningFactId`) rather than
+ *  spreading the persisted subdocument, so a field the schema might later add never reaches a
+ *  response uninvited. Mirrors `ConflictResolution` (`conflict.schema.ts`) exactly: a field is
+ *  present here whenever, and only when, it is present on the underlying record. */
+export interface ConflictResolutionShape {
+  outcome: ConflictResolutionOutcome;
+  winningFactId?: string;
+  decidedBy?: string;
+  reason?: string;
+  resolvedAt: Date;
+  ruleFired?: ConflictRuleFired;
+  followedProposal?: boolean;
 }
 
 export class ConflictResponseDto {
@@ -177,4 +197,24 @@ export class ConflictResponseDto {
     required: false,
   })
   explanation?: string;
+
+  @Expose()
+  @ApiProperty({
+    required: false,
+    type: Object,
+    example: {
+      outcome: 'resolved',
+      winningFactId: '65f1c2e4a1b2c3d4e5f6a7b9',
+      decidedBy: 'reviewer@example.com',
+      reason: 'Confirmed via source memo.',
+      resolvedAt: '2026-07-02T00:00:00.000Z',
+      ruleFired: 'authority',
+      followedProposal: true,
+    },
+    description:
+      'The persisted decision for this conflict — outcome, decider, reason and when. Present ' +
+      'only once a resolveConflict run has recorded a resolution; absent on every conflict still ' +
+      "'open'.",
+  })
+  resolution?: ConflictResolutionShape;
 }

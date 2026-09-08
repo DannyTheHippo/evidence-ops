@@ -3,7 +3,7 @@ import { Test } from '@nestjs/testing';
 import { z } from 'zod';
 import { SEARCH_EVIDENCE_TOOL_NAME } from '../../../../src/features/evidence/retrieval/evidence-tools';
 import { TOOL_AUTHZ_HOOK } from '../../../../src/features/platform/authz/authz-hook.interface';
-import { MCP_MUTATE_STEP, MCP_READ_STEP } from '../../../../src/mcp/mcp-tools';
+import { MCP_MUTATE_STEP, MCP_READ_STEP, MCP_SUBMIT_STEP } from '../../../../src/mcp/mcp-tools';
 import { StepPolicyAuthzHook } from '../../../../src/features/platform/authz/step-policy.authz-hook';
 import { ToolExecutorService } from '../../../../src/features/platform/authz/tool-executor.service';
 import type {
@@ -88,6 +88,19 @@ describe('StepPolicyAuthzHook', () => {
         step: MCP_MUTATE_STEP,
         toolName: 'request_resolution',
         context: buildContext(UserRole.Admin),
+      });
+
+      expect(decision).toEqual({ allowed: true });
+    });
+
+    // `mcp-submit` floors at Member, alongside `mcp-read` — REST upload parity
+    // (`DocumentsController.upload` is deliberately member-accessible), not at `mcp-mutate`'s
+    // Admin bar, which is reserved for a step that can move a conflict toward a human's approval.
+    it('should allow the mcp-submit step for a member', () => {
+      const decision = hook.authorize({
+        step: MCP_SUBMIT_STEP,
+        toolName: 'submit_evidence',
+        context: buildContext(UserRole.Member),
       });
 
       expect(decision).toEqual({ allowed: true });

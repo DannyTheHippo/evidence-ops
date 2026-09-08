@@ -5,8 +5,8 @@ import {
   type DocumentSourceClass,
 } from '../../../../../database/schemas/evidence/document/document.schema';
 import {
+  CONNECTOR_SOURCE_KINDS,
   SOURCE_CONNECTIVITIES,
-  SOURCE_KINDS,
   SOURCE_REACHABILITIES,
   type SourceConnectivity,
   type SourceKind,
@@ -21,15 +21,17 @@ export class CreateSourceRequestDto {
 
   @ApiProperty({
     example: 'local-folder',
-    enum: SOURCE_KINDS,
+    enum: CONNECTOR_SOURCE_KINDS,
     description: 'Which connector syncs this source.',
   })
-  @IsIn(SOURCE_KINDS)
+  @IsIn(CONNECTOR_SOURCE_KINDS)
   kind: SourceKind;
 
   @ApiProperty({
     example: 'deal-room',
-    description: "The connector's location for this source — a folder path for 'local-folder'.",
+    description:
+      "The connector's location for this source — a folder path for 'local-folder'; the " +
+      "submitting client's label for 'mcp-submit'.",
   })
   @IsString()
   @IsNotEmpty()

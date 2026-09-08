@@ -3,9 +3,16 @@ import { HydratedDocument, Schema as MongooseSchema, Types, WithTimestamps } fro
 import { AuditableDocument } from '../../../global/auditable-document/auditable-document.schema';
 import { DOCUMENT_SOURCE_CLASSES, type DocumentSourceClass } from '../document/document.schema';
 
-export type SourceKind = 'local-folder';
+export type SourceKind = 'local-folder' | 'mcp-submit';
 
-export const SOURCE_KINDS: readonly SourceKind[] = ['local-folder'];
+export const SOURCE_KINDS: readonly SourceKind[] = ['local-folder', 'mcp-submit'];
+
+/**
+ * Kinds a connector can sync and REST may create. `'mcp-submit'` rows are created only by
+ * `EvidenceSubmissionService` — never through `POST /sources`, and never handed to `runSync`,
+ * which has exactly one `SOURCE_CONNECTOR` binding and it only reads folders.
+ */
+export const CONNECTOR_SOURCE_KINDS: readonly SourceKind[] = ['local-folder'];
 
 /**
  * How this source's bytes get into the corpus: `'connector'` syncs automatically through `kind`;
@@ -105,7 +112,8 @@ export class Source extends AuditableDocument {
   /**
    * Selects which connector syncs this source. Modelled as an extensible string union, mirroring
    * `DocumentSourceKind` on `Document`, so a future connector kind joins by widening this union
-   * and `SOURCE_KINDS` rather than by changing the schema shape.
+   * and `SOURCE_KINDS` rather than by changing the schema shape. `'mcp-submit'` is the one kind
+   * with no connector — see `CONNECTOR_SOURCE_KINDS`.
    */
   @Prop({ type: String, required: true, enum: SOURCE_KINDS })
   kind: SourceKind;

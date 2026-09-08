@@ -35,6 +35,19 @@ const exampleConflict = {
   explanation: 'No authorityOrder is configured for this metric.',
 };
 
+const exampleResolvedConflict = {
+  ...exampleConflict,
+  status: 'resolved',
+  resolution: {
+    outcome: 'resolved',
+    winningFactId: '65f1c2e4a1b2c3d4e5f6a7b9',
+    decidedBy: 'reviewer@example.com',
+    reason: 'Confirmed via source memo.',
+    resolvedAt: '2026-07-02T00:00:00.000Z',
+    ruleFired: 'none',
+  },
+};
+
 const exampleResolutionRequestedRun = {
   id: '65f1c2e4a1b2c3d4e5f6a7bb',
   workflowId: 'a3f1b2c4-5678-4d9e-9abc-1234567890ab',
@@ -51,6 +64,10 @@ export const conflictsApiExamples: Record<string, ApiResponseOptions> = {
       example: {
         summary: 'One open conflict',
         value: { docs: [exampleConflict], count: 1 },
+      },
+      resolved: {
+        summary: 'One resolved conflict',
+        value: { docs: [exampleResolvedConflict], count: 1 },
       },
     },
   },

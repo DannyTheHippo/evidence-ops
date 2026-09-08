@@ -237,6 +237,21 @@ describe('Sources (e2e)', () => {
       expect(response.status).toBe(400);
     });
 
+    // mcp-submit rows are created only by EvidenceSubmissionService, never through this route.
+    it('returns 400 for kind: mcp-submit', async () => {
+      const response = await request(getTestServer(app))
+        .post('/api/v1/sources')
+        .set('Cookie', cookie)
+        .send({
+          name: `MCP Submit ${Date.now()}`,
+          kind: 'mcp-submit',
+          path: 'deal-room',
+          owner: OWNER,
+        });
+
+      expect(response.status).toBe(400);
+    });
+
     it('returns 409 for a duplicate name', async () => {
       const name = `Duplicate Source ${Date.now()}`;
       await request(getTestServer(app))

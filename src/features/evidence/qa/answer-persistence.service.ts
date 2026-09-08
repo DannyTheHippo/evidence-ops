@@ -4,6 +4,7 @@ import { Model, Types } from 'mongoose';
 import {
   Answer,
   AnswerDocument,
+  type AnswerPath,
   type AnswerUsage,
 } from '../../../database/schemas/evidence/answer/answer.schema';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
@@ -35,6 +36,10 @@ export interface PersistAnswerInput {
    * a stale value rather than leave a prior attempt's number attached to a different attempt's
    * answer. */
   readonly usage?: AnswerUsage;
+  /** Which path produced this answer — `'ledger'` (resolved from the fact ledger, no model call)
+   * or `'synthesis'`. Optional at the type level: both call sites of `persist` supply it, but the
+   * type stays permissive so a caller written before this field existed keeps compiling. */
+  readonly answerPath?: AnswerPath;
 }
 
 export interface PersistAnswerResult {
@@ -93,6 +98,7 @@ export class AnswerPersistenceService {
     answer.claims = [...input.claims];
     answer.claimCoverage = input.claimCoverage;
     answer.verificationReport = input.verificationReport;
+    answer.answerPath = input.answerPath;
     // Unconditional assign, not "only when present": a retry that now resolves to a non-conflicting
     // outcome must clear ids a prior attempt already wrote, not leave them stale alongside the new
     // outcome. `Conflict._id` (unlike `EvidenceChunk._id` above) is a real ObjectId, so this

@@ -864,6 +864,17 @@ describe('SourcesService', () => {
       expect(mockSourceConnector.listFiles).not.toHaveBeenCalled();
     });
 
+    it('should exit without listing files for an mcp-submit source even when tracked: true', async () => {
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(
+        buildMockSource({ kind: 'mcp-submit', tracked: true }),
+      );
+
+      const result = await service.runSync(sourceId.toString(), leaseToken);
+
+      expect(result).toEqual({ disabled: true, intervalMs: null });
+      expect(mockSourceConnector.listFiles).not.toHaveBeenCalled();
+    });
+
     it('should record a failed status and continue the recurring schedule when listing files fails', async () => {
       mockSourceModel.findOneAndUpdate
         .mockResolvedValueOnce(buildMockSource({ intervalMs: 5000 }))

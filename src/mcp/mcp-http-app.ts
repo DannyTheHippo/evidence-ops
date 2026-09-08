@@ -1,6 +1,11 @@
 import express from 'express';
 import type { Express, Request, Response } from 'express';
-import { createMcpRequestHandler, JSON_RPC_ERROR, sendJsonRpcError } from './mcp-request-handler';
+import {
+  createMcpPreBodyGate,
+  createMcpRequestHandler,
+  JSON_RPC_ERROR,
+  sendJsonRpcError,
+} from './mcp-request-handler';
 import type { McpServerService } from './mcp-server.service';
 import { MCP_JSON_BODY_LIMIT, MCP_ROUTE_PATH } from './mcp.constant';
 
@@ -13,7 +18,7 @@ import { MCP_JSON_BODY_LIMIT, MCP_ROUTE_PATH } from './mcp.constant';
  * `trustProxyHops` is the number of reverse proxies in front of this listener (`TRUST_PROXY_HOPS`,
  * `app.trustProxyHops` — the same knob `src/config/app.config.ts` applies to the API process).
  * `req.ip` is the rightmost address not attributable to those hops, and the pre-auth IP limiter
- * (`McpServerService.checkPreAuthIpRateLimit`, applied in `createMcpRequestHandler`) keys on it, so
+ * (`McpServerService.checkPreAuthIpRateLimit`, applied in `createMcpPreBodyGate`) keys on it, so
  * this number decides who shares a bucket with whom:
  *
  * - Too low — 0 while a proxy is in front — collapses every caller onto the proxy's own address and
@@ -38,9 +43,17 @@ export function createMcpHttpApp(
   const app = express();
 
   app.set('trust proxy', trustProxyHops);
-  app.use(express.json({ limit: MCP_JSON_BODY_LIMIT }));
 
-  app.post(MCP_ROUTE_PATH, createMcpRequestHandler(mcpServerService));
+  // The pre-body gate (IP rate limit, PAT authentication) runs before express.json parses
+  // anything on this route — an unauthenticated or over-budget caller is refused before this
+  // process ever buffers a byte of their body, so the 21 MB limit below is never spent on a
+  // caller who has not cleared the gate.
+  app.post(
+    MCP_ROUTE_PATH,
+    createMcpPreBodyGate(mcpServerService),
+    express.json({ limit: MCP_JSON_BODY_LIMIT }),
+    createMcpRequestHandler(mcpServerService),
+  );
 
   // Streamable HTTP's GET (server-initiated stream) and DELETE (session termination) both apply
   // only to stateful mode — this process never generates a session id, so neither has anything to

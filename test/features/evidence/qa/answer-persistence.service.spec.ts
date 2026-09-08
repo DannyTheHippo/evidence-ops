@@ -278,4 +278,39 @@ describe('AnswerPersistenceService', () => {
 
     expect(answerDoc.usage).toBeUndefined();
   });
+
+  it('should persist answerPath when the input carries it', async () => {
+    const outcome = { kind: 'insufficient_evidence' as const, reason: 'no supporting evidence' };
+    const answerDoc = buildAnswerDoc();
+    mockAnswerModel.findOne.mockResolvedValueOnce(answerDoc);
+
+    await service.persist({
+      answerId: (answerDoc._id as Types.ObjectId).toString(),
+      questionText: 'What is the cap rate?',
+      tenantId: 'default',
+      retrievedChunkIds: [],
+      outcome,
+      claims: [],
+      answerPath: 'ledger',
+    });
+
+    expect(answerDoc).toMatchObject({ answerPath: 'ledger' });
+  });
+
+  it('should leave answerPath absent when the input omits it', async () => {
+    const outcome = { kind: 'insufficient_evidence' as const, reason: 'no supporting evidence' };
+    const answerDoc = buildAnswerDoc();
+    mockAnswerModel.findOne.mockResolvedValueOnce(answerDoc);
+
+    await service.persist({
+      answerId: (answerDoc._id as Types.ObjectId).toString(),
+      questionText: 'What is the cap rate?',
+      tenantId: 'default',
+      retrievedChunkIds: [],
+      outcome,
+      claims: [],
+    });
+
+    expect(answerDoc.answerPath).toBeUndefined();
+  });
 });

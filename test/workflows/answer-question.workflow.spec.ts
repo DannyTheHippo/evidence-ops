@@ -14,6 +14,7 @@ interface ActivityStubs {
   checkContradictions: jest.Mock;
   groundingCheck: jest.Mock;
   persistAnswer: jest.Mock;
+  resolveFromLedger: jest.Mock;
 }
 
 interface ProxyActivitiesOptions {
@@ -25,6 +26,7 @@ interface ProxyActivitiesOptions {
 interface MockedTemporalWorkflow {
   activityStubs: ActivityStubs;
   proxyActivities: jest.Mock<unknown, [ProxyActivitiesOptions]>;
+  log: { warn: jest.Mock; info: jest.Mock };
 }
 
 /**
@@ -42,17 +44,19 @@ jest.mock('@temporalio/workflow', () => {
     checkContradictions: jest.fn(),
     groundingCheck: jest.fn(),
     persistAnswer: jest.fn(),
+    resolveFromLedger: jest.fn(),
   };
   return {
     activityStubs,
     proxyActivities: jest.fn(() => activityStubs),
+    log: { warn: jest.fn(), info: jest.fn() },
   };
 });
 
 const temporalWorkflowMock = jest.requireMock(
   '@temporalio/workflow',
 ) as unknown as MockedTemporalWorkflow;
-const { activityStubs } = temporalWorkflowMock;
+const { activityStubs, log } = temporalWorkflowMock;
 
 // Captured once, right after the workflow module's own top-level `proxyActivities` calls run
 // (during the `answerQuestion` import above) and before any `afterEach(jest.resetAllMocks)`
@@ -69,6 +73,7 @@ const input: AnswerQuestionInput = {
 
 describe('answerQuestion', () => {
   beforeEach(() => {
+    activityStubs.resolveFromLedger.mockResolvedValue({ kind: 'unresolved', reason: 'no-entity' });
     activityStubs.retrieveEvidence.mockResolvedValue([{ chunkId: 'chunk-1' }]);
     activityStubs.decomposeClaims.mockResolvedValue({ atoms: [] });
     activityStubs.checkContradictions.mockResolvedValue({ contradictedClaimIndexes: [] });
@@ -220,6 +225,7 @@ describe('answerQuestion', () => {
 
 describe('answerQuestion retrieval', () => {
   beforeEach(() => {
+    activityStubs.resolveFromLedger.mockResolvedValue({ kind: 'unresolved', reason: 'no-entity' });
     activityStubs.retrieveEvidence.mockResolvedValue([{ chunkId: 'chunk-1' }]);
     activityStubs.synthesizeAnswer.mockResolvedValue({
       contract: { kind: 'insufficient_evidence', reason: 'none' },
@@ -313,6 +319,11 @@ describe('proxyActivities retry configuration', () => {
     expect(persistOptions.retry?.nonRetryableErrorTypes).toEqual(['MissingTenantId']);
   });
 
+  it('should mark a missing tenantId non-retryable for resolveFromLedger', () => {
+    const [ledgerOptions] = proxyActivitiesCalls[6];
+    expect(ledgerOptions.retry?.nonRetryableErrorTypes).toEqual(['MissingTenantId']);
+  });
+
   // The three model-calling groups each budget longer than the heartbeat timeout, so each must
   // declare one — a group that runs past `heartbeatTimeout` without pumping is failed by Temporal
   // as unresponsive while it is in fact working.
@@ -350,5 +361,160 @@ describe('proxyActivities retry configuration', () => {
       const ms = Number(amount) * (unit.startsWith('minute') ? 60_000 : 1_000);
       expect(ms).toBeLessThanOrEqual(INGEST_HEARTBEAT_TIMEOUT_MS);
     }
+  });
+});
+
+describe('answerQuestion ledger-first branch', () => {
+  beforeEach(() => {
+    activityStubs.resolveFromLedger.mockResolvedValue({ kind: 'unresolved', reason: 'no-entity' });
+    activityStubs.retrieveEvidence.mockResolvedValue([{ chunkId: 'chunk-1' }]);
+    activityStubs.synthesizeAnswer.mockResolvedValue({
+      contract: { kind: 'insufficient_evidence', reason: 'none' },
+      usage: { promptTokens: 10, completionTokens: 5, costUsd: 0.001 },
+    });
+    activityStubs.decomposeClaims.mockResolvedValue({ atoms: [] });
+    activityStubs.checkContradictions.mockResolvedValue({ contradictedClaimIndexes: [] });
+    activityStubs.groundingCheck.mockResolvedValue({
+      outcome: { kind: 'insufficient_evidence', reason: 'no supporting evidence' },
+      claims: [],
+    });
+    activityStubs.persistAnswer.mockResolvedValue({
+      answerId: 'answer-1',
+      outcomeKind: 'insufficient_evidence',
+    });
+  });
+
+  afterEach(() => {
+    jest.resetAllMocks();
+  });
+
+  it('should skip retrieveEvidence and synthesizeAnswer and persist answerPath ledger with zero usage and the ledger chunk ids, when the ledger resolves and the gate verifies it', async () => {
+    const claim = {
+      statement: 'The cap rate was approximately 6.10%.',
+      citations: [
+        {
+          docVersionId: 'version-1',
+          sha256: 'a'.repeat(64),
+          chunkId: 'chunk-1',
+          locator: { kind: 'pdf-page', page: 3, extractorVersion: 'v1' },
+          quote: 'a cap rate of approximately 6.10%',
+        },
+      ],
+    };
+    const ledgerOutcome = {
+      kind: 'answered' as const,
+      claims: [claim],
+      ledger: {
+        entity: 'Northgate Business Park',
+        measure: 'cap_rate',
+        state: 'single' as const,
+        factId: 'fact-1',
+      },
+    };
+    const ledgerChunk = {
+      chunkId: 'chunk-1',
+      docVersionId: 'version-1',
+      sha256: 'a'.repeat(64),
+      text: 'Northgate Business Park traded at a cap rate of approximately 6.10%.',
+      locator: { kind: 'pdf-page', page: 3, extractorVersion: 'v1' },
+      documentId: 'doc-1',
+    };
+    activityStubs.resolveFromLedger.mockResolvedValue({
+      kind: 'resolved',
+      outcome: ledgerOutcome,
+      retrievedChunks: [ledgerChunk],
+    });
+    activityStubs.groundingCheck.mockResolvedValue({
+      outcome: ledgerOutcome,
+      claims: [claim],
+      claimCoverage: 1,
+    });
+    activityStubs.persistAnswer.mockResolvedValue({
+      answerId: 'answer-1',
+      outcomeKind: 'answered',
+      claimCoverage: 1,
+    });
+
+    const result = await answerQuestion(input);
+
+    expect(activityStubs.retrieveEvidence).not.toHaveBeenCalled();
+    expect(activityStubs.synthesizeAnswer).not.toHaveBeenCalled();
+    expect(activityStubs.groundingCheck).toHaveBeenCalledWith({
+      outcome: ledgerOutcome,
+      retrievedChunks: [ledgerChunk],
+      tenantId: input.tenantId,
+      questionText: input.questionText,
+    });
+    expect(activityStubs.persistAnswer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        answerPath: 'ledger',
+        usage: { promptTokens: 0, completionTokens: 0, costUsd: 0 },
+        retrievedChunkIds: ['chunk-1'],
+        outcome: ledgerOutcome,
+      }),
+    );
+    expect(result).toEqual({ answerId: 'answer-1', outcomeKind: 'answered', claimCoverage: 1 });
+  });
+
+  it('should log a warning and fall through to synthesis, persisting answerPath synthesis, when the gate degrades a resolved ledger claim to insufficient_evidence', async () => {
+    const ledgerOutcome = { kind: 'answered' as const, claims: [] };
+    activityStubs.resolveFromLedger.mockResolvedValue({
+      kind: 'resolved',
+      outcome: ledgerOutcome,
+      retrievedChunks: [],
+    });
+    // First groundingCheck call belongs to the ledger branch, the second to the synthesis
+    // fallback it triggers.
+    activityStubs.groundingCheck
+      .mockResolvedValueOnce({
+        outcome: {
+          kind: 'insufficient_evidence',
+          reason: 'grounding gate verified 0 of 1 claim(s); every citation failed verification',
+        },
+        claims: [],
+      })
+      .mockResolvedValueOnce({
+        outcome: { kind: 'insufficient_evidence', reason: 'no supporting evidence' },
+        claims: [],
+      });
+
+    await answerQuestion(input);
+
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('grounding gate'),
+      expect.objectContaining({ answerId: input.answerId, tenantId: input.tenantId }),
+    );
+    expect(activityStubs.retrieveEvidence).toHaveBeenCalled();
+    expect(activityStubs.synthesizeAnswer).toHaveBeenCalled();
+    expect(activityStubs.persistAnswer).toHaveBeenCalledWith(
+      expect.objectContaining({ answerPath: 'synthesis' }),
+    );
+  });
+
+  it('should thread conflictIds from the ledger result into persistAnswer when the gate passes a conflicting_evidence ledger outcome through unchanged', async () => {
+    const conflictingOutcome = {
+      kind: 'conflicting_evidence' as const,
+      factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+      values: [
+        { value: 6.1, unit: 'percent', sourceChunkId: 'chunk-1' },
+        { value: 6.4, unit: 'percent', sourceChunkId: 'chunk-2' },
+      ],
+    };
+    activityStubs.resolveFromLedger.mockResolvedValue({
+      kind: 'resolved',
+      outcome: conflictingOutcome,
+      retrievedChunks: [],
+      conflictIds: ['conflict-1'],
+    });
+    // `groundingCheck` passes a non-answered outcome through unchanged (see that activity's own
+    // doc comment in `activities.ts`), so it reports no `conflictIds` of its own here — the
+    // workflow falls back to the ledger result's.
+    activityStubs.groundingCheck.mockResolvedValue({ outcome: conflictingOutcome, claims: [] });
+
+    await answerQuestion(input);
+
+    expect(activityStubs.persistAnswer).toHaveBeenCalledWith(
+      expect.objectContaining({ conflictIds: ['conflict-1'], answerPath: 'ledger' }),
+    );
   });
 });

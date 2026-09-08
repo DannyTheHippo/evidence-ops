@@ -1,7 +1,13 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Expose, Type } from 'class-transformer';
-import type { AnswerRunStatus } from '../../../../../database/schemas/evidence/answer/answer.schema';
-import { ANSWER_RUN_STATUSES } from '../../../../../database/schemas/evidence/answer/answer.schema';
+import type {
+  AnswerPath,
+  AnswerRunStatus,
+} from '../../../../../database/schemas/evidence/answer/answer.schema';
+import {
+  ANSWER_PATHS,
+  ANSWER_RUN_STATUSES,
+} from '../../../../../database/schemas/evidence/answer/answer.schema';
 import type { AnswerContract, Citation } from '../../contracts/answer.contract';
 import type { ClaimAtoms } from '../../types/claim-atoms.type';
 import { AnswerUsageResponseDto } from './answer-usage.response.dto';
@@ -121,4 +127,22 @@ export class AnswerResponseDto {
       "Token and cost accounting for the QA synthesis call, present only once runStatus is 'completed'.",
   })
   usage?: AnswerUsageResponseDto;
+
+  // Same conditional-presence rule as `outcome` above — set alongside the outcome on completion.
+  @Expose()
+  @ApiProperty({
+    required: false,
+    enum: ANSWER_PATHS,
+    description:
+      "How the answer was produced — 'ledger' (resolved from the fact ledger, no model call) or " +
+      "'synthesis'; present only once runStatus is 'completed'.",
+  })
+  answerPath?: AnswerPath;
+
+  @Expose()
+  @ApiProperty({
+    required: false,
+    description: 'sha256 of the canonical attestation bundle, set on first export.',
+  })
+  attestationHash?: string;
 }

@@ -1125,6 +1125,101 @@ describe('ConflictsService', () => {
       expect(result.docs[0].unscorable).toBe(false);
     });
 
+    it('should carry the persisted resolution, with winningFactId stringified, for a resolved conflict', async () => {
+      const actorId = new Types.ObjectId().toString();
+      const factIdA = new Types.ObjectId();
+      const factIdB = new Types.ObjectId();
+      const winningFactId = factIdA;
+      const resolvedAt = new Date('2026-07-02T00:00:00.000Z');
+      const conflict = {
+        _id: new Types.ObjectId(),
+        factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+        factIds: [factIdA, factIdB],
+        magnitude: 0.0085,
+        status: 'resolved',
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        packId: ACTIVE_PACK_ID,
+        packVersion: ACTIVE_PACK_VERSION,
+        resolution: {
+          outcome: 'resolved',
+          winningFactId,
+          decidedBy: 'reviewer@example.com',
+          reason: 'Confirmed via source memo.',
+          resolvedAt,
+          ruleFired: 'none',
+        },
+      };
+      const factA = {
+        _id: factIdA,
+        value: { amount: 5.25, unit: 'percent' },
+        chunkId: 'chunk-xlsx',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
+      };
+      const factB = {
+        _id: factIdB,
+        value: { amount: 6.1, unit: 'percent' },
+        chunkId: 'chunk-prose',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+      };
+      mockConflictModel.find.mockResolvedValueOnce([conflict]);
+      mockConflictModel.countDocuments.mockResolvedValueOnce(1);
+      mockExtractedFactModel.find.mockResolvedValueOnce([factA, factB]);
+      mockDocumentVersionModel.find.mockResolvedValueOnce([]);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      const result = await service.list({ skip: 0, limit: 20 }, actorId, 'tenant-a');
+
+      expect(result.docs[0].resolution).toEqual({
+        outcome: 'resolved',
+        winningFactId: winningFactId.toString(),
+        decidedBy: 'reviewer@example.com',
+        reason: 'Confirmed via source memo.',
+        resolvedAt,
+        ruleFired: 'none',
+      });
+    });
+
+    it('should omit resolution for a conflict that has not been resolved', async () => {
+      const actorId = new Types.ObjectId().toString();
+      const factIdA = new Types.ObjectId();
+      const factIdB = new Types.ObjectId();
+      const conflict = {
+        _id: new Types.ObjectId(),
+        factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+        factIds: [factIdA, factIdB],
+        magnitude: 0.0085,
+        status: 'open',
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+        packId: ACTIVE_PACK_ID,
+        packVersion: ACTIVE_PACK_VERSION,
+      };
+      const factA = {
+        _id: factIdA,
+        value: { amount: 5.25, unit: 'percent' },
+        chunkId: 'chunk-xlsx',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'xlsx-cell', extractorVersion: 'v1', sheetName: 'Comps', cell: 'F2' },
+      };
+      const factB = {
+        _id: factIdB,
+        value: { amount: 6.1, unit: 'percent' },
+        chunkId: 'chunk-prose',
+        documentVersionId: new Types.ObjectId(),
+        locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
+      };
+      mockConflictModel.find.mockResolvedValueOnce([conflict]);
+      mockConflictModel.countDocuments.mockResolvedValueOnce(1);
+      mockExtractedFactModel.find.mockResolvedValueOnce([factA, factB]);
+      mockDocumentVersionModel.find.mockResolvedValueOnce([]);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      const result = await service.list({ skip: 0, limit: 20 }, actorId, 'tenant-a');
+
+      expect(result.docs[0].resolution).toBeUndefined();
+    });
+
     it("should propose the higher-authority fact, keyed by each document version's sourceClass, for a metric with an authorityOrder", async () => {
       const actorId = new Types.ObjectId().toString();
       const factIdPm = new Types.ObjectId();

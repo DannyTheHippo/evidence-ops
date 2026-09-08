@@ -7,7 +7,10 @@
   `verify_claims` to this surface — every statement below counting "three" advertised tools, three
   `ToolDefinition`s, or two `STEP_MINIMUM_ROLE` entries describes the surface as it shipped at this
   ADR's own Accepted date, not as it stands now; the amendment notes inline mark exactly what
-  changed.
+  changed. **Amended by ADR-0030** (2026-09-08), which adds `submit_evidence`, `lookup_fact`, and
+  `get_attestation` — the surface now advertises eight tools, not five, and `STEP_MINIMUM_ROLE`
+  gains `mcp-submit` (Member floor, the same as `mcp-read`), covered inline below alongside the
+  ADR-0020 notes.
 - **Date:** 2026-08-17
 - **Supersedes:** —
 
@@ -293,3 +296,6 @@ itself. That is what the tool's MCP-facing description states.
   `verify_claims`, closing the question-starting gap this ADR's Consequences section originally
   named as load-bearing, and records the new `mcp-ask`/`mcp-verify` steps, tool count, and spend
   gate the inline amendment notes above point back to.
+- `docs/adr/0030-attestation-bundles-and-mcp-evidence-submission.md` — **amends this ADR.** Adds
+  `submit_evidence`, `lookup_fact`, and `get_attestation`, bringing the surface to eight advertised
+  tools and adding the `mcp-submit` step the inline amendment note above points back to.

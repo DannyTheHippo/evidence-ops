@@ -22,16 +22,19 @@ export const MCP_RATE_LIMIT_SWEEP_BATCH_SIZE = 64;
 
 /**
  * `express.json()` body-size ceiling for `MCP_ROUTE_PATH`, set explicitly rather than left to
- * Express's own 100kB default. A JSON-RPC batch is a legitimate protocol feature — many
- * `tools/call` requests sharing one HTTP body — and `countRateLimitCost` charges every request
- * inside it its own unit against `McpServerService.checkRateLimit` regardless of how many share a
- * body, so this ceiling is not what bounds batch size or call volume. It exists only to cap the
- * memory one POST can claim while Express buffers and parses it: comfortably above what a
- * legitimate batch of small tool-call arguments (a query string, an answer id, a conflict id/fact
- * id pair) needs, while still refusing a single oversized body outright rather than letting it
- * grow unbounded.
+ * Express's own 100kB default. The ceiling admits one `submit_evidence` payload at
+ * `SUBMIT_EVIDENCE_MAX_BASE64_CHARS` plus the JSON-RPC envelope around it; every other tool's
+ * arguments (a query string, an answer id, a conflict id/fact id pair) are a rounding error
+ * against that. A JSON-RPC batch is a legitimate protocol feature — many `tools/call` requests
+ * sharing one HTTP body — and `countRateLimitCost` charges every request inside it its own unit
+ * against `McpServerService.checkRateLimit` regardless of how many share a body, so this ceiling
+ * is not what bounds batch size or call volume; it only caps the memory one POST can claim while
+ * Express buffers and parses it. Reached only by an authenticated caller, since `mcp-http-app.ts`
+ * mounts `createMcpPreBodyGate` — IP rate limit and PAT authentication — ahead of `express.json`
+ * on this route: an unauthenticated caller is refused before this limit is ever tested, so it
+ * never buys 21 MB of unauthenticated buffering.
  */
-export const MCP_JSON_BODY_LIMIT = '256kb';
+export const MCP_JSON_BODY_LIMIT = '21mb';
 
 /**
  * The three audit actions every `tools/call` writes exactly one of, at the protocol boundary in

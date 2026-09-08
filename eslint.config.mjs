@@ -27,7 +27,14 @@ export default tseslint.config(
     rules: {
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-floating-promises': 'error',
-      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+      // `ignoreRestSiblings` exempts only the omit-a-key destructuring pattern
+      // (`const { integrity: _integrity, ...rest } = bundle`), which is how a field is dropped from
+      // an object without mutating it — the binding is unused by construction. Narrower than a
+      // `varsIgnorePattern`, which would silence every unused `_`-prefixed variable everywhere.
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', ignoreRestSiblings: true },
+      ],
     },
   },
 

@@ -1,4 +1,4 @@
-import { proxyActivities } from '@temporalio/workflow';
+import { log, proxyActivities } from '@temporalio/workflow';
 import type { Activities } from '../worker/activities';
 import {
   CHECK_CONTRADICTIONS_START_TO_CLOSE_TIMEOUT_MS,
@@ -130,15 +130,80 @@ const persistActivities = proxyActivities<Pick<Activities, 'persistAnswer'>>({
   },
 });
 
+// Server-built and already claim-checked inside `LedgerAnswerService` (`buildLedgerClaim`) — a
+// handful of Mongo reads, no model call, so this needs no heartbeat and gets the same retry
+// budget as `retrievalActivities` above. Appended last, after every other group, so the workflow
+// runs the ledger lookup before deciding whether retrieval and synthesis are needed at all.
+const ledgerActivities = proxyActivities<Pick<Activities, 'resolveFromLedger'>>({
+  startToCloseTimeout: '30 seconds',
+  scheduleToCloseTimeout: '2 minutes',
+  retry: {
+    maximumAttempts: 5,
+    // A missing tenantId never appears by retrying (`requireTenantId` in `activities.ts`).
+    nonRetryableErrorTypes: ['MissingTenantId'],
+  },
+});
+
 /**
- * Second workflow in the tree (ADR-0003): retrieve → synthesize → decompose claims → check
+ * Second workflow in the tree (ADR-0003): resolve from the fact ledger → (skip retrieval and
+ * synthesis on success, otherwise retrieve → synthesize) → decompose claims → check
  * contradictions → verify grounding → persist. Orchestration only — every side effect (the Mongo
- * hybrid search, the model calls, the verification pass, the Mongo write) lives in an activity;
- * this function just sequences their results and threads `tenantId` through unopened to every
- * activity that scopes on it (`retrieveEvidence`, `synthesizeAnswer`, `decomposeClaims`,
- * `checkContradictions`, `groundingCheck`, `persistAnswer`).
+ * hybrid search, the ledger lookup, the model calls, the verification pass, the Mongo write) lives
+ * in an activity; this function just sequences their results and threads `tenantId` through
+ * unopened to every activity that scopes on it (`resolveFromLedger`, `retrieveEvidence`,
+ * `synthesizeAnswer`, `decomposeClaims`, `checkContradictions`, `groundingCheck`, `persistAnswer`).
+ *
+ * A ledger resolution runs through the same `groundingCheck` every synthesized answer does — the
+ * ledger path is not exempt from the gate — and persists with `answerPath: 'ledger'` and zero
+ * usage on success. A resolution the gate cannot verify falls through to the ordinary retrieval +
+ * synthesis path below, which persists with `answerPath: 'synthesis'`.
  */
 export async function answerQuestion(input: AnswerQuestionInput): Promise<AnswerQuestionResult> {
+  const ledgerResult = await ledgerActivities.resolveFromLedger({
+    questionText: input.questionText,
+    tenantId: input.tenantId,
+  });
+
+  if (ledgerResult.kind === 'resolved') {
+    const ledgerGrounding = await groundingActivities.groundingCheck({
+      outcome: ledgerResult.outcome,
+      retrievedChunks: ledgerResult.retrievedChunks,
+      tenantId: input.tenantId,
+      questionText: input.questionText,
+    });
+
+    if (ledgerGrounding.outcome.kind !== 'insufficient_evidence') {
+      const persistedFromLedger = await persistActivities.persistAnswer({
+        answerId: input.answerId,
+        questionText: input.questionText,
+        tenantId: input.tenantId,
+        retrievedChunkIds: ledgerResult.retrievedChunks.map((chunk) => chunk.chunkId),
+        outcome: ledgerGrounding.outcome,
+        claims: ledgerGrounding.claims,
+        claimCoverage: ledgerGrounding.claimCoverage,
+        verificationReport: ledgerGrounding.verificationReport,
+        conflictIds: ledgerGrounding.conflictIds ?? ledgerResult.conflictIds,
+        atoms: ledgerGrounding.atoms,
+        usage: { promptTokens: 0, completionTokens: 0, costUsd: 0 },
+        answerPath: 'ledger',
+      });
+
+      return {
+        answerId: persistedFromLedger.answerId,
+        outcomeKind: persistedFromLedger.outcomeKind,
+        claimCoverage: persistedFromLedger.claimCoverage,
+      };
+    }
+
+    // The gate rejected a claim the ledger itself considered resolved — visible in
+    // `ledgerGateSurvivalRate` (`eval/run.ts`), and logged here so a live worker surfaces it
+    // without waiting on the next eval run.
+    log.warn('Ledger-resolved answer failed the grounding gate; falling back to synthesis', {
+      answerId: input.answerId,
+      tenantId: input.tenantId,
+    });
+  }
+
   const chunks = await retrievalActivities.retrieveEvidence({
     questionText: input.questionText,
     tenantId: input.tenantId,
@@ -185,6 +250,7 @@ export async function answerQuestion(input: AnswerQuestionInput): Promise<Answer
     conflictIds: grounding.conflictIds,
     atoms: grounding.atoms,
     usage,
+    answerPath: 'synthesis',
   });
 
   return {

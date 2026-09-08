@@ -93,6 +93,43 @@ export const claimSchema = z.object({
 export type Claim = z.infer<typeof claimSchema>;
 
 /**
+ * Mirrors `ConflictResolution` in `src/database/schemas/evidence/conflict/conflict.schema.ts`
+ * structurally, not by import — same convention as `pdfPageLocatorSchema` above. Kept in sync by
+ * a compile-time assignability check in `answer.contract.spec.ts` against `ConflictResolutionOutcome`
+ * and `ConflictRuleFired`.
+ */
+export const ledgerDecisionSchema = z.object({
+  conflictId: z.string().min(1),
+  outcome: z.enum(['resolved', 'rejected', 'timed_out', 'superseded', 'retracted']),
+  winningFactId: z.string().min(1).optional(),
+  decidedBy: z.string().min(1).optional(),
+  reason: z.string().min(1).optional(),
+  resolvedAt: z.string().min(1),
+  ruleFired: z.enum(['authority', 'recency', 'none']).optional(),
+  followedProposal: z.boolean().optional(),
+});
+
+export type LedgerDecision = z.infer<typeof ledgerDecisionSchema>;
+
+/** Structured provenance for an `answered` outcome resolved from the fact ledger rather than
+ * synthesized by the model — see `LedgerAnswerService` and `buildLedgerClaim`. Carries the
+ * resolved entity/measure/period and, for an adjudicated fact group, the human decision that
+ * picked the winner; entity/measure/period never appear as digits in the claim's own statement
+ * (see `buildLedgerClaim`'s doc comment for why a bare number there would fail the numeric-support
+ * check), so they travel here instead. */
+export const ledgerProvenanceSchema = z.object({
+  entity: z.string().min(1),
+  measure: z.string().min(1),
+  period: z.string().min(1).optional(),
+  state: z.enum(['single', 'adjudicated']),
+  factId: z.string().min(1),
+  winnerWithdrawn: z.boolean().optional(),
+  decision: ledgerDecisionSchema.optional(),
+});
+
+export type LedgerProvenance = z.infer<typeof ledgerProvenanceSchema>;
+
+/**
  * What the model is actually shown for a chunk — `chunkId` and a human-readable `locator` display
  * string such as "PDF page 3" (`formatLocator` in `../prompts/format-locator.ts`) — and therefore
  * all it can honestly cite by. `docVersionId`, `sha256`, and the *structured* `locator` object
@@ -125,6 +162,7 @@ export const modelClaimSchema = z.object({
 export const answeredOutcomeSchema = z.object({
   kind: z.literal('answered'),
   claims: z.array(claimSchema).min(1),
+  ledger: ledgerProvenanceSchema.optional(),
 });
 
 export type AnsweredOutcome = z.infer<typeof answeredOutcomeSchema>;

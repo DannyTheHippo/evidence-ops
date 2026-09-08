@@ -21,6 +21,7 @@ import { TypedConfigService } from '../../../config/environment/typed-config.ser
 import { User, UserDocument } from '../../../database/schemas/administration/user/user.schema';
 import { Answer, AnswerDocument } from '../../../database/schemas/evidence/answer/answer.schema';
 import type {
+  AnswerPath,
   AnswerRunStatus,
   AnswerUsage,
 } from '../../../database/schemas/evidence/answer/answer.schema';
@@ -81,6 +82,10 @@ export interface AnswerEnvelope {
   readonly createdAt: Date;
   readonly usage?: AnswerUsage;
   readonly retrievedChunkCount?: number;
+  /** How the answer was produced — withheld until `runStatus === 'completed'`, the same gate
+   * `outcome` follows above. */
+  readonly answerPath?: AnswerPath;
+  readonly attestationHash?: string;
   /**
    * Cited document versions that currently carry `withdrawnAt`, resolved fresh against
    * `DocumentVersion` on every read — never persisted alongside `citations`. Persisted citations
@@ -473,6 +478,9 @@ export class QaService {
       retrievedChunkCount:
         answer.runStatus === 'completed' ? answer.retrievedChunkIds.length : undefined,
       withdrawnCitedDocVersionIds,
+      // Same withholding rule as `outcome` above — set alongside the outcome on completion.
+      answerPath: answer.runStatus === 'completed' ? answer.answerPath : undefined,
+      attestationHash: answer.attestationHash,
     };
   }
 }

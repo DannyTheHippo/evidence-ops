@@ -33,7 +33,9 @@ export class SourceResponseDto {
   @Expose()
   @ApiProperty({
     example: 'deal-room',
-    description: "The connector's location for this source — a folder path for 'local-folder'.",
+    description:
+      "The connector's location for this source — a folder path for 'local-folder'; the " +
+      "submitting client's label for 'mcp-submit'.",
   })
   path: string;
 

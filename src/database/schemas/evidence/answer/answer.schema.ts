@@ -17,6 +17,10 @@ export const ANSWER_RUN_STATUSES: readonly AnswerRunStatus[] = [
   'failed',
 ];
 
+export type AnswerPath = 'ledger' | 'synthesis';
+
+export const ANSWER_PATHS: readonly AnswerPath[] = ['ledger', 'synthesis'];
+
 export interface AnswerUsage {
   promptTokens: number;
   completionTokens: number;
@@ -82,6 +86,15 @@ export class Answer extends AuditableDocument {
     },
   })
   usage?: AnswerUsage;
+
+  // Set alongside the outcome on completion; absent on a queued/running/failed row and on a row
+  // completed before this field existed.
+  @Prop({ type: String, enum: ANSWER_PATHS })
+  answerPath?: AnswerPath;
+
+  // Set once by `AttestationService` on first export, never overwritten.
+  @Prop({ type: String, minlength: 64, maxlength: 64, lowercase: true })
+  attestationHash?: string;
 
   @Prop({ type: String, required: true })
   tenantId: string;

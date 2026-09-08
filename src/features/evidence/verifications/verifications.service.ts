@@ -41,6 +41,7 @@ export interface VerificationResult {
   readonly atoms: ClaimAtoms[];
   readonly usage: VerificationUsage;
   readonly createdAt: Date;
+  readonly attestationHash?: string;
 }
 
 @Injectable()
@@ -136,6 +137,7 @@ export class VerificationsService {
       atoms: verification.atoms,
       usage: verification.usage,
       createdAt: verification.createdAt,
+      attestationHash: verification.attestationHash,
     };
   }
 }

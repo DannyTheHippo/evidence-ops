@@ -3,7 +3,12 @@
 - **Status:** Accepted — `ask_evidence` and `verify_claims` implemented (`src/mcp/mcp-tools.ts`,
   `src/features/evidence/qa/claim-verification.service.ts`), a fourth deterministic gate check
   added (`check-quote-alignment.ts`), and a spend gate withholding both spending tools when the
-  tenant's daily ceiling is disabled
+  tenant's daily ceiling is disabled. **Amended by ADR-0030** (2026-09-08): this ADR's title names
+  "an attestation surface", but at this ADR's own Accepted date a `Verification` row's per-claim
+  verdicts were a checked result, never a durable, independently exportable record — `get_attestation`
+  is what makes a completed `Verification` (and a completed `Answer`) durable and exportable as a
+  hash-checkable bundle. The `verify_claims` verdict vocabulary and every bound in this ADR are
+  otherwise unchanged.
 - **Date:** 2026-08-24
 - **Supersedes:** —
 
@@ -308,3 +313,6 @@ ADR does not answer either way.
 - `docs/global/threat-model.md` — residual-risk entries for `ask_evidence` and `verify_claims`,
   including the laundering risk and the single-replica deployment precondition both spend-gated
   tools now carry.
+- `docs/adr/0030-attestation-bundles-and-mcp-evidence-submission.md` — **amends this ADR.** Adds
+  `get_attestation`, the tool that makes a `Verification` row's record durable and exportable, per
+  the inline amendment note above.

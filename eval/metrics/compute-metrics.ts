@@ -69,6 +69,15 @@ export interface CaseResult {
   /** Claims the gate dropped after the contradiction check lowered a verdict — source
    * `verificationReport.atomization.contradictionDroppedClaimCount`, 0 when the check did not run. */
   readonly contradictionDroppedClaimCount: number;
+  /** Whether `resolveFromLedger` returned `'resolved'` for this case — `eval/run.ts` runs the
+   * ledger call for every case, independent of the synthesis path that produces the fields above,
+   * so this and `ledgerSurvived` never move `actualOutcomeKind` or any metric derived from it.
+   * `undefined` only in a fixture that never set it. */
+  readonly ledgerResolved?: boolean;
+  /** Whether a `resolveFromLedger`-built outcome survived the same `groundingCheck` gate the
+   * synthesis path runs through (`outcome.kind !== 'insufficient_evidence'`) — `undefined`
+   * whenever `ledgerResolved` is not `true`, since there was nothing for the gate to check. */
+  readonly ledgerSurvived?: boolean;
 }
 
 export interface RecallMetrics {
@@ -127,6 +136,17 @@ export interface EvalMetrics {
    * is 0. Reported only, for the same reason `coverageDropRate` is: fewer drops is not evidence of a
    * better contradiction check on a corpus that never changes. */
   readonly contradictionDropRate: number;
+  /** Share of cases where `resolveFromLedger` returned `'resolved'`, 0 when there are no cases.
+   * Reported only, deliberately absent from `GATED_METRICS`: the synthetic corpus's entities and
+   * measures may not match the resolver's whole-token rules, so a run that resolves zero ledger
+   * questions is a fixture-coverage fact, not a system regression. */
+  readonly ledgerResolvedRate: number;
+  /** Of the cases `resolveFromLedger` resolved, the share whose server-built claim survived
+   * `groundingCheck`, 0 when none resolved. Reported only, deliberately absent from
+   * `GATED_METRICS`: a low rate here names a gap between the ledger claim builder and the gate's
+   * rules that belongs in `build-ledger-claim.ts`'s own parameterised tests, not a baseline
+   * comparison over a fixed synthetic corpus. */
+  readonly ledgerGateSurvivalRate: number;
   readonly caseCounts: {
     readonly total: number;
     readonly answerable: number;
@@ -225,6 +245,21 @@ function computeSummedRate(
   return totalNumerator / totalDenominator;
 }
 
+function computeLedgerResolvedRate(results: readonly CaseResult[]): number {
+  if (results.length === 0) {
+    return 0;
+  }
+  return results.filter((result) => result.ledgerResolved === true).length / results.length;
+}
+
+function computeLedgerGateSurvivalRate(results: readonly CaseResult[]): number {
+  const resolved = results.filter((result) => result.ledgerResolved === true);
+  if (resolved.length === 0) {
+    return 0;
+  }
+  return resolved.filter((result) => result.ledgerSurvived === true).length / resolved.length;
+}
+
 export function computeMetrics(results: readonly CaseResult[]): EvalMetrics {
   const countOf = (category: EvalCategory): number =>
     results.filter((result) => result.category === category).length;
@@ -269,6 +304,8 @@ export function computeMetrics(results: readonly CaseResult[]): EvalMetrics {
       (result) => result.contradictionDroppedClaimCount,
       (result) => result.totalClaimCount,
     ),
+    ledgerResolvedRate: computeLedgerResolvedRate(results),
+    ledgerGateSurvivalRate: computeLedgerGateSurvivalRate(results),
     caseCounts: {
       total: results.length,
       answerable: countOf('answerable'),

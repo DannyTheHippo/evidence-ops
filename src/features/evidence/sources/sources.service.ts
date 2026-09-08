@@ -6,6 +6,7 @@ import { Model, Types } from 'mongoose';
 import { TypedConfigService } from '../../../config/environment/typed-config.service';
 import type { DocumentSourceClass } from '../../../database/schemas/evidence/document/document.schema';
 import {
+  CONNECTOR_SOURCE_KINDS,
   Source,
   SourceDocument,
   type SourceConnectivity,
@@ -492,6 +493,17 @@ export class SourcesService {
     // connector — this recurring loop must never sync it, no matter how it was started.
     if (!source.tracked) {
       this.logger.debug(`Source '${sourceId}' not tracked; sync loop exiting`);
+      return { disabled: true, intervalMs: null };
+    }
+
+    // Fails CLOSED: the single SOURCE_CONNECTOR binding only reads folders, so a kind outside
+    // CONNECTOR_SOURCE_KINDS (an 'mcp-submit' row, whose files arrive through submit_evidence
+    // rather than a sync pass) must never reach listFiles, no matter how `tracked` was left —
+    // PATCH /sources/:id can still flip it to true after creation.
+    if (!CONNECTOR_SOURCE_KINDS.includes(source.kind)) {
+      this.logger.debug(
+        `Source '${sourceId}' kind '${source.kind}' has no connector; sync loop exiting`,
+      );
       return { disabled: true, intervalMs: null };
     }
 

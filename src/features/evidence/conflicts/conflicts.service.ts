@@ -56,7 +56,10 @@ import {
   DEFAULT_CONFLICT_SORT_FIELD,
   type ListConflictsRequestDto,
 } from './dtos/request/list-conflicts.request.dto';
-import type { ConflictValueShape } from './dtos/response/conflict.response.dto';
+import type {
+  ConflictResolutionShape,
+  ConflictValueShape,
+} from './dtos/response/conflict.response.dto';
 import { ConflictResponseDto } from './dtos/response/conflict.response.dto';
 import {
   detectConflicts,
@@ -1113,6 +1116,22 @@ export class ConflictsService {
     const stale =
       conflict.packId !== ACTIVE_PACK_ID || conflict.packVersion !== ACTIVE_PACK_VERSION;
 
+    // Same field-for-field copy `values` above uses, not a spread — a field the schema adds to
+    // `ConflictResolution` later must not reach a response until this DTO names it. Independent of
+    // unscorable/stale: a resolution is a property of the persisted record, not of what this read
+    // can currently reconstruct about the disagreeing facts.
+    const resolution: ConflictResolutionShape | undefined = conflict.resolution
+      ? {
+          outcome: conflict.resolution.outcome,
+          winningFactId: conflict.resolution.winningFactId?.toString(),
+          decidedBy: conflict.resolution.decidedBy,
+          reason: conflict.resolution.reason,
+          resolvedAt: conflict.resolution.resolvedAt,
+          ruleFired: conflict.resolution.ruleFired,
+          followedProposal: conflict.resolution.followedProposal,
+        }
+      : undefined;
+
     const base = {
       id: conflict._id.toString(),
       // Spread rather than pass `conflict.factKey` through by reference: unlike
@@ -1130,6 +1149,7 @@ export class ConflictsService {
       magnitudeUnit: conflict.magnitudeUnit,
       status: conflict.status,
       createdAt: conflict.createdAt,
+      resolution,
       stale,
       staleReason: stale
         ? `Detected under pack '${conflict.packId}' v${conflict.packVersion}; the active pack is ` +

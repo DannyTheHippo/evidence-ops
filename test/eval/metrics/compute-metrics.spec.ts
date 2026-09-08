@@ -261,6 +261,48 @@ describe('computeMetrics', () => {
     expect(metrics.contradictionDropRate).toBe(0);
   });
 
+  it('should compute the ledger resolved rate over every case, not only the resolved ones', () => {
+    const results: CaseResult[] = [
+      makeCase({ id: 'ans-001', category: 'answerable', ledgerResolved: true }),
+      makeCase({ id: 'ans-002', category: 'answerable', ledgerResolved: false }),
+      makeCase({ id: 'ans-003', category: 'answerable' }),
+      makeCase({ id: 'una-001', category: 'unanswerable', ledgerResolved: true }),
+    ];
+
+    expect(computeMetrics(results).ledgerResolvedRate).toBeCloseTo(0.5);
+  });
+
+  it('should return 0 ledger resolved rate when there are no cases', () => {
+    expect(computeMetrics([]).ledgerResolvedRate).toBe(0);
+  });
+
+  it('should compute the ledger gate survival rate over resolved cases only', () => {
+    const results: CaseResult[] = [
+      makeCase({
+        id: 'ans-001',
+        category: 'answerable',
+        ledgerResolved: true,
+        ledgerSurvived: true,
+      }),
+      makeCase({
+        id: 'ans-002',
+        category: 'answerable',
+        ledgerResolved: true,
+        ledgerSurvived: false,
+      }),
+      // Not resolved — must not count toward either the numerator or the denominator.
+      makeCase({ id: 'ans-003', category: 'answerable', ledgerResolved: false }),
+    ];
+
+    expect(computeMetrics(results).ledgerGateSurvivalRate).toBeCloseTo(0.5);
+  });
+
+  it('should return 0 ledger gate survival rate when no case resolved', () => {
+    const results: CaseResult[] = [makeCase({ id: 'ans-001', category: 'answerable' })];
+
+    expect(computeMetrics(results).ledgerGateSurvivalRate).toBe(0);
+  });
+
   it('should count every category, including zero-count ones', () => {
     const results: CaseResult[] = [
       makeCase({ id: 'ans-001', category: 'answerable' }),

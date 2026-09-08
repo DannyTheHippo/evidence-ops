@@ -756,6 +756,38 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/answers/{id}/attestation': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['AttestationsController_getAnswerAttestation'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/verifications/{id}/attestation': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['AttestationsController_getVerificationAttestation'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/retrieval/search': {
     parameters: {
       query?: never;
@@ -1838,6 +1870,19 @@ export interface components {
        * @example Fact 65f1c2e4a1b2c3d4e5f6a7b9's source class 'crm-export' outranks 'memo' in the configured authorityOrder.
        */
       explanation?: string;
+      /**
+       * @description The persisted decision for this conflict — outcome, decider, reason and when. Present only once a resolveConflict run has recorded a resolution; absent on every conflict still 'open'.
+       * @example {
+       *       "outcome": "resolved",
+       *       "winningFactId": "65f1c2e4a1b2c3d4e5f6a7b9",
+       *       "decidedBy": "reviewer@example.com",
+       *       "reason": "Confirmed via source memo.",
+       *       "resolvedAt": "2026-07-02T00:00:00.000Z",
+       *       "ruleFired": "authority",
+       *       "followedProposal": true
+       *     }
+       */
+      resolution?: Record<string, never>;
     };
     RequestConflictResolutionRequestDto: {
       /**
@@ -2300,6 +2345,13 @@ export interface components {
       withdrawnCitedDocVersionIds: string[];
       /** @description Token and cost accounting for the QA synthesis call, present only once runStatus is 'completed'. */
       usage?: components['schemas']['AnswerUsageResponseDto'];
+      /**
+       * @description How the answer was produced — 'ledger' (resolved from the fact ledger, no model call) or 'synthesis'; present only once runStatus is 'completed'.
+       * @enum {string}
+       */
+      answerPath?: 'ledger' | 'synthesis';
+      /** @description sha256 of the canonical attestation bundle, set on first export. */
+      attestationHash?: string;
     };
     VerificationRequesterResponseDto: {
       /**
@@ -2377,6 +2429,8 @@ export interface components {
        * @example 2026-07-01T00:00:00.000Z
        */
       createdAt: string;
+      /** @description sha256 of the canonical attestation bundle, set on first export. */
+      attestationHash?: string;
     };
     VerificationListResponseDto: {
       /**
@@ -2386,6 +2440,49 @@ export interface components {
       count: number;
       /** @description The tenant's verification runs. */
       docs: components['schemas']['VerificationResponseDto'][];
+    };
+    AttestationBundleResponseDto: {
+      /**
+       * @description Attestation bundle schema version.
+       * @example 1
+       */
+      schemaVersion: number;
+      /**
+       * @description Whether this bundle exports an Answer or a Verification.
+       * @example answer
+       * @enum {string}
+       */
+      kind: 'answer' | 'verification';
+      /**
+       * @description Id of the answer or verification this bundle exports.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      subjectId: string;
+      /**
+       * @description The subject's tenant.
+       * @example tenant-a
+       */
+      tenantId: string;
+      /**
+       * @description The subject's own creation timestamp, not the time it was exported.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      producedAt: string;
+      /** @description The question text for an answer bundle, or the submitted claim list for a verification bundle. */
+      subject: Record<string, never>;
+      /**
+       * @description The answer's outcome kind, or null for a verification bundle or an answer with no outcome.
+       * @example answered
+       */
+      outcome: string | null;
+      /** @description Every claim considered for this subject, survived or dropped, each with its own citations and the checks that decided its verdict. */
+      claims: Record<string, never>[];
+      /** @description Human decisions behind the conflicts this subject touches; empty for a verification bundle. */
+      decisions: Record<string, never>[];
+      /** @description Measure definitions referenced by the chunks this subject cites. */
+      measures: Record<string, never>[];
+      /** @description sha256 over the sorted-key canonical JSON of every other field in this bundle. Proves integrity for a recipient who already trusts the channel the hash arrived through, never authenticity — there is no signing key. */
+      integrity: Record<string, never>;
     };
     RetrievedChunkResponseDto: {
       /**
@@ -2458,7 +2555,7 @@ export interface components {
        */
       kind: 'local-folder';
       /**
-       * @description The connector's location for this source — a folder path for 'local-folder'.
+       * @description The connector's location for this source — a folder path for 'local-folder'; the submitting client's label for 'mcp-submit'.
        * @example deal-room
        */
       path: string;
@@ -2522,9 +2619,9 @@ export interface components {
        * @example local-folder
        * @enum {string}
        */
-      kind: 'local-folder';
+      kind: 'local-folder' | 'mcp-submit';
       /**
-       * @description The connector's location for this source — a folder path for 'local-folder'.
+       * @description The connector's location for this source — a folder path for 'local-folder'; the submitting client's label for 'mcp-submit'.
        * @example deal-room
        */
       path: string;
@@ -2642,9 +2739,9 @@ export interface components {
        * @example local-folder
        * @enum {string}
        */
-      kind: 'local-folder';
+      kind: 'local-folder' | 'mcp-submit';
       /**
-       * @description The connector's location for this source — a folder path for 'local-folder'.
+       * @description The connector's location for this source — a folder path for 'local-folder'; the submitting client's label for 'mcp-submit'.
        * @example deal-room
        */
       path: string;
@@ -4990,6 +5087,77 @@ export interface operations {
         };
       };
       /** @description Verification does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  AttestationsController_getAnswerAttestation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Tamper-evident export of a completed answer or a verification. integrity.contentHash is a sha256 over the canonical JSON of every other field, pinned on the subject the first time it is exported — a second export of an unchanged subject reproduces the same bundle and hash. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AttestationBundleResponseDto'];
+        };
+      };
+      /** @description Answer or verification does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description The answer has not finished running yet. */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  AttestationsController_getVerificationAttestation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Tamper-evident export of a completed answer or a verification. integrity.contentHash is a sha256 over the canonical JSON of every other field, pinned on the subject the first time it is exported — a second export of an unchanged subject reproduces the same bundle and hash. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['AttestationBundleResponseDto'];
+        };
+      };
+      /** @description Answer or verification does not exist. */
       404: {
         headers: {
           [name: string]: unknown;

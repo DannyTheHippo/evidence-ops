@@ -198,6 +198,7 @@ interface VarianceLaneOptions {
     | 'decomposeClaims'
     | 'checkContradictions'
     | 'groundingCheck'
+    | 'resolveFromLedger'
   >;
   readonly cases: readonly EvalCase[];
   readonly tenantId: string;
@@ -521,6 +522,29 @@ async function main(): Promise<void> {
     const caseResults: CaseResult[] = [];
 
     for (const evalCase of cases) {
+      // Runs for every case, independent of the retrieval/synthesis path below: the eval always
+      // scores the synthesis path regardless of what the ledger resolves, so this only measures
+      // whether the ledger path *would* have answered and survived the gate
+      // (`ledgerResolvedRate`/`ledgerGateSurvivalRate`) without moving any existing metric.
+      const ledgerResolution = await activities.resolveFromLedger({
+        questionText: evalCase.question,
+        tenantId: EVAL_TENANT_ID,
+      });
+      const ledgerResolved = ledgerResolution.kind === 'resolved';
+      let ledgerSurvived: boolean | undefined;
+      if (ledgerResolution.kind === 'resolved') {
+        // Mirrors `answer-question.workflow.ts`'s ledger branch: `groundingCheck` over the
+        // server-built outcome and its own retrieved chunks, no atoms or contradiction indexes —
+        // the ledger claim is whole-statement verified, same as the live workflow.
+        const ledgerGroundingResult = await activities.groundingCheck({
+          outcome: ledgerResolution.outcome,
+          retrievedChunks: ledgerResolution.retrievedChunks,
+          tenantId: EVAL_TENANT_ID,
+          questionText: evalCase.question,
+        });
+        ledgerSurvived = ledgerGroundingResult.outcome.kind !== 'insufficient_evidence';
+      }
+
       const retrievedChunks = await activities.retrieveEvidence({
         questionText: evalCase.question,
         tenantId: EVAL_TENANT_ID,
@@ -691,6 +715,8 @@ async function main(): Promise<void> {
         tabularGroundedCount,
         atomDroppedClaimCount: atomization?.atomDroppedClaimCount ?? 0,
         contradictionDroppedClaimCount: atomization?.contradictionDroppedClaimCount ?? 0,
+        ledgerResolved,
+        ledgerSurvived,
       });
 
       perCase.push({
@@ -764,7 +790,7 @@ async function main(): Promise<void> {
 
     console.log(`eval: wrote eval/results/${sha}.json and eval/results/${sha}.md`);
     console.log(
-      `eval: recall@5=${metrics.retrieval.recallAt5.toFixed(2)} recall@10=${metrics.retrieval.recallAt10.toFixed(2)} mrr=${metrics.retrieval.mrr.toFixed(2)} citationPrecision=${metrics.citationPrecision.toFixed(2)} claimCoverage=${metrics.claimCoverageMean.toFixed(2)} abstention=${metrics.abstentionAccuracy.toFixed(2)} conflictRecall=${metrics.conflictRecall.toFixed(2)} canaryOwnVoiceLeakRate=${metrics.canaryOwnVoiceLeakRate} canaryVerifiedQuoteLeakRate=${metrics.canaryVerifiedQuoteLeakRate} tabularGrounded=${metrics.tabularGroundedRate.toFixed(2)} coverageDrop=${metrics.coverageDropRate.toFixed(2)} contradictionDrop=${metrics.contradictionDropRate.toFixed(2)}`,
+      `eval: recall@5=${metrics.retrieval.recallAt5.toFixed(2)} recall@10=${metrics.retrieval.recallAt10.toFixed(2)} mrr=${metrics.retrieval.mrr.toFixed(2)} citationPrecision=${metrics.citationPrecision.toFixed(2)} claimCoverage=${metrics.claimCoverageMean.toFixed(2)} abstention=${metrics.abstentionAccuracy.toFixed(2)} conflictRecall=${metrics.conflictRecall.toFixed(2)} canaryOwnVoiceLeakRate=${metrics.canaryOwnVoiceLeakRate} canaryVerifiedQuoteLeakRate=${metrics.canaryVerifiedQuoteLeakRate} tabularGrounded=${metrics.tabularGroundedRate.toFixed(2)} coverageDrop=${metrics.coverageDropRate.toFixed(2)} contradictionDrop=${metrics.contradictionDropRate.toFixed(2)} ledgerResolvedRate=${metrics.ledgerResolvedRate.toFixed(2)} ledgerGateSurvivalRate=${metrics.ledgerGateSurvivalRate.toFixed(2)}`,
     );
 
     // `hasOwnVoiceLeak` (`./report`) is the same predicate `buildMarkdownReport`'s gate line
