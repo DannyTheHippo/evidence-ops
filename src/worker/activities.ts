@@ -40,6 +40,10 @@ import { IngestionService } from '../features/evidence/ingestion/ingestion.servi
 import { SourcesService, type RunSyncResult } from '../features/evidence/sources/sources.service';
 import { ApprovalsService } from '../features/evidence/approvals/approvals.service';
 import {
+  WorkflowRunsService,
+  type RecordWorkflowRunEndInput,
+} from '../features/evidence/workflow-runs/workflow-runs.service';
+import {
   AnswerPersistenceService,
   type PersistAnswerInput,
   type PersistAnswerResult,
@@ -409,6 +413,11 @@ export interface Activities {
    * `SourcesService.runSync`'s own doc comment). Also resolves and opens the tenant's ALS scope
    * itself (`SourcesService.findTenantIdForSync`), since `sourceId` alone names no tenant. */
   runSourceSync(sourceId: string): Promise<RunSyncResult>;
+  /** Records the terminal status a workflow reached onto its `workflow_runs` row. Takes
+   *  `workflowId` only and resolves the tenant from the row itself, for the same reason
+   *  `runSourceSync` resolves the tenant from `sourceId`: `SyncSourceWorkflowInput` carries no
+   *  `tenantId`, so a signature demanding one could not be called from `syncSource` at all. */
+  recordWorkflowRunEnd(input: RecordWorkflowRunEndInput): Promise<void>;
 }
 
 /**
@@ -513,6 +522,7 @@ export function createActivities(app: INestApplicationContext): Activities {
   const approvalChannel = app.get<ApprovalChannel>(APPROVAL_CHANNEL);
   const approvalsService = app.get(ApprovalsService);
   const sourcesService = app.get(SourcesService);
+  const workflowRunsService = app.get(WorkflowRunsService);
   const measuresService = app.get(MeasuresService);
   const claimDecompositionService = app.get(ClaimDecompositionService);
   const contradictionCheckService = app.get(ContradictionCheckService);
@@ -961,6 +971,14 @@ export function createActivities(app: INestApplicationContext): Activities {
           sourcesService.runSync(sourceId, new Types.ObjectId()),
         ),
       );
+    },
+
+    recordWorkflowRunEnd: async (input) => {
+      const tenantId = await workflowRunsService.findTenantIdForRun(input.workflowId);
+      if (!tenantId) {
+        return;
+      }
+      await withTenantScope(als, tenantId, () => workflowRunsService.recordEnd(input));
     },
   };
 }

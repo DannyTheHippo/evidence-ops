@@ -1,6 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsNotEmpty, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 import { PaginationRequestDto } from '../../../../../shared/dtos/request/pagination.request.dto';
+import { MAX_PERIOD_KEY_LENGTH } from '../../../facts/derive-period';
 import { MEASURE_SLUG_GRAMMAR } from './list-ledger-cells.request.dto';
 
 /** The drill-down behind one cell, so it addresses a cell the same way `ResolveLedgerRequestDto`
@@ -27,6 +28,6 @@ export class ListLedgerFactsRequestDto extends PaginationRequestDto {
   })
   @IsOptional()
   @IsString()
-  @MaxLength(64)
+  @MaxLength(MAX_PERIOD_KEY_LENGTH)
   period?: string;
 }

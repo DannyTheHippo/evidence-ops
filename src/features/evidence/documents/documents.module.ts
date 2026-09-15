@@ -22,6 +22,7 @@ import {
   ExtractedFactSchema,
 } from '../../../database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import { ProvidersModule } from '../../../providers/providers.module';
+import { WorkflowRunsModule } from '../workflow-runs/workflow-runs.module';
 import { DocumentsController } from './documents.controller';
 import { DocumentsService } from './documents.service';
 
@@ -31,6 +32,8 @@ import { DocumentsService } from './documents.service';
 // tenant-scoped and in a specific order, not another service's business logic. `User` is
 // registered so `DocumentsService.streamList` can re-read the connecting user's tenant on each
 // `reauthTicks$` tick — see `ApiKeysModule`'s identical `User` registration for the same reason.
+// `WorkflowRunsModule` is for `WorkflowRunsService` — `DocumentsService.uploadVersion` records a
+// run for every version that starts ingestion, mirroring `ConflictsModule`'s identical import.
 @Module({
   imports: [
     MongooseModule.forFeature([
@@ -42,6 +45,7 @@ import { DocumentsService } from './documents.service';
       { name: User.name, schema: UserSchema },
     ]),
     ProvidersModule,
+    WorkflowRunsModule,
   ],
   controllers: [DocumentsController],
   providers: [DocumentsService],

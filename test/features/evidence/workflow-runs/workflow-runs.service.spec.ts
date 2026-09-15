@@ -13,6 +13,7 @@ import {
   WORKFLOW_RUN_STREAM_INTERVAL_MS,
 } from '../../../../src/features/evidence/workflow-runs/workflow-runs.constant';
 import { WorkflowRunsService } from '../../../../src/features/evidence/workflow-runs/workflow-runs.service';
+import { WorkflowEngineNotFoundError } from '../../../../src/providers/workflow-engine/errors/workflow-engine-not-found.error';
 import { WORKFLOW_ENGINE } from '../../../../src/providers/workflow-engine/workflow-engine.interface';
 import {
   SSE_HEARTBEAT_INTERVAL_MS,
@@ -302,6 +303,33 @@ describe('WorkflowRunsService', () => {
       });
     });
 
+    it('should carry the createdAt range when from and to are given', async () => {
+      const actorId = new Types.ObjectId().toString();
+      mockWorkflowRunModel.find.mockResolvedValueOnce([]);
+      mockWorkflowRunModel.countDocuments.mockResolvedValueOnce(0);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      await service.listByWorkflowId(
+        { skip: 0, limit: 20, from: '2026-07-01T00:00:00.000Z', to: '2026-08-01T00:00:00.000Z' },
+        actorId,
+        'tenant-a',
+      );
+
+      const expectedFilter = {
+        tenantId: 'tenant-a',
+        createdAt: {
+          $gte: new Date('2026-07-01T00:00:00.000Z'),
+          $lt: new Date('2026-08-01T00:00:00.000Z'),
+        },
+      };
+      expect(mockWorkflowRunModel.find).toHaveBeenCalledWith(expectedFilter, null, {
+        sort: { createdAt: -1 },
+        skip: 0,
+        limit: 20,
+      });
+      expect(mockWorkflowRunModel.countDocuments).toHaveBeenCalledWith(expectedFilter);
+    });
+
     it('should scope the lookup to an explicit tenantId when provided', async () => {
       const actorId = new Types.ObjectId().toString();
       mockWorkflowRunModel.find.mockResolvedValueOnce([]);
@@ -363,6 +391,99 @@ describe('WorkflowRunsService', () => {
     );
   });
 
+  describe('recordEnd', () => {
+    it('should record status alone when neither errorMessage nor outcome is given', async () => {
+      mockWorkflowRunModel.findOneAndUpdate.mockResolvedValueOnce({ workflowId: 'wf-1' });
+
+      await service.recordEnd({ workflowId: 'wf-1', status: 'completed' });
+
+      expect(mockWorkflowRunModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { workflowId: 'wf-1' },
+        { $set: { status: 'completed' } },
+      );
+    });
+
+    it('should record status and errorMessage together', async () => {
+      mockWorkflowRunModel.findOneAndUpdate.mockResolvedValueOnce({ workflowId: 'wf-1' });
+
+      await service.recordEnd({
+        workflowId: 'wf-1',
+        status: 'failed',
+        errorMessage: 'Timed out waiting for approval',
+      });
+
+      expect(mockWorkflowRunModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { workflowId: 'wf-1' },
+        { $set: { status: 'failed', errorMessage: 'Timed out waiting for approval' } },
+      );
+    });
+
+    it('should record status and outcome together', async () => {
+      mockWorkflowRunModel.findOneAndUpdate.mockResolvedValueOnce({ workflowId: 'wf-1' });
+
+      await service.recordEnd({ workflowId: 'wf-1', status: 'completed', outcome: 'resolved' });
+
+      expect(mockWorkflowRunModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { workflowId: 'wf-1' },
+        { $set: { status: 'completed', outcome: 'resolved' } },
+      );
+    });
+
+    it('should record status, errorMessage and outcome all at once', async () => {
+      mockWorkflowRunModel.findOneAndUpdate.mockResolvedValueOnce({ workflowId: 'wf-1' });
+
+      await service.recordEnd({
+        workflowId: 'wf-1',
+        status: 'failed',
+        errorMessage: 'rejected by approver',
+        outcome: 'rejected',
+      });
+
+      expect(mockWorkflowRunModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { workflowId: 'wf-1' },
+        {
+          $set: {
+            status: 'failed',
+            errorMessage: 'rejected by approver',
+            outcome: 'rejected',
+          },
+        },
+      );
+    });
+
+    it('should log a warning and resolve, never throw, when no row matches the workflowId', async () => {
+      mockWorkflowRunModel.findOneAndUpdate.mockResolvedValueOnce(null);
+
+      await expect(
+        service.recordEnd({ workflowId: 'wf-missing', status: 'completed' }),
+      ).resolves.toBeUndefined();
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('wf-missing'));
+    });
+  });
+
+  describe('findTenantIdForRun', () => {
+    it('should return the tenant for a matching row', async () => {
+      mockWorkflowRunModel.findOne.mockResolvedValueOnce({ tenantId: 'acme-corp' });
+
+      const result = await service.findTenantIdForRun('wf-1');
+
+      expect(mockWorkflowRunModel.findOne).toHaveBeenCalledWith(
+        { workflowId: 'wf-1' },
+        { tenantId: 1 },
+      );
+      expect(result).toBe('acme-corp');
+    });
+
+    it('should return null when no row matches', async () => {
+      mockWorkflowRunModel.findOne.mockResolvedValueOnce(null);
+
+      const result = await service.findTenantIdForRun('wf-missing');
+
+      expect(result).toBeNull();
+    });
+  });
+
   describe('findRunByWorkflowId', () => {
     it('should return the projection for a matching row without recording an audit event', async () => {
       const id = new Types.ObjectId();
@@ -389,6 +510,23 @@ describe('WorkflowRunsService', () => {
         errorMessage: undefined,
         createdAt: run.createdAt,
       });
+    });
+
+    it('should surface outcome on a terminal resolve-conflict row', async () => {
+      const id = new Types.ObjectId();
+      const run = {
+        _id: id,
+        workflowId: 'wf-1',
+        status: 'completed',
+        errorMessage: undefined,
+        outcome: 'resolved',
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      };
+      mockWorkflowRunModel.findOne.mockResolvedValueOnce(run);
+
+      const result = await service.findRunByWorkflowId('wf-1', 'acme-corp');
+
+      expect(result?.outcome).toBe('resolved');
     });
 
     it('should return null when no row matches', async () => {
@@ -421,6 +559,7 @@ describe('WorkflowRunsService', () => {
 
       expect(mockWorkflowEngine.status).toHaveBeenCalledWith('wf-1');
       expect(result.status).toBe('completed');
+      expect(result.stale).toBe(false);
       expect(mockAuditService.record).not.toHaveBeenCalled();
     });
 
@@ -483,8 +622,64 @@ describe('WorkflowRunsService', () => {
 
       expect(mockWorkflowEngine.status).toHaveBeenCalledTimes(1);
       expect(first.status).toBe('running');
+      expect(first.stale).toBe(false);
       expect(second.status).toBe('running');
+      expect(second.stale).toBe(false);
       expect(mockLogger.warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('should mark stale true when the row is non-terminal and the engine reports the workflow not-found', async () => {
+      const run = {
+        _id: new Types.ObjectId(),
+        workflowId: 'wf-1',
+        status: 'running',
+        errorMessage: undefined,
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      };
+      mockWorkflowRunModel.findOne.mockResolvedValueOnce(run);
+      mockWorkflowEngine.status.mockRejectedValueOnce(new WorkflowEngineNotFoundError('wf-1'));
+
+      const result = await service.peekRun(run._id.toString(), 'tenant-a');
+
+      expect(result.status).toBe('running');
+      expect(result.stale).toBe(true);
+      expect(mockLogger.warn).not.toHaveBeenCalled();
+    });
+
+    it('should mark stale false for a terminal row even when the engine reports the workflow not-found', async () => {
+      const run = {
+        _id: new Types.ObjectId(),
+        workflowId: 'wf-1',
+        status: 'completed',
+        errorMessage: undefined,
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      };
+      mockWorkflowRunModel.findOne.mockResolvedValueOnce(run);
+      mockWorkflowEngine.status.mockRejectedValueOnce(new WorkflowEngineNotFoundError('wf-1'));
+
+      const result = await service.peekRun(run._id.toString(), 'tenant-a');
+
+      expect(result.status).toBe('completed');
+      expect(result.stale).toBe(false);
+    });
+
+    it('should cache a not-found engine answer too, so a repeated poll within the window checks the engine once', async () => {
+      const run = {
+        _id: new Types.ObjectId(),
+        workflowId: 'wf-1',
+        status: 'running',
+        errorMessage: undefined,
+        createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      };
+      mockWorkflowRunModel.findOne.mockResolvedValue(run);
+      mockWorkflowEngine.status.mockRejectedValueOnce(new WorkflowEngineNotFoundError('wf-1'));
+
+      const first = await service.peekRun(run._id.toString(), 'tenant-a');
+      const second = await service.peekRun(run._id.toString(), 'tenant-a');
+
+      expect(mockWorkflowEngine.status).toHaveBeenCalledTimes(1);
+      expect(first.stale).toBe(true);
+      expect(second.stale).toBe(true);
     });
 
     it('should evict expired entries for other workflowIds rather than retaining one per run ever polled', async () => {

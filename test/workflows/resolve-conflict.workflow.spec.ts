@@ -7,6 +7,7 @@ interface ActivityStubs {
   getApprovalDecision: jest.Mock;
   expireApproval: jest.Mock;
   recordConflictResolution: jest.Mock;
+  recordWorkflowRunEnd: jest.Mock;
 }
 
 interface MockedTemporalWorkflow {
@@ -37,6 +38,7 @@ jest.mock('@temporalio/workflow', () => {
     getApprovalDecision: jest.fn(),
     expireApproval: jest.fn(),
     recordConflictResolution: jest.fn(),
+    recordWorkflowRunEnd: jest.fn(),
   };
   return {
     activityStubs,
@@ -142,6 +144,11 @@ describe('resolveConflict', () => {
       winningValue: 5.25,
       winningUnit: 'percent',
     });
+    expect(activityStubs.recordWorkflowRunEnd).toHaveBeenCalledWith({
+      workflowId: 'wf-1',
+      status: 'completed',
+      outcome: 'resolved',
+    });
   });
 
   it('should fold requestedByOrigin into the approval summary a reviewer reads, and omit the marker when absent', async () => {
@@ -201,6 +208,11 @@ describe('resolveConflict', () => {
       proposedWinnerFactId: 'fact-xlsx',
     });
     expect(result).toEqual({ conflictId: 'conflict-1', outcome: 'rejected' });
+    expect(activityStubs.recordWorkflowRunEnd).toHaveBeenCalledWith({
+      workflowId: 'wf-1',
+      status: 'completed',
+      outcome: 'rejected',
+    });
   });
 
   it('should expire the Approval row and record a timed_out outcome, without reading the decision, when condition times out', async () => {
@@ -235,6 +247,11 @@ describe('resolveConflict', () => {
       proposedWinnerFactId: 'fact-xlsx',
     });
     expect(result).toEqual({ conflictId: 'conflict-1', outcome: 'timed_out' });
+    expect(activityStubs.recordWorkflowRunEnd).toHaveBeenCalledWith({
+      workflowId: 'wf-1',
+      status: 'completed',
+      outcome: 'timed_out',
+    });
   });
 
   it('should ignore a signal payload that claims approval and still record rejected when the persisted row disagrees', async () => {
@@ -257,5 +274,18 @@ describe('resolveConflict', () => {
       expect.objectContaining({ conflictId: 'conflict-1', outcome: 'rejected' }),
     );
     expect(result).toEqual({ conflictId: 'conflict-1', outcome: 'rejected' });
+  });
+
+  it('should record the run failed with the error message and rethrow when an activity throws', async () => {
+    const loadFailure = new Error('conflict not found');
+    activityStubs.loadConflict.mockRejectedValue(loadFailure);
+
+    await expect(resolveConflict(input)).rejects.toBe(loadFailure);
+
+    expect(activityStubs.recordWorkflowRunEnd).toHaveBeenCalledWith({
+      workflowId: 'wf-1',
+      status: 'failed',
+      errorMessage: 'conflict not found',
+    });
   });
 });

@@ -12,19 +12,40 @@ export const WORKFLOW_RUN_STATUSES: readonly WorkflowRunStatus[] = [
 ];
 
 /**
- * Which workflow a run projects. Covers only the workflows that actually record a run row —
- * `answer-question` and `ingest-document-version` run without one. `workflowId` is a bare
- * `randomUUID()`, so this is the only field carrying what a run *is*.
+ * Which workflow a run projects. `workflowId` is a bare `randomUUID()`, so this is the only
+ * field carrying what a run *is*.
  *
  * `'rescan-conflicts'` is no longer a workflow this codebase starts. Kept in this closed union
  * for existing rows that carry it; no current code path writes it.
  */
-export type WorkflowRunType = 'resolve-conflict' | 'sync-source' | 'rescan-conflicts';
+export type WorkflowRunType =
+  | 'resolve-conflict'
+  | 'sync-source'
+  | 'rescan-conflicts'
+  | 'answer-question'
+  | 'ingest-document-version';
 
 export const WORKFLOW_RUN_TYPES: readonly WorkflowRunType[] = [
   'resolve-conflict',
   'sync-source',
   'rescan-conflicts',
+  'answer-question',
+  'ingest-document-version',
+];
+
+/**
+ * A workflow's own verdict, written when it ends. Present on a `resolve-conflict` run; absent on
+ * every other type and on rows written before the field existed. Structurally identical to
+ * `ResolveConflictOutcome` (`src/workflows/types.ts`) and to `ConflictResolution['outcome']`,
+ * declared here rather than imported from `src/workflows/**` so `src/database/**` carries no
+ * dependency on the workflow determinism fence.
+ */
+export type WorkflowRunOutcome = 'resolved' | 'rejected' | 'timed_out';
+
+export const WORKFLOW_RUN_OUTCOMES: readonly WorkflowRunOutcome[] = [
+  'resolved',
+  'rejected',
+  'timed_out',
 ];
 
 export type WorkflowRunDocument = HydratedDocument<WithTimestamps<WorkflowRun>>;
@@ -61,6 +82,9 @@ export class WorkflowRun extends AuditableDocument {
 
   @Prop({ type: String })
   errorMessage?: string;
+
+  @Prop({ type: String, enum: WORKFLOW_RUN_OUTCOMES })
+  outcome?: WorkflowRunOutcome;
 
   @Prop({ type: String, required: true })
   tenantId: string;

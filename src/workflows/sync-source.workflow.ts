@@ -1,7 +1,8 @@
-import { continueAsNew, proxyActivities, sleep } from '@temporalio/workflow';
+import { continueAsNew, proxyActivities, sleep, workflowInfo } from '@temporalio/workflow';
 import type { Activities } from '../worker/activities';
 import { SYNC_SOURCE_START_TO_CLOSE_TIMEOUT_MS } from './activity-heartbeat-policy';
 import { INGEST_HEARTBEAT_TIMEOUT_MS } from './ingest-retry-policy';
+import { recordRunEndSafely } from './run-recording';
 import type { SyncSourceWorkflowInput } from './types';
 
 /**
@@ -46,21 +47,46 @@ const MAX_ITERATIONS_BEFORE_CONTINUE = 50;
  * null` with `disabled: false` (a one-shot sync, or this execution's lease was lost to a newer
  * attempt) also exits, without implying the source itself is disabled; otherwise the workflow
  * sleeps for `intervalMs` and sweeps again.
+ *
+ * Records its run's terminal status through `recordRunEndSafely` (`./run-recording.ts`) rather
+ * than through `withRunRecording` — that helper wraps a single terminal exit, but `continueAsNew`
+ * below is not one: it throws a control-flow signal the SDK must see uncaught, so only the loop
+ * itself sits inside the `try`/`catch` that records `failed`, and the `continueAsNew` branch after
+ * it deliberately writes no terminal row at all — the same `workflowId` keeps running under the
+ * new execution. The ended-loop path (`loopEnded`) records `completed`, and — matching
+ * {@link withRunRecording}'s own contract for a workflow with no outcome vocabulary of its own —
+ * carries no `outcome`.
+ *
+ * Both recording writes FAIL OPEN: a rejected recording is logged and swallowed, so an ended loop
+ * still resolves and a failed sweep still rethrows its own original error.
  */
 export async function syncSource(input: SyncSourceWorkflowInput): Promise<void> {
-  for (let iteration = 0; iteration < MAX_ITERATIONS_BEFORE_CONTINUE; iteration++) {
-    const result = await syncActivities.runSourceSync(input.sourceId);
+  const workflowId = workflowInfo().workflowId;
+  let loopEnded = false;
+  try {
+    for (let iteration = 0; iteration < MAX_ITERATIONS_BEFORE_CONTINUE; iteration++) {
+      const result = await syncActivities.runSourceSync(input.sourceId);
 
-    if (result.disabled) {
-      return;
+      if (result.disabled || result.intervalMs === null) {
+        loopEnded = true;
+        break;
+      }
+
+      await sleep(result.intervalMs);
     }
-
-    if (result.intervalMs === null) {
-      return;
-    }
-
-    await sleep(result.intervalMs);
+  } catch (error) {
+    await recordRunEndSafely({
+      workflowId,
+      status: 'failed',
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   }
 
-  await continueAsNew<typeof syncSource>(input);
+  if (!loopEnded) {
+    await continueAsNew<typeof syncSource>(input);
+    return;
+  }
+
+  await recordRunEndSafely({ workflowId, status: 'completed' });
 }

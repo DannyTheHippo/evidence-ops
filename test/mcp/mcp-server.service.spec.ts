@@ -9,6 +9,7 @@ import { AttestationService } from '../../src/features/evidence/attestations/att
 import { AttestationSubjectRequiredException } from '../../src/features/evidence/attestations/exceptions/attestations.exception';
 import { ClaimVerificationService } from '../../src/features/evidence/qa/claim-verification.service';
 import { ConflictsService } from '../../src/features/evidence/conflicts/conflicts.service';
+import { unparseablePeriodKey } from '../../src/features/evidence/facts/derive-period';
 import { LedgerService } from '../../src/features/evidence/ledger/ledger.service';
 import { EvidenceRetrievalService } from '../../src/features/evidence/qa/evidence-retrieval.service';
 import { QaService } from '../../src/features/evidence/qa/qa.service';
@@ -39,6 +40,7 @@ import {
   ATTESTATION_ID_MAX_LENGTH,
   GET_ANSWER_TOOL_NAME,
   GET_ATTESTATION_TOOL_NAME,
+  LOOKUP_FACT_PERIOD_MAX_LENGTH,
   LOOKUP_FACT_TOOL_NAME,
   MCP_ASK_STEP,
   MCP_MUTATE_STEP,
@@ -1062,6 +1064,26 @@ describe('McpServerService', () => {
         entity: 'Northgate Business Park',
         measure: 'cap_rate',
         period: undefined,
+      });
+    });
+
+    it('should accept a period at LOOKUP_FACT_PERIOD_MAX_LENGTH, the longest key derive-period.ts can store', async () => {
+      const { service, ledgerService } = await buildHarness();
+      const client = await connectClient(service.buildServer(TENANT_A_CONTEXT));
+      const period = unparseablePeriodKey('x'.repeat(80));
+      expect(period).toHaveLength(LOOKUP_FACT_PERIOD_MAX_LENGTH);
+
+      const result = await client.callTool({
+        name: LOOKUP_FACT_TOOL_NAME,
+        arguments: { entity: 'Northgate Business Park', measure: 'cap_rate', period },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(ledgerService.resolveValue).toHaveBeenCalledWith({
+        tenantId: 'tenant-a',
+        entity: 'Northgate Business Park',
+        measure: 'cap_rate',
+        period,
       });
     });
 

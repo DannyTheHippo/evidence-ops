@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsNotEmpty, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { MAX_PERIOD_KEY_LENGTH } from '../../../facts/derive-period';
 import { MEASURE_SLUG_GRAMMAR } from './list-ledger-cells.request.dto';
 
 /** Addresses exactly one cell. `entity` and `measure` are required because a resolution is a
@@ -26,6 +27,6 @@ export class ResolveLedgerRequestDto {
   })
   @IsOptional()
   @IsString()
-  @MaxLength(64)
+  @MaxLength(MAX_PERIOD_KEY_LENGTH)
   period?: string;
 }

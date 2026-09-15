@@ -35,7 +35,7 @@ export const workflowRunsApiExamples: Record<string, ApiResponseOptions> = {
     examples: {
       example: {
         summary: 'Running resolveConflict run',
-        value: exampleRunningRun,
+        value: { ...exampleRunningRun, stale: false },
       },
     },
   },
@@ -58,9 +58,10 @@ export const workflowRunsApiExamples: Record<string, ApiResponseOptions> = {
     description:
       'text/event-stream. Polls every 1.5s until status reaches a terminal state, emitting the ' +
       'final state before closing. `run` events carry the exact shape GET /workflow-runs/:id ' +
-      "returns; `approvals` events carry the exact shape GET /approvals returns (the tenant's " +
-      "whole pending inbox, not just this run's); a `heartbeat` event fires every 15s; a terminal " +
-      '`error` event means the client should fall back to polling both endpoints. Re-checks the ' +
+      'returns; `approvals` events carry the same {docs,count} shape GET /approvals returns, ' +
+      "filtered to this run's own pending approval rather than the tenant's whole inbox; a " +
+      '`heartbeat` event fires every 15s; a terminal `error` event means the client should fall ' +
+      'back to polling both endpoints. Re-checks the ' +
       'connecting session every 30s and closes if it is gone or moved tenants.',
   },
   streamConnectionLimitExceeded: {

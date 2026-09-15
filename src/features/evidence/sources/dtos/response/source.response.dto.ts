@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Expose } from 'class-transformer';
+import { Expose, Type } from 'class-transformer';
 import {
   DOCUMENT_SOURCE_CLASSES,
   type DocumentSourceClass,
@@ -12,6 +12,7 @@ import {
   type SourceKind,
   type SourceReachability,
 } from '../../../../../database/schemas/evidence/source/source.schema';
+import { SourceLastSyncResponseDto } from './source-last-sync.response.dto';
 
 export class SourceResponseDto {
   @Expose()
@@ -79,6 +80,17 @@ export class SourceResponseDto {
     required: false,
   })
   lastSyncError?: string;
+
+  @Expose()
+  @Type(() => SourceLastSyncResponseDto)
+  @ApiProperty({
+    type: () => SourceLastSyncResponseDto,
+    description:
+      'Diagnostic view of the most recent sync attempt. Absent when this source has never been ' +
+      'synced.',
+    required: false,
+  })
+  lastSync?: SourceLastSyncResponseDto;
 
   @Expose()
   @ApiProperty({ example: 42, description: 'Number of files this source has synced state for.' })

@@ -366,7 +366,7 @@ describe('Users (e2e)', () => {
       expect(persisted).toBeNull();
     });
 
-    it('refuses to remove the tenant’s sole remaining admin', async () => {
+    it('refuses a sole admin removing themselves', async () => {
       const solo = await registerTestUser(app, {
         email: 'users-solo-admin-remove-e2e@example.com',
         password,
@@ -378,6 +378,11 @@ describe('Users (e2e)', () => {
         .set('Cookie', solo.cookie);
 
       expect(response.status).toBe(409);
+      expect(response.body).toEqual(
+        expect.objectContaining({
+          message: `User '${solo.userId}' cannot remove themselves from the tenant`,
+        }),
+      );
 
       const persisted = await userModel.findById(solo.userId);
       expect(persisted).not.toBeNull();
@@ -386,6 +391,32 @@ describe('Users (e2e)', () => {
       // all: same creation time, same (absent) creator, not the acting admin.
       expect(persisted?.createdAt).toEqual(before?.createdAt);
       expect(persisted?.createdBy).toEqual(before?.createdBy);
+    });
+
+    it('refuses an admin removing themselves even when another admin remains', async () => {
+      const self = await registerTestUser(app, {
+        email: 'users-self-remove-e2e@example.com',
+        password,
+      });
+      await registerTestUser(
+        app,
+        { email: 'users-self-remove-peer-e2e@example.com', password },
+        { tenantId: self.tenantId },
+      );
+
+      const response = await request(getTestServer(app))
+        .delete(`/api/v1/users/${self.userId}`)
+        .set('Cookie', self.cookie);
+
+      expect(response.status).toBe(409);
+
+      const listResponse = await request(getTestServer(app))
+        .get('/api/v1/users')
+        .set('Cookie', self.cookie);
+      const listBody = listResponse.body as { docs: UserBody[]; count: number };
+
+      expect(listResponse.status).toBe(200);
+      expect(listBody.docs.find((doc) => doc.id === self.userId)).toBeDefined();
     });
 
     /**

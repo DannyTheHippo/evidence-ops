@@ -24,6 +24,10 @@ import {
   ExtractedFact,
   ExtractedFactDocument,
 } from '../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
+import {
+  WorkflowRun,
+  WorkflowRunDocument,
+} from '../../src/database/schemas/workflow/workflow-run/workflow-run.schema';
 import type {
   Citation,
   VerificationReport,
@@ -94,6 +98,7 @@ describe('QA and Conflicts (e2e)', () => {
   let extractedFactModel: Model<ExtractedFactDocument>;
   let documentModel: Model<DocumentDocument>;
   let documentVersionModel: Model<DocumentVersionDocument>;
+  let workflowRunModel: Model<WorkflowRunDocument>;
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -109,6 +114,7 @@ describe('QA and Conflicts (e2e)', () => {
     documentVersionModel = app.get<Model<DocumentVersionDocument>>(
       getModelToken(DocumentVersion.name),
     );
+    workflowRunModel = app.get<Model<WorkflowRunDocument>>(getModelToken(WorkflowRun.name));
   });
 
   afterAll(async () => {
@@ -170,6 +176,18 @@ describe('QA and Conflicts (e2e)', () => {
       expect(events).toHaveLength(1);
       expect(events[0].actor.toString()).toBe(userId);
       expect(events[0].subject.entityType).toBe('Answer');
+
+      // `FakeWorkflowEngine.start` returns `status: 'completed'`, unlike the live engine which
+      // always starts a run as `'running'` — asserting the run's existence, type and subject
+      // proves the write happened without asserting a status that would pass for the wrong reason.
+      const run = await workflowRunModel.findOne({
+        tenantId,
+        subjectId: new Types.ObjectId(body.id),
+        subjectType: 'Answer',
+      });
+      expect(run).not.toBeNull();
+      expect(run?.workflowType).toBe('answer-question');
+      expect(typeof run?.workflowId).toBe('string');
     });
   });
 
@@ -492,6 +510,83 @@ describe('QA and Conflicts (e2e)', () => {
       expect(body.count).toBeGreaterThan(0);
       expect(body.docs.every((doc) => doc.runStatus === 'queued')).toBe(true);
     });
+
+    it('narrows the result set with the from/to window', async () => {
+      const windowTenant = await registerTestUser(app, {
+        email: 'qa-answers-window-e2e@example.com',
+        password: 'correct-horse-battery',
+      });
+      const insideRow = await answerModel.create({
+        tenantId: windowTenant.tenantId,
+        questionText: 'Inside the window',
+        runStatus: 'queued',
+      });
+      const outsideRow = await answerModel.create({
+        tenantId: windowTenant.tenantId,
+        questionText: 'Outside the window',
+        runStatus: 'queued',
+      });
+      // `create()` ignores an explicit `createdAt` under `timestamps: true`; backdating needs a
+      // follow-up update. `timestamps: true` also treats `createdAt` as insert-only and strips a
+      // plain `$set` on it — `overwriteImmutable` is Mongoose's documented escape hatch to keep
+      // the caller's value on an existing document.
+      await answerModel.updateOne(
+        { _id: insideRow._id },
+        { createdAt: new Date('2026-07-15T00:00:00.000Z') },
+        { overwriteImmutable: true },
+      );
+      await answerModel.updateOne(
+        { _id: outsideRow._id },
+        { createdAt: new Date('2026-09-01T00:00:00.000Z') },
+        { overwriteImmutable: true },
+      );
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/answers')
+        .query({ from: '2026-07-01T00:00:00.000Z', to: '2026-08-01T00:00:00.000Z' })
+        .set('Cookie', windowTenant.cookie);
+      const body = response.body as { docs: AnswerBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.count).toBe(1);
+      expect(body.docs[0].id).toBe(insideRow._id.toString());
+    });
+
+    it('returns 400 naming both values when to is earlier than from', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/answers')
+        .query({ from: '2026-08-01T00:00:00.000Z', to: '2026-07-01T00:00:00.000Z' })
+        .set('Cookie', listCookie);
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual(
+        expect.objectContaining({
+          message: expect.stringContaining('2026-08-01T00:00:00.000Z') as string,
+        }),
+      );
+      expect(response.body).toEqual(
+        expect.objectContaining({
+          message: expect.stringContaining('2026-07-01T00:00:00.000Z') as string,
+        }),
+      );
+    });
+
+    it('returns up to limit=100 rows and rejects limit=101', async () => {
+      const okResponse = await request(getTestServer(app))
+        .get('/api/v1/answers')
+        .query({ limit: 100 })
+        .set('Cookie', listCookie);
+
+      expect(okResponse.status).toBe(200);
+      expect((okResponse.body as { docs: AnswerBody[] }).docs.length).toBeLessThanOrEqual(100);
+
+      const rejectedResponse = await request(getTestServer(app))
+        .get('/api/v1/answers')
+        .query({ limit: 101 })
+        .set('Cookie', listCookie);
+
+      expect(rejectedResponse.status).toBe(400);
+    });
   });
 
   describe('GET /answers sort', () => {
@@ -539,15 +634,26 @@ describe('QA and Conflicts (e2e)', () => {
       await answerModel.updateOne(
         { _id: bAnswer._id },
         { createdAt: new Date('2026-01-01T00:00:00.000Z') },
+        { overwriteImmutable: true },
       );
       await answerModel.updateOne(
         { _id: cAnswer._id },
         { createdAt: new Date('2026-01-02T00:00:00.000Z') },
+        { overwriteImmutable: true },
       );
       await answerModel.updateOne(
         { _id: aAnswer._id },
         { createdAt: new Date('2026-01-03T00:00:00.000Z') },
+        { overwriteImmutable: true },
       );
+
+      // Proves the fixture itself, not just the ordering it produces — an update that silently
+      // strips `createdAt` would leave every row at its real insertion time, and the assertions
+      // below could still pass by coincidence.
+      const backdatedB = await answerModel.findById(bAnswer._id);
+      expect(backdatedB?.createdAt?.toISOString()).toBe('2026-01-01T00:00:00.000Z');
+      const backdatedA = await answerModel.findById(aAnswer._id);
+      expect(backdatedA?.createdAt?.toISOString()).toBe('2026-01-03T00:00:00.000Z');
 
       const defaultResponse = await request(getTestServer(app))
         .get('/api/v1/answers')

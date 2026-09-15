@@ -14,12 +14,24 @@ const mockStart = jest.fn();
 const mockGetHandle = jest.fn();
 const mockSignal = jest.fn();
 
-jest.mock('@temporalio/client', () => ({
-  __esModule: true,
-  Connection: { connect: mockConnectionConnect },
-  Client: mockClient,
-}));
+// `WorkflowNotFoundError`, `NamespaceNotFoundError` and `ServiceError` are re-exported from the
+// real module (via `jest.requireActual`) rather than stubbed, so `instanceof WorkflowNotFoundError`
+// inside `TemporalWorkflowEngine.status()` still matches an instance built from the same import
+// below, and the negative cases below construct real Temporal error classes rather than lookalikes.
+jest.mock('@temporalio/client', () => {
+  const actual = jest.requireActual<typeof import('@temporalio/client')>('@temporalio/client');
+  return {
+    __esModule: true,
+    Connection: { connect: mockConnectionConnect },
+    Client: mockClient,
+    WorkflowNotFoundError: actual.WorkflowNotFoundError,
+    NamespaceNotFoundError: actual.NamespaceNotFoundError,
+    ServiceError: actual.ServiceError,
+  };
+});
 
+import { NamespaceNotFoundError, ServiceError, WorkflowNotFoundError } from '@temporalio/client';
+import { WorkflowEngineNotFoundError } from '../../../src/providers/workflow-engine/errors/workflow-engine-not-found.error';
 import { TemporalWorkflowEngine } from '../../../src/providers/workflow-engine/temporal-workflow.engine';
 
 describe('TemporalWorkflowEngine', () => {
@@ -92,6 +104,34 @@ describe('TemporalWorkflowEngine', () => {
     expect(mockGetHandle).toHaveBeenCalledWith('wf-1');
     expect(handle).toEqual({ id: 'wf-1', status: expected });
   });
+
+  it('should reject with WorkflowEngineNotFoundError when Temporal reports the workflow unknown to it', async () => {
+    const notFound = new WorkflowNotFoundError('workflow not found', 'wf-1', undefined);
+    mockGetHandle.mockReturnValue({ describe: jest.fn().mockRejectedValue(notFound) });
+    const engine = new TemporalWorkflowEngine(config);
+
+    const rejection = engine.status('wf-1');
+
+    await expect(rejection).rejects.toBeInstanceOf(WorkflowEngineNotFoundError);
+    await expect(rejection).rejects.toMatchObject({ workflowId: 'wf-1', cause: notFound });
+  });
+
+  it.each<[string, Error]>([
+    ['a plain Error', new Error('temporal unreachable')],
+    ['NamespaceNotFoundError', new NamespaceNotFoundError('default')],
+    ['ServiceError', new ServiceError('service unavailable')],
+  ])(
+    'should propagate %s from status() unchanged, not as WorkflowEngineNotFoundError',
+    async (_name, error) => {
+      mockGetHandle.mockReturnValue({ describe: jest.fn().mockRejectedValue(error) });
+      const engine = new TemporalWorkflowEngine(config);
+
+      const rejection = engine.status('wf-1');
+
+      await expect(rejection).rejects.toBe(error);
+      await expect(rejection).rejects.not.toBeInstanceOf(WorkflowEngineNotFoundError);
+    },
+  );
 
   it('should signal a running workflow by id, name, and payload', async () => {
     mockGetHandle.mockReturnValue({ signal: mockSignal });

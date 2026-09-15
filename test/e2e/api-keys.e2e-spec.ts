@@ -437,6 +437,29 @@ describe('ApiKeys (e2e)', () => {
       expect(response.status).toBe(404);
     });
 
+    // The key is owned and identifiable, so it is distinguishable from a missing one — 409, not
+    // the 404 an unknown or foreign id returns.
+    it('returns 409 for a key whose expiresAt has passed, backdated through the model directly', async () => {
+      const minted = await request(getTestServer(app))
+        .post('/api/v1/api-keys')
+        .set('Cookie', cookie)
+        .send({ name: 'Expired, then rotate attempt' });
+      const mintedBody = minted.body as MintedKeyBody;
+      await apiKeyModel.updateOne(
+        { _id: mintedBody.id },
+        { $set: { expiresAt: new Date('2020-01-01T00:00:00.000Z') } },
+      );
+
+      const response = await request(getTestServer(app))
+        .post(`/api/v1/api-keys/${mintedBody.id}/rotate`)
+        .set('Cookie', cookie);
+
+      expect(response.status).toBe(409);
+      expect((response.body as { message: string }).message).toBe(
+        `API key '${mintedBody.id}' has expired`,
+      );
+    });
+
     /**
      * The acceptance criterion for rotation, exercised in one lifecycle rather than split across
      * calls to stay inside this suite's shared per-handler request budget (`setup-env.ts`): the

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { WorkflowEngineNotFoundError } from './errors/workflow-engine-not-found.error';
 import type { WorkflowEngine, WorkflowHandle, WorkflowStatus } from './workflow-engine.interface';
 
 /** Test double: in-memory `Map`, starts every workflow as `completed` unless overridden. */
@@ -32,7 +33,7 @@ export class FakeWorkflowEngine implements WorkflowEngine {
   async status(id: string): Promise<WorkflowHandle> {
     const handle = this.handles.get(id);
     if (!handle) {
-      throw new Error(`FakeWorkflowEngine has no workflow with id '${id}'`);
+      throw new WorkflowEngineNotFoundError(id);
     }
     return handle;
   }

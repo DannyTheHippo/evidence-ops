@@ -66,9 +66,17 @@ export interface UpdateSourceInput {
   readonly enabled?: boolean;
   readonly connectivity?: SourceConnectivity;
   readonly reachability?: SourceReachability;
-  readonly owner?: string;
+  readonly owner?: string | null;
   readonly tracked?: boolean;
   readonly sourceClass?: DocumentSourceClass;
+}
+
+export interface SourceLastSyncResult {
+  readonly startedAt?: Date;
+  readonly finishedAt?: Date;
+  readonly status?: 'ok' | 'failed';
+  readonly error?: string;
+  readonly nextSweepAt?: Date;
 }
 
 export interface SourceResult {
@@ -82,6 +90,7 @@ export interface SourceResult {
   readonly lastSyncAt?: Date;
   readonly lastSyncStatus?: string;
   readonly lastSyncError?: string;
+  readonly lastSync?: SourceLastSyncResult;
   readonly fileCount: number;
   readonly connectivity: SourceConnectivity;
   readonly reachability: SourceReachability;
@@ -294,10 +303,13 @@ export class SourcesService {
     const $set: Partial<Record<keyof UpdateSourceInput, unknown>> & {
       previousSourceClass?: DocumentSourceClass;
     } = {};
+    const $unset: Partial<Record<'owner', 1>> = {};
     if (input.enabled !== undefined) $set.enabled = input.enabled;
     if (input.connectivity !== undefined) $set.connectivity = input.connectivity;
     if (input.reachability !== undefined) $set.reachability = input.reachability;
-    if (input.owner !== undefined) $set.owner = input.owner;
+    // `null` clears the field via `$unset`; absent leaves it untouched; a string sets it.
+    if (input.owner === null) $unset.owner = 1;
+    else if (input.owner !== undefined) $set.owner = input.owner;
     if (input.tracked !== undefined) $set.tracked = input.tracked;
     // Stamps `previousSourceClass` only on a genuine change, never on a re-set to the same value —
     // see that field's own doc comment for why a no-op set must leave it untouched.
@@ -310,7 +322,7 @@ export class SourcesService {
 
     const source = await this.sourceModel.findOneAndUpdate(
       { _id: id, tenantId },
-      { $set },
+      { $set, ...(Object.keys($unset).length > 0 ? { $unset } : {}) },
       { new: true },
     );
     if (!source) {
@@ -435,6 +447,8 @@ export class SourcesService {
         workflowType: 'sync-source',
         status: handle.status,
         tenantId,
+        subjectId: id,
+        subjectType: 'Source',
       });
 
       this.logger.debug(`Started syncSource workflow '${handle.id}' for source '${id}'`);
@@ -853,7 +867,7 @@ export class SourcesService {
   ): Promise<SourceDocument | null> {
     return this.sourceModel.findOneAndUpdate(
       { _id: sourceId },
-      { $set: { syncLeaseToken: leaseToken } },
+      { $set: { syncLeaseToken: leaseToken, lastSyncStartedAt: new Date() } },
     );
   }
 
@@ -938,6 +952,7 @@ export class SourcesService {
       lastSyncAt: source.lastSyncAt,
       lastSyncStatus: source.lastSyncStatus,
       lastSyncError: source.lastSyncError,
+      lastSync: this.toLastSyncResult(source),
       fileCount: source.fileStates.length,
       connectivity: source.connectivity,
       reachability: source.reachability,
@@ -946,6 +961,37 @@ export class SourcesService {
       sourceClass: source.sourceClass,
       createdAt: source.createdAt,
     };
+  }
+
+  /**
+   * Derived from stored fields only — never queries the workflow engine, so `toResult` stays
+   * synchronous. `nextSweepAt` approximates "a sync loop is still running" from
+   * `syncWorkflowId`/`enabled`/`tracked`/`kind`/`lastSyncAt`; nothing clears `syncWorkflowId` when
+   * a loop actually exits, so this can still project a time for a source whose loop has stopped.
+   * Returns `undefined` when every member would be absent, so a source with no sync fields
+   * serializes without `lastSync`.
+   */
+  private toLastSyncResult(source: SourceDocument): SourceLastSyncResult | undefined {
+    const nextSweepAt =
+      source.syncWorkflowId &&
+      source.enabled &&
+      source.tracked &&
+      CONNECTOR_SOURCE_KINDS.includes(source.kind) &&
+      source.lastSyncAt
+        ? new Date(
+            source.lastSyncAt.getTime() + (source.intervalMs ?? this.config.sources.syncIntervalMs),
+          )
+        : undefined;
+
+    const result: SourceLastSyncResult = {
+      startedAt: source.lastSyncStartedAt,
+      finishedAt: source.lastSyncAt,
+      status: source.lastSyncStatus as 'ok' | 'failed' | undefined,
+      error: source.lastSyncError,
+      nextSweepAt,
+    };
+
+    return Object.values(result).every((value) => value === undefined) ? undefined : result;
   }
 
   private toResultWithFileStates(source: SourceDocument): SourceWithFileStatesResult {

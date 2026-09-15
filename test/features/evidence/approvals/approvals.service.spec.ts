@@ -174,6 +174,41 @@ describe('ApprovalsService', () => {
         );
       },
     );
+
+    it('should forward dto.workflowId to peekPending, narrowing the filter to one run', async () => {
+      const actorId = new Types.ObjectId().toString();
+      mockApprovalModel.find.mockResolvedValueOnce([]);
+      mockApprovalModel.countDocuments.mockResolvedValueOnce(0);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      await service.listPending({ skip: 0, limit: 20, workflowId: 'wf-1' }, actorId, 'tenant-a');
+
+      expect(mockApprovalModel.find).toHaveBeenCalledWith(
+        { tenantId: 'tenant-a', state: 'pending', workflowId: 'wf-1' },
+        null,
+        { sort: { createdAt: -1 }, skip: 0, limit: 20 },
+      );
+      expect(mockApprovalModel.countDocuments).toHaveBeenCalledWith({
+        tenantId: 'tenant-a',
+        state: 'pending',
+        workflowId: 'wf-1',
+      });
+    });
+
+    it('should forward undefined to peekPending when dto.workflowId is absent', async () => {
+      const actorId = new Types.ObjectId().toString();
+      mockApprovalModel.find.mockResolvedValueOnce([]);
+      mockApprovalModel.countDocuments.mockResolvedValueOnce(0);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      await service.listPending({ skip: 0, limit: 20 }, actorId, 'tenant-a');
+
+      expect(mockApprovalModel.find).toHaveBeenCalledWith(
+        { tenantId: 'tenant-a', state: 'pending' },
+        null,
+        { sort: { createdAt: -1 }, skip: 0, limit: 20 },
+      );
+    });
   });
 
   describe('peekPending', () => {

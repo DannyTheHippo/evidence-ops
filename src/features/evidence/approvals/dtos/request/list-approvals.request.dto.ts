@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsIn, IsOptional } from 'class-validator';
+import { IsIn, IsOptional, IsString } from 'class-validator';
 import {
   APPROVAL_STATES,
   type ApprovalState,
@@ -24,6 +24,17 @@ export class ListApprovalsRequestDto extends PaginationRequestDto {
   @IsOptional()
   @IsIn(APPROVAL_STATES)
   state?: ApprovalState;
+
+  @ApiProperty({
+    example: 'a3f1b2c4-5678-4d9e-9abc-1234567890ab',
+    description:
+      "Narrows the inbox to approvals requested by one workflow. Omit it for the tenant's whole " +
+      'inbox.',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  workflowId?: string;
 
   @ApiProperty({
     example: 'createdAt',

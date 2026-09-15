@@ -4,6 +4,7 @@ import type { AttestationService } from '../features/evidence/attestations/attes
 import { AttestationSubjectRequiredException } from '../features/evidence/attestations/exceptions/attestations.exception';
 import type { ClaimVerificationService } from '../features/evidence/qa/claim-verification.service';
 import type { ConflictsService } from '../features/evidence/conflicts/conflicts.service';
+import { MAX_PERIOD_KEY_LENGTH } from '../features/evidence/facts/derive-period';
 import type { LedgerService } from '../features/evidence/ledger/ledger.service';
 import {
   SEARCH_EVIDENCE_TOOL_NAME,
@@ -380,10 +381,12 @@ export function buildSubmitEvidenceTool(service: EvidenceSubmissionService): Too
 /** Length bounds on `lookup_fact`'s string arguments, mirroring `ASK_EVIDENCE_QUESTION_MAX_LENGTH`'s
  *  role for `ask_evidence` — this channel runs no `ValidationPipe`, so without these the
  *  model-supplied strings this schema validates would be unbounded before ever reaching
- *  `LedgerService.resolveValue`. */
+ *  `LedgerService.resolveValue`. `period` reuses `MAX_PERIOD_KEY_LENGTH` rather than a separately
+ *  chosen number, so it accepts every `factKey.period` value the ledger's own request DTOs accept,
+ *  including the longest `unparseablePeriodKey` form the resolution response can echo back. */
 export const LOOKUP_FACT_ENTITY_MAX_LENGTH = 200;
 export const LOOKUP_FACT_MEASURE_MAX_LENGTH = 100;
-export const LOOKUP_FACT_PERIOD_MAX_LENGTH = 40;
+export const LOOKUP_FACT_PERIOD_MAX_LENGTH = MAX_PERIOD_KEY_LENGTH;
 
 const lookupFactArgsSchema = z.object({
   entity: z.string().min(1).max(LOOKUP_FACT_ENTITY_MAX_LENGTH),

@@ -68,13 +68,15 @@ export class ApprovalsService {
   }
 
   /** The pending inbox: every `Approval` still awaiting a human decision, tenant-scoped —
-   * `dto.state` narrows to a different state instead when given, but defaults to `pending`. */
+   * `dto.state` narrows to a different state instead when given, but defaults to `pending`.
+   * `dto.workflowId` narrows it further to one workflow's own request, matching `peekPending`'s
+   * optional third argument. */
   async listPending(
     dto: ListApprovalsRequestDto,
     actorId: string,
     tenantId: string,
   ): Promise<DocumentResultWithCount<ApprovalResponseDto>> {
-    const result = await this.peekPending(dto, tenantId);
+    const result = await this.peekPending(dto, tenantId, dto.workflowId);
 
     await this.auditService.record({
       action: 'approvals.listed',

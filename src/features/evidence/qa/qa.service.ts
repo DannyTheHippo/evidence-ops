@@ -41,11 +41,13 @@ import { UserRole } from '../../../shared/enums/user-role.enum';
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import { buildCreatedAtRange } from '../../../shared/utils/build-created-at-range.util';
 import { resolveSort } from '../../../shared/utils/resolve-sort.util';
 import { reauthTicks$, shouldRecordStreamView } from '../../../shared/utils/stream-session.util';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import type { AnswerQuestionInput } from '../../../workflows/types';
 import { neutralizeForDisplay } from '../ingestion/sanitize-evidence-text';
+import { WorkflowRunsService } from '../workflow-runs/workflow-runs.service';
 import type { AnswerContract, Citation, VerificationReport } from './contracts/answer.contract';
 import {
   DEFAULT_ANSWER_SORT_DIRECTION,
@@ -133,6 +135,7 @@ export class QaService {
 
     private readonly config: TypedConfigService,
     private readonly auditService: AuditService,
+    private readonly workflowRunsService: WorkflowRunsService,
     private readonly logger: AppLogger,
   ) {
     this.logger.init(QaService.name);
@@ -151,11 +154,30 @@ export class QaService {
       tenantId: input.tenantId,
     });
 
-    await this.workflowEngine.start(ANSWER_QUESTION_WORKFLOW_TYPE, {
+    const handle = await this.workflowEngine.start(ANSWER_QUESTION_WORKFLOW_TYPE, {
       answerId: answer._id.toString(),
       questionText: input.questionText,
       tenantId: input.tenantId,
     } satisfies AnswerQuestionInput);
+
+    // Fails OPEN: the run row is a display projection, same class as `WorkflowRunsService.recordEnd`
+    // (see its own doc comment) — the workflow has already started, so a write failure here must
+    // not turn an otherwise-successful question into a 500.
+    try {
+      await this.workflowRunsService.create({
+        workflowId: handle.id,
+        workflowType: 'answer-question',
+        status: handle.status,
+        tenantId: input.tenantId,
+        subjectId: answer._id.toString(),
+        subjectType: 'Answer',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `Failed to record workflow run for answer '${answer._id.toString()}': ${message}`,
+      );
+    }
 
     await this.auditService.record({
       action: 'qa.question.started',
@@ -229,6 +251,7 @@ export class QaService {
     const filter = {
       tenantId,
       ...(dto.runStatus ? { runStatus: dto.runStatus } : {}),
+      ...buildCreatedAtRange(dto.from, dto.to),
     };
 
     const [answers, count] = await Promise.all([

@@ -320,5 +320,85 @@ describe('AuditEvents (e2e)', () => {
         mcpRow._id.toString(),
       ]);
     });
+
+    it('narrows the result set with the from/to window', async () => {
+      const action = `audit-e2e.window-${new Types.ObjectId().toString()}`;
+      const insideRow = await auditEventModel.create({
+        actor: new Types.ObjectId(),
+        action,
+        subject: { entityType: 'Approval', entityId: new Types.ObjectId() },
+        timestamp: new Date('2026-07-15T00:00:00.000Z'),
+        correlationId: 'corr-window-inside',
+        tenantId,
+      });
+      const outsideRow = await auditEventModel.create({
+        actor: new Types.ObjectId(),
+        action,
+        subject: { entityType: 'Approval', entityId: new Types.ObjectId() },
+        timestamp: new Date('2026-09-01T00:00:00.000Z'),
+        correlationId: 'corr-window-outside',
+        tenantId,
+      });
+      // `create()` ignores an explicit `createdAt` under `timestamps: true`; backdating needs a
+      // follow-up update. `timestamps: true` also treats `createdAt` as insert-only and strips a
+      // plain `$set` on it — `overwriteImmutable` is Mongoose's documented escape hatch to keep
+      // the caller's value on an existing document.
+      await auditEventModel.updateOne(
+        { _id: insideRow._id },
+        { createdAt: new Date('2026-07-15T00:00:00.000Z') },
+        { overwriteImmutable: true },
+      );
+      await auditEventModel.updateOne(
+        { _id: outsideRow._id },
+        { createdAt: new Date('2026-09-01T00:00:00.000Z') },
+        { overwriteImmutable: true },
+      );
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/audit-events')
+        .query({ action, from: '2026-07-01T00:00:00.000Z', to: '2026-08-01T00:00:00.000Z' })
+        .set('Cookie', adminCookie);
+      const body = response.body as { docs: AuditEventBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.count).toBe(1);
+      expect(body.docs[0].id).toBe(insideRow._id.toString());
+    });
+
+    it('returns 400 naming both values when to is earlier than from', async () => {
+      const response = await request(getTestServer(app))
+        .get('/api/v1/audit-events')
+        .query({ from: '2026-08-01T00:00:00.000Z', to: '2026-07-01T00:00:00.000Z' })
+        .set('Cookie', adminCookie);
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual(
+        expect.objectContaining({
+          message: expect.stringContaining('2026-08-01T00:00:00.000Z') as string,
+        }),
+      );
+      expect(response.body).toEqual(
+        expect.objectContaining({
+          message: expect.stringContaining('2026-07-01T00:00:00.000Z') as string,
+        }),
+      );
+    });
+
+    it('returns up to limit=100 rows and rejects limit=101', async () => {
+      const okResponse = await request(getTestServer(app))
+        .get('/api/v1/audit-events')
+        .query({ limit: 100 })
+        .set('Cookie', adminCookie);
+
+      expect(okResponse.status).toBe(200);
+      expect((okResponse.body as { docs: AuditEventBody[] }).docs.length).toBeLessThanOrEqual(100);
+
+      const rejectedResponse = await request(getTestServer(app))
+        .get('/api/v1/audit-events')
+        .query({ limit: 101 })
+        .set('Cookie', adminCookie);
+
+      expect(rejectedResponse.status).toBe(400);
+    });
   });
 });

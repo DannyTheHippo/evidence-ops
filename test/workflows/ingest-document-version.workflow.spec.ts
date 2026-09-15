@@ -16,6 +16,7 @@ interface ActivityStubs {
   recordFactExtractionFailure: jest.Mock;
   requestIngestApproval: jest.Mock;
   getApprovalDecision: jest.Mock;
+  recordWorkflowRunEnd: jest.Mock;
 }
 
 interface ProxyActivitiesOptions {
@@ -50,6 +51,7 @@ jest.mock('@temporalio/workflow', () => {
     recordFactExtractionFailure: jest.fn(),
     requestIngestApproval: jest.fn(),
     getApprovalDecision: jest.fn(),
+    recordWorkflowRunEnd: jest.fn(),
   };
   return {
     activityStubs,
@@ -69,9 +71,10 @@ const { activityStubs, setHandler, condition, workflowInfo } = temporalWorkflowM
 // Captured once, right after the workflow module's own top-level `proxyActivities` calls run
 // (during the `ingestDocumentVersion` import above) and before any `afterEach(jest.resetAllMocks)`
 // wipes `proxyActivities.mock.calls` — a later `describe` block reading `.mock.calls` directly
-// would see an empty array once the first spec's cleanup has run. Order matches the source file's
-// declaration order: ingest, facts, facts-failure recording, conflicts, approval request,
-// approval decision.
+// would see an empty array once the first spec's cleanup has run. Index 0 belongs to `run-
+// recording.ts`'s own `runActivities` group (imported ahead of this file's own activity
+// declarations); indexes 1-6 match the source file's declaration order: ingest, facts,
+// facts-failure recording, conflicts, approval request, approval decision.
 const proxyActivitiesCalls = [...temporalWorkflowMock.proxyActivities.mock.calls];
 
 const ungatedInput: IngestDocumentVersionInput = {
@@ -266,12 +269,92 @@ describe('ingestDocumentVersion', () => {
   });
 });
 
+describe('ingestDocumentVersion run recording', () => {
+  beforeEach(() => {
+    capturedHandler = undefined;
+    setHandler.mockImplementation((_def: unknown, handler: SignalHandler) => {
+      capturedHandler = handler;
+    });
+    activityStubs.ingestDocumentVersion.mockResolvedValue({
+      chunksCreated: 4,
+      alreadyIngested: false,
+    });
+    activityStubs.extractFacts.mockResolvedValue({
+      factsCreated: 4,
+      alreadyExtracted: false,
+      skippedChunkCount: 0,
+      factKeys: extractedFactKeys,
+    });
+    activityStubs.requestIngestApproval.mockResolvedValue({ id: 'approval-1' });
+    workflowInfo.mockReturnValue({ workflowId: 'wf-ingest-1' });
+  });
+
+  afterEach(() => {
+    jest.resetAllMocks();
+  });
+
+  // A gate's `rejected`/`timed_out` verdict lives on `IngestDocumentVersionResult.gateOutcome`
+  // and the `Approval` row, never on the run's `outcome` field — see `runIngestDocumentVersion`'s
+  // own doc comment. Every ordinary ending, gated or not, records `completed` with no `outcome`.
+  it('should record the run completed with no outcome on an ungated upload', async () => {
+    await ingestDocumentVersion(ungatedInput);
+
+    expect(activityStubs.recordWorkflowRunEnd).toHaveBeenCalledWith({
+      workflowId: 'wf-ingest-1',
+      status: 'completed',
+      outcome: undefined,
+    });
+  });
+
+  it('should record the run completed with no outcome when a gate rejects the ingest', async () => {
+    condition.mockImplementation((predicate: () => boolean) => {
+      capturedHandler?.();
+      return predicate();
+    });
+    activityStubs.getApprovalDecision.mockResolvedValue({ decision: 'rejected' });
+
+    await ingestDocumentVersion(gatedInput);
+
+    expect(activityStubs.recordWorkflowRunEnd).toHaveBeenCalledWith({
+      workflowId: 'wf-ingest-1',
+      status: 'completed',
+      outcome: undefined,
+    });
+  });
+
+  it('should record the run completed with no outcome when a gate times out', async () => {
+    condition.mockResolvedValue(false);
+
+    await ingestDocumentVersion(gatedInput);
+
+    expect(activityStubs.recordWorkflowRunEnd).toHaveBeenCalledWith({
+      workflowId: 'wf-ingest-1',
+      status: 'completed',
+      outcome: undefined,
+    });
+  });
+
+  it('should record the run failed with the error message and rethrow when the pipeline throws', async () => {
+    const extractionFailure = new Error('daily spend ceiling reached');
+    activityStubs.extractFacts.mockRejectedValue(extractionFailure);
+    activityStubs.recordFactExtractionFailure.mockResolvedValue(undefined);
+
+    await expect(ingestDocumentVersion(ungatedInput)).rejects.toBe(extractionFailure);
+
+    expect(activityStubs.recordWorkflowRunEnd).toHaveBeenCalledWith({
+      workflowId: 'wf-ingest-1',
+      status: 'failed',
+      errorMessage: 'daily spend ceiling reached',
+    });
+  });
+});
+
 describe('proxyActivities retry configuration', () => {
   // Guards each group's `nonRetryableErrorTypes` against a silent rename of the error class it
   // names — Temporal matches these as plain strings (see the workflow file's own group comments),
   // so a rename that isn't mirrored here would disable the classification without failing tsc.
   it('should apply the declared non-retryable classification to ingestDocumentVersion', () => {
-    const [ingestOptions] = proxyActivitiesCalls[0];
+    const [ingestOptions] = proxyActivitiesCalls[1];
     expect(ingestOptions.retry?.nonRetryableErrorTypes).toEqual([
       ...INGEST_NON_RETRYABLE_ERROR_TYPES,
     ]);
@@ -281,21 +364,21 @@ describe('proxyActivities retry configuration', () => {
   // never delivers cancellation back to it, so `IngestionService`'s catch never records the
   // failure. The pairing is asserted here because nothing in the type system requires it.
   it('should declare a heartbeat timeout for ingestDocumentVersion, under its startToCloseTimeout', () => {
-    const [ingestOptions] = proxyActivitiesCalls[0];
+    const [ingestOptions] = proxyActivitiesCalls[1];
     expect(ingestOptions.heartbeatTimeout).toBe(INGEST_HEARTBEAT_TIMEOUT_MS);
     expect(ingestOptions.startToCloseTimeout).toBe(INGEST_START_TO_CLOSE_TIMEOUT_MS);
     expect(ingestOptions.scheduleToCloseTimeout).toBe(INGEST_SCHEDULE_TO_CLOSE_TIMEOUT_MS);
   });
 
   it('should apply the declared non-retryable classification to extractFacts', () => {
-    const [factsOptions] = proxyActivitiesCalls[1];
+    const [factsOptions] = proxyActivitiesCalls[2];
     expect(factsOptions.retry?.nonRetryableErrorTypes).toEqual([
       ...EXTRACT_FACTS_NON_RETRYABLE_ERROR_TYPES,
     ]);
   });
 
   it('should declare a heartbeat timeout for extractFacts, under its startToCloseTimeout', () => {
-    const [factsOptions] = proxyActivitiesCalls[1];
+    const [factsOptions] = proxyActivitiesCalls[2];
     expect(factsOptions.heartbeatTimeout).toBe(INGEST_HEARTBEAT_TIMEOUT_MS);
     expect(factsOptions.startToCloseTimeout).toBe(EXTRACT_FACTS_START_TO_CLOSE_TIMEOUT_MS);
   });
@@ -324,7 +407,7 @@ describe('proxyActivities retry configuration', () => {
   });
 
   it('should mark a missing tenantId and an unknown version non-retryable for recordFactExtractionFailure', () => {
-    const [factsFailureOptions] = proxyActivitiesCalls[2];
+    const [factsFailureOptions] = proxyActivitiesCalls[3];
     expect(factsFailureOptions.retry?.nonRetryableErrorTypes).toEqual([
       'MissingTenantId',
       'DocumentVersionNotFoundException',
@@ -332,17 +415,17 @@ describe('proxyActivities retry configuration', () => {
   });
 
   it('should mark a missing tenantId non-retryable for scanForConflicts', () => {
-    const [conflictsOptions] = proxyActivitiesCalls[3];
+    const [conflictsOptions] = proxyActivitiesCalls[4];
     expect(conflictsOptions.retry?.nonRetryableErrorTypes).toEqual(['MissingTenantId']);
   });
 
   it('should mark a missing tenantId non-retryable for requestIngestApproval', () => {
-    const [approvalRequestOptions] = proxyActivitiesCalls[4];
+    const [approvalRequestOptions] = proxyActivitiesCalls[5];
     expect(approvalRequestOptions.retry?.nonRetryableErrorTypes).toEqual(['MissingTenantId']);
   });
 
   it('should mark a missing tenantId non-retryable for getApprovalDecision', () => {
-    const [approvalDecisionOptions] = proxyActivitiesCalls[5];
+    const [approvalDecisionOptions] = proxyActivitiesCalls[6];
     expect(approvalDecisionOptions.retry?.nonRetryableErrorTypes).toEqual(['MissingTenantId']);
   });
 });

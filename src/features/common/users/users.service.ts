@@ -20,6 +20,7 @@ import {
 import {
   AdminGuardUnavailableException,
   LastAdminException,
+  SelfRemovalException,
   UserNotFoundException,
 } from './exceptions/users.exception';
 
@@ -178,10 +179,18 @@ export class UsersService {
    * count, or the process dying before commit — rolls the delete back along with it: there is no
    * instant at which a refused removal is durably deleted while its refusal is only decided
    * afterwards, so nothing needs restoring.
+   *
+   * A caller targeting their own id is refused with `SelfRemovalException` before the session
+   * opens: no transaction, no database call and no audit record, since only `LastAdminException`
+   * is audited. That refusal fails closed and applies however many other admins the tenant has.
    */
   async remove(id: string, actorId: string, tenantId: string): Promise<void> {
     if (!Types.ObjectId.isValid(id)) {
       throw new UserNotFoundException(`User '${id}' not found`);
+    }
+
+    if (new Types.ObjectId(id).equals(actorId)) {
+      throw new SelfRemovalException(`User '${id}' cannot remove themselves from the tenant`);
     }
 
     const session = await this.userModel.startSession();

@@ -7,6 +7,7 @@ import { Document } from '../../../../src/database/schemas/evidence/document/doc
 import { DocumentVersion } from '../../../../src/database/schemas/evidence/document-version/document-version.schema';
 import { ExtractedFact } from '../../../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import { CanonicalEntityService } from '../../../../src/features/evidence/facts/canonical-entity.service';
+import { UNDATED_PERIOD } from '../../../../src/features/evidence/facts/derive-period';
 import type { MeasureDefinition } from '../../../../src/features/evidence/measures/measure-definition';
 import { MeasureNotFoundException } from '../../../../src/features/evidence/measures/exceptions/measures.exception';
 import { MeasuresService } from '../../../../src/features/evidence/measures/measures.service';
@@ -319,6 +320,54 @@ describe('LedgerService', () => {
       );
     });
 
+    it('matches the bare undated sentinel verbatim instead of double-prefixing it', async () => {
+      mockMeasuresService.findBySlug.mockResolvedValueOnce(
+        buildMeasureDoc({ status: 'confirmed' }),
+      );
+      mockCanonicalEntityService.resolveMany.mockResolvedValueOnce([
+        { name: 'Northgate Plaza', matched: true },
+      ]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+      mockConflictModel.find.mockResolvedValueOnce([]);
+
+      const result = await service.resolveValue({
+        tenantId: TENANT_ID,
+        entity: 'Northgate Plaza',
+        measure: 'cap_rate',
+        period: UNDATED_PERIOD,
+      });
+
+      expect(result.period).toBe(UNDATED_PERIOD);
+      expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
+        expect.objectContaining({ groupKeyNormalized: 'northgate plaza::cap_rate::undated' }),
+      );
+    });
+
+    it('normalizes an unparseable-text period without doubling the undated: prefix', async () => {
+      mockMeasuresService.findBySlug.mockResolvedValueOnce(
+        buildMeasureDoc({ status: 'confirmed' }),
+      );
+      mockCanonicalEntityService.resolveMany.mockResolvedValueOnce([
+        { name: 'Northgate Plaza', matched: true },
+      ]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+      mockConflictModel.find.mockResolvedValueOnce([]);
+
+      const result = await service.resolveValue({
+        tenantId: TENANT_ID,
+        entity: 'Northgate Plaza',
+        measure: 'cap_rate',
+        period: 'undated:Sold  In Spring',
+      });
+
+      expect(result.period).toBe('undated:sold in spring');
+      expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          groupKeyNormalized: 'northgate plaza::cap_rate::undated:sold in spring',
+        }),
+      );
+    });
+
     it('reports conflicted with the open conflict id, citing every fact it names', async () => {
       mockMeasuresService.findBySlug.mockResolvedValueOnce(
         buildMeasureDoc({ status: 'confirmed' }),
@@ -456,6 +505,34 @@ describe('LedgerService', () => {
           'factKey.metric': 'cap_rate',
           'factKey.period': '2025-03',
         }),
+      );
+    });
+
+    it('matches the undated period verbatim instead of double-prefixing it', async () => {
+      mockMeasuresService.listConfirmedDefinitions.mockResolvedValueOnce([]);
+      mockExtractedFactModel.aggregate.mockResolvedValueOnce([{ docs: [], count: [] }]);
+
+      await service.listCells(TENANT_ID, { period: UNDATED_PERIOD });
+
+      const [pipeline] = mockExtractedFactModel.aggregate.mock.calls[0] as [
+        Record<string, unknown>[],
+      ];
+      expect(pipeline[0].$match).toEqual(
+        expect.objectContaining({ 'factKey.period': UNDATED_PERIOD }),
+      );
+    });
+
+    it('normalizes an unparseable-text period filter without doubling the undated: prefix', async () => {
+      mockMeasuresService.listConfirmedDefinitions.mockResolvedValueOnce([]);
+      mockExtractedFactModel.aggregate.mockResolvedValueOnce([{ docs: [], count: [] }]);
+
+      await service.listCells(TENANT_ID, { period: 'undated:Sold  In Spring' });
+
+      const [pipeline] = mockExtractedFactModel.aggregate.mock.calls[0] as [
+        Record<string, unknown>[],
+      ];
+      expect(pipeline[0].$match).toEqual(
+        expect.objectContaining({ 'factKey.period': 'undated:sold in spring' }),
       );
     });
 
@@ -745,6 +822,72 @@ describe('LedgerService', () => {
 
       expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
         { tenantId: TENANT_ID, groupKeyNormalized: 'northgate plaza::cap_rate::undated' },
+        null,
+        expect.objectContaining({ sort: { createdAt: -1 } }),
+      );
+    });
+
+    it('builds the identical group key filter for an explicit undated period', async () => {
+      mockCanonicalEntityService.resolveMany.mockResolvedValueOnce([
+        { name: 'Northgate Plaza', matched: true },
+      ]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+      mockExtractedFactModel.countDocuments.mockResolvedValueOnce(0);
+      mockMeasuresService.findBySlug.mockResolvedValueOnce(null);
+
+      await service.listFacts(TENANT_ID, {
+        entity: 'north gate plaza',
+        measure: 'cap_rate',
+        period: 'undated',
+      });
+
+      expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
+        { tenantId: TENANT_ID, groupKeyNormalized: 'northgate plaza::cap_rate::undated' },
+        null,
+        expect.objectContaining({ sort: { createdAt: -1 } }),
+      );
+    });
+
+    it('normalizes an unparseable-text period without doubling the undated: prefix', async () => {
+      mockCanonicalEntityService.resolveMany.mockResolvedValueOnce([
+        { name: 'Northgate Plaza', matched: true },
+      ]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+      mockExtractedFactModel.countDocuments.mockResolvedValueOnce(0);
+      mockMeasuresService.findBySlug.mockResolvedValueOnce(null);
+
+      await service.listFacts(TENANT_ID, {
+        entity: 'north gate plaza',
+        measure: 'cap_rate',
+        period: 'undated:Sold  In Spring',
+      });
+
+      expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
+        {
+          tenantId: TENANT_ID,
+          groupKeyNormalized: 'northgate plaza::cap_rate::undated:sold in spring',
+        },
+        null,
+        expect.objectContaining({ sort: { createdAt: -1 } }),
+      );
+    });
+
+    it('still routes a real period through parsePeriod', async () => {
+      mockCanonicalEntityService.resolveMany.mockResolvedValueOnce([
+        { name: 'Northgate Plaza', matched: true },
+      ]);
+      mockExtractedFactModel.find.mockResolvedValueOnce([]);
+      mockExtractedFactModel.countDocuments.mockResolvedValueOnce(0);
+      mockMeasuresService.findBySlug.mockResolvedValueOnce(null);
+
+      await service.listFacts(TENANT_ID, {
+        entity: 'north gate plaza',
+        measure: 'cap_rate',
+        period: '2026-Q1',
+      });
+
+      expect(mockExtractedFactModel.find).toHaveBeenCalledWith(
+        { tenantId: TENANT_ID, groupKeyNormalized: 'northgate plaza::cap_rate::2026-Q1' },
         null,
         expect.objectContaining({ sort: { createdAt: -1 } }),
       );

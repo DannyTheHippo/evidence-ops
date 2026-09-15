@@ -83,7 +83,7 @@ export class UsersController {
   @RequireRole(UserRole.Admin)
   @ApiResponse(usersApiExamples.removed)
   @ApiResponse(usersApiExamples.notFound)
-  @ApiResponse(usersApiExamples.lastAdmin)
+  @ApiResponse(usersApiExamples.removeConflict)
   @ApiResponse(usersApiExamples.forbidden)
   async remove(
     @Param('id') id: string,

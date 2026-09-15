@@ -15,6 +15,7 @@ interface ActivityStubs {
   groundingCheck: jest.Mock;
   persistAnswer: jest.Mock;
   resolveFromLedger: jest.Mock;
+  recordWorkflowRunEnd: jest.Mock;
 }
 
 interface ProxyActivitiesOptions {
@@ -27,6 +28,7 @@ interface MockedTemporalWorkflow {
   activityStubs: ActivityStubs;
   proxyActivities: jest.Mock<unknown, [ProxyActivitiesOptions]>;
   log: { warn: jest.Mock; info: jest.Mock };
+  workflowInfo: jest.Mock;
 }
 
 /**
@@ -45,24 +47,28 @@ jest.mock('@temporalio/workflow', () => {
     groundingCheck: jest.fn(),
     persistAnswer: jest.fn(),
     resolveFromLedger: jest.fn(),
+    recordWorkflowRunEnd: jest.fn(),
   };
   return {
     activityStubs,
     proxyActivities: jest.fn(() => activityStubs),
     log: { warn: jest.fn(), info: jest.fn() },
+    workflowInfo: jest.fn(() => ({ workflowId: 'wf-1' })),
   };
 });
 
 const temporalWorkflowMock = jest.requireMock(
   '@temporalio/workflow',
 ) as unknown as MockedTemporalWorkflow;
-const { activityStubs, log } = temporalWorkflowMock;
+const { activityStubs, log, workflowInfo } = temporalWorkflowMock;
 
 // Captured once, right after the workflow module's own top-level `proxyActivities` calls run
 // (during the `answerQuestion` import above) and before any `afterEach(jest.resetAllMocks)`
 // wipes `proxyActivities.mock.calls` — a later `describe` block reading `.mock.calls` directly
-// would see an empty array once the first spec's cleanup has run. Order matches the source file's
-// declaration order: retrieval, synthesis, decomposition, contradiction, grounding, persist.
+// would see an empty array once the first spec's cleanup has run. Index 0 belongs to `run-
+// recording.ts`'s own `runActivities` group (imported ahead of this file's own activity
+// declarations); indexes 1-7 match the source file's declaration order: retrieval, synthesis,
+// decomposition, contradiction, grounding, persist, ledger.
 const proxyActivitiesCalls = [...temporalWorkflowMock.proxyActivities.mock.calls];
 
 const input: AnswerQuestionInput = {
@@ -70,6 +76,13 @@ const input: AnswerQuestionInput = {
   questionText: 'What is the cap rate?',
   tenantId: 'acme-corp',
 };
+
+// `resetAllMocks()` (every `afterEach` below) wipes `jest.mock`'s factory-time implementation —
+// must be re-set before each test (`jest-tests.md`'s own convention for a `jest.fn` carrying an
+// implementation).
+beforeEach(() => {
+  workflowInfo.mockReturnValue({ workflowId: 'wf-1' });
+});
 
 describe('answerQuestion', () => {
   beforeEach(() => {
@@ -265,7 +278,7 @@ describe('proxyActivities retry configuration', () => {
   // names — Temporal matches these as plain strings (see the workflow file's own group comments),
   // so a rename that isn't mirrored here would disable the classification without failing tsc.
   it("should mark a missing tenantId and Voyage's deterministic failures non-retryable for retrieveEvidence", () => {
-    const [retrievalOptions] = proxyActivitiesCalls[0];
+    const [retrievalOptions] = proxyActivitiesCalls[1];
     expect(retrievalOptions.retry?.nonRetryableErrorTypes).toEqual([
       'MissingTenantId',
       'VoyageApiKeyMissingError',
@@ -274,7 +287,7 @@ describe('proxyActivities retry configuration', () => {
   });
 
   it('should mark the budget, pricing, schema-validation, truncation, and spend-guard failures non-retryable for synthesizeAnswer', () => {
-    const [synthesisOptions] = proxyActivitiesCalls[1];
+    const [synthesisOptions] = proxyActivitiesCalls[2];
     expect(synthesisOptions.retry?.nonRetryableErrorTypes).toEqual([
       'ModelBudgetExceededError',
       'UnknownModelPricingError',
@@ -286,7 +299,7 @@ describe('proxyActivities retry configuration', () => {
   });
 
   it("should mark the budget, pricing, schema-validation, truncation, and spend-guard failures non-retryable for decomposeClaims, matching synthesizeAnswer's set", () => {
-    const [decompositionOptions] = proxyActivitiesCalls[2];
+    const [decompositionOptions] = proxyActivitiesCalls[3];
     expect(decompositionOptions.retry?.nonRetryableErrorTypes).toEqual([
       'ModelBudgetExceededError',
       'UnknownModelPricingError',
@@ -298,7 +311,7 @@ describe('proxyActivities retry configuration', () => {
   });
 
   it("should mark the budget, pricing, schema-validation, truncation, and spend-guard failures non-retryable for checkContradictions, matching synthesizeAnswer's set", () => {
-    const [contradictionOptions] = proxyActivitiesCalls[3];
+    const [contradictionOptions] = proxyActivitiesCalls[4];
     expect(contradictionOptions.retry?.nonRetryableErrorTypes).toEqual([
       'ModelBudgetExceededError',
       'UnknownModelPricingError',
@@ -310,17 +323,17 @@ describe('proxyActivities retry configuration', () => {
   });
 
   it('should mark a missing tenantId non-retryable for groundingCheck', () => {
-    const [groundingOptions] = proxyActivitiesCalls[4];
+    const [groundingOptions] = proxyActivitiesCalls[5];
     expect(groundingOptions.retry?.nonRetryableErrorTypes).toEqual(['MissingTenantId']);
   });
 
   it('should mark a missing tenantId non-retryable for persistAnswer', () => {
-    const [persistOptions] = proxyActivitiesCalls[5];
+    const [persistOptions] = proxyActivitiesCalls[6];
     expect(persistOptions.retry?.nonRetryableErrorTypes).toEqual(['MissingTenantId']);
   });
 
   it('should mark a missing tenantId non-retryable for resolveFromLedger', () => {
-    const [ledgerOptions] = proxyActivitiesCalls[6];
+    const [ledgerOptions] = proxyActivitiesCalls[7];
     expect(ledgerOptions.retry?.nonRetryableErrorTypes).toEqual(['MissingTenantId']);
   });
 
@@ -328,9 +341,9 @@ describe('proxyActivities retry configuration', () => {
   // declare one — a group that runs past `heartbeatTimeout` without pumping is failed by Temporal
   // as unresponsive while it is in fact working.
   it.each<[string, number, number]>([
-    ['synthesis', 1, SYNTHESIZE_ANSWER_START_TO_CLOSE_TIMEOUT_MS],
-    ['decomposition', 2, DECOMPOSE_CLAIMS_START_TO_CLOSE_TIMEOUT_MS],
-    ['contradiction', 3, CHECK_CONTRADICTIONS_START_TO_CLOSE_TIMEOUT_MS],
+    ['synthesis', 2, SYNTHESIZE_ANSWER_START_TO_CLOSE_TIMEOUT_MS],
+    ['decomposition', 3, DECOMPOSE_CLAIMS_START_TO_CLOSE_TIMEOUT_MS],
+    ['contradiction', 4, CHECK_CONTRADICTIONS_START_TO_CLOSE_TIMEOUT_MS],
   ])(
     'should declare a heartbeat timeout for the %s group, under its startToCloseTimeout',
     (_name, index, expectedStartToClose) => {
@@ -516,5 +529,55 @@ describe('answerQuestion ledger-first branch', () => {
     expect(activityStubs.persistAnswer).toHaveBeenCalledWith(
       expect.objectContaining({ conflictIds: ['conflict-1'], answerPath: 'ledger' }),
     );
+  });
+});
+
+describe('answerQuestion run recording', () => {
+  beforeEach(() => {
+    activityStubs.resolveFromLedger.mockResolvedValue({ kind: 'unresolved', reason: 'no-entity' });
+    activityStubs.retrieveEvidence.mockResolvedValue([{ chunkId: 'chunk-1' }]);
+    activityStubs.synthesizeAnswer.mockResolvedValue({
+      contract: { kind: 'insufficient_evidence', reason: 'none' },
+      usage: { promptTokens: 10, completionTokens: 5, costUsd: 0.001 },
+    });
+    activityStubs.decomposeClaims.mockResolvedValue({ atoms: [] });
+    activityStubs.checkContradictions.mockResolvedValue({ contradictedClaimIndexes: [] });
+    activityStubs.groundingCheck.mockResolvedValue({
+      outcome: { kind: 'insufficient_evidence', reason: 'no supporting evidence' },
+      claims: [],
+    });
+    activityStubs.persistAnswer.mockResolvedValue({
+      answerId: 'answer-1',
+      outcomeKind: 'insufficient_evidence',
+    });
+  });
+
+  afterEach(() => {
+    jest.resetAllMocks();
+  });
+
+  // `answer-question` carries no outcome vocabulary of its own — `withRunRecording` is called
+  // with no `toOutcome`, so a successful run's row carries no `outcome` field.
+  it('should record the run completed with no outcome on an ordinary ending', async () => {
+    await answerQuestion(input);
+
+    expect(activityStubs.recordWorkflowRunEnd).toHaveBeenCalledWith({
+      workflowId: 'wf-1',
+      status: 'completed',
+      outcome: undefined,
+    });
+  });
+
+  it('should record the run failed with the error message and rethrow when an activity throws', async () => {
+    const synthesisFailure = new Error('model provider unreachable');
+    activityStubs.synthesizeAnswer.mockRejectedValue(synthesisFailure);
+
+    await expect(answerQuestion(input)).rejects.toBe(synthesisFailure);
+
+    expect(activityStubs.recordWorkflowRunEnd).toHaveBeenCalledWith({
+      workflowId: 'wf-1',
+      status: 'failed',
+      errorMessage: 'model provider unreachable',
+    });
   });
 });

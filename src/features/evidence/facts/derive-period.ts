@@ -55,6 +55,14 @@ export const UNPARSEABLE_PERIOD_PREFIX = 'undated:';
  * source text inside it could exceed the index key limit and fail the write. */
 const UNPARSEABLE_TEXT_BUDGET = 64;
 
+/** Upper bound on any key {@link unparseablePeriodKey} can produce: the prefix, the budgeted text,
+ * a `#` separator, and the 16-hex-character digest suffix. Every entry point that accepts a raw
+ * period string back from a caller — the ledger request DTOs, the MCP `lookup_fact` schema —
+ * validates against this constant rather than a separately chosen number, so an accepted input and
+ * a storable key never diverge. */
+export const MAX_PERIOD_KEY_LENGTH =
+  UNPARSEABLE_PERIOD_PREFIX.length + UNPARSEABLE_TEXT_BUDGET + 1 + 16;
+
 /** Years outside this window in free text are far more often an identifier — a suite number, a
  * part code — than a period, so a bare four-digit token is only read as a year inside it. Refusing
  * outside it costs a period that would have had to be stated as `YYYY-MM` to be trusted anyway. */

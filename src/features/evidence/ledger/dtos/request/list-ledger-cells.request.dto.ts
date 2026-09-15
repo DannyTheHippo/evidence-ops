@@ -2,6 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 import { SORT_DIRECTIONS, type SortDirection } from '../../../../../shared/constants/sort.constant';
 import { PaginationRequestDto } from '../../../../../shared/dtos/request/pagination.request.dto';
+import { MAX_PERIOD_KEY_LENGTH } from '../../../facts/derive-period';
 import { LEDGER_STATES, type LedgerState } from '../../resolve-cell';
 
 /** A measure is addressed by its slug, so the filter carries the slug grammar `Measure.slug`
@@ -50,7 +51,7 @@ export class ListLedgerCellsRequestDto extends PaginationRequestDto {
   })
   @IsOptional()
   @IsString()
-  @MaxLength(64)
+  @MaxLength(MAX_PERIOD_KEY_LENGTH)
   period?: string;
 
   @ApiProperty({

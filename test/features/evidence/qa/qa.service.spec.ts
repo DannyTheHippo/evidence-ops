@@ -10,6 +10,7 @@ import { DocumentVersion } from '../../../../src/database/schemas/evidence/docum
 import { AnswerNotFoundException } from '../../../../src/features/evidence/qa/exceptions/qa.exception';
 import { ANSWER_STREAM_INTERVAL_MS } from '../../../../src/features/evidence/qa/qa.constant';
 import { QaService } from '../../../../src/features/evidence/qa/qa.service';
+import { WorkflowRunsService } from '../../../../src/features/evidence/workflow-runs/workflow-runs.service';
 import { WORKFLOW_ENGINE } from '../../../../src/providers/workflow-engine/workflow-engine.interface';
 import {
   SSE_HEARTBEAT_INTERVAL_MS,
@@ -32,6 +33,7 @@ describe('QaService', () => {
   const mockDocumentVersionModel = getMockModel();
   const mockWorkflowEngine = { start: jest.fn(), status: jest.fn() };
   const mockAuditService = { record: jest.fn() };
+  const mockWorkflowRunsService = { create: jest.fn() };
   const mockLogger = getMockLogger();
 
   beforeEach(async () => {
@@ -44,6 +46,7 @@ describe('QaService', () => {
         { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
         { provide: TypedConfigService, useValue: getMockTypedConfig() },
         { provide: AuditService, useValue: mockAuditService },
+        { provide: WorkflowRunsService, useValue: mockWorkflowRunsService },
         { provide: AppLogger, useValue: mockLogger },
       ],
     }).compile();
@@ -56,11 +59,12 @@ describe('QaService', () => {
   });
 
   describe('startQuestion', () => {
-    it('should create a queued Answer, start the workflow, and record an audit event', async () => {
+    it('should create a queued Answer, start the workflow, record a workflow run, and record an audit event', async () => {
       const answerId = new Types.ObjectId();
       const actorId = new Types.ObjectId().toString();
       mockAnswerModel.create.mockResolvedValueOnce({ _id: answerId, runStatus: 'queued' });
       mockWorkflowEngine.start.mockResolvedValueOnce({ id: 'wf-1', status: 'running' });
+      mockWorkflowRunsService.create.mockResolvedValueOnce({ id: 'run-1' });
       mockAuditService.record.mockResolvedValueOnce(undefined);
 
       const result = await service.startQuestion({
@@ -80,12 +84,70 @@ describe('QaService', () => {
         questionText: 'What is the cap rate?',
         tenantId: 'tenant-a',
       });
+      expect(mockWorkflowRunsService.create).toHaveBeenCalledWith({
+        workflowId: 'wf-1',
+        workflowType: 'answer-question',
+        status: 'running',
+        tenantId: 'tenant-a',
+        subjectId: answerId.toString(),
+        subjectType: 'Answer',
+      });
       expect(mockAuditService.record).toHaveBeenCalledWith({
         action: 'qa.question.started',
         actorId,
         subject: { entityType: 'Answer', entityId: answerId.toString() },
         tenantId: 'tenant-a',
       });
+      expect(result).toEqual({ id: answerId.toString(), runStatus: 'queued' });
+    });
+
+    it('should still return the answer and record the audit event when recording the workflow run fails with an Error', async () => {
+      const answerId = new Types.ObjectId();
+      const actorId = new Types.ObjectId().toString();
+      mockAnswerModel.create.mockResolvedValueOnce({ _id: answerId, runStatus: 'queued' });
+      mockWorkflowEngine.start.mockResolvedValueOnce({ id: 'wf-1', status: 'running' });
+      mockWorkflowRunsService.create.mockRejectedValueOnce(new Error('write failed'));
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      const result = await service.startQuestion({
+        questionText: 'What is the cap rate?',
+        actorId,
+        role: UserRole.Member,
+        tenantId: 'tenant-a',
+      });
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        `Failed to record workflow run for answer '${answerId.toString()}': write failed`,
+      );
+      expect(mockAuditService.record).toHaveBeenCalledWith({
+        action: 'qa.question.started',
+        actorId,
+        subject: { entityType: 'Answer', entityId: answerId.toString() },
+        tenantId: 'tenant-a',
+      });
+      expect(result).toEqual({ id: answerId.toString(), runStatus: 'queued' });
+    });
+
+    // Mongoose never guarantees the rejection is an `Error` instance — this covers the
+    // `String(error)` branch of `error instanceof Error ? error.message : String(error)`.
+    it('should still return the answer when recording the workflow run fails with a non-Error rejection', async () => {
+      const answerId = new Types.ObjectId();
+      const actorId = new Types.ObjectId().toString();
+      mockAnswerModel.create.mockResolvedValueOnce({ _id: answerId, runStatus: 'queued' });
+      mockWorkflowEngine.start.mockResolvedValueOnce({ id: 'wf-1', status: 'running' });
+      mockWorkflowRunsService.create.mockRejectedValueOnce('a plain string rejection');
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      const result = await service.startQuestion({
+        questionText: 'What is the cap rate?',
+        actorId,
+        role: UserRole.Member,
+        tenantId: 'tenant-a',
+      });
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        `Failed to record workflow run for answer '${answerId.toString()}': a plain string rejection`,
+      );
       expect(result).toEqual({ id: answerId.toString(), runStatus: 'queued' });
     });
   });
@@ -522,6 +584,31 @@ describe('QaService', () => {
       await service.listByTenant({ skip: 0, limit: 20, runStatus: 'failed' }, 'actor', 'tenant-a');
 
       const expectedFilter = { tenantId: 'tenant-a', runStatus: 'failed' };
+      expect(mockAnswerModel.find).toHaveBeenCalledWith(expectedFilter, null, {
+        sort: { createdAt: -1 },
+        skip: 0,
+        limit: 20,
+      });
+      expect(mockAnswerModel.countDocuments).toHaveBeenCalledWith(expectedFilter);
+    });
+
+    it('should carry the createdAt range when from and to are given', async () => {
+      mockAnswerModel.find.mockResolvedValueOnce([]);
+      mockAnswerModel.countDocuments.mockResolvedValueOnce(0);
+
+      await service.listByTenant(
+        { skip: 0, limit: 20, from: '2026-07-01T00:00:00.000Z', to: '2026-08-01T00:00:00.000Z' },
+        'actor',
+        'tenant-a',
+      );
+
+      const expectedFilter = {
+        tenantId: 'tenant-a',
+        createdAt: {
+          $gte: new Date('2026-07-01T00:00:00.000Z'),
+          $lt: new Date('2026-08-01T00:00:00.000Z'),
+        },
+      };
       expect(mockAnswerModel.find).toHaveBeenCalledWith(expectedFilter, null, {
         sort: { createdAt: -1 },
         skip: 0,

@@ -88,6 +88,7 @@ describe('SourcesService', () => {
     syncWorkflowId: undefined,
     syncLeaseToken: undefined,
     lastSyncAt: undefined,
+    lastSyncStartedAt: undefined,
     lastSyncStatus: undefined,
     lastSyncError: undefined,
     fileStates: [],
@@ -614,6 +615,19 @@ describe('SourcesService', () => {
         { new: true },
       );
     });
+
+    it('should $unset owner, not $set it, when owner is explicitly null', async () => {
+      mockSourceModel.findOne.mockResolvedValueOnce(buildMockSource({ owner: 'Jane Doe, IT' }));
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(buildMockSource({ owner: undefined }));
+
+      await service.update(sourceId.toString(), { owner: null }, actorId, 'tenant-a');
+
+      expect(mockSourceModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: sourceId.toString(), tenantId: 'tenant-a' },
+        { $set: {}, $unset: { owner: 1 } },
+        { new: true },
+      );
+    });
   });
 
   describe('getClassDriftReport', () => {
@@ -753,6 +767,8 @@ describe('SourcesService', () => {
         workflowType: 'sync-source',
         status: 'running',
         tenantId: 'tenant-a',
+        subjectId: sourceId.toString(),
+        subjectType: 'Source',
       });
       expect(mockAuditService.record).toHaveBeenCalledWith({
         action: 'sources.sync_requested',
@@ -835,6 +851,84 @@ describe('SourcesService', () => {
     });
   });
 
+  describe('lastSync projection', () => {
+    const listOne = async (overrides: Record<string, unknown>) => {
+      mockSourceModel.find.mockResolvedValueOnce([buildMockSource(overrides)]);
+      mockSourceModel.countDocuments.mockResolvedValueOnce(1);
+      const result = await service.list({ skip: 0, limit: 20 }, actorId, 'tenant-a');
+      return result.docs[0];
+    };
+
+    const readyOverrides = {
+      syncWorkflowId: 'wf-sync-1',
+      enabled: true,
+      tracked: true,
+      kind: 'local-folder',
+      lastSyncAt: new Date('2026-07-01T00:00:00.000Z'),
+      lastSyncStartedAt: new Date('2026-06-30T23:59:00.000Z'),
+      lastSyncStatus: 'ok',
+    };
+
+    it('should be absent entirely on a never-synced source', async () => {
+      const doc = await listOne({});
+
+      expect(doc.lastSync).toBeUndefined();
+    });
+
+    it('should project nextSweepAt when every condition holds', async () => {
+      const doc = await listOne(readyOverrides);
+
+      expect(doc.lastSync).toEqual({
+        startedAt: readyOverrides.lastSyncStartedAt,
+        finishedAt: readyOverrides.lastSyncAt,
+        status: 'ok',
+        error: undefined,
+        nextSweepAt: new Date(
+          readyOverrides.lastSyncAt.getTime() + getMockTypedConfig().sources.syncIntervalMs,
+        ),
+      });
+    });
+
+    it('should use the source-level intervalMs override when present', async () => {
+      const doc = await listOne({ ...readyOverrides, intervalMs: 5000 });
+
+      expect(doc.lastSync?.nextSweepAt).toEqual(
+        new Date(readyOverrides.lastSyncAt.getTime() + 5000),
+      );
+    });
+
+    it('should omit nextSweepAt when syncWorkflowId is absent', async () => {
+      const doc = await listOne({ ...readyOverrides, syncWorkflowId: undefined });
+
+      expect(doc.lastSync?.nextSweepAt).toBeUndefined();
+    });
+
+    it('should omit nextSweepAt when the source is disabled', async () => {
+      const doc = await listOne({ ...readyOverrides, enabled: false });
+
+      expect(doc.lastSync?.nextSweepAt).toBeUndefined();
+    });
+
+    it('should omit nextSweepAt when the source is not tracked', async () => {
+      const doc = await listOne({ ...readyOverrides, tracked: false });
+
+      expect(doc.lastSync?.nextSweepAt).toBeUndefined();
+    });
+
+    it('should omit nextSweepAt for a kind with no connector', async () => {
+      const doc = await listOne({ ...readyOverrides, kind: 'mcp-submit' });
+
+      expect(doc.lastSync?.nextSweepAt).toBeUndefined();
+    });
+
+    it('should omit nextSweepAt when lastSyncAt is absent', async () => {
+      const doc = await listOne({ ...readyOverrides, lastSyncAt: undefined });
+
+      expect(doc.lastSync?.nextSweepAt).toBeUndefined();
+      expect(doc.lastSync?.startedAt).toEqual(readyOverrides.lastSyncStartedAt);
+    });
+  });
+
   describe('runSync', () => {
     const leaseToken = new Types.ObjectId();
 
@@ -844,6 +938,21 @@ describe('SourcesService', () => {
       const result = await service.runSync(sourceId.toString(), leaseToken);
 
       expect(result).toEqual({ disabled: true, intervalMs: null });
+    });
+
+    it('should stamp lastSyncStartedAt on the claim, even for a source that exits at a guard', async () => {
+      mockSourceModel.findOneAndUpdate.mockResolvedValueOnce(buildMockSource({ enabled: false }));
+
+      await service.runSync(sourceId.toString(), leaseToken);
+
+      expect(mockSourceModel.findOneAndUpdate).toHaveBeenNthCalledWith(
+        1,
+        { _id: sourceId },
+        // Recast rather than bare `expect.any(Date)` inside the object literal — its `any`-typed
+        // return trips `no-unsafe-assignment`, same reasoning `ingestion.service.spec.ts`'s
+        // `getFindOneAndUpdateCall` documents for its own identical case.
+        { $set: { syncLeaseToken: leaseToken, lastSyncStartedAt: expect.any(Date) as Date } },
+      );
     });
 
     it('should report disabled and exit without listing files when the source is disabled', async () => {

@@ -22,9 +22,11 @@ import { User, UserDocument } from '../../../database/schemas/administration/use
 import {
   WorkflowRun,
   WorkflowRunDocument,
+  type WorkflowRunOutcome,
   type WorkflowRunStatus,
   type WorkflowRunType,
 } from '../../../database/schemas/workflow/workflow-run/workflow-run.schema';
+import { WorkflowEngineNotFoundError } from '../../../providers/workflow-engine/errors/workflow-engine-not-found.error';
 import {
   WORKFLOW_ENGINE,
   type WorkflowEngine,
@@ -42,6 +44,7 @@ import {
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import { buildCreatedAtRange } from '../../../shared/utils/build-created-at-range.util';
 import { resolveSort } from '../../../shared/utils/resolve-sort.util';
 import { reauthTicks$, shouldRecordStreamView } from '../../../shared/utils/stream-session.util';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
@@ -77,17 +80,42 @@ export interface WorkflowRunResult {
   readonly workflowType?: WorkflowRunType;
   readonly status: WorkflowRunStatus;
   readonly errorMessage?: string;
+  readonly outcome?: WorkflowRunOutcome;
   readonly subjectId?: string;
   readonly subjectType?: string;
+  /** Set by `peekRun` alone — `true` when the stored status is non-terminal and the live engine
+   *  reported the workflow not-found, `false` for every other outcome `peekRun` handles. Left
+   *  `undefined` by every other builder of this type (`create`, `listByWorkflowId`,
+   *  `findRunByWorkflowId`), which never call the engine, so the field is absent from their
+   *  responses rather than asserting a freshness they never checked. */
+  readonly stale?: boolean;
   readonly createdAt: Date;
+}
+
+/** `WorkflowRunsService.recordEnd`'s input — the terminal write an activity makes once a
+ *  workflow reaches an ordinary end. */
+export interface RecordWorkflowRunEndInput {
+  readonly workflowId: string;
+  readonly status: 'completed' | 'failed';
+  readonly errorMessage?: string;
+  readonly outcome?: WorkflowRunOutcome;
 }
 
 const isTerminalWorkflowRunStatus = (status: WorkflowRunStatus): boolean =>
   status === 'completed' || status === 'failed';
 
-// Internal to `streamRun` only. `approvals` carries the whole pending-approval inbox (the same
-// `{docs,count}` shape `GET /approvals` returns), not a single approval matched to this run — see
-// `streamRun`'s own doc comment for why.
+// `getLiveStatus`'s settled outcome — a discriminated union rather than `WorkflowRunStatus |
+// undefined` so `peekRun` can tell a definite "not known to the engine" answer apart from every
+// other failure (unreachable, timed out, auth) without re-inspecting the rejected error itself.
+type LiveStatusLookup =
+  | { readonly kind: 'live'; readonly status: WorkflowRunStatus }
+  | { readonly kind: 'not-found' }
+  | { readonly kind: 'engine-error' };
+
+// Internal to `streamRun` only. `approvals` carries this run's own pending approval, scoped by
+// `workflowId` — the same `{docs,count}` shape `GET /approvals` returns, filtered to this run
+// rather than the tenant's whole pending-approval inbox — see `streamRun`'s own doc comment for
+// why.
 type WorkflowRunStreamEvent =
   | { type: 'run'; data: WorkflowRunResponseDto }
   | { type: 'approvals'; data: { docs: ApprovalResponseDto[]; count: number } }
@@ -101,7 +129,7 @@ export class WorkflowRunsService {
   // accumulating one entry per workflowId the process has ever polled.
   private readonly liveStatusCache = new Map<
     string,
-    { readonly expiresAt: number; readonly statusPromise: Promise<WorkflowRunStatus | undefined> }
+    { readonly expiresAt: number; readonly lookupPromise: Promise<LiveStatusLookup> }
   >();
 
   constructor(
@@ -124,11 +152,12 @@ export class WorkflowRunsService {
 
   /**
    * Creates the durable projection a caller who just started a workflow hands back, so a client
-   * has an id to poll `GET /workflow-runs/:id` with. Two callers write here:
-   * `ConflictsService.requestResolution` (which passes `subjectId`/`subjectType` naming the
-   * `Conflict` being gated) and `SourcesService.requestSync` (which passes neither) —
-   * `answer-question` and `ingest-document-version` run without a projection, so no run row
-   * exists for them either way.
+   * has an id to poll `GET /workflow-runs/:id` with. Four callers write here, one per workflow
+   * type, and each passes `subjectId`/`subjectType` naming the entity the run acts on:
+   * `ConflictsService.requestResolution` (`Conflict`), `SourcesService.requestSync` (`Source`),
+   * `QaService.startQuestion` (`Answer`) and `DocumentsService.uploadVersion` (`DocumentVersion`).
+   * The first two let a failure here propagate; the last two log and swallow it, since their
+   * workflow has already started.
    */
   async create(input: CreateWorkflowRunInput): Promise<WorkflowRunResult> {
     // Written together or not at all, matching the schema field's own invariant (see
@@ -155,11 +184,13 @@ export class WorkflowRunsService {
    * Tenant-scoped read of the durable row, refreshed best-effort against the live engine status.
    * FAILS OPEN on the engine call: `WorkflowEngine.status()` is a measurement of a downstream
    * system's state for display, never a permission gate on anything — a Temporal outage or a
-   * stale/expired handle must not turn a legitimate poll of an already-known run into an error, so
-   * an engine failure is logged and the durable (possibly stale) row is returned as-is. Never
-   * written back to Mongo: this method only merges the live status into the response it returns,
-   * so a GET here stays a read, and the persisted row remains whatever the workflow's own
-   * activities last recorded.
+   * stale/expired handle must not turn a legitimate poll of an already-known run into an error.
+   * The engine reporting the workflow unknown to it falls back to the durable status silently (no
+   * log) and sets `stale`; every other engine failure logs a warning and falls back to the durable
+   * status with `stale: false` — see `peekRun`'s own doc comment for the exact rule. Never written
+   * back to Mongo: this method only merges the live status into the response it returns, so a GET
+   * here stays a read, and the persisted row remains whatever the workflow's own activities last
+   * recorded.
    */
   async findById(id: string, actorId: string, tenantId: string): Promise<WorkflowRunResult> {
     const result = await this.peekRun(id, tenantId);
@@ -182,6 +213,13 @@ export class WorkflowRunsService {
    * refresh `findById` documented above — the SSE `run` event must match the polled GET
    * byte-for-byte, so this cannot skip that step.
    *
+   * The result's `stale` flag is `true` exactly when the row is still non-terminal and the engine
+   * positively reports the workflow unknown to it — a workflow whose history fell out of
+   * retention after it ended through a path that never recorded its end (see `recordEnd`). The
+   * reported `status` stays the durable row's value in that case, same as any other engine
+   * failure; `stale` is `false` for a terminal row, a live answer, or a non-not-found engine
+   * failure. Never written back to Mongo either way.
+   *
    * `streamRun`'s opening record (below) is the other writer of this action, deduped via
    * `shouldRecordStreamView`.
    */
@@ -195,9 +233,14 @@ export class WorkflowRunsService {
       throw new WorkflowRunNotFoundException(`WorkflowRun '${id}' not found`);
     }
 
-    const liveStatus = await this.getLiveStatus(run.workflowId, id);
+    const lookup = await this.getLiveStatus(run.workflowId, id);
+    // Stale exactly when the row is still queued or running but the engine has positively said it
+    // does not know this workflow — a terminal row or a live answer is never stale, and an engine
+    // failure other than not-found stays fail-open with no freshness claim either way.
+    const stale = !isTerminalWorkflowRunStatus(run.status) && lookup.kind === 'not-found';
+    const status = lookup.kind === 'live' ? lookup.status : run.status;
 
-    return this.toResult(run, liveStatus ?? run.status);
+    return this.toResult(run, status, stale);
   }
 
   /**
@@ -210,12 +253,13 @@ export class WorkflowRunsService {
    * the engine again; a miss issues one new call and caches it — resolved or rejected — for
    * `WORKFLOW_RUN_ENGINE_STATUS_CACHE_MS`, so every concurrent `peekRun` caller for the same run
    * (parallel `streamRun` ticks, parallel open tabs, a `findById` landing mid-window) shares that
-   * one call instead of each issuing its own. FAILS OPEN on the engine call, same direction as
-   * `peekRun`'s own doc comment: `undefined` tells the caller to fall back to the durable row's
-   * status rather than surfacing an error, and the failure is logged once per cache window rather
-   * than once per caller.
+   * one call instead of each issuing its own. A `WorkflowEngineNotFoundError` settles the cache to
+   * `{ kind: 'not-found' }` — a definite answer, cached for the same window as a live status. Every
+   * other rejection FAILS OPEN, same direction as `peekRun`'s own doc comment: `{ kind:
+   * 'engine-error' }` tells the caller to fall back to the durable row's status rather than
+   * surfacing an error, and the failure is logged once per cache window rather than once per caller.
    */
-  private getLiveStatus(workflowId: string, runId: string): Promise<WorkflowRunStatus | undefined> {
+  private getLiveStatus(workflowId: string, runId: string): Promise<LiveStatusLookup> {
     const now = Date.now();
     for (const [cachedWorkflowId, entry] of this.liveStatusCache) {
       if (entry.expiresAt <= now) {
@@ -225,25 +269,28 @@ export class WorkflowRunsService {
 
     const cached = this.liveStatusCache.get(workflowId);
     if (cached) {
-      return cached.statusPromise;
+      return cached.lookupPromise;
     }
 
-    const statusPromise = this.workflowEngine
+    const lookupPromise = this.workflowEngine
       .status(workflowId)
-      .then((handle) => handle.status)
-      .catch((error: unknown) => {
+      .then((handle): LiveStatusLookup => ({ kind: 'live', status: handle.status }))
+      .catch((error: unknown): LiveStatusLookup => {
+        if (error instanceof WorkflowEngineNotFoundError) {
+          return { kind: 'not-found' };
+        }
         this.logger.warn(
           `Could not refresh live status for workflow run '${runId}' (workflow '${workflowId}'): ${(error as Error).message}`,
         );
-        return undefined;
+        return { kind: 'engine-error' };
       });
 
     this.liveStatusCache.set(workflowId, {
       expiresAt: now + WORKFLOW_RUN_ENGINE_STATUS_CACHE_MS,
-      statusPromise,
+      lookupPromise,
     });
 
-    return statusPromise;
+    return lookupPromise;
   }
 
   /**
@@ -397,6 +444,7 @@ export class WorkflowRunsService {
       ...(dto.workflowId ? { workflowId: dto.workflowId } : {}),
       ...(dto.status ? { status: dto.status } : {}),
       ...(dto.workflowType ? { workflowType: dto.workflowType } : {}),
+      ...buildCreatedAtRange(dto.from, dto.to),
     };
 
     const [runs, count] = await Promise.all([
@@ -440,9 +488,50 @@ export class WorkflowRunsService {
     return run ? this.toResult(run) : null;
   }
 
+  /**
+   * Records the terminal status a workflow reached onto its row, called by the
+   * `recordWorkflowRunEnd` activity once a workflow ends. FAILS OPEN on a miss: no row for
+   * `workflowId` (e.g. a workflow that finished before `create` landed) is logged at `warn` and
+   * returns rather than throwing. Any other failure rejects, and the workflow side
+   * (`recordRunEndSafely` in `src/workflows/run-recording.ts`) logs and swallows that rejection,
+   * so a failed projection write never fails an otherwise-successful workflow.
+   */
+  async recordEnd(input: RecordWorkflowRunEndInput): Promise<void> {
+    const updated = await this.workflowRunModel.findOneAndUpdate(
+      { workflowId: input.workflowId },
+      {
+        $set: {
+          status: input.status,
+          ...(input.errorMessage ? { errorMessage: input.errorMessage } : {}),
+          ...(input.outcome ? { outcome: input.outcome } : {}),
+        },
+      },
+    );
+
+    if (!updated) {
+      this.logger.warn(
+        `No workflow_runs row found for workflowId '${input.workflowId}' to record its terminal status`,
+      );
+    }
+  }
+
+  /**
+   * Audit-free lookup of the tenant that owns a run, by Temporal `workflowId` — mirrors
+   * `SourcesService.findTenantIdForSync`: the `recordWorkflowRunEnd` activity takes `workflowId`
+   * only, because `SyncSourceWorkflowInput` is the one workflow input with no `tenantId`, so it
+   * resolves the tenant from the row before opening a tenant-scoped write. Returns `null` on a
+   * miss rather than throwing, for
+   * the same reason `recordEnd` fails open on one.
+   */
+  async findTenantIdForRun(workflowId: string): Promise<string | null> {
+    const run = await this.workflowRunModel.findOne({ workflowId }, { tenantId: 1 });
+    return run?.tenantId ?? null;
+  }
+
   private toResult(
     run: WorkflowRunDocument,
     statusOverride?: WorkflowRunStatus,
+    stale?: boolean,
   ): WorkflowRunResult {
     return {
       id: run._id.toString(),
@@ -450,10 +539,15 @@ export class WorkflowRunsService {
       workflowType: run.workflowType,
       status: statusOverride ?? run.status,
       errorMessage: run.errorMessage,
-      // `SourcesService.requestSync` writes no subject, so this pair stays undefined on a
-      // `sync-source` row — only a writer that names one populates it.
+      outcome: run.outcome,
+      // A writer that omits both `subjectId` and `subjectType` leaves this pair undefined on the
+      // stored row — see `CreateWorkflowRunInput.subjectId`'s own doc comment for the write-time
+      // invariant this mirrors.
       subjectId: run.subjectId?.toString(),
       subjectType: run.subjectId ? run.subjectType : undefined,
+      // Only `peekRun` passes this — every other caller of `toResult` leaves it `undefined`, so
+      // `stale` stays absent from a response that never queried the engine.
+      stale,
       createdAt: run.createdAt,
     };
   }

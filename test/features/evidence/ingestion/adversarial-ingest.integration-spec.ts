@@ -92,10 +92,10 @@ const GATE_REFUSED_EXCEPTIONS: ReadonlyMap<string, string> = new Map([
 
 /**
  * Every manifest path that clears the upload gate reaches `ingestionStatus: 'completed'`, except
- * the ones named here: an unterminated `<script>` and a paragraph nested past
- * `HTML_MAX_NESTING_DEPTH` (`html.parser.ts`) both throw `MalformedHtmlException`; a truncated,
- * headerless, or over-deep-nested `.eml` throws inside `parseEmailMessage` before any chunk is
- * produced; and an honestly-typed `.eml` whose attachment's declared type contradicts its bytes
+ * the ones named here: an unterminated `<script>` throws `MalformedHtmlException`
+ * (`html.parser.ts`); a truncated, headerless, or over-deep-nested `.eml` throws inside
+ * `parseEmailMessage` before any chunk is produced; and an honestly-typed `.eml` whose attachment's
+ * declared type contradicts its bytes
  * throws `HostileEmailException` out of `EmailAttachmentService.unwrapAttachments`. `truncated.pdf`
  * accepts either terminal failure status — `PdfParser` throws one of two exceptions for it
  * (`test/fixtures/adversarial-behavior.spec.ts` pins both as acceptable), and `IngestionService`
@@ -107,7 +107,6 @@ const EXPECTED_INGESTION_STATUS: ReadonlyMap<string, readonly DocumentVersionIng
     ['email-headerless.eml', ['failed']],
     ['email-nested-message.eml', ['failed']],
     ['email-truncated.eml', ['failed']],
-    ['nested-tags.html', ['failed']],
     ['unterminated-script.html', ['failed']],
     ['truncated.pdf', ['failed', 'needs-ocr']],
   ]);
@@ -192,6 +191,10 @@ describe('Adversarial ingest sweep (integration)', () => {
       sources: { inboxDir: FIXTURES, syncIntervalMs: 300_000 },
     });
 
+    // Shared by `DocumentsService` (`create` fires for real on the upload path, a projection write
+    // that is awaited, and swallowed on failure) and `SourcesService` (a required constructor
+    // dependency `runSync`'s own lease/withdrawal work never calls on this path).
+    const workflowRunsService = { create: jest.fn() } as unknown as WorkflowRunsService;
     const documentsService = new DocumentsService(
       documentModel,
       documentVersionModel,
@@ -201,6 +204,7 @@ describe('Adversarial ingest sweep (integration)', () => {
       userModel,
       documentStore,
       workflowEngine,
+      workflowRunsService,
       auditService,
       logger,
       config,
@@ -221,9 +225,6 @@ describe('Adversarial ingest sweep (integration)', () => {
       logger,
     );
 
-    // `runSync`'s own lease/withdrawal work is unexercised by this test — only `create` is a
-    // required constructor dependency, never called on this path.
-    const workflowRunsService = { create: jest.fn() } as unknown as WorkflowRunsService;
     const sourceConnector = new LocalFolderSourceConnector(config);
     const sourcesService = new SourcesService(
       sourceModel,

@@ -12,6 +12,7 @@ import {
   MAX_ACTIVE_KEYS_PER_USER,
 } from '../../../../src/features/platform/api-keys/api-keys.service';
 import {
+  ApiKeyExpiredException,
   ApiKeyLimitExceededException,
   ApiKeyNotFoundException,
 } from '../../../../src/features/platform/api-keys/exceptions/api-keys.exception';
@@ -348,12 +349,22 @@ describe('ApiKeysService', () => {
       expect(mockApiKeyModel.findOneAndUpdate).not.toHaveBeenCalled();
     });
 
-    it('should throw ApiKeyNotFoundException when no active key matches the user and tenant', async () => {
+    // Covers both the unknown-id case and a revoked key: the second, disambiguating read is
+    // scoped by the same `revokedAt: { $exists: false }` clause as the first, so a revoked key's
+    // owner also lands here rather than at ApiKeyExpiredException.
+    it('should throw ApiKeyNotFoundException when no active key matches the user and tenant, and the second read also misses', async () => {
       mockApiKeyModel.findOneAndUpdate.mockResolvedValueOnce(null);
+      mockApiKeyModel.findOne.mockResolvedValueOnce(null);
 
       await expect(service.rotate(apiKeyId.toString(), actorId, 'tenant-a')).rejects.toBeInstanceOf(
         ApiKeyNotFoundException,
       );
+      expect(mockApiKeyModel.findOne).toHaveBeenCalledWith({
+        _id: apiKeyId.toString(),
+        userId,
+        tenantId: 'tenant-a',
+        revokedAt: { $exists: false },
+      });
     });
 
     // Fails CLOSED: no row means no epoch to stamp the rotated token against, so nothing is written.
@@ -366,7 +377,7 @@ describe('ApiKeysService', () => {
       expect(mockApiKeyModel.findOneAndUpdate).not.toHaveBeenCalled();
     });
 
-    it('should rotate the token, scoped to the owning user, tenant, and non-revoked status, and record an audit event', async () => {
+    it('should rotate the token, scoped to the owning user, tenant, and non-revoked, unexpired status, and record an audit event', async () => {
       mockApiKeyModel.findOneAndUpdate.mockResolvedValueOnce(buildMockApiKey());
 
       const result = await service.rotate(apiKeyId.toString(), actorId, 'tenant-a');
@@ -380,6 +391,7 @@ describe('ApiKeysService', () => {
         userId,
         tenantId: 'tenant-a',
         revokedAt: { $exists: false },
+        $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $gt: expect.any(Date) as Date } }],
       });
       expect(rotateUpdate.$set.tokenHash).toBe(hashOf(result.token));
       expect(rotateUpdate.$set.tokenPrefix.startsWith('eo_pat_')).toBe(true);
@@ -389,6 +401,38 @@ describe('ApiKeysService', () => {
         actorId,
         subject: { entityType: 'ApiKey', entityId: apiKeyId.toString() },
         tenantId: 'tenant-a',
+      });
+    });
+
+    it('should rotate a key whose expiresAt has not yet passed', async () => {
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      mockApiKeyModel.findOneAndUpdate.mockResolvedValueOnce(buildMockApiKey({ expiresAt }));
+
+      await expect(service.rotate(apiKeyId.toString(), actorId, 'tenant-a')).resolves.toEqual(
+        expect.objectContaining({ id: apiKeyId.toString() }),
+      );
+      expect(mockApiKeyModel.findOne).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The filter alone cannot tell an expired key from a missing one — both miss the `$or`
+     * clause — so this is what makes the second, narrower read load-bearing: it drops only the
+     * expiry clause, and finding the row there is what turns a bare 404 into the 409 the caller
+     * needs to distinguish "rotate a different key" from "this key is gone".
+     */
+    it('should throw ApiKeyExpiredException, not ApiKeyNotFoundException, for an owned key whose expiresAt has passed', async () => {
+      const expired = buildMockApiKey({ expiresAt: new Date('2020-01-01T00:00:00.000Z') });
+      mockApiKeyModel.findOneAndUpdate.mockResolvedValueOnce(null);
+      mockApiKeyModel.findOne.mockResolvedValueOnce(expired);
+
+      await expect(service.rotate(apiKeyId.toString(), actorId, 'tenant-a')).rejects.toBeInstanceOf(
+        ApiKeyExpiredException,
+      );
+      expect(mockApiKeyModel.findOne).toHaveBeenCalledWith({
+        _id: apiKeyId.toString(),
+        userId,
+        tenantId: 'tenant-a',
+        revokedAt: { $exists: false },
       });
     });
 

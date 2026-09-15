@@ -81,6 +81,31 @@ export const usersApiExamples: Record<string, ApiResponseOptions> = {
       },
     },
   },
+  removeConflict: {
+    status: HttpStatus.CONFLICT,
+    description:
+      'The removal is refused: it would leave the tenant with no admin, or the caller is removing ' +
+      'themselves.',
+    examples: {
+      lastAdmin: {
+        summary: 'Last admin protected',
+        value: {
+          statusCode: HttpStatus.CONFLICT,
+          message:
+            "Tenant 'tenant-a' must always keep at least one admin; removing user '65f1c2e4a1b2c3d4e5f6a7b8' would leave none",
+          error: 'Conflict',
+        },
+      },
+      self: {
+        summary: 'Self-removal refused',
+        value: {
+          statusCode: HttpStatus.CONFLICT,
+          message: "User '65f1c2e4a1b2c3d4e5f6a7b8' cannot remove themselves from the tenant",
+          error: 'Conflict',
+        },
+      },
+    },
+  },
   forbidden: {
     status: HttpStatus.FORBIDDEN,
     description: 'Only an admin may manage tenant members.',

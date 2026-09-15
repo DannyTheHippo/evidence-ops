@@ -26,6 +26,7 @@ import {
   UnsupportedContentTypeException,
 } from '../../../../src/features/evidence/documents/exceptions/documents.exception';
 import type { UploadedFileLike } from '../../../../src/features/evidence/documents/types/uploaded-file.type';
+import { WorkflowRunsService } from '../../../../src/features/evidence/workflow-runs/workflow-runs.service';
 import {
   DOCUMENT_STORE,
   type DocumentStore,
@@ -68,6 +69,7 @@ describe('DocumentsService', () => {
     status: jest.fn(),
     signal: jest.fn(),
   } satisfies Record<keyof WorkflowEngine, jest.Mock>;
+  const mockWorkflowRunsService = { create: jest.fn() };
   const mockAuditService = { record: jest.fn() };
   const mockLogger = getMockLogger();
 
@@ -125,6 +127,7 @@ describe('DocumentsService', () => {
         { provide: getModelToken(User.name), useValue: mockUserModel },
         { provide: DOCUMENT_STORE, useValue: mockDocumentStore },
         { provide: WORKFLOW_ENGINE, useValue: mockWorkflowEngine },
+        { provide: WorkflowRunsService, useValue: mockWorkflowRunsService },
         { provide: AuditService, useValue: mockAuditService },
         { provide: AppLogger, useValue: mockLogger },
         { provide: TypedConfigService, useValue: getMockTypedConfig() },
@@ -132,6 +135,9 @@ describe('DocumentsService', () => {
     }).compile();
 
     service = module.get<DocumentsService>(DocumentsService);
+    // Default handle every upload test can rely on without naming it — tests asserting the
+    // recorded run's own payload override with `mockResolvedValueOnce`.
+    mockWorkflowEngine.start.mockResolvedValue({ id: 'wf-1', status: 'running' });
   });
 
   afterEach(() => {
@@ -410,6 +416,52 @@ describe('DocumentsService', () => {
         expect.objectContaining({ requireApproval: true }),
       );
     });
+
+    it('should record a workflow run for the new version, carrying its type, subject and tenant', async () => {
+      const file = buildFile();
+      const mockDocument = buildMockDocument();
+      mockDocumentModel.create.mockResolvedValueOnce(mockDocument);
+      mockDocumentStore.put.mockResolvedValueOnce({
+        id: 'gridfs-id-1',
+        content: file.buffer,
+        contentType: file.mimetype,
+        metadata: {},
+      });
+      const version = buildMockVersion();
+      mockDocumentVersionModel.create.mockResolvedValueOnce(version);
+      mockWorkflowEngine.start.mockResolvedValueOnce({ id: 'wf-ingest-1', status: 'running' });
+
+      await service.upload(file, { title: 'Q3 Rent Roll' }, 'tenant-a');
+
+      expect(mockWorkflowRunsService.create).toHaveBeenCalledWith({
+        workflowId: 'wf-ingest-1',
+        workflowType: 'ingest-document-version',
+        status: 'running',
+        tenantId: 'tenant-a',
+        subjectId: versionId.toString(),
+        subjectType: 'DocumentVersion',
+      });
+    });
+
+    it('should log and continue when recording the workflow run fails, without failing the upload', async () => {
+      const file = buildFile();
+      const mockDocument = buildMockDocument();
+      mockDocumentModel.create.mockResolvedValueOnce(mockDocument);
+      mockDocumentStore.put.mockResolvedValueOnce({
+        id: 'gridfs-id-1',
+        content: file.buffer,
+        contentType: file.mimetype,
+        metadata: {},
+      });
+      const version = buildMockVersion();
+      mockDocumentVersionModel.create.mockResolvedValueOnce(version);
+      mockWorkflowRunsService.create.mockRejectedValueOnce(new Error('write conflict'));
+
+      const result = await service.upload(file, { title: 'Q3 Rent Roll' }, 'tenant-a');
+
+      expect(result.currentVersion.versionNumber).toBe(1);
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('wf-1'));
+    });
   });
 
   describe('upload — new version (documentId present)', () => {
@@ -463,8 +515,10 @@ describe('DocumentsService', () => {
       expect(mockDocumentVersionModel.create).not.toHaveBeenCalled();
       expect(mockDocument.save).not.toHaveBeenCalled();
       expect(result.currentVersion.id).toBe(versionId.toString());
-      // Content-addressed dedupe: no new bytes were stored, so there is nothing new to ingest.
+      // Content-addressed dedupe: no new bytes were stored, so there is nothing new to ingest and
+      // nothing new to record a run for.
       expect(mockWorkflowEngine.start).not.toHaveBeenCalled();
+      expect(mockWorkflowRunsService.create).not.toHaveBeenCalled();
     });
 
     it('should create version 2 when the uploaded bytes are new for the document', async () => {

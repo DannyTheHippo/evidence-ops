@@ -24,6 +24,7 @@ import { FactsModule } from '../facts/facts.module';
 import { LedgerModule } from '../ledger/ledger.module';
 import { MeasuresModule } from '../measures/measures.module';
 import { VerificationsModule } from '../verifications/verifications.module';
+import { WorkflowRunsModule } from '../workflow-runs/workflow-runs.module';
 import { AnswerPersistenceService } from './answer-persistence.service';
 import { ClaimDecompositionService } from './claim-decomposition.service';
 import { ClaimVerificationService } from './claim-verification.service';
@@ -53,7 +54,9 @@ import { SynthesisService } from './synthesis.service';
 // `VerificationsService.record`, the persistence `ClaimVerificationService.verifyClaims` calls once
 // per run. `ExtractedFact`/`EvidenceChunk` are registered here (alongside the already-present
 // `DocumentVersion`) for `LedgerAnswerService`'s own representative-fact/chunk/version loads;
-// `LedgerModule` is imported for `LedgerService.resolveValue`.
+// `LedgerModule` is imported for `LedgerService.resolveValue`. `WorkflowRunsModule` is for
+// `WorkflowRunsService`, through which `QaService.startQuestion` records the `workflow_runs` row for
+// the question it starts.
 @Module({
   imports: [
     MongooseModule.forFeature([
@@ -70,6 +73,7 @@ import { SynthesisService } from './synthesis.service';
     LedgerModule,
     MeasuresModule,
     VerificationsModule,
+    WorkflowRunsModule,
   ],
   controllers: [QaController],
   providers: [

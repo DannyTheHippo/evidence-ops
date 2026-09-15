@@ -76,6 +76,85 @@ describe('Validation errors (e2e)', () => {
     );
   });
 
+  it.each([
+    ['/api/v1/audit-events', 'from', '2026-W27', 'audit-events-from'],
+    ['/api/v1/audit-events', 'to', '2026-W27', 'audit-events-to'],
+    ['/api/v1/workflow-runs', 'from', '20260801', 'workflow-runs-from'],
+    ['/api/v1/workflow-runs', 'to', '20260801', 'workflow-runs-to'],
+    ['/api/v1/answers', 'from', '2026-185', 'answers-from'],
+    ['/api/v1/answers', 'to', '2026-185', 'answers-to'],
+  ])(
+    'returns a 400 naming the field for a non-instant ISO-8601 date on %s?%s=%s',
+    async (path, field, value, emailSlug) => {
+      const admin = await registerTestUser(app, {
+        email: `validation-e2e-instant-${emailSlug}@example.com`,
+        password: 'correct-horse-battery-staple',
+      });
+
+      const response = await request(getTestServer(app))
+        .get(path)
+        .query({ [field]: value })
+        .set('Cookie', admin.cookie);
+      const body = response.body as ValidationErrorResponseBody;
+
+      expect(response.status).toBe(400);
+      expect(body.errors).toContainEqual({
+        field,
+        message: `${field} must be an ISO-8601 instant with a date, a time and an offset`,
+      });
+    },
+  );
+
+  it.each([
+    ['/api/v1/audit-events', 'from', 'audit-events-impossible-from'],
+    ['/api/v1/audit-events', 'to', 'audit-events-impossible-to'],
+    ['/api/v1/workflow-runs', 'from', 'workflow-runs-impossible-from'],
+    ['/api/v1/workflow-runs', 'to', 'workflow-runs-impossible-to'],
+    ['/api/v1/answers', 'from', 'answers-impossible-from'],
+    ['/api/v1/answers', 'to', 'answers-impossible-to'],
+  ])(
+    'returns a 400 naming the field for a calendar date the month never reaches on %s?%s',
+    async (path, field, emailSlug) => {
+      const admin = await registerTestUser(app, {
+        email: `validation-e2e-instant-${emailSlug}@example.com`,
+        password: 'correct-horse-battery-staple',
+      });
+
+      const response = await request(getTestServer(app))
+        .get(path)
+        .query({ [field]: '2026-02-30T00:00:00Z' })
+        .set('Cookie', admin.cookie);
+      const body = response.body as ValidationErrorResponseBody;
+
+      expect(response.status).toBe(400);
+      expect(body.errors).toContainEqual({
+        field,
+        message: `${field} must be an ISO-8601 instant with a date, a time and an offset`,
+      });
+    },
+  );
+
+  it.each([
+    ['/api/v1/audit-events', 'from', 'audit-events-valid-from'],
+    ['/api/v1/audit-events', 'to', 'audit-events-valid-to'],
+    ['/api/v1/workflow-runs', 'from', 'workflow-runs-valid-from'],
+    ['/api/v1/workflow-runs', 'to', 'workflow-runs-valid-to'],
+    ['/api/v1/answers', 'from', 'answers-valid-from'],
+    ['/api/v1/answers', 'to', 'answers-valid-to'],
+  ])('returns a 200 for a valid ISO-8601 instant on %s?%s', async (path, field, emailSlug) => {
+    const admin = await registerTestUser(app, {
+      email: `validation-e2e-instant-${emailSlug}@example.com`,
+      password: 'correct-horse-battery-staple',
+    });
+
+    const response = await request(getTestServer(app))
+      .get(path)
+      .query({ [field]: '2026-07-01T00:00:00Z' })
+      .set('Cookie', admin.cookie);
+
+    expect(response.status).toBe(200);
+  });
+
   it('carries errors for an unknown property rejected by forbidNonWhitelisted', async () => {
     const response = await request(getTestServer(app)).post('/api/v1/auth/register').send({
       email: 'validation-e2e-whitelist@example.com',

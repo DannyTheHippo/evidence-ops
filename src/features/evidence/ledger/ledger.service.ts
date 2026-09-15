@@ -36,7 +36,7 @@ import { resolveSort } from '../../../shared/utils/resolve-sort.util';
 import { CanonicalEntityService } from '../facts/canonical-entity.service';
 import { groupKey } from '../conflicts/detect-conflicts';
 import { normalizeFactValue } from '../conflicts/normalize-fact-value';
-import { parsePeriod } from '../facts/derive-period';
+import { parsePeriod, UNDATED_PERIOD, UNPARSEABLE_PERIOD_PREFIX } from '../facts/derive-period';
 import { toMeasureDefinition, type MeasureDefinition } from '../measures/measure-definition';
 import { MeasureNotFoundException } from '../measures/exceptions/measures.exception';
 import { MeasuresService } from '../measures/measures.service';
@@ -258,7 +258,7 @@ export class LedgerService {
     }
 
     const [entityResolution] = await this.canonicalEntityService.resolveMany([entity], tenantId);
-    const periodKey = parsePeriod(period ?? '').key;
+    const periodKey = this.resolvePeriodKey(period ?? '');
 
     if (measureDoc.status === 'proposed') {
       return {
@@ -315,7 +315,7 @@ export class LedgerService {
       tenantId,
       measureStatus: 'confirmed',
       ...(dto.measure ? { 'factKey.metric': dto.measure } : {}),
-      ...(dto.period ? { 'factKey.period': parsePeriod(dto.period).key } : {}),
+      ...(dto.period ? { 'factKey.period': this.resolvePeriodKey(dto.period) } : {}),
     };
     if (dto.entity) {
       const [entityResolution] = await this.canonicalEntityService.resolveMany(
@@ -365,7 +365,7 @@ export class LedgerService {
       [dto.entity],
       tenantId,
     );
-    const periodKey = parsePeriod(dto.period ?? '').key;
+    const periodKey = this.resolvePeriodKey(dto.period ?? '');
     const groupKeyNormalized = groupKey({
       entity: entityResolution.name,
       metric: dto.measure,
@@ -428,6 +428,27 @@ export class LedgerService {
    *  ordering and filtering are defined. */
   async listMeasures(tenantId: string): Promise<MeasureDefinition[]> {
     return this.measuresService.listConfirmedDefinitions(tenantId);
+  }
+
+  /** Resolves a period filter's raw value to the exact `factKey.period` key it must match.
+   *  `UNDATED_PERIOD` and an `UNPARSEABLE_PERIOD_PREFIX`-prefixed value are the client's own
+   *  sentinel forms (`LedgerCellResponseDto.period`, echoed straight back as a filter) — each is
+   *  recognized by this method directly rather than re-read through `parsePeriod`, which would
+   *  otherwise treat either as unparseable text and derive a key with an extra `undated:` layer
+   *  that no stored fact carries. Only the text after the case-sensitive `undated:` prefix is
+   *  normalized, so a filter typed with different case or whitespace than the stored key matches
+   *  it for the prefixed form; the bare `undated` sentinel is matched exactly. Shared by
+   *  `resolveValue`, `listCells` and `listFacts`, the three methods that turn a caller-supplied
+   *  period into a lookup key. */
+  private resolvePeriodKey(period: string): string {
+    if (period === UNDATED_PERIOD) {
+      return UNDATED_PERIOD;
+    }
+    if (period.startsWith(UNPARSEABLE_PERIOD_PREFIX)) {
+      const text = period.slice(UNPARSEABLE_PERIOD_PREFIX.length);
+      return `${UNPARSEABLE_PERIOD_PREFIX}${normalizeEntityName(text)}`;
+    }
+    return parsePeriod(period).key;
   }
 
   private buildGroupPipeline(

@@ -19,6 +19,16 @@ export class LastAdminException extends BaseException {
   }
 }
 
+/** `UsersService.remove` throws this when the target id is the caller's own id, compared as
+ *  ObjectIds so hex case never matters. It fires after id validation and before any session opens,
+ *  so no transaction, database call or audit record exists when it is thrown. It fails closed: the
+ *  caller is refused however many other admins the tenant has. */
+export class SelfRemovalException extends BaseException {
+  constructor(message: string, cause?: unknown) {
+    super(message, HttpStatus.CONFLICT, cause);
+  }
+}
+
 /** `UsersService`'s admin-count guard throws this when a tenant has no registry row to
  *  materialize its write conflict against. Every tenant is created with one before its first user
  *  exists, so a missing row here signals that invariant has broken rather than a normal refusal —

@@ -81,6 +81,7 @@ const SOURCE_KEYS = [
   'sourceClass',
   'createdAt',
   'fileStates',
+  'lastSync',
 ].sort();
 
 /** A file state with `lastError` set — the only state in which `lastError` is observable on the
@@ -760,6 +761,70 @@ describe('Sources (e2e)', () => {
       expect(stored?.tracked).toBe(false);
     });
 
+    it('clears owner when it is sent as null, and the response omits the field', async () => {
+      const created = await sourceModel.create({
+        name: `Patch Clear Owner Source ${Date.now()}`,
+        kind: 'local-folder',
+        path: 'deal-room',
+        tenantId,
+        owner: OWNER,
+      });
+
+      const response = await request(getTestServer(app))
+        .patch(`/api/v1/sources/${created._id.toString()}`)
+        .set('Cookie', cookie)
+        .send({ owner: null });
+      const body = response.body as SourceBody;
+
+      expect(response.status).toBe(200);
+      expect(body.owner).toBeUndefined();
+
+      const stored = await sourceModel.findById(created._id);
+      expect(stored?.owner).toBeUndefined();
+    });
+
+    it('rejects an empty-string owner with a 400 — it is not a clear instruction', async () => {
+      const created = await sourceModel.create({
+        name: `Patch Empty Owner Source ${Date.now()}`,
+        kind: 'local-folder',
+        path: 'deal-room',
+        tenantId,
+        owner: OWNER,
+      });
+
+      const response = await request(getTestServer(app))
+        .patch(`/api/v1/sources/${created._id.toString()}`)
+        .set('Cookie', cookie)
+        .send({ owner: '' });
+
+      expect(response.status).toBe(400);
+
+      const stored = await sourceModel.findById(created._id);
+      expect(stored?.owner).toBe(OWNER);
+    });
+
+    it('leaves owner intact when the field is absent from the PATCH body', async () => {
+      const created = await sourceModel.create({
+        name: `Patch No-Owner-Field Source ${Date.now()}`,
+        kind: 'local-folder',
+        path: 'deal-room',
+        tenantId,
+        owner: OWNER,
+      });
+
+      const response = await request(getTestServer(app))
+        .patch(`/api/v1/sources/${created._id.toString()}`)
+        .set('Cookie', cookie)
+        .send({ tracked: false });
+      const body = response.body as SourceBody;
+
+      expect(response.status).toBe(200);
+      expect(body.owner).toBe(OWNER);
+
+      const stored = await sourceModel.findById(created._id);
+      expect(stored?.owner).toBe(OWNER);
+    });
+
     // The caller's token carries a real, freshly provisioned tenant id, so this only proves
     // isolation because that id genuinely differs from 'other-tenant'.
     it('returns 404 for a source belonging to a different tenant, not 403', async () => {
@@ -834,7 +899,15 @@ describe('Sources (e2e)', () => {
       // Asserting the exact key set is the only gate that catches a response-DTO field missing
       // @Expose() — such a field is silently dropped from the payload with no error anywhere.
       expect(Object.keys(body).sort()).toEqual(
-        ['id', 'workflowId', 'workflowType', 'status', 'createdAt'].sort(),
+        [
+          'id',
+          'workflowId',
+          'workflowType',
+          'status',
+          'createdAt',
+          'subjectId',
+          'subjectType',
+        ].sort(),
       );
       // The label the Runs list shows in place of the opaque workflow uuid.
       expect(body.workflowType).toBe('sync-source');

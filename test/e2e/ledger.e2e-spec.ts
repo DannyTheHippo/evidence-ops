@@ -19,7 +19,10 @@ import {
   type ExtractedFactDocument,
 } from '../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import { groupKey } from '../../src/features/evidence/conflicts/detect-conflicts';
-import { UNDATED_PERIOD } from '../../src/features/evidence/facts/derive-period';
+import {
+  UNDATED_PERIOD,
+  unparseablePeriodKey,
+} from '../../src/features/evidence/facts/derive-period';
 import { closeTestApp, createTestApp, getTestServer } from '../utils/create-test-app';
 import { measureStamp, type MeasureStamp } from '../utils/measure-stamp';
 import { registerTestUser } from '../utils/register-test-user';
@@ -102,6 +105,12 @@ const SINGLE_ENTITY = 'Ledger Single Tower';
 const CONFLICT_ENTITY = 'Ledger Conflict Yard';
 const ADJUDICATED_ENTITY = 'Ledger Adjudicated Plaza';
 const PROPOSED_ENTITY = 'Ledger Proposed Annex';
+const UNDATED_TEXT_ENTITY = 'Ledger Undated Text Court';
+const UNDATED_TEXT_PERIOD = unparseablePeriodKey('sold in spring');
+const MAX_LENGTH_ENTITY = 'Ledger Max Period Court';
+// The longest key `unparseablePeriodKey` can produce: past the 64-character text budget, it
+// truncates and appends a `#`-separated digest, landing at `MAX_PERIOD_KEY_LENGTH`.
+const MAX_LENGTH_PERIOD = unparseablePeriodKey('x'.repeat(80));
 
 describe('Ledger (e2e)', () => {
   let app: INestApplication;
@@ -264,6 +273,33 @@ describe('Ledger (e2e)', () => {
     await seedFact(PROPOSED_ENTITY, 'cap_rate', 7.4, 'percent', proposedVersion, {
       measureStatus: 'proposed',
     });
+
+    // A fact whose source stated a period this codebase cannot read, keyed by the same
+    // `unparseablePeriodKey` an extractor would derive from that text — distinct from the bare
+    // `undated` cells above, which state no period at all.
+    const undatedTextVersion = await seedVersion('9'.repeat(64), 'ledger-undated-text');
+    const undatedTextFactKey = {
+      entity: UNDATED_TEXT_ENTITY,
+      metric: 'cap_rate',
+      period: UNDATED_TEXT_PERIOD,
+    };
+    await seedFact(UNDATED_TEXT_ENTITY, 'cap_rate', 4.5, 'percent', undatedTextVersion, {
+      factKey: undatedTextFactKey,
+      groupKeyNormalized: groupKey(undatedTextFactKey),
+    });
+
+    // A fact keyed by the longest period a request can validly send back — pins the bound the
+    // ledger DTOs and the MCP schema must accept, not just the one they must refuse.
+    const maxLengthVersion = await seedVersion('8'.repeat(64), 'ledger-max-period');
+    const maxLengthFactKey = {
+      entity: MAX_LENGTH_ENTITY,
+      metric: 'cap_rate',
+      period: MAX_LENGTH_PERIOD,
+    };
+    await seedFact(MAX_LENGTH_ENTITY, 'cap_rate', 6.2, 'percent', maxLengthVersion, {
+      factKey: maxLengthFactKey,
+      groupKeyNormalized: groupKey(maxLengthFactKey),
+    });
   });
 
   afterAll(async () => {
@@ -374,6 +410,42 @@ describe('Ledger (e2e)', () => {
       expect(response.status).toBe(200);
       expect(body.docs.every((doc) => doc.measure === 'net_operating_income')).toBe(true);
     });
+
+    it('filters by the bare undated period, matching only cells with no stated period', async () => {
+      const response = await request(getTestServer(app))
+        .get(`/api/v1/ledger?period=${UNDATED_PERIOD}`)
+        .set('Cookie', cookie);
+      const body = response.body as { docs: LedgerCellBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.docs.some((doc) => doc.entity === SINGLE_ENTITY)).toBe(true);
+      expect(body.docs.every((doc) => doc.period === UNDATED_PERIOD)).toBe(true);
+      expect(body.docs.some((doc) => doc.entity === UNDATED_TEXT_ENTITY)).toBe(false);
+    });
+
+    it('filters by an undated:<text> period, matching exactly the cell that key was derived from', async () => {
+      const response = await request(getTestServer(app))
+        .get(`/api/v1/ledger?period=${encodeURIComponent(UNDATED_TEXT_PERIOD)}`)
+        .set('Cookie', cookie);
+      const body = response.body as { docs: LedgerCellBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.docs).toHaveLength(1);
+      expect(body.docs[0].entity).toBe(UNDATED_TEXT_ENTITY);
+      expect(body.docs[0].period).toBe(UNDATED_TEXT_PERIOD);
+    });
+
+    it('accepts a period at the maximum stored key length', async () => {
+      const response = await request(getTestServer(app))
+        .get(`/api/v1/ledger?period=${encodeURIComponent(MAX_LENGTH_PERIOD)}`)
+        .set('Cookie', cookie);
+      const body = response.body as { docs: LedgerCellBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.docs).toHaveLength(1);
+      expect(body.docs[0].entity).toBe(MAX_LENGTH_ENTITY);
+      expect(body.docs[0].period).toBe(MAX_LENGTH_PERIOD);
+    });
   });
 
   describe('GET /ledger/resolve', () => {
@@ -401,6 +473,46 @@ describe('Ledger (e2e)', () => {
       expect(body.entity).toBe(SINGLE_ENTITY);
       expect(body.measure).toBe('cap_rate');
       expect(body.period).toBe(UNDATED_PERIOD);
+    });
+
+    it('resolves the bare undated sentinel to the same cell an absent period resolves', async () => {
+      const response = await request(getTestServer(app))
+        .get(
+          `/api/v1/ledger/resolve?entity=${encodeURIComponent(SINGLE_ENTITY)}&measure=cap_rate&period=${UNDATED_PERIOD}`,
+        )
+        .set('Cookie', cookie);
+      const body = response.body as LedgerResolutionBody;
+
+      expect(response.status).toBe(200);
+      expect(body.state).toBe('single');
+      expect(body.period).toBe(UNDATED_PERIOD);
+    });
+
+    it('resolves an undated:<text> sentinel to the cell that key was derived from', async () => {
+      const response = await request(getTestServer(app))
+        .get(
+          `/api/v1/ledger/resolve?entity=${encodeURIComponent(UNDATED_TEXT_ENTITY)}&measure=cap_rate&period=${encodeURIComponent(UNDATED_TEXT_PERIOD)}`,
+        )
+        .set('Cookie', cookie);
+      const body = response.body as LedgerResolutionBody;
+
+      expect(response.status).toBe(200);
+      expect(body.state).toBe('single');
+      expect(body.period).toBe(UNDATED_TEXT_PERIOD);
+      expect(body.value).toEqual({ amount: 4.5, unit: 'percent', canonicalAmount: 0.045 });
+    });
+
+    it('accepts a period at the maximum stored key length', async () => {
+      const response = await request(getTestServer(app))
+        .get(
+          `/api/v1/ledger/resolve?entity=${encodeURIComponent(MAX_LENGTH_ENTITY)}&measure=cap_rate&period=${encodeURIComponent(MAX_LENGTH_PERIOD)}`,
+        )
+        .set('Cookie', cookie);
+      const body = response.body as LedgerResolutionBody;
+
+      expect(response.status).toBe(200);
+      expect(body.state).toBe('single');
+      expect(body.period).toBe(MAX_LENGTH_PERIOD);
     });
 
     it('answers unknown for an entity the ledger holds no facts for', async () => {
@@ -445,6 +557,19 @@ describe('Ledger (e2e)', () => {
       expect(body.docs.every((doc) => doc.measureStatus === 'confirmed')).toBe(true);
     });
 
+    it('accepts the undated sentinel the cell view sends explicitly, same as an omitted period', async () => {
+      const response = await request(getTestServer(app))
+        .get(
+          `/api/v1/ledger/facts?entity=${encodeURIComponent(CONFLICT_ENTITY)}&measure=cap_rate&period=${UNDATED_PERIOD}`,
+        )
+        .set('Cookie', cookie);
+      const body = response.body as { docs: LedgerFactBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.count).toBe(2);
+      expect(body.docs.map((doc) => doc.value.amount).sort()).toEqual([5.25, 6.1]);
+    });
+
     it('shows the proposed-measure fact the cell view hides, labelled by its status', async () => {
       const response = await request(getTestServer(app))
         .get(`/api/v1/ledger/facts?entity=${encodeURIComponent(PROPOSED_ENTITY)}&measure=cap_rate`)
@@ -457,6 +582,19 @@ describe('Ledger (e2e)', () => {
       // deliberately excluded, rather than the row simply vanishing.
       expect(body.docs[0].measureStatus).toBe('proposed');
       expect(body.docs[0].value.amount).toBe(7.4);
+    });
+
+    it('accepts a period at the maximum stored key length', async () => {
+      const response = await request(getTestServer(app))
+        .get(
+          `/api/v1/ledger/facts?entity=${encodeURIComponent(MAX_LENGTH_ENTITY)}&measure=cap_rate&period=${encodeURIComponent(MAX_LENGTH_PERIOD)}`,
+        )
+        .set('Cookie', cookie);
+      const body = response.body as { docs: LedgerFactBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.count).toBe(1);
+      expect(body.docs[0].value.amount).toBe(6.2);
     });
   });
 

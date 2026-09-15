@@ -9,6 +9,8 @@ import {
   WORKFLOW_RUN_TYPES,
 } from '../../../../../database/schemas/workflow/workflow-run/workflow-run.schema';
 import { SORT_DIRECTIONS, type SortDirection } from '../../../../../shared/constants/sort.constant';
+import { IsAfter } from '../../../../../shared/decorators/is-after.decorator';
+import { IsIsoInstant } from '../../../../../shared/decorators/is-iso-instant.decorator';
 import { PaginationRequestDto } from '../../../../../shared/dtos/request/pagination.request.dto';
 
 export const WORKFLOW_RUN_SORT_FIELDS = ['createdAt', 'status', 'workflowType'] as const;
@@ -54,6 +56,29 @@ export class ListWorkflowRunsRequestDto extends PaginationRequestDto {
   @IsOptional()
   @IsIn(WORKFLOW_RUN_TYPES)
   workflowType?: WorkflowRunType;
+
+  @ApiProperty({
+    example: '2026-07-01T00:00:00.000Z',
+    description:
+      'Only rows created at or after this instant. ISO-8601 instant with date, time and offset ' +
+      '(`Z` or `±hh:mm`), as `toISOString()` emits.',
+    required: false,
+  })
+  @IsOptional()
+  @IsIsoInstant()
+  from?: string;
+
+  @ApiProperty({
+    example: '2026-08-01T00:00:00.000Z',
+    description:
+      'Only rows created strictly before this instant; must be later than from. ISO-8601 ' +
+      'instant with date, time and offset (`Z` or `±hh:mm`), as `toISOString()` emits.',
+    required: false,
+  })
+  @IsOptional()
+  @IsIsoInstant()
+  @IsAfter('from')
+  to?: string;
 
   @ApiProperty({
     example: 'createdAt',

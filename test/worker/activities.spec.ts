@@ -23,6 +23,7 @@ import { LedgerAnswerService } from '../../src/features/evidence/qa/ledger-answe
 import { SynthesisService } from '../../src/features/evidence/qa/synthesis.service';
 import type { RetrievedChunk } from '../../src/features/evidence/qa/types/retrieved-chunk.type';
 import { SourcesService } from '../../src/features/evidence/sources/sources.service';
+import { WorkflowRunsService } from '../../src/features/evidence/workflow-runs/workflow-runs.service';
 import { APPROVAL_CHANNEL } from '../../src/providers/approval-channel/approval-channel.interface';
 import type { AlsContext } from '../../src/shared/types/als-context.type';
 import type { Activities } from '../../src/worker/activities';
@@ -99,6 +100,8 @@ function buildApp(overrides: {
   getDecision?: jest.Mock;
   findTenantIdForSync?: jest.Mock;
   runSync?: jest.Mock;
+  findTenantIdForRun?: jest.Mock;
+  recordEnd?: jest.Mock;
   als?: AsyncLocalStorage<AlsContext>;
 }): INestApplicationContext {
   const services = new Map<unknown, unknown>([
@@ -162,6 +165,13 @@ function buildApp(overrides: {
       {
         findTenantIdForSync: overrides.findTenantIdForSync ?? jest.fn(),
         runSync: overrides.runSync ?? jest.fn(),
+      },
+    ],
+    [
+      WorkflowRunsService,
+      {
+        findTenantIdForRun: overrides.findTenantIdForRun ?? jest.fn(),
+        recordEnd: overrides.recordEnd ?? jest.fn(),
       },
     ],
   ]);
@@ -2208,6 +2218,45 @@ describe('createActivities', () => {
 
       expect(mockRunSync).not.toHaveBeenCalled();
       expect(result).toEqual({ disabled: true, intervalMs: null });
+    });
+  });
+
+  describe('recordWorkflowRunEnd', () => {
+    it('should look up the tenant and record the terminal status inside its ALS scope', async () => {
+      const als = new AsyncLocalStorage<AlsContext>();
+      let observedTenant: string | undefined;
+      const mockFindTenantIdForRun = jest.fn().mockResolvedValue('acme-corp');
+      const mockRecordEnd = jest.fn(() => {
+        observedTenant = als.getStore()?.tenant;
+        return Promise.resolve();
+      });
+      const app = buildApp({
+        findTenantIdForRun: mockFindTenantIdForRun,
+        recordEnd: mockRecordEnd,
+        als,
+      });
+      const input = { workflowId: 'wf-1', status: 'completed' as const };
+
+      const activities = createActivities(app);
+      await activities.recordWorkflowRunEnd(input);
+
+      expect(mockFindTenantIdForRun).toHaveBeenCalledWith('wf-1');
+      expect(mockRecordEnd).toHaveBeenCalledWith(input);
+      expect(observedTenant).toBe('acme-corp');
+    });
+
+    it('should return without opening a scope or calling recordEnd when no row names this workflowId', async () => {
+      const mockFindTenantIdForRun = jest.fn().mockResolvedValue(null);
+      const mockRecordEnd = jest.fn();
+      const app = buildApp({
+        findTenantIdForRun: mockFindTenantIdForRun,
+        recordEnd: mockRecordEnd,
+      });
+
+      const activities = createActivities(app);
+      await activities.recordWorkflowRunEnd({ workflowId: 'wf-1', status: 'completed' });
+
+      expect(mockRecordEnd).not.toHaveBeenCalled();
     });
   });
 });

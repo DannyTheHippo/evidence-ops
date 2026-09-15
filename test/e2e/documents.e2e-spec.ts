@@ -33,6 +33,10 @@ import {
   ExtractedFactDocument,
 } from '../../src/database/schemas/evidence/extracted-fact/extracted-fact.schema';
 import {
+  WorkflowRun,
+  WorkflowRunDocument,
+} from '../../src/database/schemas/workflow/workflow-run/workflow-run.schema';
+import {
   DOCUMENT_STORE,
   type DocumentStore,
 } from '../../src/providers/storage/document-store.interface';
@@ -92,6 +96,7 @@ describe('Documents (e2e)', () => {
   let extractedFactModel: Model<ExtractedFactDocument>;
   let conflictModel: Model<ConflictDocument>;
   let auditEventModel: Model<AuditEventDocument>;
+  let workflowRunModel: Model<WorkflowRunDocument>;
   let documentStore: DocumentStore;
 
   beforeAll(async () => {
@@ -123,6 +128,7 @@ describe('Documents (e2e)', () => {
     extractedFactModel = app.get<Model<ExtractedFactDocument>>(getModelToken(ExtractedFact.name));
     conflictModel = app.get<Model<ConflictDocument>>(getModelToken(Conflict.name));
     auditEventModel = app.get<Model<AuditEventDocument>>(getModelToken(AuditEvent.name));
+    workflowRunModel = app.get<Model<WorkflowRunDocument>>(getModelToken(WorkflowRun.name));
     documentStore = app.get<DocumentStore>(DOCUMENT_STORE);
 
     comps = await readFile(path.join(FIXTURES, 'comps.xlsx'));
@@ -305,6 +311,18 @@ describe('Documents (e2e)', () => {
         (call.input as { documentVersionId: string }).documentVersionId === body.currentVersion.id,
     );
     expect(started).toBeDefined();
+
+    // `DocumentsService.uploadVersion` records a `workflow_runs` row for every version that starts
+    // ingestion. `FakeWorkflowEngine` starts every workflow as `completed`, so this asserts row
+    // existence and identity — not `status`, which would pass for the wrong reason under the fake
+    // engine.
+    const run = await workflowRunModel.findOne({
+      subjectId: new Types.ObjectId(body.currentVersion.id),
+      subjectType: 'DocumentVersion',
+    });
+    expect(run).not.toBeNull();
+    expect(run?.workflowType).toBe('ingest-document-version');
+    expect(run?.tenantId).toBe(tenantId);
   });
 
   it('exposes ingestionFailureReason only once a version is actually marked failed, with the exact key set at each state', async () => {
@@ -761,21 +779,35 @@ describe('Documents (e2e)', () => {
 
       // `createdAt` stamped explicitly, out of title order — sequential in-memory creates can
       // land in the same millisecond, which would make the default-sort assertion below flaky.
+      // `timestamps: true` treats `createdAt` as insert-only and strips a plain `$set` on it —
+      // `overwriteImmutable` is Mongoose's documented escape hatch to keep the caller's value on
+      // an existing document.
       const bDoc = await seedDocumentWithVersion('Sort E2E B', { tenantId: sortTenant.tenantId });
       const cDoc = await seedDocumentWithVersion('Sort E2E C', { tenantId: sortTenant.tenantId });
       const aDoc = await seedDocumentWithVersion('Sort E2E A', { tenantId: sortTenant.tenantId });
       await documentModel.updateOne(
         { _id: bDoc._id },
         { createdAt: new Date('2026-01-01T00:00:00.000Z') },
+        { overwriteImmutable: true },
       );
       await documentModel.updateOne(
         { _id: cDoc._id },
         { createdAt: new Date('2026-01-02T00:00:00.000Z') },
+        { overwriteImmutable: true },
       );
       await documentModel.updateOne(
         { _id: aDoc._id },
         { createdAt: new Date('2026-01-03T00:00:00.000Z') },
+        { overwriteImmutable: true },
       );
+
+      // Proves the fixture itself, not just the ordering it produces — an update that silently
+      // strips `createdAt` would leave every row at its real insertion time, and the assertions
+      // below could still pass by coincidence.
+      const backdatedB = await documentModel.findById(bDoc._id);
+      expect(backdatedB?.createdAt?.toISOString()).toBe('2026-01-01T00:00:00.000Z');
+      const backdatedA = await documentModel.findById(aDoc._id);
+      expect(backdatedA?.createdAt?.toISOString()).toBe('2026-01-03T00:00:00.000Z');
 
       const defaultResponse = await request(getTestServer(app))
         .get('/api/v1/documents')

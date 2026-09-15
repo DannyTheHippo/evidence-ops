@@ -1,7 +1,13 @@
 import { Injectable, type OnModuleDestroy } from '@nestjs/common';
-import { Client, Connection, type WorkflowExecutionStatusName } from '@temporalio/client';
+import {
+  Client,
+  Connection,
+  WorkflowNotFoundError,
+  type WorkflowExecutionStatusName,
+} from '@temporalio/client';
 import { randomUUID } from 'node:crypto';
 import { TypedConfigService } from '../../config/environment/typed-config.service';
+import { WorkflowEngineNotFoundError } from './errors/workflow-engine-not-found.error';
 import type { WorkflowEngine, WorkflowHandle, WorkflowStatus } from './workflow-engine.interface';
 
 function toWorkflowStatus(name: WorkflowExecutionStatusName): WorkflowStatus {
@@ -47,11 +53,20 @@ export class TemporalWorkflowEngine implements WorkflowEngine, OnModuleDestroy {
     return { id: handle.workflowId, status: 'running' };
   }
 
+  /** Rejects with `WorkflowEngineNotFoundError` when Temporal's own `WorkflowNotFoundError` says
+   *  `id` is unknown to it (deleted, mistyped, or past the namespace's retention window); every
+   *  other rejection from `describe()` propagates unchanged. */
   async status(id: string): Promise<WorkflowHandle> {
     const client = await this.getClient();
-    const description = await client.workflow.getHandle(id).describe();
-
-    return { id, status: toWorkflowStatus(description.status.name) };
+    try {
+      const description = await client.workflow.getHandle(id).describe();
+      return { id, status: toWorkflowStatus(description.status.name) };
+    } catch (error) {
+      if (error instanceof WorkflowNotFoundError) {
+        throw new WorkflowEngineNotFoundError(id, error);
+      }
+      throw error;
+    }
   }
 
   async signal(id: string, signalName: string, payload: unknown): Promise<void> {

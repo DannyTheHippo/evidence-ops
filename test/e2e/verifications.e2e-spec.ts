@@ -123,11 +123,21 @@ describe('Verifications (e2e)', () => {
     await verificationModel.updateOne(
       { _id: patVerification._id },
       { createdAt: new Date('2026-01-01T00:00:00.000Z') },
+      { overwriteImmutable: true },
     );
     await verificationModel.updateOne(
       { _id: userVerification._id },
       { createdAt: new Date('2026-01-02T00:00:00.000Z') },
+      { overwriteImmutable: true },
     );
+
+    // Proves the fixture itself, not just the ordering it produces — an update that silently
+    // strips `createdAt` would leave every row at its real insertion time, and the assertions
+    // below could still pass by coincidence.
+    const backdatedPat = await verificationModel.findById(patVerification._id);
+    expect(backdatedPat?.createdAt?.toISOString()).toBe('2026-01-01T00:00:00.000Z');
+    const backdatedUser = await verificationModel.findById(userVerification._id);
+    expect(backdatedUser?.createdAt?.toISOString()).toBe('2026-01-02T00:00:00.000Z');
   });
 
   afterAll(async () => {

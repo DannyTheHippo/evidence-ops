@@ -8,6 +8,7 @@ import { UsersService } from '../../../../src/features/common/users/users.servic
 import {
   AdminGuardUnavailableException,
   LastAdminException,
+  SelfRemovalException,
   UserNotFoundException,
 } from '../../../../src/features/common/users/exceptions/users.exception';
 import { DEFAULT_PAGINATION_LIMIT } from '../../../../src/shared/constants/pagination-defaults.constant';
@@ -294,6 +295,21 @@ describe('UsersService', () => {
       expect(mockUserModel.startSession).not.toHaveBeenCalled();
       expect(mockUserModel.findOneAndDelete).not.toHaveBeenCalled();
     });
+
+    it.each([
+      ['lowercase', userId.toString()],
+      ['uppercase', userId.toString().toUpperCase()],
+    ])(
+      'should refuse a caller removing themselves by %s hex id without opening a session or auditing',
+      async (_label, id) => {
+        await expect(service.remove(id, userId.toString(), 'tenant-a')).rejects.toBeInstanceOf(
+          SelfRemovalException,
+        );
+        expect(mockUserModel.startSession).not.toHaveBeenCalled();
+        expect(mockUserModel.findOneAndDelete).not.toHaveBeenCalled();
+        expect(mockAuditService.record).not.toHaveBeenCalled();
+      },
+    );
 
     it('should refuse when no member matches the id in this tenant', async () => {
       mockUserModel.findOneAndDelete.mockResolvedValueOnce(null);

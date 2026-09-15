@@ -14,6 +14,7 @@ import {
   INGEST_SCHEDULE_TO_CLOSE_TIMEOUT_MS,
   INGEST_START_TO_CLOSE_TIMEOUT_MS,
 } from './ingest-retry-policy';
+import { withRunRecording } from './run-recording';
 import type {
   ApprovalDecisionSignal,
   IngestDocumentVersionInput,
@@ -210,8 +211,16 @@ async function runIngestPipeline(
  * genuinely never started. No new persisted state is needed to represent "blocked pending
  * approval": the durable `Approval` row already carries that record, and a human reviewing the
  * pending-approvals inbox (`ApprovalsService.listPending`) sees it there.
+ *
+ * Wrapped by {@link withRunRecording} in the exported `ingestDocumentVersion` below, with no
+ * `toOutcome` — a gate's `rejected`/`timed_out` verdict lives on `IngestDocumentVersionResult
+ * .gateOutcome` and the `Approval` row, not on the run's `outcome` field: `WorkflowRunOutcome` is
+ * the conflict-resolution vocabulary (`resolved`/`rejected`/`timed_out`), and mapping an ingest
+ * gate's `approved`/`rejected`/`timed_out` onto it would conflate two different verdicts that
+ * happen to share two spellings. Every ordinary ending here — gated or not, approved, rejected, or
+ * timed out — records `completed` with no `outcome`.
  */
-export async function ingestDocumentVersion(
+async function runIngestDocumentVersion(
   input: IngestDocumentVersionInput,
 ): Promise<IngestDocumentVersionResult> {
   if (!input.requireApproval) {
@@ -262,4 +271,10 @@ export async function ingestDocumentVersion(
 
   const result = await runIngestPipeline(input.documentVersionId, input.tenantId);
   return { ...result, gateOutcome: 'approved' };
+}
+
+export async function ingestDocumentVersion(
+  input: IngestDocumentVersionInput,
+): Promise<IngestDocumentVersionResult> {
+  return withRunRecording(() => runIngestDocumentVersion(input));
 }

@@ -70,6 +70,7 @@ import { resolveSort } from '../../../shared/utils/resolve-sort.util';
 import { reauthTicks$ } from '../../../shared/utils/stream-session.util';
 import { toResponseDto } from '../../../shared/utils/to-response-dto.util';
 import type { IngestDocumentVersionInput } from '../../../workflows/types';
+import { WorkflowRunsService } from '../workflow-runs/workflow-runs.service';
 import {
   AMBIGUOUS_UPLOAD_MIME_TYPES,
   contentMatchesDeclaredKind,
@@ -189,6 +190,8 @@ export class DocumentsService {
 
     @Inject(WORKFLOW_ENGINE)
     private readonly workflowEngine: WorkflowEngine,
+
+    private readonly workflowRunsService: WorkflowRunsService,
 
     private readonly auditService: AuditService,
 
@@ -312,7 +315,7 @@ export class DocumentsService {
     // rather than an inline call into `IngestionService`. Never starts for the dedupe path — no
     // new bytes were stored, so there is nothing new to ingest.
     if (isNewVersion) {
-      await this.workflowEngine.start(INGEST_DOCUMENT_VERSION_WORKFLOW_TYPE, {
+      const handle = await this.workflowEngine.start(INGEST_DOCUMENT_VERSION_WORKFLOW_TYPE, {
         documentVersionId: currentVersion._id.toString(),
         // Per-upload opt-in (D5 of the approvals milestone) — see `IngestDocumentVersionInput`'s
         // own doc comment (`src/workflows/types.ts`) for why this travels on the workflow input
@@ -328,6 +331,24 @@ export class DocumentsService {
         // uploader's — a gate that denies correctly for the wrong reason.
         tenantId,
       } satisfies IngestDocumentVersionInput);
+
+      // Fails OPEN: the workflow has already started and will ingest the version regardless of
+      // this projection row, so a write failure here is logged and swallowed rather than turning
+      // an otherwise-successful upload into an error the caller has to retry.
+      try {
+        await this.workflowRunsService.create({
+          workflowId: handle.id,
+          workflowType: 'ingest-document-version',
+          status: handle.status,
+          tenantId,
+          subjectId: currentVersion._id.toString(),
+          subjectType: 'DocumentVersion',
+        });
+      } catch (error) {
+        this.logger.warn(
+          `Failed to record workflow run '${handle.id}' for document version '${currentVersion._id.toString()}': ${String(error)}`,
+        );
+      }
     }
 
     this.logger.debug(

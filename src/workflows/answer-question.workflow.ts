@@ -6,6 +6,7 @@ import {
   SYNTHESIZE_ANSWER_START_TO_CLOSE_TIMEOUT_MS,
 } from './activity-heartbeat-policy';
 import { INGEST_HEARTBEAT_TIMEOUT_MS } from './ingest-retry-policy';
+import { withRunRecording } from './run-recording';
 import type { AnswerQuestionInput, AnswerQuestionResult } from './types';
 
 // Retrieval is a Mongo hybrid-search read plus one Voyage embedding call for the query — cheap
@@ -157,8 +158,12 @@ const ledgerActivities = proxyActivities<Pick<Activities, 'resolveFromLedger'>>(
  * ledger path is not exempt from the gate — and persists with `answerPath: 'ledger'` and zero
  * usage on success. A resolution the gate cannot verify falls through to the ordinary retrieval +
  * synthesis path below, which persists with `answerPath: 'synthesis'`.
+ *
+ * Wrapped by {@link withRunRecording} in the exported `answerQuestion` below, with no `toOutcome`
+ * — `answer-question` has no outcome vocabulary of its own, so its run records `completed` with
+ * no `outcome` field on every ordinary ending.
  */
-export async function answerQuestion(input: AnswerQuestionInput): Promise<AnswerQuestionResult> {
+async function runAnswerQuestion(input: AnswerQuestionInput): Promise<AnswerQuestionResult> {
   const ledgerResult = await ledgerActivities.resolveFromLedger({
     questionText: input.questionText,
     tenantId: input.tenantId,
@@ -258,4 +263,8 @@ export async function answerQuestion(input: AnswerQuestionInput): Promise<Answer
     outcomeKind: persisted.outcomeKind,
     claimCoverage: persisted.claimCoverage,
   };
+}
+
+export async function answerQuestion(input: AnswerQuestionInput): Promise<AnswerQuestionResult> {
+  return withRunRecording(() => runAnswerQuestion(input));
 }

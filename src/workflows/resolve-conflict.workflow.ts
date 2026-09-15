@@ -6,6 +6,7 @@ import {
   workflowInfo,
 } from '@temporalio/workflow';
 import type { Activities } from '../worker/activities';
+import { withRunRecording } from './run-recording';
 import type {
   ApprovalDecisionSignal,
   ResolveConflictWorkflowInput,
@@ -93,8 +94,12 @@ const APPROVAL_TIMEOUT = '24 hours';
  * proposal behind a human, never inventing or second-guessing it. `input.ruleFired`/
  * `input.proposedWinnerFactId` travel the same way, into every `recordConflictResolution` call
  * below unchanged — this function never recomputes them either.
+ *
+ * Wrapped by {@link withRunRecording} in the exported `resolveConflict` below, reading its
+ * `outcome` off the returned `ResolveConflictWorkflowResult.outcome` — already exactly the
+ * `resolved`/`rejected`/`timed_out` vocabulary the run's own `outcome` field carries.
  */
-export async function resolveConflict(
+async function runResolveConflict(
   input: ResolveConflictWorkflowInput,
 ): Promise<ResolveConflictWorkflowResult> {
   const candidate = await conflictActivities.loadConflict({
@@ -211,4 +216,13 @@ export async function resolveConflict(
     winningValue: winner.value,
     winningUnit: winner.unit,
   };
+}
+
+export async function resolveConflict(
+  input: ResolveConflictWorkflowInput,
+): Promise<ResolveConflictWorkflowResult> {
+  return withRunRecording(
+    () => runResolveConflict(input),
+    (result) => result.outcome,
+  );
 }

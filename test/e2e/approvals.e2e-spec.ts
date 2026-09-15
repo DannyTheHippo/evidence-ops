@@ -51,8 +51,10 @@ interface WorkflowRunBody {
   workflowType?: string;
   status: string;
   errorMessage?: string;
+  outcome?: string;
   subjectId?: string;
   subjectType?: string;
+  stale?: boolean;
   createdAt: string;
 }
 
@@ -565,6 +567,46 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
         ids.indexOf(decidedLater._id.toString()),
       );
     });
+
+    it('narrows the inbox to one workflow via workflowId, and returns an empty page for an unknown id', async () => {
+      const matching = await approvalModel.create({
+        subject: { entityType: 'Conflict', entityId: new Types.ObjectId() },
+        action: 'resolve_conflict',
+        summary: "This workflow's own pending approval.",
+        workflowId: `wf-filter-match-${new Types.ObjectId().toString()}`,
+        state: 'pending',
+        tenantId,
+      });
+      await approvalModel.create({
+        subject: { entityType: 'Conflict', entityId: new Types.ObjectId() },
+        action: 'resolve_conflict',
+        summary: 'A different workflow entirely.',
+        workflowId: `wf-filter-other-${new Types.ObjectId().toString()}`,
+        state: 'pending',
+        tenantId,
+      });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/approvals')
+        .query({ workflowId: matching.workflowId })
+        .set('Cookie', cookie);
+      const body = response.body as { docs: ApprovalBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.count).toBe(1);
+      expect(body.docs).toHaveLength(1);
+      expect(body.docs[0].id).toBe(matching._id.toString());
+
+      const emptyResponse = await request(getTestServer(app))
+        .get('/api/v1/approvals')
+        .query({ workflowId: 'wf-does-not-exist' })
+        .set('Cookie', cookie);
+      const emptyBody = emptyResponse.body as { docs: ApprovalBody[]; count: number };
+
+      expect(emptyResponse.status).toBe(200);
+      expect(emptyBody.count).toBe(0);
+      expect(emptyBody.docs).toHaveLength(0);
+    });
   });
 
   describe('POST /approvals/:id/decision', () => {
@@ -784,9 +826,10 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
 
       expect(response.status).toBe(200);
       expect(body.status).toBe('completed');
+      expect(body.stale).toBe(false);
       expect(body.workflowType).toBe('resolve-conflict');
       expect(Object.keys(body).sort()).toEqual(
-        ['id', 'workflowId', 'workflowType', 'status', 'createdAt'].sort(),
+        ['id', 'workflowId', 'workflowType', 'status', 'stale', 'createdAt'].sort(),
       );
 
       const events = await auditEventModel.find({
@@ -796,7 +839,7 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
       expect(events.length).toBeGreaterThan(0);
     });
 
-    it('fails open to the durable status when the workflow id is unknown to the live engine', async () => {
+    it('fails open to the durable status, marked stale, when the workflow id is unknown to the live engine', async () => {
       const run = await workflowRunModel.create({
         workflowId: 'unregistered-workflow-id',
         status: 'running',
@@ -810,6 +853,47 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
 
       expect(response.status).toBe(200);
       expect(body.status).toBe('running');
+      expect(body.stale).toBe(true);
+    });
+
+    it('surfaces errorMessage on a failed row and outcome on a completed row, each on its own fixture', async () => {
+      const failed = await workflowRunModel.create({
+        workflowId: `wf-terminal-failed-${new Types.ObjectId().toString()}`,
+        workflowType: 'sync-source',
+        status: 'failed',
+        errorMessage: 'ENOENT: no such file or directory',
+        tenantId,
+      });
+      const completed = await workflowRunModel.create({
+        workflowId: `wf-terminal-outcome-${new Types.ObjectId().toString()}`,
+        workflowType: 'resolve-conflict',
+        status: 'completed',
+        outcome: 'timed_out',
+        tenantId,
+      });
+
+      const failedResponse = await request(getTestServer(app))
+        .get(`/api/v1/workflow-runs/${failed._id.toString()}`)
+        .set('Cookie', cookie);
+      const failedBody = failedResponse.body as WorkflowRunBody;
+
+      expect(failedResponse.status).toBe(200);
+      expect(failedBody.status).toBe('failed');
+      expect(failedBody.errorMessage).toBe('ENOENT: no such file or directory');
+      expect(failedBody.outcome).toBeUndefined();
+      // Terminal already, so never stale even though the engine also does not know this
+      // workflowId.
+      expect(failedBody.stale).toBe(false);
+
+      const completedResponse = await request(getTestServer(app))
+        .get(`/api/v1/workflow-runs/${completed._id.toString()}`)
+        .set('Cookie', cookie);
+      const completedBody = completedResponse.body as WorkflowRunBody;
+
+      expect(completedResponse.status).toBe(200);
+      expect(completedBody.status).toBe('completed');
+      expect(completedBody.outcome).toBe('timed_out');
+      expect(completedBody.errorMessage).toBeUndefined();
     });
   });
 
@@ -982,6 +1066,128 @@ describe('Approvals, WorkflowRuns, and Conflict resolution requests (e2e)', () =
         resolveRun._id.toString(),
         syncRun._id.toString(),
       ]);
+    });
+
+    it('surfaces outcome on a list row', async () => {
+      const workflowId = `wf-outcome-list-${new Types.ObjectId().toString()}`;
+      const run = await workflowRunModel.create({
+        workflowId,
+        workflowType: 'resolve-conflict',
+        status: 'completed',
+        outcome: 'resolved',
+        tenantId,
+      });
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/workflow-runs')
+        .query({ workflowId })
+        .set('Cookie', cookie);
+      const body = response.body as { docs: WorkflowRunBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.docs.find((doc) => doc.id === run._id.toString())?.outcome).toBe('resolved');
+    });
+
+    it('narrows the result set with the from/to window, and 400s naming both values when to is earlier than from', async () => {
+      const workflowId = `wf-window-${new Types.ObjectId().toString()}`;
+      const insideRun = await workflowRunModel.create({ workflowId, status: 'running', tenantId });
+      const outsideRun = await workflowRunModel.create({ workflowId, status: 'running', tenantId });
+      // `create()` ignores an explicit `createdAt` under `timestamps: true`; backdating needs a
+      // follow-up update. `timestamps: true` also treats `createdAt` as insert-only and strips a
+      // plain `$set` on it — `overwriteImmutable` is Mongoose's documented escape hatch to keep
+      // the caller's value on an existing document.
+      await workflowRunModel.updateOne(
+        { _id: insideRun._id },
+        { createdAt: new Date('2026-07-15T00:00:00.000Z') },
+        { overwriteImmutable: true },
+      );
+      await workflowRunModel.updateOne(
+        { _id: outsideRun._id },
+        { createdAt: new Date('2026-09-01T00:00:00.000Z') },
+        { overwriteImmutable: true },
+      );
+
+      const response = await request(getTestServer(app))
+        .get('/api/v1/workflow-runs')
+        .query({
+          workflowId,
+          from: '2026-07-01T00:00:00.000Z',
+          to: '2026-08-01T00:00:00.000Z',
+        })
+        .set('Cookie', cookie);
+      const body = response.body as { docs: WorkflowRunBody[]; count: number };
+
+      expect(response.status).toBe(200);
+      expect(body.count).toBe(1);
+      expect(body.docs[0].id).toBe(insideRun._id.toString());
+
+      const badWindowResponse = await request(getTestServer(app))
+        .get('/api/v1/workflow-runs')
+        .query({ from: '2026-08-01T00:00:00.000Z', to: '2026-07-01T00:00:00.000Z' })
+        .set('Cookie', cookie);
+
+      expect(badWindowResponse.status).toBe(400);
+      expect(badWindowResponse.body).toEqual(
+        expect.objectContaining({
+          message: expect.stringContaining('2026-08-01T00:00:00.000Z') as string,
+        }),
+      );
+      expect(badWindowResponse.body).toEqual(
+        expect.objectContaining({
+          message: expect.stringContaining('2026-07-01T00:00:00.000Z') as string,
+        }),
+      );
+    });
+
+    it('returns up to limit=100 rows and rejects limit=101', async () => {
+      const okResponse = await request(getTestServer(app))
+        .get('/api/v1/workflow-runs')
+        .query({ limit: 100 })
+        .set('Cookie', cookie);
+
+      expect(okResponse.status).toBe(200);
+      expect((okResponse.body as { docs: WorkflowRunBody[] }).docs.length).toBeLessThanOrEqual(100);
+
+      const rejectedResponse = await request(getTestServer(app))
+        .get('/api/v1/workflow-runs')
+        .query({ limit: 101 })
+        .set('Cookie', cookie);
+
+      expect(rejectedResponse.status).toBe(400);
+    });
+
+    it('matches status=completed and status=failed against their own seeded terminal rows', async () => {
+      const completed = await workflowRunModel.create({
+        workflowId: `wf-status-completed-${new Types.ObjectId().toString()}`,
+        status: 'completed',
+        tenantId,
+      });
+      const failed = await workflowRunModel.create({
+        workflowId: `wf-status-failed-${new Types.ObjectId().toString()}`,
+        status: 'failed',
+        errorMessage: 'boom',
+        tenantId,
+      });
+
+      const completedResponse = await request(getTestServer(app))
+        .get('/api/v1/workflow-runs')
+        .query({ status: 'completed' })
+        .set('Cookie', cookie);
+      const completedBody = completedResponse.body as { docs: WorkflowRunBody[]; count: number };
+
+      expect(completedResponse.status).toBe(200);
+      expect(completedBody.docs.some((doc) => doc.id === completed._id.toString())).toBe(true);
+      expect(completedBody.docs.some((doc) => doc.id === failed._id.toString())).toBe(false);
+
+      const failedResponse = await request(getTestServer(app))
+        .get('/api/v1/workflow-runs')
+        .query({ status: 'failed' })
+        .set('Cookie', cookie);
+      const failedBody = failedResponse.body as { docs: WorkflowRunBody[]; count: number };
+
+      expect(failedResponse.status).toBe(200);
+      expect(failedBody.docs.some((doc) => doc.id === failed._id.toString())).toBe(true);
+      expect(failedBody.docs.some((doc) => doc.id === completed._id.toString())).toBe(false);
     });
   });
 

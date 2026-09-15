@@ -235,6 +235,33 @@ describe('AuditEventsService', () => {
       expect(mockAuditEventModel.countDocuments).toHaveBeenCalledWith(expectedFilter);
     });
 
+    it('should carry the createdAt range when from and to are given', async () => {
+      const actorId = new Types.ObjectId().toString();
+      mockAuditEventModel.find.mockResolvedValueOnce([]);
+      mockAuditEventModel.countDocuments.mockResolvedValueOnce(0);
+      mockAuditService.record.mockResolvedValueOnce(undefined);
+
+      await service.list(
+        { skip: 0, limit: 20, from: '2026-07-01T00:00:00.000Z', to: '2026-08-01T00:00:00.000Z' },
+        actorId,
+        'tenant-a',
+      );
+
+      const expectedFilter = {
+        tenantId: 'tenant-a',
+        createdAt: {
+          $gte: new Date('2026-07-01T00:00:00.000Z'),
+          $lt: new Date('2026-08-01T00:00:00.000Z'),
+        },
+      };
+      expect(mockAuditEventModel.find).toHaveBeenCalledWith(expectedFilter, null, {
+        sort: { createdAt: -1 },
+        skip: 0,
+        limit: 20,
+      });
+      expect(mockAuditEventModel.countDocuments).toHaveBeenCalledWith(expectedFilter);
+    });
+
     it('should combine action, entityType, and entityId when all three are given', async () => {
       const actorId = new Types.ObjectId().toString();
       const entityId = new Types.ObjectId().toString();

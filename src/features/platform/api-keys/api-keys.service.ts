@@ -18,6 +18,7 @@ import {
   type ListApiKeysRequestDto,
 } from './dtos/request/list-api-keys.request.dto';
 import {
+  ApiKeyExpiredException,
   ApiKeyLimitExceededException,
   ApiKeyNotFoundException,
 } from './exceptions/api-keys.exception';
@@ -199,7 +200,8 @@ export class ApiKeysService implements TokenVerifier {
    *
    * Scoped by userId as well as tenantId, same as `revoke`, and refuses an already-revoked key —
    * a foreign-tenant id, another user's key id, and a revoked key are all indistinguishable from a
-   * missing one.
+   * missing one. An expired key is the one exception: it is owned and identifiable, so it is
+   * refused with 409 rather than folded into the same 404.
    */
   async rotate(id: string, actorId: string, tenantId: string): Promise<MintedApiKeyResult> {
     if (!Types.ObjectId.isValid(id)) {
@@ -215,16 +217,29 @@ export class ApiKeysService implements TokenVerifier {
     const tokenHash = this.hash(token);
     const tokenPrefix = token.slice(0, TOKEN_DISPLAY_PREFIX_LENGTH);
 
+    const now = new Date();
     const apiKey = await this.apiKeyModel.findOneAndUpdate(
       {
         _id: id,
         userId: new Types.ObjectId(actorId),
         tenantId,
         revokedAt: { $exists: false },
+        $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $gt: now } }],
       },
       { $set: { tokenHash, tokenPrefix, tokenVersion: user.tokenVersion } },
     );
     if (!apiKey) {
+      // The filter above cannot tell an expired key from a missing one, so a second, narrower
+      // read — dropping only the expiry clause — disambiguates: owned means 409, otherwise 404.
+      const owned = await this.apiKeyModel.findOne({
+        _id: id,
+        userId: new Types.ObjectId(actorId),
+        tenantId,
+        revokedAt: { $exists: false },
+      });
+      if (owned) {
+        throw new ApiKeyExpiredException(`API key '${id}' has expired`);
+      }
       throw new ApiKeyNotFoundException(`API key '${id}' not found`);
     }
 

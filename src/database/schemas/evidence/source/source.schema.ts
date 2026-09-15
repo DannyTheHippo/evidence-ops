@@ -143,6 +143,11 @@ export class Source extends AuditableDocument {
   @Prop({ type: Date })
   lastSyncAt?: Date;
 
+  /** Stamped by every `claimAttempt`, including one that exits at the `enabled`/`tracked`/`kind`
+   *  guards before syncing anything — it records that the loop ran, not that it succeeded. */
+  @Prop({ type: Date })
+  lastSyncStartedAt?: Date;
+
   /**
    * Outcome of the most recent sync attempt. Left as an open string rather than an enum here —
    * the sync service that owns this vocabulary is a later step, not part of this schema change.

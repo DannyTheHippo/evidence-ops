@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsBoolean, IsIn, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsIn, IsNotEmpty, IsOptional, IsString, ValidateIf } from 'class-validator';
 import {
   DOCUMENT_SOURCE_CLASSES,
   type DocumentSourceClass,
@@ -49,13 +49,17 @@ export class UpdateSourceRequestDto {
 
   @ApiProperty({
     example: 'Jane Doe, IT',
-    description: 'Person or team accountable for this source.',
+    description:
+      'Person or team accountable for this source. Omit the field to leave it unchanged; send ' +
+      'null to clear it. An empty string is rejected — it is not a clear instruction.',
     required: false,
+    nullable: true,
   })
   @IsOptional()
+  @ValidateIf((_, value) => value !== null)
   @IsString()
   @IsNotEmpty()
-  owner?: string;
+  owner?: string | null;
 
   @ApiProperty({
     example: false,

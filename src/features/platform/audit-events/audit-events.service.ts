@@ -9,6 +9,7 @@ import {
 import { AuditService } from '../../../shared/services/audit/audit.service';
 import { AppLogger } from '../../../shared/services/logger/logger.service';
 import type { DocumentResultWithCount } from '../../../shared/types/document-result-with-count.type';
+import { buildCreatedAtRange } from '../../../shared/utils/build-created-at-range.util';
 import { resolveSort } from '../../../shared/utils/resolve-sort.util';
 import {
   DEFAULT_AUDIT_EVENT_SORT_DIRECTION,
@@ -65,6 +66,7 @@ export class AuditEventsService {
       ...(dto.entityId ? { 'subject.entityId': new Types.ObjectId(dto.entityId) } : {}),
       ...(dto.origin ? { origin: dto.origin } : {}),
       ...(dto.refusalReason ? { refusalReason: dto.refusalReason } : {}),
+      ...buildCreatedAtRange(dto.from, dto.to),
     };
 
     const [events, count] = await Promise.all([
