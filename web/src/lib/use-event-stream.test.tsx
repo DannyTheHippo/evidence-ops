@@ -2,6 +2,8 @@ import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeEventSource } from '../test/fake-event-source';
 import {
+  CONNECTION_LABELS,
+  CONNECTION_TONES,
   getStreamStatus,
   subscribeStreamStatus,
   unsubscribeStreamStatus,
@@ -191,10 +193,162 @@ describe('useEventStream', () => {
     expect(screen.getByText('stream state: live')).toBeInTheDocument();
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(35_000);
     });
 
     expect(screen.getByText('stream state: stale')).toBeInTheDocument();
+  });
+
+  it('goes stale from connecting when no frame ever arrives', async () => {
+    vi.useFakeTimers();
+    render(<Harness url="/api/v1/answers/1/events" onEvent={vi.fn()} onFallback={vi.fn()} />);
+
+    expect(screen.getByText('stream state: connecting')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(35_000);
+    });
+
+    expect(screen.getByText('stream state: stale')).toBeInTheDocument();
+  });
+
+  it('closes a stale source and reconnects with backoff, going live on the next frame', async () => {
+    vi.useFakeTimers();
+    render(<Harness url="/api/v1/answers/1/events" onEvent={vi.fn()} onFallback={vi.fn()} />);
+
+    const [firstSource] = FakeEventSource.instances;
+    act(() => {
+      firstSource.emit('heartbeat', { value: 'first' });
+    });
+    expect(screen.getByText('stream state: live')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(35_000);
+    });
+    expect(screen.getByText('stream state: stale')).toBeInTheDocument();
+    expect(firstSource.closed).toBe(true);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(screen.getByText('stream state: reconnecting')).toBeInTheDocument();
+    expect(FakeEventSource.instances).toHaveLength(2);
+
+    const [, secondSource] = FakeEventSource.instances;
+    act(() => {
+      secondSource.emit('heartbeat', { value: 'second' });
+    });
+    expect(screen.getByText('stream state: live')).toBeInTheDocument();
+  });
+
+  it('falls back after three stale reconnects and calls onFallback once', async () => {
+    vi.useFakeTimers();
+    const onFallback = vi.fn();
+    render(<Harness url="/api/v1/answers/1/events" onEvent={vi.fn()} onFallback={onFallback} />);
+
+    const [firstSource] = FakeEventSource.instances;
+    act(() => {
+      firstSource.emit('heartbeat', { value: 'first' });
+    });
+
+    // Three stale reconnects, each source left to go stale in turn with no frame ever arriving.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(35_000 + 1_000 + 35_000 + 2_000 + 35_000 + 4_000 + 35_000);
+    });
+
+    expect(screen.getByText('stream state: fallback')).toBeInTheDocument();
+    expect(onFallback).toHaveBeenCalledTimes(1);
+    expect(FakeEventSource.instances).toHaveLength(4);
+    expect(FakeEventSource.instances.every((instance) => instance.closed)).toBe(true);
+  });
+
+  it('re-establishes the stream from fallback on the timer and stops once live', async () => {
+    vi.useFakeTimers();
+    render(<Harness url="/api/v1/answers/1/events" onEvent={vi.fn()} onFallback={vi.fn()} />);
+
+    const [firstSource] = FakeEventSource.instances;
+    act(() => {
+      firstSource.emitConnectionError();
+      firstSource.emitConnectionError();
+      firstSource.emitConnectionError();
+    });
+    expect(screen.getByText('stream state: fallback')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(screen.getByText('stream state: reconnecting')).toBeInTheDocument();
+    expect(FakeEventSource.instances).toHaveLength(2);
+
+    const [, secondSource] = FakeEventSource.instances;
+    act(() => {
+      secondSource.emit('heartbeat', { value: 'restored' });
+    });
+    expect(screen.getByText('stream state: live')).toBeInTheDocument();
+  });
+
+  it('re-establishes on visibilitychange to visible', () => {
+    render(<Harness url="/api/v1/answers/1/events" onEvent={vi.fn()} onFallback={vi.fn()} />);
+
+    const [firstSource] = FakeEventSource.instances;
+    act(() => {
+      firstSource.emitConnectionError();
+      firstSource.emitConnectionError();
+      firstSource.emitConnectionError();
+    });
+    expect(screen.getByText('stream state: fallback')).toBeInTheDocument();
+
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    expect(screen.getByText('stream state: reconnecting')).toBeInTheDocument();
+    expect(FakeEventSource.instances).toHaveLength(2);
+  });
+
+  it('publishes idle after a terminal frame and never reconnects', async () => {
+    vi.useFakeTimers();
+    const onFallback = vi.fn();
+    render(
+      <Harness
+        url="/api/v1/answers/1/events"
+        onEvent={vi.fn()}
+        onFallback={onFallback}
+        isTerminal={(name) => name === 'message'}
+      />,
+    );
+
+    const [source] = FakeEventSource.instances;
+    act(() => {
+      source.emit('message', { value: 'done' });
+    });
+    expect(screen.getByText('stream state: idle')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+
+    expect(screen.getByText('stream state: idle')).toBeInTheDocument();
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(onFallback).not.toHaveBeenCalled();
+  });
+
+  it('carries every StreamState in CONNECTION_LABELS with no bare-word detail', () => {
+    const states: StreamState[] = [
+      'idle',
+      'connecting',
+      'live',
+      'stale',
+      'reconnecting',
+      'fallback',
+    ];
+
+    for (const streamState of states) {
+      const entry = CONNECTION_LABELS[streamState];
+      expect(entry.label).toBeTruthy();
+      expect(entry.detail.trim().split(/\s+/).length).toBeGreaterThan(1);
+    }
   });
 
   it('falls back immediately when EventSource is unavailable in this environment', () => {
@@ -246,5 +400,18 @@ describe('useEventStream', () => {
     expect(source.closed).toBe(true);
     expect(screen.getByText('stream state: idle')).toBeInTheDocument();
     expect(getStreamStatus()).toBe('idle');
+  });
+});
+
+describe('CONNECTION_TONES', () => {
+  it('maps every non-idle stream state to a tone, and idle to none', () => {
+    expect(CONNECTION_TONES).toEqual({
+      connecting: 'connecting',
+      live: 'live',
+      stale: 'stale',
+      reconnecting: 'reconnecting',
+      fallback: 'polling',
+    });
+    expect(CONNECTION_TONES.idle).toBeUndefined();
   });
 });

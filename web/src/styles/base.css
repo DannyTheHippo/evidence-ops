@@ -27,6 +27,7 @@ body {
    turn stacks .topbar (flex:none) above the scrolling .container — two levels below #root. */
 #root {
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
 }
@@ -40,13 +41,15 @@ a:hover {
 }
 
 :focus-visible {
-  outline: none;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   box-shadow: var(--ring);
   border-radius: var(--radius-sm);
 }
 
 ::selection {
-  background: var(--signal-soft);
+  background: var(--highlight);
+  color: var(--ink);
 }
 
 /* Skip link: clipped to a 0×0 rect off-screen rather than display:none, so it stays in the
@@ -70,17 +73,21 @@ a:hover {
 .skip-link:focus-visible {
   clip-path: none;
   overflow: visible;
-  outline: none;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   box-shadow: var(--ring);
 }
 
-/* Focus lands here programmatically (skip link, route change) far more often than by real
-   keyboard traversal, since tabIndex={-1} keeps it out of the normal tab order. Plain :focus
-   (the programmatic case) draws no ring; :focus-visible (genuine keyboard focus) still does. */
+/* Route-change focus lands on the page <h1> (tabIndex -1); this region takes focus only as the
+   fallback for a page without one and draws no ring itself. Only keyboard-initiated navigation
+   matches :focus-visible on the heading, so pointer navigation shows no ring. */
 #main-content:focus {
   outline: none;
 }
-#main-content:focus-visible {
+#main-content h1:focus {
+  outline: none;
+}
+#main-content h1:focus-visible {
   outline: none;
   box-shadow: var(--ring);
   border-radius: var(--radius-sm);
@@ -104,14 +111,13 @@ h2 {
   color: var(--muted);
   font-size: var(--text-sm);
   margin: var(--space-2) 0 0;
-  max-width: var(--measure-reading);
 }
 .eyebrow {
   display: inline-block;
   font-size: var(--text-2xs);
   font-weight: 600;
   line-height: var(--leading-tight);
-  letter-spacing: 0.1em;
+  letter-spacing: var(--tracking-caps);
   text-transform: uppercase;
   color: var(--muted);
   margin-bottom: var(--space-1);
@@ -139,12 +145,11 @@ h2 {
     outline: 2px solid CanvasText;
     outline-offset: 2px;
   }
-  /* The skip link and the main region set `outline: none` above and rely on the shadow ring
-     instead, and a media query adds no specificity — so the bare `:focus-visible` rule above loses
-     to both. Named explicitly, they would be the only two focusable things in the app with no
-     indicator at all here, and they are the two the keyboard entry path depends on. */
+  /* Other :focus-visible rules declare a transparent outline, which forced colors recolour in
+     place; the route-focus heading sets outline: none and relies on the shadow ring, so it is
+     restored here explicitly. */
   .skip-link:focus-visible,
-  #main-content:focus-visible {
+  #main-content h1:focus-visible {
     outline: 2px solid CanvasText;
     outline-offset: 2px;
   }

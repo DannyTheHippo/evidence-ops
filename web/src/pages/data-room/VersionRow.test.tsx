@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { DocumentVersion } from '../../api/client';
 import VersionRow from './VersionRow';
 
@@ -17,12 +17,22 @@ const version: DocumentVersion = {
 // A version row renders as <tr>/<td> — a bare table row outside <table><tbody> is invalid HTML
 // and jsdom logs a nesting warning on every test without this wrapper. `Link` also needs a router
 // context, hence `MemoryRouter`.
-function renderRow(v: DocumentVersion = version, documentId = 'doc-1') {
+function renderRow(
+  v: DocumentVersion = version,
+  documentId = 'doc-1',
+  options: { isCurrent?: boolean; onOpenDetails?: (version: DocumentVersion) => void } = {},
+) {
   render(
     <MemoryRouter>
       <table>
         <tbody>
-          <VersionRow version={v} documentId={documentId} />
+          <VersionRow
+            version={v}
+            documentId={documentId}
+            documentTitle="Q3 Rent Roll"
+            isCurrent={options.isCurrent ?? false}
+            onOpenDetails={options.onOpenDetails ?? vi.fn()}
+          />
         </tbody>
       </table>
     </MemoryRouter>,
@@ -81,5 +91,40 @@ describe('VersionRow', () => {
 
     expect(screen.queryByText('reduced fidelity')).not.toBeInTheDocument();
     expect(screen.queryByText(/fidelity/i)).not.toBeInTheDocument();
+  });
+
+  it('marks the current version with aria-current and a Current badge', () => {
+    renderRow(version, 'doc-1', { isCurrent: true });
+
+    expect(screen.getByRole('row')).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByText('Current').className).toContain('badge--info');
+  });
+
+  it('carries no aria-current and no Current badge on a non-current version', () => {
+    renderRow(version, 'doc-1', { isCurrent: false });
+
+    expect(screen.getByRole('row')).not.toHaveAttribute('aria-current');
+    expect(screen.queryByText('Current')).not.toBeInTheDocument();
+  });
+
+  it('opens the full sha256 tooltip when keyboard focus reaches the truncated digest', async () => {
+    renderRow();
+
+    const digest = screen.getByText(`${'a'.repeat(8)}…${'a'.repeat(4)}`);
+    expect(digest).toHaveAttribute('tabindex', '0');
+
+    digest.focus();
+    const surface = await screen.findByRole('tooltip');
+    expect(surface).toHaveTextContent('a'.repeat(64));
+    expect(digest).toHaveAttribute('aria-describedby', surface.id);
+  });
+
+  it('opens the version details on the Details control, named for its row', () => {
+    const onOpenDetails = vi.fn();
+    renderRow(version, 'doc-1', { onOpenDetails });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Version 1 details, Q3 Rent Roll' }));
+
+    expect(onOpenDetails).toHaveBeenCalledWith(version);
   });
 });

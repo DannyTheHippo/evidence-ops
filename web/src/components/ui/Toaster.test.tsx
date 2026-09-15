@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Toaster from './Toaster';
-import { clearToasts, notify } from './toast';
+import { clearToasts, getToasts, notify } from './toast';
 
 describe('Toaster', () => {
   afterEach(() => {
@@ -104,5 +104,93 @@ describe('Toaster', () => {
     });
 
     expect(screen.queryAllByRole('status')).toHaveLength(0);
+  });
+
+  it('holds a success toast while the stack has focus', async () => {
+    vi.useFakeTimers();
+    render(<Toaster />);
+
+    act(() => {
+      notify('success', 'Saved.');
+    });
+    const dismiss = screen.getByRole('button', { name: 'Dismiss' });
+    act(() => {
+      dismiss.focus();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(screen.getByRole('status')).toBeInTheDocument();
+
+    act(() => {
+      fireEvent.focusOut(dismiss, { relatedTarget: document.body });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('announces a success toast through one live region', () => {
+    render(<Toaster />);
+
+    act(() => {
+      notify('success', 'Saved.');
+    });
+
+    const status = screen.getByRole('status');
+    expect(status).not.toHaveAttribute('aria-live');
+    expect(status.closest('.toast-stack')).toHaveAttribute('aria-live', 'polite');
+  });
+
+  it('never reuses a toast id after clearToasts, and drops a timer armed before it', async () => {
+    vi.useFakeTimers();
+    render(<Toaster />);
+
+    act(() => {
+      notify('success', 'First.');
+    });
+    const firstId = getToasts()[0].id;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4900);
+    });
+    act(() => {
+      clearToasts();
+    });
+    // First.'s timer had 100ms left when the clear ran; without clearToasts's own clearTimeout
+    // loop it would still be scheduled here.
+    expect(vi.getTimerCount()).toBe(0);
+
+    act(() => {
+      notify('success', 'Second.');
+    });
+    const secondId = getToasts()[0].id;
+    expect(secondId).not.toBe(firstId);
+
+    // Second.'s own 5000ms timer isn't due yet.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(getToasts()).toHaveLength(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4800);
+    });
+    expect(getToasts()).toHaveLength(0);
+  });
+
+  it('reports hidden toasts beyond the cap', () => {
+    render(<Toaster />);
+
+    act(() => {
+      notify('success', 'First.');
+      notify('success', 'Second.');
+      notify('success', 'Third.');
+      notify('success', 'Fourth.');
+    });
+
+    expect(screen.getByText('1 more')).toBeInTheDocument();
   });
 });

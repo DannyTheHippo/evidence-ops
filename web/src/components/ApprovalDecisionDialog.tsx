@@ -1,6 +1,7 @@
-import { useId, useRef, useState, type KeyboardEvent } from 'react';
+import { useId, useRef, useState, type RefObject } from 'react';
 import type { ApprovalDecision } from '../api/client';
 import { useFormSubmit } from '../lib/use-form-submit';
+import Alert from './ui/Alert';
 import Button from './ui/Button';
 import Dialog from './ui/Dialog';
 import Field from './ui/Field';
@@ -26,40 +27,36 @@ interface DecisionFormProps {
   summary: string;
   resumesWorkflow: boolean;
   bodyId: string;
+  /** Cancel's `Button` node, owned by the parent so `Dialog`'s `initialFocusRef` can target it
+   * on a rejection. */
+  cancelRef: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
   onConfirm: (decision: ApprovalDecision, reason: string | undefined) => Promise<void>;
 }
 
 /** The reason field and its submit lifecycle for one open of the dialog. Mounted only while a
  * decision is set — see the `key`ed usage below — so every fresh open starts `useFormSubmit`
- * clean instead of replaying a prior open's reason text or server error. */
+ * clean instead of replaying a prior open's reason text or server error. Enter in the reason
+ * field inserts a newline rather than submitting, matching every other multi-line control in the
+ * app; `cancelRef` is what lets the parent land initial focus on Cancel for a rejection instead. */
 function DecisionForm({
   decision,
   summary,
   resumesWorkflow,
   bodyId,
+  cancelRef,
   onClose,
   onConfirm,
 }: DecisionFormProps) {
   const [reason, setReason] = useState('');
-  const formRef = useRef<HTMLFormElement>(null);
 
   const { pending, formError, onSubmit, fieldProps } = useFormSubmit<'reason'>({
     submit: () => onConfirm(decision, reason.trim() || undefined),
   });
   const { id: reasonId, error: reasonError, onBlur: reasonBlur } = fieldProps('reason');
 
-  // Enter submits, matching a single-line control; Shift+Enter still inserts a newline, since the
-  // field is a multi-line textarea.
-  function handleReasonKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      formRef.current?.requestSubmit();
-    }
-  }
-
   return (
-    <form ref={formRef} onSubmit={onSubmit} className="form" noValidate>
+    <form onSubmit={onSubmit} className="form" noValidate>
       <p id={bodyId}>{summary}</p>
       <p className="cell-sub">
         {resumesWorkflow
@@ -73,18 +70,13 @@ function DecisionForm({
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             onBlur={reasonBlur}
-            onKeyDown={handleReasonKeyDown}
             placeholder="Evidence checks out."
             disabled={pending}
             {...inputProps}
           />
         )}
       </Field>
-      {formError && (
-        <p className="error" role="alert">
-          {formError}
-        </p>
-      )}
+      {formError && <Alert tone="rejected">{formError}</Alert>}
       <div className="form-actions">
         <Button
           type="submit"
@@ -93,7 +85,7 @@ function DecisionForm({
         >
           {decision === 'rejected' ? 'Reject' : 'Approve'}
         </Button>
-        <Button type="button" variant="ghost" disabled={pending} onClick={onClose}>
+        <Button type="button" variant="ghost" disabled={pending} onClick={onClose} ref={cancelRef}>
           Cancel
         </Button>
       </div>
@@ -113,6 +105,7 @@ export default function ApprovalDecisionDialog({
   onConfirm,
 }: ApprovalDecisionDialogProps) {
   const bodyId = useId();
+  const cancelRef = useRef<HTMLButtonElement>(null);
 
   return (
     <Dialog
@@ -121,6 +114,7 @@ export default function ApprovalDecisionDialog({
       title={decision === 'rejected' ? 'Reject this approval' : 'Approve this approval'}
       describedBy={bodyId}
       size="sm"
+      initialFocusRef={decision === 'rejected' ? cancelRef : undefined}
     >
       {decision && (
         <DecisionForm
@@ -129,6 +123,7 @@ export default function ApprovalDecisionDialog({
           summary={summary}
           resumesWorkflow={resumesWorkflow}
           bodyId={bodyId}
+          cancelRef={cancelRef}
           onClose={onClose}
           onConfirm={onConfirm}
         />

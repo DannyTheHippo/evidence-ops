@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import indexHtml from '../../index.html?raw';
 import nginxConf from '../../nginx.conf?raw';
-import { THEME_STORAGE_KEY } from '../components/shell/ThemeToggle';
+import { THEME_STORAGE_KEY } from '../components/shell/ThemeMenu';
 
 /** `index.html` carries an inline theme bootstrap that has to run before first paint, so it cannot
  * import from the bundle and cannot be covered by a component test. That leaves two values in it
@@ -52,11 +52,11 @@ describe('index.html ↔ nginx.conf', () => {
   });
 });
 
-describe('index.html ↔ ThemeToggle', () => {
-  /** Fails CLOSED. The bootstrap reads the key the toggle writes; renaming `THEME_STORAGE_KEY`
+describe('index.html ↔ ThemeMenu', () => {
+  /** Fails CLOSED. The bootstrap reads the key the menu writes; renaming `THEME_STORAGE_KEY`
    * alone leaves the bootstrap reading a key nothing sets, which is invisible to every other test
    * and shows up only as a flash of the wrong theme on a cold load. */
-  it('reads the same storage key ThemeToggle writes', () => {
+  it('reads the same storage key ThemeMenu writes', () => {
     expect(inlineThemeScript()).toContain(`'${THEME_STORAGE_KEY}'`);
   });
 });

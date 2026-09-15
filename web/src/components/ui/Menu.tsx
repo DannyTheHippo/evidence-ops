@@ -1,11 +1,13 @@
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type FocusEvent,
   type KeyboardEvent,
   type ReactNode,
 } from 'react';
+import Popover from './Popover';
 
 export interface MenuItem {
   label: ReactNode;
@@ -17,14 +19,17 @@ export interface MenuItem {
 interface MenuProps {
   trigger: ReactNode;
   items: MenuItem[];
+  /** Which trigger edge the surface prefers to align to; `Popover` flips it to the other edge (and
+   * upward) on its own whenever the preferred side would overflow the viewport, so this is a hint
+   * for the common case, not a requirement — a caller near the viewport's end edge can still pass
+   * `'bottom-end'` to skip the first render's flip. Defaults to `'bottom-start'`. */
+  placement?: 'bottom-start' | 'bottom-end';
 }
 
-/** Dropdown menu button following the WAI-ARIA menu-button pattern. `Dialog` is a modal `<dialog>`
- * and does not fit this shape — no backdrop, no focus trap, and it dismisses on Escape, an outside
- * click, or focus leaving the surface rather than requiring an explicit close action. An item with
- * no `onSelect` renders `aria-disabled` and reads as informational; an item with `onSelect` is the
- * actionable kind. */
-export default function Menu({ trigger, items }: MenuProps) {
+/** Dropdown menu button following the WAI-ARIA menu-button pattern, its surface rendered through
+ * `Popover`. An item with no `onSelect` renders as non-interactive text; an item with `onSelect`
+ * is the actionable kind. */
+export default function Menu({ trigger, items, placement }: MenuProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -34,6 +39,21 @@ export default function Menu({ trigger, items }: MenuProps) {
   // trigger there would fight that action. Escape, an item selection, and unmount-while-open all
   // leave focus with nowhere natural to go, so those paths restore it.
   const skipRestoreFocus = useRef(false);
+  // Set by the trigger's own ArrowUp/ArrowDown before opening, so the effect below knows which end
+  // of the actionable list to focus first — ArrowUp opens onto the last item, everything else onto
+  // the first.
+  const openAtLastItem = useRef(false);
+  const triggerId = useId();
+
+  const actionableCount = items.filter((item) => item.onSelect).length;
+  // Refreshed every render (mirroring `useSourceSync`'s `onSettledRef`) so the open effect below
+  // reads the count as of the render that opened the menu without listing it as a dependency —
+  // listing it would re-run the effect, and re-focus the first item, whenever `items` changes while
+  // the menu is already open.
+  const actionableCountRef = useRef(actionableCount);
+  useEffect(() => {
+    actionableCountRef.current = actionableCount;
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -41,7 +61,7 @@ export default function Menu({ trigger, items }: MenuProps) {
     skipRestoreFocus.current = false;
     restoreFocusTo.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    itemRefs.current[0]?.focus();
+    itemRefs.current[openAtLastItem.current ? actionableCountRef.current - 1 : 0]?.focus();
 
     // Outside click closes the menu; React's synthetic events never fire for a target outside
     // this component's own tree, so this is the one listener that must attach to `document`.
@@ -59,6 +79,8 @@ export default function Menu({ trigger, items }: MenuProps) {
       // browser's own focus restore has a chance to run, and jsdom has no native restore at all.
       if (!skipRestoreFocus.current) restoreFocusTo.current?.focus();
     };
+
+    // value at the moment the menu opens, not to re-run this effect when items change while open
   }, [open]);
 
   const focusItem = (index: number) => {
@@ -71,6 +93,7 @@ export default function Menu({ trigger, items }: MenuProps) {
   const handleTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
+      openAtLastItem.current = event.key === 'ArrowUp';
       setOpen(true);
     }
   };
@@ -83,11 +106,11 @@ export default function Menu({ trigger, items }: MenuProps) {
         break;
       case 'ArrowDown':
         event.preventDefault();
-        focusItem((currentItemIndex(event) + 1) % items.length);
+        focusItem((currentItemIndex(event) + 1) % actionableCount);
         break;
       case 'ArrowUp':
         event.preventDefault();
-        focusItem((currentItemIndex(event) - 1 + items.length) % items.length);
+        focusItem((currentItemIndex(event) - 1 + actionableCount) % actionableCount);
         break;
       case 'Home':
         event.preventDefault();
@@ -95,7 +118,7 @@ export default function Menu({ trigger, items }: MenuProps) {
         break;
       case 'End':
         event.preventDefault();
-        focusItem(items.length - 1);
+        focusItem(actionableCount - 1);
         break;
       default:
         break;
@@ -121,48 +144,69 @@ export default function Menu({ trigger, items }: MenuProps) {
 
   return (
     <div className="menu" ref={rootRef}>
-      <button
-        type="button"
-        className="menu-trigger"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        // Keeps focus inside the surface while the menu is open, so pressing the trigger to dismiss
-        // it raises no focusout at all. Without this a browser that reports a null `relatedTarget`
-        // on focusout — Safari and Firefox on macOS — closes the menu before the click arrives, and
-        // the click reopens it. Focus still returns to the trigger, via the effect's own restore.
-        onMouseDown={(event) => {
-          if (open) event.preventDefault();
-        }}
-        onClick={() => setOpen((was) => !was)}
-        onKeyDown={handleTriggerKeyDown}
+      <Popover
+        trigger={
+          <button
+            type="button"
+            id={triggerId}
+            className="menu-trigger"
+            aria-haspopup="menu"
+            // Keeps focus inside the surface while the menu is open, so pressing the trigger to
+            // dismiss it raises no focusout at all. Without this a browser that reports a null
+            // relatedTarget on focusout — Safari and Firefox on macOS — closes the menu before the
+            // click arrives, and the click reopens it. Focus still returns to the trigger, via the
+            // effect's own restore.
+            onMouseDown={(event) => {
+              if (open) event.preventDefault();
+            }}
+            onClick={() => setOpen((was) => !was)}
+            onKeyDown={handleTriggerKeyDown}
+          >
+            {trigger}
+          </button>
+        }
+        open={open}
+        onOpenChange={setOpen}
+        label="Menu"
+        placement={placement}
       >
-        {trigger}
-      </button>
-      {open && (
         <div
           className="menu-surface"
           role="menu"
+          aria-labelledby={triggerId}
           onKeyDown={handleMenuKeyDown}
           onBlur={handleMenuBlur}
         >
-          {items.map((item, index) => (
-            <button
-              key={index}
-              ref={(el) => {
-                itemRefs.current[index] = el;
-              }}
-              type="button"
-              role="menuitem"
-              className={item.tone === 'danger' ? 'menu-item menu-item--danger' : 'menu-item'}
-              tabIndex={-1}
-              aria-disabled={item.onSelect ? undefined : true}
-              onClick={() => handleSelect(item)}
-            >
-              {item.label}
-            </button>
-          ))}
+          {items.map((item, index) => {
+            if (!item.onSelect) {
+              return (
+                <div key={index} className="menu-info">
+                  {item.label}
+                </div>
+              );
+            }
+            // The index among actionable items only, since inert `menu-info` rows share the
+            // outer `index` but never get a ref slot.
+            const refIndex = items.slice(0, index).filter((it) => it.onSelect).length;
+            return (
+              <button
+                key={index}
+                ref={(el) => {
+                  itemRefs.current[refIndex] = el;
+                }}
+                type="button"
+                role="menuitem"
+                className={item.tone === 'danger' ? 'menu-item menu-item--danger' : 'menu-item'}
+                tabIndex={-1}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => handleSelect(item)}
+              >
+                {item.label}
+              </button>
+            );
+          })}
         </div>
-      )}
+      </Popover>
     </div>
   );
 }

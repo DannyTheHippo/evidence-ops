@@ -1,8 +1,17 @@
 import { useEffect, useState } from 'react';
 import { ApiError, answerEventsUrl, getAnswerById, type Answer } from '../api/client';
-import { useEventStream } from './use-event-stream';
+import { useEventStream, type StreamState } from './use-event-stream';
 
 const DEFAULT_POLL_INTERVAL_MS = 1500;
+
+// Doubled onto `pollIntervalMs` after each failed poll, reset to `pollIntervalMs` on the next
+// success — a run left polling through an outage backs off instead of hammering the endpoint.
+const POLL_BACKOFF_CAP_MS = 15_000;
+
+// The poll loop runs whenever the stream is not carrying live updates on its own: gone stale,
+// mid-reconnect, or given up entirely. Typed as a plain string set rather than the `StreamState`
+// union so a comparison against `streamState` compiles independently of that union's members.
+const POLLING_STREAM_STATES: readonly string[] = ['stale', 'reconnecting', 'fallback'];
 
 // Distinct from every real `answerId` (including `null`), so the render-time reset below always
 // fires once on mount — even when a caller mounts directly with a non-null `answerId` and a
@@ -27,17 +36,20 @@ export interface UseAnswerRunResult {
   answer: Answer | null;
   error: string | null;
   notFound: boolean;
+  streamState: StreamState;
 }
 
 /**
  * Owns an answer's lifecycle from `answerId` alone: the initial GET (skipped when `initialAnswer`
  * already carries it), the SSE subscription for live updates, and — once `useEventStream` reports
- * `'fallback'` — polling the same `getAnswerById` call until the run reaches a terminal
- * `runStatus`. `'fallback'` covers a server-authored error frame, exhausted transport retries, an
- * environment with no `EventSource` at all, and the API's own 30-minute stream ceiling
- * (`qa.service.ts`'s `takeUntil`) ending the connection out from under a browser that would
- * otherwise keep retrying it — in every case the run still reaches its terminal state on screen,
- * carried by the poll instead of the stream. Shared by AnswerComposer, which seeds `initialAnswer`
+ * the connection stale, reconnecting, or given up — polling the same `getAnswerById` call until the
+ * run reaches a terminal `runStatus`. That covers a stale heartbeat, a mid-reconnect gap, a
+ * server-authored error frame, exhausted transport retries, an environment with no `EventSource` at
+ * all, and the API's own 30-minute stream ceiling (`qa.service.ts`'s `takeUntil`) ending the
+ * connection out from under a browser that would otherwise keep retrying it — in every case the run
+ * still reaches its terminal state on screen, carried by the poll instead of the stream. A 404 —
+ * from the initial GET or a later poll — stops the stream and the poll loop for good rather than
+ * retrying an id that will never resolve. Shared by AnswerComposer, which seeds `initialAnswer`
  * from its own optimistic snapshot, and AnswerDetailPage, which has nothing to seed and always
  * fetches.
  */
@@ -98,42 +110,76 @@ export function useAnswerRun({
   // re-trigger the server's qa.answer.viewed audit write). `heartbeat` only keeps the stream
   // 'live'; neither page renders anything from it.
   const streamState = useEventStream<Answer>({
-    url: answerId ? answerEventsUrl(answerId) : null,
+    url: answerId && !notFound ? answerEventsUrl(answerId) : null,
     events: ['answer', 'heartbeat'],
     onEvent: (eventName, data) => {
-      if (eventName === 'answer') setAnswer(data);
+      if (eventName === 'answer') {
+        setAnswer(data);
+        setError(null);
+      }
     },
     onFallback: () => {},
     isTerminal: (eventName, data) =>
       eventName === 'answer' && (data.runStatus === 'completed' || data.runStatus === 'failed'),
   });
 
-  // Falls back to polling once the stream itself gives up, gated on `streamState === 'fallback'`
-  // rather than driving every answer unconditionally. Stops the moment runStatus reaches a
-  // terminal value, same as the SSE path. `cancelled` drops a response that lands after this
-  // effect is torn down instead of overwriting fresher state.
+  // Falls back to polling once the stream itself gives up, gated on `POLLING_STREAM_STATES`
+  // rather than driving every answer unconditionally. Skips once `notFound` — polling a 404
+  // forever serves nothing. Stops the moment runStatus
+  // reaches a terminal value, same as the SSE path. A recursive `setTimeout` loop (not
+  // `setInterval`) means the next poll is only ever scheduled once the current one has settled, so
+  // a slow response can never overlap the next attempt; a failure doubles the wait up to
+  // `POLL_BACKOFF_CAP_MS`, reset to `pollIntervalMs` on the next success. `cancelled` and the
+  // per-run `sequence` both drop a response that lands after this effect has been torn down or
+  // superseded by a newer run.
   useEffect(() => {
     if (!answerId) return;
-    if (streamState !== 'fallback') return;
+    if (notFound) return;
+    if (!POLLING_STREAM_STATES.includes(streamState)) return;
     if (isTerminalRunStatus) return;
-    let cancelled = false;
 
-    const timer = setInterval(() => {
+    let cancelled = false;
+    let sequence = 0;
+    let inFlight = false;
+    let intervalMs = pollIntervalMs;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = () => {
+      if (inFlight) return;
+      inFlight = true;
+      const thisSequence = ++sequence;
+
       getAnswerById(answerId)
         .then((next) => {
-          if (!cancelled) setAnswer(next);
+          inFlight = false;
+          if (cancelled || thisSequence !== sequence) return;
+          intervalMs = pollIntervalMs;
+          setAnswer(next);
+          setError(null);
+          if (next.runStatus === 'completed' || next.runStatus === 'failed') return;
+          timer = setTimeout(poll, intervalMs);
         })
         .catch((err: unknown) => {
-          if (cancelled) return;
+          inFlight = false;
+          if (cancelled || thisSequence !== sequence) return;
+          if (err instanceof ApiError && err.status === 404) {
+            setNotFound(true);
+            setError(null);
+            return;
+          }
           setError(err instanceof Error ? err.message : 'Failed to poll answer');
+          intervalMs = Math.min(intervalMs * 2, POLL_BACKOFF_CAP_MS);
+          timer = setTimeout(poll, intervalMs);
         });
-    }, pollIntervalMs);
+    };
+
+    timer = setTimeout(poll, intervalMs);
 
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      if (timer !== undefined) clearTimeout(timer);
     };
-  }, [answerId, streamState, isTerminalRunStatus, pollIntervalMs]);
+  }, [answerId, streamState, isTerminalRunStatus, pollIntervalMs, notFound]);
 
-  return { answer, error, notFound };
+  return { answer, error, notFound, streamState };
 }

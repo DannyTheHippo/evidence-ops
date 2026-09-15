@@ -188,20 +188,21 @@ scope; a quarantined version stays that way until different bytes replace it.
 
 ## In the browser
 
-- **Data Room** — upload PDF, DOCX, XLSX, PPTX, CSV, TSV, TXT, MD or EML; watch ingestion complete.
-  An upload whose declared MIME is ambiguous is resolved by an extension allowlist, and anything
-  on neither list is refused rather than guessed.
+- **Data room** — upload PDF, DOCX, XLSX, PPTX, CSV, TSV, TXT, MD, EML, HTML or HTM; watch ingestion
+  complete. An upload whose declared MIME is ambiguous is resolved by an extension allowlist, and
+  anything on neither list is refused rather than guessed.
 - **Sources** — connect a folder or export drop; the sync loop keeps it current. A source's own
   page lists each file it has seen and where that file got to.
-- **Ask** — submit a question; citations render as the verified quote plus a locator formatted for
-  its kind — PDF page, DOCX paragraph, XLSX sheet range or cell, PPTX slide, or text block.
-- **Conflicts** — fact-level disagreements; a policy proposal where one exists; request resolution.
-- **Approvals** — a human decides. The Temporal signal only wakes the waiting workflow; the verdict
-  is a re-read of the Mongo row an authenticated writer produced.
-- **Run timeline** — paused awaiting approval, then resumed.
-- **API Keys** — mint and revoke personal access tokens. The full token is shown once, at
+- **Answers** — submit a question; citations render as the verified quote plus a locator formatted
+  for its kind — PDF page, DOCX paragraph, XLSX sheet range or cell, PPTX slide, or text block.
+- **Adjudication** — the conflicts view lists fact-level disagreements and a policy proposal where
+  one exists, with a request-resolution action; the decisions view is where a human decides. The
+  Temporal signal only wakes the waiting workflow; the verdict is a re-read of the Mongo row an
+  authenticated writer produced.
+- **Runs** — a run's own page shows its timeline, paused awaiting approval, then resumed.
+- **API keys** — mint and revoke personal access tokens. The full token is shown once, at
   creation, and only a hash is stored.
-- **Audit Log** — admin-only, in the navigation and on the server. The client-side check decides
+- **Audit events** — admin-only, in the navigation and on the server. The client-side check decides
   what renders; the route's own role guard is the boundary.
 
 ## Outside the browser
@@ -211,7 +212,7 @@ tooling a person already trusts rather than being one more destination app — a
 assistant's own drafted claims can be checked against this corpus without that assistant ever
 needing to trust this system's synthesis path. The MCP server is its own process — `npm run
 mcp:dev` on the host loop, the `mcp` service under the `full` profile in a containerized stack. It
-authenticates with the personal access tokens the API Keys page mints, and exposes eight tools:
+authenticates with the personal access tokens the API keys page mints, and exposes eight tools:
 `search_evidence`, `ask_evidence` (starts a question without waiting on it), `get_answer` (polls a
 started question), `verify_claims` (checks claims an assistant drafted itself against the corpus),
 `request_resolution` (proposes a conflict resolution), `submit_evidence` (pushes a file's bytes an
@@ -236,7 +237,7 @@ all.
 
 ### Connecting an assistant
 
-Both paths below authenticate with a personal access token minted on the **API Keys** page — the
+Both paths below authenticate with a personal access token minted on the **API keys** page — the
 full value is shown once, at creation, and only a hash is stored afterward. The endpoint is
 `http://localhost:3002/mcp` on the host loop or the containerized stack alike; `3002` is
 `MCP_HOST_PORT`'s default, so a stack started with that variable overridden needs the same number
@@ -260,7 +261,7 @@ bridge, verified against that project's own README:
         "Authorization: Bearer ${EO_PAT}"
       ],
       "env": {
-        "EO_PAT": "<paste the token from the API Keys page>"
+        "EO_PAT": "<paste the token from the API keys page>"
       }
     }
   }
@@ -645,13 +646,14 @@ npm --prefix web run start:dev   # SPA on http://localhost:5173
 
 Order is load-bearing — see the Temporal gotcha below.
 
-**6. Create a user.** Open <http://localhost:5173>, which redirects to `/login`. Click **Need an
-account? Sign up**, enter an email and a password of at least 8 characters, and submit — the form
-registers and then logs in with the same credentials, so you land authenticated on the home page.
+**6. Create a user.** Open <http://localhost:5173>, which redirects to `/login`. Click **Need a
+workspace? Create a new workspace**, enter an email and a password of at least 8 characters, and
+submit — the form registers and then logs in with the same credentials, so you land authenticated
+on the home page.
 (Equivalently: `POST /api/v1/auth/register` then `POST /api/v1/auth/login`; those two routes and
 `health`/`info` are the only non-authenticated routes in the system.)
 
-**7. Upload the fixture data room.** Go to **Data Room** and upload all nine files from
+**7. Upload the fixture data room.** Go to **Data room** and upload all nine files from
 `fixtures/data-room/`:
 
 | File                             | What it is                                                             |
@@ -679,11 +681,11 @@ These are synthetic, generated by `npm run fixtures:generate` and content-hashed
 them free of real-world identifiers.
 
 Each upload returns immediately and starts a durable `ingestDocumentVersion` workflow
-(chunk+embed → extract facts → scan for conflicts). The Data Room page polls; watch each version's
+(chunk+embed → extract facts → scan for conflicts). The Data room page polls; watch each version's
 badge go from `pending` to `completed`. Watch terminal 3 or the Temporal UI if you want to see the
 activities fire.
 
-**8. Ask a question.** Go to **Ask**. These four are lifted verbatim from the eval dataset
+**8. Ask a question.** Go to **Answers**. These four are lifted verbatim from the eval dataset
 (`eval/dataset/cases.json`), which records the expected outcome for each — one per branch:
 
 | Question                                                                                                                                  | Case      | Expected                                                                                                                         |
@@ -696,8 +698,8 @@ activities fire.
 Each citation renders as the verbatim quote that was verified against the chunk, followed by a link
 to its source document and a formatted locator — PDF page, DOCX paragraph, or XLSX cell.
 
-**9. Look at conflicts.** The **Conflicts** page lists fact-level disagreements found by the
-conflict scan that runs at the end of every ingestion. Each row shows the disagreeing values —
+**9. Look at conflicts.** The **Adjudication** page's conflicts view lists fact-level disagreements
+found by the conflict scan that runs at the end of every ingestion. Each row shows the disagreeing values —
 value, unit, source document and locator — and, on an `open` conflict, a **Request resolution**
 button per value.
 
@@ -710,14 +712,14 @@ to the person deciding is worse than none.
 **10. Request resolution on the seeded Northgate conflict.** On the `con-001` row from step 8
 (`comps.xlsx!F2` at 5.25% vs `valuation-memo.pdf` page 2 at 6.10%), click **Request resolution**
 next to the value you want to keep. This calls `POST /conflicts/:id/resolution-requests`, which
-starts the durable `resolveConflict` workflow, and the SPA navigates you to **Run timeline** —
+starts the durable `resolveConflict` workflow, and the SPA navigates you to **Runs** —
 showing the run paused at "Paused — awaiting approval".
 
-**11. Approve it.** Go to **Approvals**. The pending request appears with its summary, who
-requested it, and a requested-at timestamp. Click **Approve** (a reason is optional).
+**11. Approve it.** Go to **Adjudication**'s decisions view. The pending request appears with its
+summary, who requested it, and a requested-at timestamp. Click **Approve** (a reason is optional).
 
-**12. Watch it resume.** Return to **Run timeline** — the run moves to "Resumed — completed". Back
-on **Conflicts**, that row's status changes from `open` to `resolved`.
+**12. Watch it resume.** Return to **Runs** — the run moves to "Resumed — completed". Back
+on **Adjudication**'s conflicts view, that row's status changes from `open` to `resolved`.
 
 ### What the demo shows
 

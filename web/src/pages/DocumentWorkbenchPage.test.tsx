@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import DocumentWorkbenchPage from './DocumentWorkbenchPage';
@@ -132,7 +132,7 @@ describe('DocumentWorkbenchPage', () => {
     );
     // Rendered twice by design: once as the header's at-a-glance badge, once as the detail rail's
     // labelled "Status" row.
-    expect(screen.getAllByText('completed')).toHaveLength(2);
+    expect(screen.getAllByText('Completed')).toHaveLength(2);
     expect(screen.getByText(/^Version 1 · uploaded /)).toBeInTheDocument();
     const downloadLink = screen.getByRole('link', { name: 'Download' });
     expect(downloadLink).toHaveAttribute('href', '/api/v1/documents/versions/version-1/content');
@@ -190,8 +190,16 @@ describe('DocumentWorkbenchPage', () => {
 
     renderAt('doc-1', 'version-1', '?chunk=chunk-1');
 
-    const iframe = await screen.findByTitle('Q3 Rent Roll, version 1');
-    await waitFor(() => expect(iframe).toHaveAttribute('src', 'blob:mock-1#page=3'));
+    // The resolved page mounts a fresh iframe, so the element is re-queried inside the wait rather
+    // than held across the remount. jsdom runs no PDF viewer: this asserts the fragment the pane
+    // hands the browser, never that a viewer honours it.
+    await screen.findByTitle('Q3 Rent Roll, version 1');
+    await waitFor(() =>
+      expect(screen.getByTitle('Q3 Rent Roll, version 1')).toHaveAttribute(
+        'src',
+        'blob:mock-1#page=3',
+      ),
+    );
 
     const target = await screen.findByText(chunk.text);
     expect(target.closest('li')).toHaveAttribute('aria-current', 'location');
@@ -297,6 +305,108 @@ describe('DocumentWorkbenchPage', () => {
     renderAt('doc-1', 'version-1');
 
     expect(await screen.findByText('Document not found.')).toBeInTheDocument();
+  });
+
+  it('surfaces a non-404 load failure as an alert rather than a not-found notice', async () => {
+    stubFetch({
+      '/api/v1/documents/doc-1': () => jsonResponse({ message: 'Upstream unavailable' }, 500),
+    });
+
+    renderAt('doc-1', 'version-1');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Upstream unavailable');
+    expect(screen.queryByText('Document not found.')).not.toBeInTheDocument();
+  });
+
+  it('advances the version named in the URL from pending as the poll ticks', async () => {
+    vi.useFakeTimers();
+    // The document's current version is a later, completed one: only the version the URL names is
+    // still ingesting, so a poll gated on `currentVersion` would never run.
+    const currentVersion = pdfVersion({ id: 'version-2', versionNumber: 2 });
+    const urlVersion = pdfVersion({ ingestionStatus: 'pending' });
+    let call = 0;
+    stubFetch({
+      '/api/v1/documents/doc-1': () => {
+        call += 1;
+        return jsonResponse({
+          ...documentWithVersion('xlsx', currentVersion),
+          versions: [call === 1 ? urlVersion : pdfVersion(), currentVersion],
+        });
+      },
+      '/api/v1/documents/versions/version-1/chunks': emptyChunksResponse,
+    });
+
+    renderAt('doc-1', 'version-1');
+
+    await vi.waitFor(() => expect(screen.getAllByText('Pending').length).toBeGreaterThan(0));
+    expect(
+      screen.getByText(
+        'Ingestion is still running for this version — evidence chunks appear as they are stored.',
+      ),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    await vi.waitFor(() => expect(screen.queryByText('Pending')).not.toBeInTheDocument());
+    expect(screen.getAllByText('Completed').length).toBeGreaterThan(0);
+    expect(screen.getByText('No evidence chunks are stored for this version.')).toBeInTheDocument();
+
+    vi.useRealTimers();
+  });
+
+  it('keeps the status badge and the Back button together in the header actions slot', async () => {
+    stubFetch({
+      '/api/v1/documents/doc-1': () => jsonResponse(documentWithVersion('xlsx', pdfVersion())),
+      '/api/v1/documents/versions/version-1/chunks': emptyChunksResponse,
+    });
+
+    renderAt('doc-1', 'version-1');
+
+    // The Back link renders from `documentId` alone, on the first paint; the status badge waits
+    // on the document fetch, one render later — the two only share a commit once that resolves.
+    const back = await screen.findByRole('link', { name: 'Back to document' });
+    const actions = back.closest('.page-head-actions');
+    expect(actions).not.toBeNull();
+    await waitFor(() => {
+      expect(within(actions as HTMLElement).getByText('Completed')).toBeInTheDocument();
+    });
+  });
+
+  it('copies the full sha256 from the version card while the row shows the truncated digest', async () => {
+    stubFetch({
+      '/api/v1/documents/doc-1': () => jsonResponse(documentWithVersion('xlsx', pdfVersion())),
+      '/api/v1/documents/versions/version-1/chunks': emptyChunksResponse,
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+
+    renderAt('doc-1', 'version-1');
+
+    const copy = await screen.findByRole('button', { name: 'Copy sha256' });
+    expect(screen.queryByText('a'.repeat(64))).not.toBeInTheDocument();
+
+    fireEvent.click(copy);
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('a'.repeat(64)));
+  });
+
+  it('opens the full sha256 tooltip when keyboard focus reaches the truncated digest', async () => {
+    stubFetch({
+      '/api/v1/documents/doc-1': () => jsonResponse(documentWithVersion('xlsx', pdfVersion())),
+      '/api/v1/documents/versions/version-1/chunks': emptyChunksResponse,
+    });
+
+    renderAt('doc-1', 'version-1');
+
+    const digest = await screen.findByText(`${'a'.repeat(8)}…${'a'.repeat(4)}`);
+    expect(digest).toHaveAttribute('tabindex', '0');
+
+    digest.focus();
+    const surface = await screen.findByRole('tooltip');
+    expect(surface).toHaveTextContent('a'.repeat(64));
+    expect(digest).toHaveAttribute('aria-describedby', surface.id);
   });
 
   it('flags a version id that does not belong to the loaded document', async () => {

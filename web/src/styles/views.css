@@ -15,17 +15,26 @@
   padding: var(--space-8) 0;
 }
 .page-head {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
   gap: var(--space-4);
-  margin-bottom: var(--space-6);
+  margin-bottom: var(--space-5);
 }
-/* The element immediately following the page head is a `.control-row` (no top margin of its
-   own) on some routes and a `.card` (`margin: var(--space-4) 0` in primitives.css) on others —
+.page-head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  justify-self: end;
+}
+/* The element immediately following the page head is a `.toolbar` (no top margin of its own)
+   on list pages and a `.card` (`margin: var(--space-4) 0` in primitives.css) on others —
    zeroing that shape's own top margin here means the visible gap below `.page-head` is always
-   exactly its own margin-bottom, regardless of which shape leads the page. */
-.page-head + * {
+   exactly its own margin-bottom, regardless of which shape leads the page. Excludes a `dialog` or
+   `[popover]` element: either renders in the browser's top layer, centred by the UA's own
+   `margin: auto` against `inset: 0`, and zeroing only its top margin pins it to the viewport's
+   top edge instead of leaving it centred. */
+.page-head + *:not(dialog):not([popover]) {
   margin-top: 0;
 }
 
@@ -37,6 +46,16 @@
   }
   .view {
     padding: var(--space-4) 0;
+  }
+  /* Below the two-column grid's comfortable width, the actions column no longer shares the row
+     with the title — it drops under it and wraps on its own line instead of pushing past the
+     gutter. */
+  .page-head {
+    grid-template-columns: 1fr;
+  }
+  .page-head-actions {
+    justify-self: start;
+    flex-wrap: wrap;
   }
 }
 

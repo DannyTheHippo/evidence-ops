@@ -20,6 +20,34 @@ const listeners = new Set<ToastListener>();
 // describes something the reader needs to act on, so only the dismiss control removes it.
 const SUCCESS_AUTO_DISMISS_MS = 5000;
 
+interface PendingDismiss {
+  // null while paused — the countdown for that toast has no live timer to clear.
+  timeoutId: ReturnType<typeof setTimeout> | null;
+  remainingMs: number;
+  startedAt: number;
+}
+
+// One entry per success toast still counting down, so a pause can freeze exactly the remaining
+// time rather than restarting the full 5s once the reader moves on.
+const pendingDismissals = new Map<number, PendingDismiss>();
+let paused = false;
+
+function armTimer(id: number, pending: PendingDismiss): void {
+  pending.startedAt = Date.now();
+  pending.timeoutId = setTimeout(() => {
+    pendingDismissals.delete(id);
+    dismissToast(id);
+  }, pending.remainingMs);
+}
+
+function clearPending(id: number): void {
+  const pending = pendingDismissals.get(id);
+  if (pending?.timeoutId !== null && pending?.timeoutId !== undefined) {
+    clearTimeout(pending.timeoutId);
+  }
+  pendingDismissals.delete(id);
+}
+
 function publish(): void {
   for (const listener of listeners) listener(toasts);
 }
@@ -37,6 +65,7 @@ export function getToasts(): Toast[] {
 }
 
 export function dismissToast(id: number): void {
+  clearPending(id);
   toasts = toasts.filter((toast) => toast.id !== id);
   publish();
 }
@@ -46,15 +75,51 @@ export function notify(kind: ToastKind, message: string): void {
   toasts = [...toasts, { id, kind, message }];
   publish();
   if (kind === 'success') {
-    // A pending timer firing after the toast was already dismissed (by hand, or by clearToasts())
-    // is a harmless no-op filter in dismissToast — no handle to track or cancel.
-    setTimeout(() => dismissToast(id), SUCCESS_AUTO_DISMISS_MS);
+    const pending: PendingDismiss = {
+      timeoutId: null,
+      remainingMs: SUCCESS_AUTO_DISMISS_MS,
+      startedAt: Date.now(),
+    };
+    pendingDismissals.set(id, pending);
+    // Paused on creation (the stack already has hover or focus-within) waits for resumeToasts()
+    // to arm it, so a toast that arrives mid-interaction doesn't start counting down unseen.
+    if (!paused) armTimer(id, pending);
   }
 }
 
-// Test-only reset of the module-scope store, mirroring clearSession() in auth.ts.
+// Freezes every counting-down success toast at its remaining time, for as long as the stack has
+// pointer hover or focus-within — a reader still looking at the stack must not have it change
+// under them.
+export function pauseToasts(): void {
+  if (paused) return;
+  paused = true;
+  for (const pending of pendingDismissals.values()) {
+    if (pending.timeoutId === null) continue;
+    clearTimeout(pending.timeoutId);
+    pending.remainingMs = Math.max(0, pending.remainingMs - (Date.now() - pending.startedAt));
+    pending.timeoutId = null;
+  }
+}
+
+// Resumes every frozen countdown from its remaining time, once the stack has neither hover nor
+// focus-within.
+export function resumeToasts(): void {
+  if (!paused) return;
+  paused = false;
+  for (const [id, pending] of pendingDismissals) {
+    armTimer(id, pending);
+  }
+}
+
+// Resets the module-scope store. App.tsx calls this on logout; tests call it between cases.
+// Pending timers are cleared, but nextId is not reset, so a toast created after a clear never
+// reuses an id a still-mounted reference could be holding.
 export function clearToasts(): void {
+  for (const pending of pendingDismissals.values()) {
+    if (pending.timeoutId !== null) clearTimeout(pending.timeoutId);
+  }
+  pendingDismissals.clear();
+  paused = false;
   toasts = [];
-  nextId = 0;
   publish();
 }

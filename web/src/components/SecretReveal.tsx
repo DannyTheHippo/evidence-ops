@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode, type Ref } from 'react';
+import { useEffect, useId, type ReactNode, type Ref } from 'react';
 import Button from './ui/Button';
 import CopyButton from './ui/CopyButton';
 import Timestamp from './ui/Timestamp';
@@ -32,6 +32,8 @@ export default function SecretReveal({
   onDismiss,
   ref,
 }: SecretRevealProps) {
+  const eyebrowId = useId();
+
   useEffect(() => {
     function handleBeforeUnload(e: BeforeUnloadEvent) {
       e.preventDefault();
@@ -42,8 +44,10 @@ export default function SecretReveal({
   }, []);
 
   return (
-    <section ref={ref} tabIndex={-1} className="card secret-reveal">
-      <span className="eyebrow">One-time secret</span>
+    <section ref={ref} tabIndex={-1} className="card secret-reveal" aria-labelledby={eyebrowId}>
+      <span id={eyebrowId} className="eyebrow">
+        One-time secret
+      </span>
       <p className="notice notice--warn">{notice}</p>
       <p className="secret-reveal-value mono">{secret}</p>
       <p className="secret-reveal-meta">

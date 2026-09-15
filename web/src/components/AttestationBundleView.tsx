@@ -1,10 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getAttestation, type AttestationBundle, type AttestationKind } from '../api/client';
+import {
+  answerOutcomeLabel,
+  BUNDLE_VERDICT_LABELS,
+  DECISION_OUTCOME_LABELS,
+} from '../lib/answer-verdicts';
 import { workbenchHref } from '../lib/citation-link';
 import { resolveDocumentVersions, type ResolvedVersion } from '../lib/document-index';
 import { truncateSha256 } from '../lib/identifiers';
 import { formatLocator } from '../lib/locator';
+import { metricLabel, useMetricLabels } from '../lib/metric-labels';
 import Badge, { type BadgeTone } from './ui/Badge';
 import Button from './ui/Button';
 import CopyButton from './ui/CopyButton';
@@ -14,6 +20,7 @@ import Panel from './ui/Panel';
 import Skeleton from './ui/Skeleton';
 import Table, { TableCell, TableHeaderCell } from './ui/Table';
 import Timestamp from './ui/Timestamp';
+import Tooltip from './ui/Tooltip';
 
 // A claim's verdict is either a real grounding-check verdict (`ClaimVerdict`) or one of the two
 // bundle-only outcomes a claim not carried by the model's own `AnswerOutcome` can still hold:
@@ -31,6 +38,7 @@ const VERDICT_TONE: Record<AttestationBundle['claims'][number]['verdict'], Badge
 interface AttestationBundleViewProps {
   kind: AttestationKind;
   subjectId: string;
+  attestationHash?: string;
 }
 
 /**
@@ -40,13 +48,23 @@ interface AttestationBundleViewProps {
  * recipient who already has it through a trusted channel — this cycle mints no signing key, so
  * the bundle is never described as signed or verified, only as reproducible: the hash and the
  * algorithm that produced it are rendered in full and made copyable so a recipient can recompute
- * and compare it independently. Fetching the bundle here pins `attestationHash` on the subject's
- * row server-side, so mounting this view is itself a first export, not a read-only peek.
+ * and compare it independently. Fetching the bundle pins `attestationHash` on the subject's row
+ * server-side, an irreversible write, so this gates CLOSED on `attestationHash`: a subject that
+ * already carries a hash auto-loads its existing bundle, and a subject with none waits for the
+ * operator to explicitly generate one rather than exporting on a silent mount.
  */
-export default function AttestationBundleView({ kind, subjectId }: AttestationBundleViewProps) {
+export default function AttestationBundleView({
+  kind,
+  subjectId,
+  attestationHash,
+}: AttestationBundleViewProps) {
+  const metricLabels = useMetricLabels();
   const [bundle, setBundle] = useState<AttestationBundle | null>(null);
   const [documentIndex, setDocumentIndex] = useState<Map<string, ResolvedVersion>>(new Map());
   const [error, setError] = useState<string | null>(null);
+  // Counts the operator's Generate clicks, so a retry after a failed fetch changes the fetch
+  // effect's deps and sends a new request.
+  const [generateAttempt, setGenerateAttempt] = useState(0);
 
   // Resets state during render rather than inside the fetch effect below, on the same
   // `resetForId`/`use-answer-run.ts` pattern — a synchronous setState inside an effect body
@@ -60,9 +78,11 @@ export default function AttestationBundleView({ kind, subjectId }: AttestationBu
     setBundle(null);
     setError(null);
     setDocumentIndex(new Map());
+    setGenerateAttempt(0);
   }
 
   useEffect(() => {
+    if (!attestationHash && generateAttempt === 0) return;
     let cancelled = false;
 
     getAttestation(kind, subjectId)
@@ -85,33 +105,63 @@ export default function AttestationBundleView({ kind, subjectId }: AttestationBu
     return () => {
       cancelled = true;
     };
-  }, [kind, subjectId]);
+  }, [kind, subjectId, attestationHash, generateAttempt]);
+
+  // Object URLs created for a download outlive the click that triggers them — an anchor's
+  // navigation can resolve after this function returns, so revoking synchronously here can race
+  // it. Each URL is retired on unmount instead, once nothing can still be reading it.
+  const objectUrlsRef = useRef<string[]>([]);
+  useEffect(() => {
+    const urls = objectUrlsRef.current;
+    return () => {
+      urls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, []);
 
   function downloadBundle() {
     if (!bundle) return;
     const url = URL.createObjectURL(
       new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' }),
     );
-    try {
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `attestation-${kind === 'answers' ? 'answer' : 'verification'}-${subjectId}.json`;
-      anchor.click();
-    } finally {
-      URL.revokeObjectURL(url);
-    }
+    objectUrlsRef.current.push(url);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `attestation-${kind === 'answers' ? 'answer' : 'verification'}-${subjectId}.json`;
+    anchor.click();
   }
 
   return (
     <section className="card">
       <div className="card-head">
         <h2 className="card-title">Attestation</h2>
-        <Button variant="secondary" size="sm" onClick={downloadBundle} disabled={!bundle}>
-          Download attestation
-        </Button>
+        {!attestationHash && !bundle && (
+          <p className="cell-sub">
+            Generating the bundle pins its hash to this record permanently.
+          </p>
+        )}
+        {bundle || attestationHash ? (
+          <Button variant="secondary" size="sm" onClick={downloadBundle} disabled={!bundle}>
+            Download attestation
+          </Button>
+        ) : (
+          <Button
+            variant="secondary"
+            size="sm"
+            busy={generateAttempt > 0 && !error}
+            busyLabel="Generating…"
+            onClick={() => {
+              setError(null);
+              setGenerateAttempt((attempt) => attempt + 1);
+            }}
+          >
+            Generate attestation
+          </Button>
+        )}
       </div>
 
-      {!bundle && !error && <Skeleton label="Loading attestation…" />}
+      {!bundle && !error && (attestationHash || generateAttempt > 0) && (
+        <Skeleton label="Loading attestation…" />
+      )}
       {error && (
         <p className="error" role="alert">
           {error}
@@ -124,7 +174,7 @@ export default function AttestationBundleView({ kind, subjectId }: AttestationBu
             columns={2}
             items={[
               { term: 'Produced', description: <Timestamp value={bundle.producedAt} /> },
-              { term: 'Outcome', description: bundle.outcome ?? '—' },
+              { term: 'Outcome', description: answerOutcomeLabel(bundle.outcome) },
               {
                 term: 'Integrity',
                 description: (
@@ -152,7 +202,7 @@ export default function AttestationBundleView({ kind, subjectId }: AttestationBu
             ]}
           />
 
-          <h2 className="card-title">Attested claims</h2>
+          <h3 className="card-subtitle">Attested claims</h3>
           <Panel aria-label="Attested claims">
             <Table caption="Attested claims">
               <thead>
@@ -177,10 +227,12 @@ export default function AttestationBundleView({ kind, subjectId }: AttestationBu
                       )}
                     </TableCell>
                     <TableCell label="Verdict">
-                      <Badge tone={VERDICT_TONE[claim.verdict]}>{claim.verdict}</Badge>
+                      <Badge tone={VERDICT_TONE[claim.verdict]}>
+                        {BUNDLE_VERDICT_LABELS[claim.verdict]}
+                      </Badge>
                     </TableCell>
                     <TableCell label="Checks">
-                      <ul>
+                      <ul className="attestation-list" role="list">
                         {claim.checks.map((check, checkIndex) => (
                           <li key={checkIndex}>
                             {check.name} — {check.passed ? 'passed' : 'failed'}
@@ -197,17 +249,18 @@ export default function AttestationBundleView({ kind, subjectId }: AttestationBu
                               {formatLocator(citation.locator)}
                             </span>
                             {citation.documentId !== null && (
-                              <Link
-                                className="trace-chip mono"
-                                to={workbenchHref({
-                                  documentId: citation.documentId,
-                                  versionId: citation.documentVersionId,
-                                })}
-                                title={citation.quote}
-                              >
-                                {documentIndex.get(citation.documentVersionId)?.documentTitle ??
-                                  truncateSha256(citation.sha256)}
-                              </Link>
+                              <Tooltip content={citation.quote}>
+                                <Link
+                                  className="trace-chip mono"
+                                  to={workbenchHref({
+                                    documentId: citation.documentId,
+                                    versionId: citation.documentVersionId,
+                                  })}
+                                >
+                                  {documentIndex.get(citation.documentVersionId)?.documentTitle ??
+                                    truncateSha256(citation.sha256)}
+                                </Link>
+                              </Tooltip>
                             )}
                           </li>
                         ))}
@@ -219,21 +272,21 @@ export default function AttestationBundleView({ kind, subjectId }: AttestationBu
             </Table>
           </Panel>
 
-          <h2 className="card-title">Decisions</h2>
+          <h3 className="card-subtitle">Decisions</h3>
           {bundle.decisions.length === 0 ? (
             <p className="cell-sub">No adjudication decisions apply to this attestation.</p>
           ) : (
-            <ul>
+            <ul className="attestation-list" role="list">
               {bundle.decisions.map((decision, decisionIndex) => (
                 <li key={decisionIndex}>
                   <p>
-                    {decision.factKey.entity} · {decision.factKey.metric} ·{' '}
-                    {decision.factKey.period}
+                    {decision.factKey.entity} · {metricLabel(decision.factKey.metric, metricLabels)}{' '}
+                    · {decision.factKey.period}
                   </p>
                   <DescriptionList
                     columns={2}
                     items={[
-                      { term: 'Outcome', description: decision.outcome },
+                      { term: 'Outcome', description: DECISION_OUTCOME_LABELS[decision.outcome] },
                       { term: 'Decided by', description: decision.decidedBy ?? '—' },
                       { term: 'Reason', description: decision.reason ?? '—' },
                       {

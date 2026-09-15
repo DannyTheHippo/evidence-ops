@@ -7,10 +7,16 @@ import type { WorkflowRunType } from '../api/client';
  * `title` attribute beside it.
  */
 
-const WORKFLOW_TYPE_LABELS: Record<WorkflowRunType, string> = {
+// `Record<WorkflowRunType, string>` forces a label for every member the server can send —
+// `client.ts`'s `WorkflowRunType` derives from the OpenAPI schema, so a future server-side member
+// fails this file to compile rather than rendering unlabelled. `'rescan-conflicts'` is labelled
+// for rows that carry it; no current code path writes it.
+export const WORKFLOW_TYPE_LABELS: Record<WorkflowRunType, string> = {
   'resolve-conflict': 'Conflict resolution',
   'sync-source': 'Source sync',
   'rescan-conflicts': 'Conflict rescan',
+  'answer-question': 'Question answering',
+  'ingest-document-version': 'Document ingest',
 };
 
 /** The name a run is listed under. `WorkflowRun.workflowId` is a bare `randomUUID()`, so the type

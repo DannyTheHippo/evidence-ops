@@ -100,8 +100,10 @@ describe('navigation invariant', () => {
     );
 
     if (ADMIN_ONLY.has(to)) {
-      // RequireAdmin bounces a non-admin to / rather than rendering the page or a 404.
-      expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
+      // RequireAdmin shows the 403 view for a non-admin rather than rendering the page or a 404.
+      expect(
+        await screen.findByRole('heading', { name: "You don't have access to this page" }),
+      ).toBeInTheDocument();
       return;
     }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   changeUserRole,
   listInvitations,
@@ -9,6 +9,7 @@ import {
   revokeInvitation,
   revokeUserSessions,
   type Invitation,
+  type InvitationSortField,
   type MintedInvitation,
   type SortDirection,
   type User,
@@ -17,6 +18,7 @@ import {
 } from '../api/client';
 import SecretReveal from '../components/SecretReveal';
 import { IconUserPlus, IconUsers } from '../components/icons';
+import Alert from '../components/ui/Alert';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
@@ -36,6 +38,8 @@ import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
 import Timestamp from '../components/ui/Timestamp';
 import Toolbar from '../components/ui/Toolbar';
 import { notify } from '../components/ui/toast';
+import { clampPageSize, clampSkip, pickOption } from '../lib/paging';
+import { useAbortableEffect } from '../lib/use-latest';
 import { useFormSubmit } from '../lib/use-form-submit';
 import { useSession } from '../lib/use-session';
 import { useUrlState } from '../lib/use-url-state';
@@ -62,13 +66,39 @@ const ROLE_OPTIONS: RadioOption[] = [
 // but only needs it stable in value — a module-level object satisfies both. Two skip keys, not
 // one, mirroring SourcesPage.tsx: members and invitations page independently, and each keeps its
 // own position while the other view is off screen.
-const URL_DEFAULTS: Record<'view' | 'sort' | 'sortDir' | 'skip' | 'invSkip', string> = {
+const URL_DEFAULTS: Record<
+  | 'view'
+  | 'sort'
+  | 'sortDir'
+  | 'skip'
+  | 'limit'
+  | 'invSkip'
+  | 'invLimit'
+  | 'invSort'
+  | 'invSortDir',
+  string
+> = {
   view: 'members',
   sort: 'email',
   sortDir: 'asc',
   skip: '0',
+  limit: String(MEMBERS_PAGE_SIZE),
   invSkip: '0',
+  invLimit: String(INVITATIONS_PAGE_SIZE),
+  invSort: 'createdAt',
+  invSortDir: 'desc',
 };
+
+// Match the server's `@IsIn` lists in `list-users.request.dto.ts` and
+// `list-invitations.request.dto.ts`.
+const USER_SORT_FIELDS: readonly UserSortField[] = ['createdAt', 'email', 'role'];
+const INVITATION_SORT_FIELDS: readonly InvitationSortField[] = [
+  'createdAt',
+  'email',
+  'expiresAt',
+  'role',
+];
+const SORT_DIRECTIONS: readonly SortDirection[] = ['asc', 'desc'];
 
 /** `acceptedAt` wins over `revokedAt`: an accepted invitation's token is already spent, so whether
  * it was also revoked afterward (revoking an accepted invitation is refused server-side) never
@@ -179,7 +209,17 @@ function MemberRow({
               onSelect: () => setRoleOpen(true),
             },
             { label: 'Revoke sessions', onSelect: () => setRevokeOpen(true) },
-            { label: 'Remove member', onSelect: () => setRemoveOpen(true), tone: 'danger' },
+            // Hidden for the caller's own row: the API refuses self-removal with a 409, so
+            // offering the action would only surface that refusal.
+            ...(isYou
+              ? []
+              : [
+                  {
+                    label: 'Remove member',
+                    onSelect: () => setRemoveOpen(true),
+                    tone: 'danger' as const,
+                  },
+                ]),
           ]}
         />
         <ConfirmDialog
@@ -196,7 +236,7 @@ function MemberRow({
           open={revokeOpen}
           onClose={() => setRevokeOpen(false)}
           title={`Revoke sessions for "${member.email}"?`}
-          body={`Signs "${member.email}" out of every browser session and disables every API key they hold, right away — a session cookie and an API key are checked against the same session epoch, so revoking one revokes both.`}
+          body={`Signs "${member.email}" out of every browser session and disables every API key they hold, right away — a session cookie and an API key are checked against the same session epoch, so revoking one revokes both.${isYou ? ' You are revoking your own sessions — this signs you out of this browser too.' : ''}`}
           confirmLabel="Revoke sessions"
           destructive
           busy={revoking}
@@ -238,6 +278,9 @@ function InvitationRow({
   // Only a pending or expired invitation can be revoked or resent — the server refuses both once
   // accepted, and refuses resend once revoked.
   const actionable = !invitation.acceptedAt && !invitation.revokedAt;
+  // Receives focus when a revoke closes its dialog: the revoke removes both row actions, so the
+  // opener is gone. Programmatically focusable only once the row has no actions of its own.
+  const rowRef = useRef<HTMLTableRowElement>(null);
 
   async function handleResend() {
     setResending(true);
@@ -273,13 +316,16 @@ function InvitationRow({
   }
 
   return (
-    <tr>
+    <tr ref={rowRef} tabIndex={actionable ? undefined : -1}>
       <TableCell label="Email">{invitation.email}</TableCell>
       <TableCell label="Role" className="cell-sub">
         {invitation.role}
       </TableCell>
       <TableCell label="Status">
         <Badge tone={status.tone}>{status.label}</Badge>
+      </TableCell>
+      <TableCell label="Created" className="cell-sub">
+        <Timestamp value={invitation.createdAt} />
       </TableCell>
       <TableCell label="Expires" className="cell-sub">
         <Timestamp value={invitation.expiresAt} />
@@ -288,10 +334,10 @@ function InvitationRow({
         {actionable && (
           <>
             <Button variant="secondary" size="sm" onClick={() => setResendOpen(true)}>
-              Resend
+              Resend<span className="sr-only"> {invitation.email}</span>
             </Button>
             <Button variant="secondary" size="sm" onClick={() => setRevokeOpen(true)}>
-              Revoke
+              Revoke<span className="sr-only"> {invitation.email}</span>
             </Button>
             <ConfirmDialog
               open={resendOpen}
@@ -312,6 +358,7 @@ function InvitationRow({
               destructive
               busy={revoking}
               error={revokeError ?? undefined}
+              fallbackFocusRef={rowRef}
               onConfirm={() => void handleRevoke()}
             />
           </>
@@ -365,11 +412,7 @@ function InviteMemberDialog({ onClose, onInvited }: InviteMemberDialogProps) {
   return (
     <Dialog open onClose={onClose} title="Invite member" size="sm">
       <form onSubmit={onSubmit} className="form" noValidate>
-        {formError && (
-          <p className="error" role="alert">
-            {formError}
-          </p>
-        )}
+        {formError && <Alert tone="rejected">{formError}</Alert>}
         <Input
           {...emailField}
           label="Email"
@@ -392,8 +435,8 @@ function InviteMemberDialog({ onClose, onInvited }: InviteMemberDialogProps) {
           <Button type="button" variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" disabled={pending}>
-            {pending ? 'Inviting…' : 'Invite'}
+          <Button type="submit" busy={pending} busyLabel="Inviting…">
+            Invite
           </Button>
         </div>
       </form>
@@ -404,31 +447,40 @@ function InviteMemberDialog({ onClose, onInvited }: InviteMemberDialogProps) {
 export default function PeoplePage() {
   const session = useSession();
   const [urlState, setUrlState] = useUrlState(URL_DEFAULTS);
-  const view = urlState.view as PeopleView;
-  const sort = urlState.sort as UserSortField;
-  const sortDir = urlState.sortDir as SortDirection;
-  const skip = Number(urlState.skip);
-  const invitationSkip = Number(urlState.invSkip);
+  // An unknown `?view=` renders Members with its segment pressed, rather than a header and
+  // toolbar with nothing painted underneath.
+  const view: PeopleView = urlState.view === 'invitations' ? 'invitations' : 'members';
+  // A hand-edited or stale `sort`/`sortDir` falls back to the page default rather than reaching
+  // the API with a value its `@IsIn` decorator refuses, which would otherwise blank the page.
+  const sort = pickOption(urlState.sort, USER_SORT_FIELDS, 'email');
+  const sortDir = pickOption(urlState.sortDir, SORT_DIRECTIONS, 'asc');
+  const skip = clampSkip(urlState.skip);
+  const pageSize = clampPageSize(urlState.limit, [25, 50, 100], MEMBERS_PAGE_SIZE);
+  const invitationSkip = clampSkip(urlState.invSkip);
+  const invitationPageSize = clampPageSize(urlState.invLimit, [25, 50, 100], INVITATIONS_PAGE_SIZE);
+  const invitationSort = pickOption(urlState.invSort, INVITATION_SORT_FIELDS, 'createdAt');
+  const invitationSortDir = pickOption(urlState.invSortDir, SORT_DIRECTIONS, 'desc');
 
   const [members, setMembers] = useState<User[] | null>(null);
   const [memberCount, setMemberCount] = useState(0);
   const [memberError, setMemberError] = useState<string | null>(null);
 
-  const loadMembers = useCallback(() => {
-    return listUsers({ skip, limit: MEMBERS_PAGE_SIZE, sort, sortDir })
-      .then(({ docs, count: total }) => {
-        setMembers(docs);
-        setMemberCount(total);
-        setMemberError(null);
-      })
-      .catch((err: unknown) => {
-        setMemberError(err instanceof Error ? err.message : 'Failed to load members');
-      });
-  }, [skip, sort, sortDir]);
-
-  useEffect(() => {
-    void loadMembers();
-  }, [loadMembers]);
+  useAbortableEffect(
+    (isCurrent) => {
+      return listUsers({ skip, limit: pageSize, sort, sortDir })
+        .then(({ docs, count: total }) => {
+          if (!isCurrent()) return;
+          setMembers(docs);
+          setMemberCount(total);
+          setMemberError(null);
+        })
+        .catch((err: unknown) => {
+          if (!isCurrent()) return;
+          setMemberError(err instanceof Error ? err.message : 'Failed to load members');
+        });
+    },
+    [skip, pageSize, sort, sortDir],
+  );
 
   function handleSort(field: UserSortField) {
     // Switching to a different column always starts it at `desc`; clicking the active column
@@ -454,45 +506,58 @@ export default function PeoplePage() {
 
   // The page's only copy of a plaintext invitation token, backing `SecretReveal`. `action` only
   // changes the panel's wording: mint and resend hand back the same shape, and both must replace
-  // whatever the panel was already showing.
+  // whatever the panel was already showing. Rendered at page level, outside both view branches, so
+  // a segment switch can never unmount it while it holds a live token.
   const [secretPanel, setSecretPanel] = useState<{
     invitation: MintedInvitation;
     action: 'invited' | 'resent';
   } | null>(null);
   const secretRevealRef = useRef<HTMLElement>(null);
 
-  // Moves focus to the panel every time a mint or a resend replaces it. A mint also flips `view`
-  // to 'invitations' in the same call, but that change reaches this component through
-  // react-router's own state rather than a plain `useState`, so it can land one render behind —
-  // the deferred frame gives the section time to actually be in the tree before the panel is
-  // asked to focus it, matching `useFormSubmit`'s own deferred-focus pattern.
+  // Bumped after a mint or a resend so the invitations list re-fetches instead of being patched
+  // in place with the minted shape (token included) — the list then only ever holds the
+  // token-free wire shape.
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // Moves focus to the panel every time a mint or a resend replaces it.
   useEffect(() => {
-    if (!secretPanel) return;
-    const raf = requestAnimationFrame(() => secretRevealRef.current?.focus());
-    return () => cancelAnimationFrame(raf);
+    if (secretPanel) secretRevealRef.current?.focus();
   }, [secretPanel]);
 
-  const loadInvitations = useCallback(() => {
-    return listInvitations({ skip: invitationSkip, limit: INVITATIONS_PAGE_SIZE })
-      .then(({ docs, count: total }) => {
-        setInvitations(docs);
-        setInvitationCount(total);
-        setInvitationError(null);
+  useAbortableEffect(
+    (isCurrent) => {
+      return listInvitations({
+        skip: invitationSkip,
+        limit: invitationPageSize,
+        sort: invitationSort,
+        sortDir: invitationSortDir,
       })
-      .catch((err: unknown) => {
-        setInvitationError(err instanceof Error ? err.message : 'Failed to load invitations');
-      });
-  }, [invitationSkip]);
+        .then(({ docs, count: total }) => {
+          if (!isCurrent()) return;
+          setInvitations(docs);
+          setInvitationCount(total);
+          setInvitationError(null);
+        })
+        .catch((err: unknown) => {
+          if (!isCurrent()) return;
+          setInvitationError(err instanceof Error ? err.message : 'Failed to load invitations');
+        });
+    },
+    [invitationSkip, invitationPageSize, invitationSort, invitationSortDir, reloadKey],
+  );
 
-  useEffect(() => {
-    void loadInvitations();
-  }, [loadInvitations]);
+  function handleInvitationSort(field: InvitationSortField) {
+    // Switching to a different column always starts it at `desc`; clicking the active column
+    // toggles direction — matches `handleSort` above.
+    const nextDir: SortDirection =
+      field === invitationSort && invitationSortDir === 'desc' ? 'asc' : 'desc';
+    setUrlState({ invSort: field, invSortDir: nextDir, invSkip: URL_DEFAULTS.invSkip });
+  }
 
   function handleInvited(invitation: MintedInvitation) {
     setSecretPanel({ invitation, action: 'invited' });
-    setInvitations((current) => [invitation, ...(current ?? [])]);
-    setInvitationCount((current) => current + 1);
     setUrlState({ view: 'invitations', invSkip: URL_DEFAULTS.invSkip });
+    setReloadKey((current) => current + 1);
     notify('success', `Invited "${invitation.email}".`);
   }
 
@@ -508,13 +573,8 @@ export default function PeoplePage() {
   }
 
   function handleInvitationResent(resent: MintedInvitation) {
-    setInvitations(
-      (current) =>
-        current?.map((invitation) =>
-          invitation.id === resent.id ? { ...invitation, expiresAt: resent.expiresAt } : invitation,
-        ) ?? current,
-    );
     setSecretPanel({ invitation: resent, action: 'resent' });
+    setReloadKey((current) => current + 1);
   }
 
   // The fragment, not the query string, carries the token: a fragment is never sent in the request
@@ -551,8 +611,27 @@ export default function PeoplePage() {
         <InviteMemberDialog onClose={() => setInviteOpen(false)} onInvited={handleInvited} />
       )}
 
+      {secretPanel && (
+        <SecretReveal
+          ref={secretRevealRef}
+          secret={inviteLink(secretPanel.invitation)}
+          expiresAt={secretPanel.invitation.expiresAt}
+          notice={
+            secretPanel.action === 'resent'
+              ? `This is the only time this new link is shown, and the previous link has already stopped working — copy it now and send it to ${secretPanel.invitation.email}.`
+              : `This is the only time this link is shown — copy it now and send it to ${secretPanel.invitation.email}. Evidence Ops sends no invitation email.`
+          }
+          extraActions={
+            <LinkButton href={mailtoLink(secretPanel.invitation)} variant="secondary" size="sm">
+              Email invite
+            </LinkButton>
+          }
+          onDismiss={() => setSecretPanel(null)}
+        />
+      )}
+
       <Toolbar
-        start={
+        view={
           <SegmentedControl<PeopleView>
             aria-label="People view"
             options={[
@@ -567,13 +646,9 @@ export default function PeoplePage() {
 
       {view === 'members' && (
         <>
-          {memberError && (
-            <p className="error error--page" role="alert">
-              {memberError}
-            </p>
-          )}
+          {memberError && <Alert tone="rejected">{memberError}</Alert>}
 
-          {!members && !memberError && <Skeleton label="Loading members…" />}
+          {!members && !memberError && <Skeleton label="Loading members…" variant="table" />}
 
           {members && members.length === 0 && (
             <EmptyState
@@ -631,8 +706,12 @@ export default function PeoplePage() {
             <Pager
               count={memberCount}
               skip={skip}
-              pageSize={MEMBERS_PAGE_SIZE}
+              pageSize={pageSize}
               onSkipChange={(next) => setUrlState({ skip: String(next) })}
+              onPageSizeChange={(next) =>
+                setUrlState({ limit: String(next), skip: URL_DEFAULTS.skip })
+              }
+              pageSizeOptions={[25, 50, 100]}
             />
           )}
         </>
@@ -640,32 +719,11 @@ export default function PeoplePage() {
 
       {view === 'invitations' && (
         <>
-          {secretPanel && (
-            <SecretReveal
-              ref={secretRevealRef}
-              secret={inviteLink(secretPanel.invitation)}
-              expiresAt={secretPanel.invitation.expiresAt}
-              notice={
-                secretPanel.action === 'resent'
-                  ? `This is the only time this new link is shown, and the previous link has already stopped working — copy it now and send it to ${secretPanel.invitation.email}.`
-                  : `This is the only time this link is shown — copy it now and send it to ${secretPanel.invitation.email}. Evidence Ops sends no invitation email.`
-              }
-              extraActions={
-                <LinkButton href={mailtoLink(secretPanel.invitation)} variant="secondary" size="sm">
-                  Email invite
-                </LinkButton>
-              }
-              onDismiss={() => setSecretPanel(null)}
-            />
-          )}
+          {invitationError && <Alert tone="rejected">{invitationError}</Alert>}
 
-          {invitationError && (
-            <p className="error error--page" role="alert">
-              {invitationError}
-            </p>
+          {!invitations && !invitationError && (
+            <Skeleton label="Loading invitations…" variant="table" />
           )}
-
-          {!invitations && !invitationError && <Skeleton label="Loading invitations…" />}
 
           {invitations && invitations.length === 0 && (
             <EmptyState
@@ -680,10 +738,35 @@ export default function PeoplePage() {
               <Table caption="Invitations minted for this tenant.">
                 <thead>
                   <tr>
-                    <TableHeaderCell>Email</TableHeaderCell>
-                    <TableHeaderCell>Role</TableHeaderCell>
+                    <SortableHeaderCell<InvitationSortField>
+                      field="email"
+                      label="Email"
+                      sort={invitationSort}
+                      direction={invitationSortDir}
+                      onSort={handleInvitationSort}
+                    />
+                    <SortableHeaderCell<InvitationSortField>
+                      field="role"
+                      label="Role"
+                      sort={invitationSort}
+                      direction={invitationSortDir}
+                      onSort={handleInvitationSort}
+                    />
                     <TableHeaderCell>Status</TableHeaderCell>
-                    <TableHeaderCell>Expires</TableHeaderCell>
+                    <SortableHeaderCell<InvitationSortField>
+                      field="createdAt"
+                      label="Created"
+                      sort={invitationSort}
+                      direction={invitationSortDir}
+                      onSort={handleInvitationSort}
+                    />
+                    <SortableHeaderCell<InvitationSortField>
+                      field="expiresAt"
+                      label="Expires"
+                      sort={invitationSort}
+                      direction={invitationSortDir}
+                      onSort={handleInvitationSort}
+                    />
                     <TableHeaderCell>Actions</TableHeaderCell>
                   </tr>
                 </thead>
@@ -705,8 +788,12 @@ export default function PeoplePage() {
             <Pager
               count={invitationCount}
               skip={invitationSkip}
-              pageSize={INVITATIONS_PAGE_SIZE}
+              pageSize={invitationPageSize}
               onSkipChange={(next) => setUrlState({ invSkip: String(next) })}
+              onPageSizeChange={(next) =>
+                setUrlState({ invLimit: String(next), invSkip: URL_DEFAULTS.invSkip })
+              }
+              pageSizeOptions={[25, 50, 100]}
             />
           )}
         </>

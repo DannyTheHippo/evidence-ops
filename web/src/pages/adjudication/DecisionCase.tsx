@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  ApiError,
   decideApproval,
   listWorkflowRuns,
   type Approval,
@@ -9,8 +10,10 @@ import {
 } from '../../api/client';
 import ApprovalDecisionDialog from '../../components/ApprovalDecisionDialog';
 import ConflictValueCompare from '../../components/ConflictValueCompare';
+import Alert from '../../components/ui/Alert';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
+import CopyButton from '../../components/ui/CopyButton';
 import DescriptionList from '../../components/ui/DescriptionList';
 import LinkButton from '../../components/ui/LinkButton';
 import Timestamp from '../../components/ui/Timestamp';
@@ -20,13 +23,6 @@ import type { ResolvedVersion } from '../../lib/document-index';
 import { shortId } from '../../lib/identifiers';
 import { metricLabel } from '../../lib/metric-labels';
 
-/** The value `conflict.proposedWinnerFactId` points at, formatted for display — undefined when
- *  the id names no value in `conflict.values` (data drift) or the policy proposed none. */
-function conflictWinnerLabel(conflict: Conflict): string | undefined {
-  const winner = conflict.values.find((value) => value.factId === conflict.proposedWinnerFactId);
-  return winner ? `${winner.value} ${winner.unit}` : undefined;
-}
-
 interface DecisionCaseProps {
   approval: Approval;
   conflict?: Conflict;
@@ -34,13 +30,15 @@ interface DecisionCaseProps {
   documentIndex: Map<string, ResolvedVersion>;
   canDecide: boolean;
   sessionResolved: boolean;
-  onDecided: (id: string) => void;
+  /** Called after the server has accepted the decision. `refetch` asks the page to reload the
+   * current queue page — set on a 404/409, where local removal would not match the server. */
+  onDecided: (id: string, options?: { refetch?: boolean }) => void;
 }
 
 /** The adjudication pane for one approval: what is being decided and, once decided, who decided
- *  it and why. A conflict-resolution approval additionally shows the policy's proposal — the rule
- *  fired and its winner label — plus the read-only `ConflictValueCompare` so the proposal is
- *  visible alongside the sourced evidence it was drawn from, not just its label. */
+ *  it and why. A conflict-resolution approval additionally shows the fact key plus the read-only
+ *  `ConflictValueCompare`, which renders the policy's own proposal strip — so the recommendation
+ *  is stated once, alongside the sourced evidence it was drawn from. */
 export default function DecisionCase({
   approval,
   conflict,
@@ -54,7 +52,6 @@ export default function DecisionCase({
   const [pendingDecision, setPendingDecision] = useState<ApprovalDecision | null>(null);
   const [viewingRun, setViewingRun] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
-  const winnerLabel = conflict ? conflictWinnerLabel(conflict) : undefined;
 
   async function viewRun() {
     const workflowId = approval.workflowId;
@@ -77,7 +74,19 @@ export default function DecisionCase({
   }
 
   async function handleConfirm(decision: ApprovalDecision, reason: string | undefined) {
-    await decideApproval(approval.id, decision, reason);
+    try {
+      await decideApproval(approval.id, decision, reason);
+    } catch (err: unknown) {
+      // A 404/409 means the server already moved this approval past pending — re-offering the
+      // dialog would only 409 again, so the page refetches instead of removing the row locally.
+      if (err instanceof ApiError && (err.status === 404 || err.status === 409)) {
+        setPendingDecision(null);
+        notify('error', 'This approval was already decided. Refreshing the queue.');
+        onDecided(approval.id, { refetch: true });
+        return;
+      }
+      throw err;
+    }
     notify(
       'success',
       decision === 'approved'
@@ -96,9 +105,8 @@ export default function DecisionCase({
       description: (
         <>
           {approval.subject.entityType}{' '}
-          <span className="mono" title={approval.subject.entityId}>
-            {shortId(approval.subject.entityId)}
-          </span>
+          <span className="mono">{shortId(approval.subject.entityId)}</span>{' '}
+          <CopyButton text={approval.subject.entityId} label="Copy subject id" iconOnly />
         </>
       ),
     },
@@ -133,19 +141,6 @@ export default function DecisionCase({
             {conflict.factKey.entity} · {metricLabel(conflict.factKey.metric, metricLabels)} ·{' '}
             {conflict.factKey.period}
           </p>
-          {conflict.ruleFired === 'none' ? (
-            <p className="cell-sub">
-              Policy has no recommendation for this conflict — {conflict.explanation}
-            </p>
-          ) : (
-            <div className="policy-strip">
-              <span className="policy-strip-label">recommended · {conflict.ruleFired}</span>
-              <span className="policy-strip-reason">
-                {winnerLabel ? `${winnerLabel} — ` : ''}
-                {conflict.explanation}
-              </span>
-            </div>
-          )}
           <ConflictValueCompare
             values={conflict.values}
             proposedWinnerFactId={conflict.proposedWinnerFactId}
@@ -190,11 +185,7 @@ export default function DecisionCase({
         )}
       </div>
 
-      {runError && (
-        <p className="error" role="alert">
-          {runError}
-        </p>
-      )}
+      {runError && <Alert tone="rejected">{runError}</Alert>}
 
       <ApprovalDecisionDialog
         decision={pendingDecision}

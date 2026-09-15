@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type Ref } from 'react';
+import { Link } from 'react-router-dom';
 import {
   applyHarvestedAlias,
   revokeHarvestedAlias,
@@ -7,12 +8,16 @@ import {
   type HarvestedAlias,
 } from '../../api/client';
 import { IconClipboard } from '../../components/icons';
+import Alert from '../../components/ui/Alert';
 import Button from '../../components/ui/Button';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import EmptyState from '../../components/ui/EmptyState';
 import Panel from '../../components/ui/Panel';
 import Table, { TableCell, TableHeaderCell } from '../../components/ui/Table';
 import { notify } from '../../components/ui/toast';
+import Tooltip from '../../components/ui/Tooltip';
+import { workbenchHref } from '../../lib/citation-link';
+import type { ResolvedVersion } from '../../lib/document-index';
 import { formatLocator } from '../../lib/locator';
 
 interface Proposal {
@@ -20,16 +25,28 @@ interface Proposal {
   alias: HarvestedAlias;
 }
 
+/** Identifies a row by the pair that produced it — an alias is unique within its entity, and the
+ * same alias text may be proposed for more than one. Keys the rendered rows and the Confirm-button
+ * registry the queue focuses through. */
+function proposalKey({ entity, alias }: Proposal): string {
+  return `${entity.id}::${alias.alias}`;
+}
+
 function ProposalRow({
   proposal,
+  documentIndex,
+  confirmRef,
   onDecided,
   onConfirmError,
 }: {
   proposal: Proposal;
+  documentIndex: Map<string, ResolvedVersion>;
+  confirmRef: Ref<HTMLButtonElement>;
   onDecided: (updated: CanonicalEntity) => void;
   onConfirmError: (message: string) => void;
 }) {
   const { entity, alias } = proposal;
+  const resolved = documentIndex.get(alias.documentVersionId);
   const [confirming, setConfirming] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejecting, setRejecting] = useState(false);
@@ -70,31 +87,50 @@ function ProposalRow({
     <tr>
       <TableCell label="Canonical name">{entity.canonicalName}</TableCell>
       <TableCell label="Proposed alias">{alias.alias}</TableCell>
-      {/* The locator and quote are this proposal's evidence; once the document workbench route
-          exists, this is where its link belongs, built from `alias.documentVersionId` and
-          `alias.locator` to open straight to the passage. */}
       <TableCell label="Evidence" className="cell-sub">
         <span className="trace-chip mono">{formatLocator(alias.locator)}</span>
-        <blockquote className="proposal-evidence-quote" title={alias.quote}>
-          &ldquo;{alias.quote}&rdquo;
-        </blockquote>
+        <Tooltip content={alias.quote}>
+          <blockquote className="proposal-evidence-quote" tabIndex={0}>
+            &ldquo;{alias.quote}&rdquo;
+          </blockquote>
+        </Tooltip>
+        {resolved ? (
+          <Link
+            className="trace-chip mono"
+            to={workbenchHref({
+              documentId: resolved.documentId,
+              versionId: alias.documentVersionId,
+            })}
+          >
+            {resolved.documentTitle}
+          </Link>
+        ) : (
+          <span className="trace-chip mono">{alias.documentVersionId}</span>
+        )}
       </TableCell>
       <TableCell label="Actions" className="cell-actions">
         {/* Confirm is the row's one signal and reversible — a plain small primary. Reject opens a
             destructive confirmation and reads as the quieter of the two, a small ghost, rather
-            than matching Confirm's weight. */}
+            than matching Confirm's weight. Both take `busy` rather than `disabled`, which would
+            drop focus to <body> the moment the button holding it went inert. Reject reads busy
+            while a confirm is in flight too; Confirm needs no matching guard, because the reject
+            confirmation is a modal dialog and the row is inert for as long as it is open. */}
         <Button
           variant="primary"
           size="sm"
-          disabled={confirming || rejecting}
+          ref={confirmRef}
+          busy={confirming}
+          busyLabel="Confirming…"
+          aria-label={`Confirm "${alias.alias}" for "${entity.canonicalName}"`}
           onClick={() => void handleConfirm()}
         >
-          {confirming ? 'Confirming…' : 'Confirm'}
+          Confirm
         </Button>
         <Button
           variant="ghost"
           size="sm"
-          disabled={confirming || rejecting}
+          busy={confirming || rejecting}
+          aria-label={`Reject "${alias.alias}" for "${entity.canonicalName}"`}
           onClick={() => setRejectOpen(true)}
         >
           Reject
@@ -117,6 +153,7 @@ function ProposalRow({
 
 interface ProposalsQueueProps {
   entities: CanonicalEntity[];
+  documentIndex: Map<string, ResolvedVersion>;
   onEntityChanged: (updated: CanonicalEntity) => void;
   // Re-fetches the entity list after a scan writes new proposals server-side — the scan response
   // itself carries only a count, not the rows it touched.
@@ -132,6 +169,7 @@ interface ProposalsQueueProps {
  */
 export default function ProposalsQueue({
   entities,
+  documentIndex,
   onEntityChanged,
   onScanned,
 }: ProposalsQueueProps) {
@@ -142,6 +180,15 @@ export default function ProposalsQueue({
   // decision that superseded it. Reject failures render through `ConfirmDialog`'s own `error`
   // prop instead, the same convention every other destructive row action in this app uses.
   const [confirmError, setConfirmError] = useState<string | null>(null);
+  // The landmark a decision falls back to once the queue empties and no row is left to focus.
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  // One entry per rendered row's Confirm button, keyed as the rows are, so a decision can hand
+  // focus to whichever row takes the decided one's place after it unmounts.
+  const confirmButtonsRef = useRef(new Map<string, HTMLButtonElement>());
+  // Non-null only between a decision and the render that drops its row: `key` names the row to
+  // focus, null means the queue is emptying and the heading takes it. The effect below consumes
+  // and clears it, so an ordinary re-render never moves focus.
+  const pendingFocusRef = useRef<{ key: string | null } | null>(null);
 
   const proposals = useMemo<Proposal[]>(
     () =>
@@ -153,10 +200,29 @@ export default function ProposalsQueue({
     [entities],
   );
 
-  function handleDecided(updated: CanonicalEntity) {
+  function handleDecided(updated: CanonicalEntity, decidedKey: string) {
+    // Read off the queue as it stands, before the decision drops the row: the one below it, or
+    // the one above when the decided row was last.
+    const decidedIndex = proposals.findIndex((proposal) => proposalKey(proposal) === decidedKey);
+    const next = proposals[decidedIndex + 1] ?? proposals[decidedIndex - 1] ?? null;
+    pendingFocusRef.current = { key: next ? proposalKey(next) : null };
     setConfirmError(null);
     onEntityChanged(updated);
   }
+
+  // Runs once the decided row has left the queue, taking the button that had focus with it, when
+  // it held focus at open. The rAF matters: `use-modal-dialog.ts`'s close cleanup finds that button
+  // detached and moves focus to the page heading, from an effect not ordered against this one, so a
+  // synchronous `focus()` here would race it and lose.
+  useEffect(() => {
+    const pending = pendingFocusRef.current;
+    if (!pending) return;
+    pendingFocusRef.current = null;
+    requestAnimationFrame(() => {
+      const nextConfirm = pending.key ? confirmButtonsRef.current.get(pending.key) : undefined;
+      (nextConfirm ?? headingRef.current)?.focus();
+    });
+  }, [proposals]);
 
   async function handleScan() {
     setScanning(true);
@@ -187,7 +253,11 @@ export default function ProposalsQueue({
     <>
       <section className="card">
         <div className="card-head">
-          <h2 className="card-title">Proposed aliases</h2>
+          {/* `tabIndex={-1}` makes the heading a programmatic focus target without adding a tab
+              stop — where focus lands when a decision empties the queue. */}
+          <h2 className="card-title" tabIndex={-1} ref={headingRef}>
+            Proposed aliases
+          </h2>
           {proposals.length > 0 && (
             <div className="queue-head-actions">
               {/* Counts only the entities this page loaded — the queue has no server-side filter
@@ -204,16 +274,8 @@ export default function ProposalsQueue({
           proposed for confirmation. Nothing here resolves until you confirm it.
         </p>
 
-        {scanError && (
-          <p className="error" role="alert">
-            {scanError}
-          </p>
-        )}
-        {confirmError && (
-          <p className="error" role="alert">
-            {confirmError}
-          </p>
-        )}
+        {scanError && <Alert tone="rejected">{scanError}</Alert>}
+        {confirmError && <Alert tone="rejected">{confirmError}</Alert>}
 
         {proposals.length === 0 && (
           <EmptyState
@@ -238,14 +300,22 @@ export default function ProposalsQueue({
               </tr>
             </thead>
             <tbody>
-              {proposals.map((proposal) => (
-                <ProposalRow
-                  key={`${proposal.entity.id}::${proposal.alias.alias}`}
-                  proposal={proposal}
-                  onDecided={handleDecided}
-                  onConfirmError={setConfirmError}
-                />
-              ))}
+              {proposals.map((proposal) => {
+                const key = proposalKey(proposal);
+                return (
+                  <ProposalRow
+                    key={key}
+                    proposal={proposal}
+                    documentIndex={documentIndex}
+                    confirmRef={(node) => {
+                      if (node) confirmButtonsRef.current.set(key, node);
+                      else confirmButtonsRef.current.delete(key);
+                    }}
+                    onDecided={(updated) => handleDecided(updated, key)}
+                    onConfirmError={setConfirmError}
+                  />
+                );
+              })}
             </tbody>
           </Table>
         </Panel>

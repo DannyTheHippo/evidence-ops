@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -85,6 +85,7 @@ describe('Sidebar', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
     auth.clearSession();
   });
 
@@ -96,27 +97,34 @@ describe('Sidebar', () => {
     expect(screen.getByRole('link', { name: 'Home' })).not.toHaveAttribute('aria-current');
   });
 
-  it('groups the nav into Estate and Ledger, with no group heading for Home, Adjudication, Answers or Runs', () => {
+  it('groups the nav into Estate, Ledger, Work and Admin lists, with Home alone and no heading elements', () => {
     vi.stubGlobal('fetch', fetchStub());
-    renderSidebar();
+    renderSidebar({ isAdmin: true });
 
-    expect(screen.getByRole('heading', { name: 'Estate' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Ledger' })).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Estate' })).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Ledger' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Home' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Adjudication' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Answers' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Runs' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'API keys' })).toBeInTheDocument();
+
+    const workList = within(screen.getByRole('list', { name: 'Work' }));
+    expect(workList.getByRole('link', { name: 'Adjudication' })).toBeInTheDocument();
+    expect(workList.getByRole('link', { name: 'Answers' })).toBeInTheDocument();
+    expect(workList.getByRole('link', { name: 'Runs' })).toBeInTheDocument();
+
+    const adminList = within(screen.getByRole('list', { name: 'Admin' }));
+    expect(adminList.getByRole('link', { name: 'API keys' })).toBeInTheDocument();
+
+    expect(screen.queryAllByRole('heading')).toHaveLength(0);
   });
 
-  it('shows the Admin group, with People, Audit events and Aliases and entities, only to an admin', () => {
+  it('shows the Admin list with People, Audit events and Entities only to an admin; a member sees Admin with API keys only', () => {
     vi.stubGlobal('fetch', fetchStub());
     const { rerender } = renderSidebar({ isAdmin: true });
 
-    expect(screen.getByRole('heading', { name: 'Admin' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'People' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Audit events' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Aliases and entities' })).toBeInTheDocument();
+    const adminList = screen.getByRole('list', { name: 'Admin' });
+    expect(within(adminList).getByRole('link', { name: 'People' })).toBeInTheDocument();
+    expect(within(adminList).getByRole('link', { name: 'Audit events' })).toBeInTheDocument();
+    expect(within(adminList).getByRole('link', { name: 'API keys' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Entities' })).toBeInTheDocument();
 
     rerender(
       <MemoryRouter initialEntries={['/']}>
@@ -130,18 +138,28 @@ describe('Sidebar', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.queryByRole('heading', { name: 'Admin' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'People' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Audit events' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Aliases and entities' })).not.toBeInTheDocument();
+    const memberAdminList = within(screen.getByRole('list', { name: 'Admin' }));
+    expect(memberAdminList.getByRole('link', { name: 'API keys' })).toBeInTheDocument();
+    expect(memberAdminList.queryByRole('link', { name: 'People' })).not.toBeInTheDocument();
+    expect(memberAdminList.queryByRole('link', { name: 'Audit events' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Entities' })).not.toBeInTheDocument();
   });
 
-  it('renders the drawer nav inside a dialog once open', () => {
+  it('names the brand without aria-label, exposing the visible text as its accessible name', () => {
+    vi.stubGlobal('fetch', fetchStub());
+    renderSidebar();
+
+    const nav = screen.getByRole('navigation', { name: 'Primary' });
+    expect(within(nav).getByText('Evidence Ops')).toBeInTheDocument();
+  });
+
+  it('renders the drawer nav inside a navigation landmark within the dialog', () => {
     vi.stubGlobal('fetch', fetchStub());
     renderSidebar({ drawerOpen: true });
 
     const dialog = screen.getByRole('dialog', { name: 'Navigation' });
-    expect(within(dialog).getByRole('link', { name: 'Home' })).toBeInTheDocument();
+    const nav = within(dialog).getByRole('navigation', { name: 'Primary' });
+    expect(within(nav).getByRole('link', { name: 'Home' })).toBeInTheDocument();
   });
 
   it('closes the drawer when a drawer nav link is clicked', () => {
@@ -152,6 +170,33 @@ describe('Sidebar', () => {
     const dialog = screen.getByRole('dialog', { name: 'Navigation' });
     fireEvent.click(within(dialog).getByRole('link', { name: 'Home' }));
 
+    expect(onCloseDrawer).toHaveBeenCalled();
+  });
+
+  it('closes the drawer from its Close button', () => {
+    vi.stubGlobal('fetch', fetchStub());
+    const onCloseDrawer = vi.fn();
+    renderSidebar({ drawerOpen: true, onCloseDrawer });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    expect(onCloseDrawer).toHaveBeenCalled();
+  });
+
+  it('closes the drawer on a backdrop pointerdown but not on a press inside it', () => {
+    vi.stubGlobal('fetch', fetchStub());
+    const onCloseDrawer = vi.fn();
+    renderSidebar({ drawerOpen: true, onCloseDrawer });
+
+    // jsdom runs no layout, so the dialog reports an empty box unless stubbed; give it one here,
+    // the same way Drawer.test.tsx does, so a point outside it reads as the backdrop.
+    const dialog = screen.getByRole('dialog', { name: 'Navigation' });
+    vi.spyOn(dialog, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 400, 600));
+
+    fireEvent.pointerDown(dialog, { clientX: 200, clientY: 300 });
+    expect(onCloseDrawer).not.toHaveBeenCalled();
+
+    fireEvent.pointerDown(dialog, { clientX: 500, clientY: 300 });
     expect(onCloseDrawer).toHaveBeenCalled();
   });
 
@@ -195,6 +240,31 @@ describe('Sidebar', () => {
     expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
   });
 
+  it('changes the collapse glyph direction', () => {
+    vi.stubGlobal('fetch', fetchStub());
+    const { rerender } = renderSidebar({ collapsed: false });
+
+    const expandedToggle = screen.getByRole('button', { name: 'Collapse sidebar' });
+    const expandedPaths = expandedToggle.querySelectorAll('path');
+    expect(expandedPaths[expandedPaths.length - 1]).toHaveAttribute('d', 'M11 6.5L9 8L11 9.5');
+
+    rerender(
+      <MemoryRouter initialEntries={['/']}>
+        <Sidebar
+          isAdmin={false}
+          drawerOpen={false}
+          onCloseDrawer={() => {}}
+          collapsed
+          onToggleCollapsed={() => {}}
+        />
+      </MemoryRouter>,
+    );
+
+    const collapsedToggle = screen.getByRole('button', { name: 'Expand sidebar' });
+    const collapsedPaths = collapsedToggle.querySelectorAll('path');
+    expect(collapsedPaths[collapsedPaths.length - 1]).toHaveAttribute('d', 'M9 6.5L11 8L9 9.5');
+  });
+
   it('keeps every nav link reachable when collapsed, since the rail only hides the text', () => {
     vi.stubGlobal('fetch', fetchStub());
     renderSidebar({ collapsed: true });
@@ -205,16 +275,37 @@ describe('Sidebar', () => {
     expect(screen.getByRole('navigation', { name: 'Primary' })).toHaveClass('sidebar--collapsed');
   });
 
-  it('folds the Adjudication and Measures queue counts into their link names', async () => {
+  it('renders no title attribute on nav links', () => {
+    vi.stubGlobal('fetch', fetchStub());
+    renderSidebar();
+
+    expect(screen.getByRole('link', { name: 'Ledger' })).not.toHaveAttribute('title');
+  });
+
+  it('shows a tooltip on focus for a rail link when collapsed', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', fetchStub());
+    renderSidebar({ collapsed: true });
+
+    const link = screen.getByRole('link', { name: 'Ledger' });
+    link.focus();
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+
+    const tooltip = screen.getByRole('tooltip');
+    expect(tooltip).toHaveTextContent('Ledger');
+    expect(link).toHaveAttribute('aria-describedby', tooltip.id);
+  });
+
+  it('folds the Adjudication and Measures counts into their link names', async () => {
     vi.stubGlobal('fetch', fetchStub({ conflictsCount: 3, approvalsCount: 0, measuresCount: 2 }));
     renderSidebar();
 
     expect(
       await screen.findByRole('link', { name: 'Adjudication, 3 pending' }),
     ).toBeInTheDocument();
-    expect(
-      await screen.findByRole('link', { name: 'Measures queue, 2 pending' }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Measures, 2 pending' })).toBeInTheDocument();
   });
 
   it('sums Adjudication from whichever of conflicts/approvals resolved when one fails', async () => {

@@ -71,4 +71,10 @@ describe('AuthCanvas', () => {
 
     expect(ref.current).toHaveFocus();
   });
+
+  it('renders the theme control', () => {
+    render(<AuthCanvas title="Sign in">content</AuthCanvas>);
+
+    expect(screen.getByRole('button', { name: 'Theme: System' })).toBeInTheDocument();
+  });
 });

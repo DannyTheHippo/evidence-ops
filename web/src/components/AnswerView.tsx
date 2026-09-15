@@ -8,9 +8,11 @@ import type {
   Locator,
 } from '../api/client';
 import type { ResolvedVersion } from '../lib/document-index';
+import { shortId, truncateSha256 } from '../lib/identifiers';
 import ConflictValueCompare from './ConflictValueCompare';
 import ProvenanceRail from './ProvenanceRail';
 import VerificationLedger from './VerificationLedger';
+import CopyButton from './ui/CopyButton';
 import LinkButton from './ui/LinkButton';
 
 /** A conflicting_evidence value's source chunk resolved to the document version and locator it
@@ -67,11 +69,12 @@ function DroppedClaimsBand({ droppedClaims, isAbstention }: DroppedClaimsBandPro
 }
 
 // `AnswerOutcome`'s `conflicting_evidence` carries only `value`/`unit`/`sourceChunkId` per
-// competing value — `conflictChunkIndex` (built by the caller from `listConflicts()`, capped at
-// its own page size) is what resolves a chunk to the document version and locator
-// `ConflictValueCompare` needs to render a source passage and a workbench link. A chunk absent
-// from that index — past the cap, or a conflict the index hasn't loaded yet — stays a value with
-// no source to point at, not an error; it renders in `unresolved` instead of `resolved`.
+// competing value — `conflictChunkIndex` (built by the caller from `listConflicts({ ids })`,
+// joined exactly against the answer's own `conflictIds`) is what resolves a chunk to the document
+// version and locator `ConflictValueCompare` needs to render a source passage and a workbench
+// link. A chunk absent from that index — the enrichment fetch has not resolved yet, or failed —
+// stays a value with no source to point at, not an error; it renders in `unresolved` instead of
+// `resolved`.
 function splitConflictValues(
   values: ConflictingValue[],
   conflictChunkIndex: Map<string, ConflictChunkResolution>,
@@ -205,7 +208,8 @@ export default function AnswerView({ answer, documentIndex, conflictChunkIndex }
                   <span className="mono">
                     {value.value} {value.unit}
                   </span>
-                  <span className="cell-sub">{value.sourceChunkId}</span>
+                  <span className="cell-sub">{truncateSha256(value.sourceChunkId)}</span>
+                  <CopyButton text={value.sourceChunkId} label="Copy chunk id" iconOnly />
                 </li>
               ))}
             </ul>
@@ -220,6 +224,7 @@ export default function AnswerView({ answer, documentIndex, conflictChunkIndex }
                   <Link
                     to={`/adjudication?kind=conflicts&selected=${conflictId}`}
                     className="btn btn--secondary btn--sm"
+                    aria-label={`Review conflict ${shortId(conflictId)}`}
                   >
                     Review conflict
                   </Link>

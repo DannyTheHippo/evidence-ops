@@ -55,10 +55,13 @@ function stubFetch(routes: Record<string, unknown>) {
   );
 }
 
+// Renders a subject that already carries a hash, so the view takes the auto-load path. The
+// on-demand cases render directly instead of through this helper, so they can omit
+// `attestationHash` outright.
 function renderView(kind: 'answers' | 'verifications', subjectId: string) {
   return render(
     <MemoryRouter>
-      <AttestationBundleView kind={kind} subjectId={subjectId} />
+      <AttestationBundleView kind={kind} subjectId={subjectId} attestationHash={'a'.repeat(64)} />
     </MemoryRouter>,
   );
 }
@@ -130,7 +133,7 @@ describe('AttestationBundleView', () => {
 
     expect(await screen.findByText('The cap rate was 6.1%.')).toBeInTheDocument();
     expect(screen.getByText('grounded')).toHaveClass('badge--strong');
-    expect(screen.getByText('not_grounded')).toHaveClass('badge--reject');
+    expect(screen.getByText('not grounded')).toHaveClass('badge--reject');
     expect(screen.getByText('Grounding check — passed')).toBeInTheDocument();
     expect(screen.getByText(/Grounding check — failed/)).toBeInTheDocument();
     expect(screen.getByText('No supporting chunk')).toBeInTheDocument();
@@ -179,7 +182,7 @@ describe('AttestationBundleView', () => {
     renderView('answers', 'a-1');
 
     expect(await screen.findByText('Comps!F2')).toBeInTheDocument();
-    expect(screen.getByText('no_evidence_retrieved')).toHaveClass('badge--neutral');
+    expect(screen.getByText('no evidence retrieved')).toHaveClass('badge--neutral');
     expect(screen.queryByRole('link', { name: /Comps/ })).not.toBeInTheDocument();
   });
 
@@ -199,7 +202,7 @@ describe('AttestationBundleView', () => {
     ).toBeInTheDocument();
   });
 
-  it('downloads the bundle as a named JSON file and revokes the object URL afterwards', async () => {
+  it('downloads the bundle as a named JSON file and does not revoke the object url before the download can start', async () => {
     const { createObjectURL, revokeObjectURL } = stubObjectUrl();
     const clicked: string[] = [];
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
@@ -215,14 +218,101 @@ describe('AttestationBundleView', () => {
       '/api/v1/documents/versions/lookup': { docs: [], count: 0 },
     });
 
-    renderView('verifications', 'v-1');
+    const { unmount } = renderView('verifications', 'v-1');
     const button = await screen.findByRole('button', { name: 'Download attestation' });
     await waitFor(() => expect(button).toBeEnabled());
     button.click();
 
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(clicked).toEqual(['attestation-verification-v-1.json']);
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+
+    unmount();
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock-1');
+  });
+
+  it('does not fetch the bundle for a record with no pinned hash until the operator generates it', async () => {
+    const fetchSpy = vi.fn(() => Promise.reject(new Error('should not be called')));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    render(
+      <MemoryRouter>
+        <AttestationBundleView kind="answers" subjectId="a-1" />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('button', { name: 'Generate attestation' })).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('fetches the bundle when the operator asks for it', async () => {
+    stubFetch({
+      '/api/v1/answers/a-1/attestation': baseBundle(),
+      '/api/v1/documents/versions/lookup': { docs: [], count: 0 },
+    });
+
+    render(
+      <MemoryRouter>
+        <AttestationBundleView kind="answers" subjectId="a-1" />
+      </MemoryRouter>,
+    );
+
+    const generateButton = await screen.findByRole('button', { name: 'Generate attestation' });
+    generateButton.click();
+
+    expect(await screen.findByRole('heading', { name: 'Attested claims' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Download attestation' })).toBeInTheDocument();
+  });
+
+  it('fetches again when the operator retries a failed generate', async () => {
+    let attestationCalls = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const path = (typeof input === 'string' ? input : '').split('?')[0];
+      if (path === '/api/v1/answers/a-1/attestation') {
+        attestationCalls += 1;
+        return attestationCalls === 1
+          ? Promise.reject(new Error('Network down'))
+          : Promise.resolve(jsonResponse(baseBundle()));
+      }
+      if (path === '/api/v1/documents/versions/lookup') {
+        return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${path}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <MemoryRouter>
+        <AttestationBundleView kind="answers" subjectId="a-1" />
+      </MemoryRouter>,
+    );
+
+    (await screen.findByRole('button', { name: 'Generate attestation' })).click();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Network down');
+
+    screen.getByRole('button', { name: 'Generate attestation' }).click();
+
+    expect(await screen.findByRole('heading', { name: 'Attested claims' })).toBeInTheDocument();
+    expect(attestationCalls).toBe(2);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('states that generating pins the hash', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('should not be called'))),
+    );
+
+    render(
+      <MemoryRouter>
+        <AttestationBundleView kind="answers" subjectId="a-1" />
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText('Generating the bundle pins its hash to this record permanently.'),
+    ).toBeInTheDocument();
   });
 
   it('renders an alert when the attestation fetch fails', async () => {
@@ -234,5 +324,68 @@ describe('AttestationBundleView', () => {
     renderView('answers', 'a-1');
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Network down');
+  });
+
+  it('renders human verdict, outcome and metric labels rather than raw enum values', async () => {
+    // Every other test in this file leaves `metric-labels.ts`'s module-scope cache populated
+    // (empty, since none stub `/metrics`) for the rest of the file's run — resetting the module
+    // registry and re-importing gives this test its own uncached instance regardless of run order.
+    vi.resetModules();
+    const routes: Record<string, unknown> = {
+      '/api/v1/answers/a-1/attestation': baseBundle({
+        outcome: 'insufficient_evidence',
+        claims: [
+          {
+            statement: 'Occupancy fell to 80%.',
+            verdict: 'not_grounded',
+            citations: [],
+            checks: [],
+          },
+        ],
+        decisions: [
+          {
+            factKey: { entity: 'Northgate', metric: 'cap_rate', period: '2026-Q2' },
+            outcome: 'timed_out',
+            resolvedAt: '2026-07-01T00:00:00.000Z',
+            conflictId: 'conflict-1',
+          },
+        ],
+      }),
+      '/api/v1/documents/versions/lookup': { docs: [], count: 0 },
+      '/api/v1/metrics': [{ id: 'cap_rate', label: 'Cap rate', canonicalUnit: 'percent' }],
+    };
+    stubFetch(routes);
+    const { default: AttestationBundleViewFresh } = await import('./AttestationBundleView');
+
+    render(
+      <MemoryRouter>
+        <AttestationBundleViewFresh
+          kind="answers"
+          subjectId="a-1"
+          attestationHash={'a'.repeat(64)}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('not grounded')).toBeInTheDocument();
+    expect(screen.getByText('insufficient evidence')).toBeInTheDocument();
+    expect(screen.getByText('timed out')).toBeInTheDocument();
+    expect(await screen.findByText(/Cap rate/)).toBeInTheDocument();
+    expect(screen.queryByText(/cap_rate/)).not.toBeInTheDocument();
+  });
+
+  it('nests the claims and decisions sections under the card heading', async () => {
+    stubFetch({
+      '/api/v1/answers/a-1/attestation': baseBundle(),
+      '/api/v1/documents/versions/lookup': { docs: [], count: 0 },
+    });
+
+    renderView('answers', 'a-1');
+
+    expect(
+      await screen.findByRole('heading', { name: 'Attestation', level: 2 }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Attested claims', level: 3 })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Decisions', level: 3 })).toBeInTheDocument();
   });
 });

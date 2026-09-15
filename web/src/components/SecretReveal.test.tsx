@@ -111,4 +111,17 @@ describe('SecretReveal', () => {
 
     expect(ref.current).toHaveFocus();
   });
+
+  it('names the section by its eyebrow, so a focus move announces the region', () => {
+    render(
+      <SecretReveal
+        secret="eo_inv_brandnewtoken123"
+        expiresAt="2099-01-01T00:00:00.000Z"
+        notice="Copy it now."
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('region', { name: 'One-time secret' })).toBeInTheDocument();
+  });
 });

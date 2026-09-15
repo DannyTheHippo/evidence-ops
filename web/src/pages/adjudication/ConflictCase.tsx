@@ -2,14 +2,17 @@ import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { requestConflictResolution, type Conflict, type ConflictValue } from '../../api/client';
 import ConflictValueCompare from '../../components/ConflictValueCompare';
+import Alert from '../../components/ui/Alert';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import DescriptionList from '../../components/ui/DescriptionList';
+import LinkButton from '../../components/ui/LinkButton';
 import Timestamp from '../../components/ui/Timestamp';
 import { notify } from '../../components/ui/toast';
 import { conflictStatusTone } from '../../lib/adjudication-status';
 import type { ResolvedVersion } from '../../lib/document-index';
+import { formatValue } from '../../lib/format-value';
 import { metricLabel } from '../../lib/metric-labels';
 
 // A pane offers at most one primary action, never exactly one: promoting a value the policy did
@@ -28,19 +31,29 @@ interface ConflictCaseProps {
   conflict: Conflict;
   metricLabels: Record<string, string>;
   documentIndex: Map<string, ResolvedVersion>;
+  /** Set when an open conflict already has a pending resolution approval; suppresses the request
+   *  action and links to that decision. */
+  pendingApprovalId?: string;
 }
 
 /** The adjudication pane for one conflict: metric, spread, and the decision record read straight
  *  from `conflict.resolution` — the queue needs no second query for it. While the conflict is
  *  still open, `ConflictValueCompare` also renders a "Request resolution" action per value, primary
- *  on the policy's recommended winner only. */
-export default function ConflictCase({ conflict, metricLabels, documentIndex }: ConflictCaseProps) {
+ *  on the policy's recommended winner only. The action is withheld from the two open conflicts the
+ *  server refuses: an unscorable one, whose evidence no longer resolves, and one already waiting on
+ *  a resolution approval — the Decision row says which, and links to the pending decision. */
+export default function ConflictCase({
+  conflict,
+  metricLabels,
+  documentIndex,
+  pendingApprovalId,
+}: ConflictCaseProps) {
   const navigate = useNavigate();
   const [resolvingFactId, setResolvingFactId] = useState<string | null>(null);
   const [pendingResolution, setPendingResolution] = useState<ConflictValue | null>(null);
   const [resolveError, setResolveError] = useState<string | null>(null);
-  // Blocks a double submit between the confirm click and the re-render that disables
-  // `ConfirmDialog`'s own buttons.
+  // Blocks a double submit between the confirm click and the re-render that marks
+  // `ConfirmDialog`'s Confirm busy.
   const resolveInFlightRef = useRef(false);
 
   function openResolveDialog(value: ConflictValue) {
@@ -80,14 +93,12 @@ export default function ConflictCase({ conflict, metricLabels, documentIndex }: 
     {
       term: 'Spread',
       description: (
-        <span className="mono">
-          {conflict.magnitude} {conflict.magnitudeUnit}
-        </span>
+        <span className="mono">{formatValue(conflict.magnitude, conflict.magnitudeUnit)}</span>
       ),
     },
     { term: 'Created', description: <Timestamp value={conflict.createdAt} /> },
     // Stale and unscorable both gate whether action is even possible, so their reasons render
-    // untruncated rather than behind `.cell-truncate`'s hover-only title.
+    // untruncated in the pane rather than behind a truncated cell.
     ...(conflict.stale
       ? [
           {
@@ -108,7 +119,22 @@ export default function ConflictCase({ conflict, metricLabels, documentIndex }: 
       term: 'Decision',
       description:
         conflict.status === 'open' ? (
-          'No decision yet — request a resolution to start one.'
+          pendingApprovalId ? (
+            <>
+              Resolution pending — awaiting approval.{' '}
+              <LinkButton
+                variant="secondary"
+                size="sm"
+                to={`/adjudication?kind=decisions&state=pending&selected=${pendingApprovalId}`}
+              >
+                Open the decision
+              </LinkButton>
+            </>
+          ) : conflict.unscorable ? (
+            'Not resolvable while its evidence is missing — restore the missing evidence, or dismiss the conflict.'
+          ) : (
+            'No decision yet — request a resolution to start one.'
+          )
         ) : resolution ? (
           <>
             {resolution.outcome} by {resolution.decidedBy ?? 'policy'} on{' '}
@@ -131,6 +157,11 @@ export default function ConflictCase({ conflict, metricLabels, documentIndex }: 
     },
   ];
 
+  // Only a request the server can honour is offered: an unscorable conflict answers 500 and one
+  // already awaiting approval answers 409.
+  const canRequestResolution =
+    conflict.status === 'open' && !conflict.unscorable && pendingApprovalId === undefined;
+
   return (
     <div className="card">
       <div className="card-head">
@@ -140,6 +171,10 @@ export default function ConflictCase({ conflict, metricLabels, documentIndex }: 
 
       <DescriptionList columns={2} items={detailItems} />
 
+      {/* A request that fails after its dialog was dismissed has nowhere else to land — the pane
+          carries the failure so the dismissal never reads as success. */}
+      {pendingResolution === null && resolveError && <Alert tone="rejected">{resolveError}</Alert>}
+
       <ConflictValueCompare
         values={conflict.values}
         proposedWinnerFactId={conflict.proposedWinnerFactId}
@@ -147,7 +182,7 @@ export default function ConflictCase({ conflict, metricLabels, documentIndex }: 
         explanation={conflict.explanation}
         documentIndex={documentIndex}
         renderAction={
-          conflict.status === 'open'
+          canRequestResolution
             ? (value) => (
                 <Button
                   variant={isPrimaryValue(conflict, value) ? 'primary' : 'secondary'}
@@ -168,7 +203,7 @@ export default function ConflictCase({ conflict, metricLabels, documentIndex }: 
         title="Request resolution"
         body={
           pendingResolution
-            ? `Request resolution using ${pendingResolution.value} ${pendingResolution.unit} as the winning value? This starts a workflow run that needs approval.`
+            ? `Request resolution using ${formatValue(pendingResolution.value, pendingResolution.unit)} as the winning value? This starts a workflow run that needs approval.`
             : ''
         }
         confirmLabel="Request resolution"

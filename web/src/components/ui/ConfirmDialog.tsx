@@ -1,4 +1,4 @@
-import { useId, useRef } from 'react';
+import { useId, useRef, type RefObject } from 'react';
 import Button from './Button';
 import Dialog from './Dialog';
 
@@ -11,6 +11,8 @@ interface ConfirmDialogProps {
   destructive?: boolean;
   busy?: boolean;
   error?: string;
+  // Focus target on close when the confirmed action removed the opener; see `useModalDialog`.
+  fallbackFocusRef?: RefObject<HTMLElement | null>;
   onConfirm: () => void;
 }
 
@@ -19,11 +21,12 @@ interface ConfirmDialogProps {
  * is wired to `Dialog`'s `describedBy` so a screen reader announces the explanation alongside the
  * title. `destructive` selects the danger confirm button over the primary one and, via `Dialog`'s
  * `initialFocusRef`, moves initial focus to Cancel — so the keyboard default on an irreversible
- * action is the safe one rather than the DOM order's Confirm. `busy` disables both buttons and
- * relabels the confirm action, which is what stops a double-click from firing `onConfirm` twice on
- * an action that cannot be undone. `error` renders inline in the app's existing error style and the
- * dialog stays open; cancel is disabled only by `busy`, never by `error`, so a failed confirm never
- * traps the user behind a lost explanation. */
+ * action is the safe one rather than the DOM order's Confirm. `busy` relabels the confirm action and
+ * guards its `onClick` rather than disabling it — a disabled focused Confirm would drop focus to
+ * `<body>` — while Cancel stays `disabled={busy}`, which is what stops a double-click from firing
+ * `onConfirm` twice on an action that cannot be undone. `error` renders inline in the app's existing
+ * error style and the dialog stays open; cancel is disabled only by `busy`, never by `error`, so a
+ * failed confirm never traps the user behind a lost explanation. */
 export default function ConfirmDialog({
   open,
   onClose,
@@ -33,6 +36,7 @@ export default function ConfirmDialog({
   destructive = false,
   busy = false,
   error,
+  fallbackFocusRef,
   onConfirm,
 }: ConfirmDialogProps) {
   const bodyId = useId();
@@ -45,6 +49,7 @@ export default function ConfirmDialog({
       title={title}
       describedBy={bodyId}
       initialFocusRef={destructive ? cancelRef : undefined}
+      fallbackFocusRef={fallbackFocusRef}
     >
       <p id={bodyId}>{body}</p>
       {error && (
@@ -53,8 +58,13 @@ export default function ConfirmDialog({
         </p>
       )}
       <div className="form-actions">
-        <Button variant={destructive ? 'danger' : 'primary'} disabled={busy} onClick={onConfirm}>
-          {busy ? `${confirmLabel}…` : confirmLabel}
+        <Button
+          variant={destructive ? 'danger' : 'primary'}
+          busy={busy}
+          busyLabel={`${confirmLabel}…`}
+          onClick={onConfirm}
+        >
+          {confirmLabel}
         </Button>
         <Button variant="ghost" onClick={onClose} disabled={busy} ref={cancelRef}>
           Cancel

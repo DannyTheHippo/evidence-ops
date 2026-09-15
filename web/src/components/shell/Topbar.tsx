@@ -6,9 +6,8 @@ import { useSession } from '../../lib/use-session';
 import Badge from '../ui/Badge';
 import IconButton from '../ui/IconButton';
 import Menu from '../ui/Menu';
-import Timestamp from '../ui/Timestamp';
 import ConnectionStatus from './ConnectionStatus';
-import { ThemeToggle } from './ThemeToggle';
+import ThemeMenu from './ThemeMenu';
 
 interface TopbarProps {
   breadcrumbFallback: string;
@@ -17,10 +16,13 @@ interface TopbarProps {
 }
 
 /** Renders `trail` as an ordered breadcrumb list, three levels at most (Section › Page ›
- * Record). The first crumb (the Section) is never a link, regardless of whether it carries a `to`
- * — a group label has nowhere of its own to go. The last crumb is always the current page:
- * plain text carrying `aria-current="page"`, never a link either. At ≤560px every crumb but the
- * last two collapses into a single non-interactive "…" (`.breadcrumb-collapse`,
+ * Record). Any crumb but the last renders as a `<Link>` when it carries a `to`, including the
+ * first — a Section crumb with nowhere of its own to go simply omits `to` and stays plain text.
+ * The last crumb is always the current page: plain text carrying `aria-current="page"` and the
+ * `breadcrumb-current` class (its truncation styling target in shell.css), never a link either.
+ * Separators are explicit `<span aria-hidden="true">` elements rather than CSS generated content,
+ * so a screen reader that voices `::before` content never reads the slash aloud. At ≤560px every
+ * crumb but the last two collapses into a single non-interactive "…" (`.breadcrumb-collapse`,
  * `.breadcrumb-ellipsis` in shell.css). */
 function BreadcrumbNav({ trail }: { trail: BreadcrumbItem[] }) {
   const collapsedCount = trail.length > 2 ? trail.length - 2 : 0;
@@ -36,15 +38,22 @@ function BreadcrumbNav({ trail }: { trail: BreadcrumbItem[] }) {
         {trail.map((item, index) => {
           const isFirst = index === 0;
           const isLast = index === trail.length - 1;
-          const isLinkable = Boolean(item.to) && !isFirst && !isLast;
+          const isLinkable = Boolean(item.to) && !isLast;
 
           return (
             <li
               key={`${item.label}-${index}`}
               className={index < collapsedCount ? 'breadcrumb-collapse' : undefined}
             >
+              {!isFirst && (
+                <span className="breadcrumb-sep" aria-hidden="true">
+                  /
+                </span>
+              )}
               {isLast ? (
-                <span aria-current="page">{item.label}</span>
+                <span aria-current="page" className="breadcrumb-current">
+                  {item.label}
+                </span>
               ) : isLinkable ? (
                 <Link to={item.to as string}>{item.label}</Link>
               ) : (
@@ -60,9 +69,11 @@ function BreadcrumbNav({ trail }: { trail: BreadcrumbItem[] }) {
 
 /** The chrome header above routed content: the drawer trigger (visible only below 768px, per
  * `.menu-toggle` in shell.css), the current page's breadcrumb trail, connection status, the
- * signed-in identity, theme control, and the account menu. Reads its own session via
- * `useSession()` — `App.tsx` composes this component without passing session data down, and the
- * hook's cache means this costs no extra probe beyond the one `App` already triggered.
+ * signed-in identity, theme control, and the account menu (Logout only — the trigger's own
+ * sr-only name carries email and role instead, since `.topbar-identity` hides them below 768px).
+ * Reads its own session via `useSession()` — `App.tsx` composes this component without passing
+ * session data down, and the hook's cache means this costs no extra probe beyond the one `App`
+ * already triggered.
  *
  * `breadcrumbFallback` is the single Page-level crumb `App.tsx` derives from the route; it is
  * what `useBreadcrumbTrail` returns while no page has published a trail of its own via
@@ -70,25 +81,12 @@ function BreadcrumbNav({ trail }: { trail: BreadcrumbItem[] }) {
 export default function Topbar({ breadcrumbFallback, onOpenMenu, onLogout }: TopbarProps) {
   const session = useSession();
   const me = session.status === 'authed' ? session.me : null;
-  const accountLabel = me ? me.email : 'Account';
-  const accountInitial = me ? me.email.charAt(0).toUpperCase() : '?';
   const roleLabel = me ? (me.role === 'admin' ? 'Admin' : 'Member') : null;
+  const accountLabel = me ? `${me.email}, ${roleLabel}` : 'Account';
+  const accountInitial = me ? me.email.charAt(0).toUpperCase() : '?';
   const trail = useBreadcrumbTrail([{ label: breadcrumbFallback }]);
 
-  const accountItems = me
-    ? [
-        { label: me.email },
-        { label: roleLabel as string },
-        {
-          label: (
-            <>
-              Member since <Timestamp value={me.createdAt} />
-            </>
-          ),
-        },
-        { label: 'Logout', onSelect: onLogout, tone: 'danger' as const },
-      ]
-    : [{ label: 'Logout', onSelect: onLogout, tone: 'danger' as const }];
+  const accountItems = [{ label: 'Logout', onSelect: onLogout, tone: 'danger' as const }];
 
   return (
     <header className="topbar">
@@ -113,7 +111,7 @@ export default function Topbar({ breadcrumbFallback, onOpenMenu, onLogout }: Top
             <Badge tone={me.role === 'admin' ? 'info' : 'neutral'}>{roleLabel}</Badge>
           </span>
         )}
-        <ThemeToggle />
+        <ThemeMenu />
         <Menu
           trigger={
             <>
@@ -125,6 +123,7 @@ export default function Topbar({ breadcrumbFallback, onOpenMenu, onLogout }: Top
             </>
           }
           items={accountItems}
+          placement="bottom-end"
         />
       </div>
     </header>

@@ -1,4 +1,7 @@
-import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react';
+import { useId, useRef, type PointerEvent, type ReactNode, type RefObject } from 'react';
+import { IconX } from '../icons';
+import IconButton from './IconButton';
+import { useModalDialog } from './use-modal-dialog';
 
 interface DialogProps {
   open: boolean;
@@ -9,12 +12,9 @@ interface DialogProps {
   describedBy?: string;
   // Selects one of the three width tokens in `primitives.css`; defaults to `'md'`.
   size?: 'sm' | 'md' | 'lg';
-  // Element to focus once the dialog is open, overriding the native first-focusable-element
-  // default. Applied as the last step of the same effect that calls `showModal()`, after
-  // `showModal()`'s own initial-focus placement rather than racing it — the whole open/close
-  // focus lifecycle (this, and the restore-on-close below) lives in one place rather than
-  // split across this component and its callers.
   initialFocusRef?: RefObject<HTMLElement | null>;
+  // Focus target on close when the opener has left the document; see `useModalDialog`.
+  fallbackFocusRef?: RefObject<HTMLElement | null>;
   children: ReactNode;
 }
 
@@ -25,9 +25,9 @@ const sizeClass: Record<NonNullable<DialogProps['size']>, string> = {
 };
 
 /** Native `<dialog>` driven by `showModal()`/`close()` — focus trap, Escape-to-close, backdrop and
- * inertness are browser behaviour, not hand-rolled here. The native `close` event (Escape, or a
- * programmatic `close()`) is the single path to `onClose`, so a caller-triggered close and a
- * keyboard-triggered one both flow through the same prop. */
+ * inertness are browser behaviour, not hand-rolled here. The native `close` event (Escape, the
+ * header close control, a backdrop press, or a programmatic `close()`) is the single path to
+ * `onClose`, so every dismissal flows through the same prop. */
 export default function Dialog({
   open,
   onClose,
@@ -35,55 +35,36 @@ export default function Dialog({
   describedBy,
   size = 'md',
   initialFocusRef,
+  fallbackFocusRef,
   children,
 }: DialogProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
-  const restoreFocusTo = useRef<HTMLElement | null>(null);
   const titleId = useId();
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog || !open) return;
-
-    restoreFocusTo.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-
-    // jsdom does not implement showModal()/close() — this is a UI affordance, so it fails OPEN
-    // (rendering the dialog visibly) rather than throwing or swallowing the content, whether the
-    // method is simply absent or present but non-functional.
-    if (typeof dialog.showModal === 'function') {
-      try {
-        dialog.showModal();
-      } catch {
-        dialog.setAttribute('open', '');
-      }
-    } else {
-      dialog.setAttribute('open', '');
-    }
-
-    // After showModal()'s own initial-focus placement, so an explicit target wins over the
-    // native first-focusable-element default rather than racing it.
-    initialFocusRef?.current?.focus();
-
-    return () => {
-      if (typeof dialog.close === 'function') {
-        try {
-          dialog.close();
-        } catch {
-          dialog.removeAttribute('open');
-        }
-      } else {
-        dialog.removeAttribute('open');
-      }
-      // Explicit fallback: current browsers restore focus to the invoking element through
-      // dialog.close() itself, but the parent unmounting this component (flipping `open` to
-      // false) removes the dialog from the DOM before that has a chance to run — and jsdom does
-      // not implement the restore at all. Doing it here covers both.
-      restoreFocusTo.current?.focus();
-    };
-  }, [open, initialFocusRef]);
+  const { requestClose } = useModalDialog({
+    open,
+    onClose,
+    dialogRef,
+    initialFocusRef,
+    fallbackFocusRef,
+  });
 
   if (!open) return null;
+
+  // A press on the dialog's own padding also targets the <dialog> element, so only a press whose
+  // point falls outside the dialog's box counts as the backdrop.
+  const handleBackdropPointerDown = (event: PointerEvent<HTMLDialogElement>) => {
+    const dialog = dialogRef.current;
+    if (!dialog || event.target !== dialog) return;
+    const box = dialog.getBoundingClientRect();
+    if (
+      event.clientX < box.left ||
+      event.clientX > box.right ||
+      event.clientY < box.top ||
+      event.clientY > box.bottom
+    ) {
+      requestClose();
+    }
+  };
 
   return (
     <dialog
@@ -92,10 +73,20 @@ export default function Dialog({
       aria-labelledby={titleId}
       aria-describedby={describedBy}
       onClose={onClose}
+      onPointerDown={handleBackdropPointerDown}
     >
-      <h2 id={titleId} className="dialog-title">
-        {title}
-      </h2>
+      <div className="dialog-head">
+        <h2 id={titleId} className="dialog-title">
+          {title}
+        </h2>
+        <IconButton
+          icon={<IconX />}
+          aria-label="Close"
+          variant="ghost"
+          size="sm"
+          onClick={requestClose}
+        />
+      </div>
       {children}
     </dialog>
   );

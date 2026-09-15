@@ -1,4 +1,5 @@
 import { clearSession, setSession } from '../lib/auth';
+import { loginHrefFor } from '../lib/return-to';
 import type { components } from './schema';
 
 const API = '/api/v1';
@@ -33,8 +34,8 @@ export class ApiError extends Error {
 
   /** Seconds until the caller may retry, read from the response's `Retry-After` header. Present
    * only when the header carries a non-negative number — absent for every response that omits it
-   * or sends something this client cannot parse as one, in which case a caller falls back to its
-   * own fixed cooldown window. */
+   * or sends something this client cannot parse as one. `useFormSubmit` counts this down on a 429
+   * and falls back to a fixed 30-second window when it is absent. */
   readonly retryAfterSeconds?: number;
 
   constructor(status: number, message: string, fields?: FieldError[], retryAfterSeconds?: number) {
@@ -52,16 +53,24 @@ export function isFieldValidationError(err: unknown): err is ApiError & { fields
   return err instanceof ApiError && Array.isArray(err.fields) && err.fields.length > 0;
 }
 
-// The single wording for an unreachable server, reached by every call site through
+// The single wording for a dropped connection, reached by every call site through
 // `TransportError` rather than restated per page.
 const TRANSPORT_ERROR_MESSAGE = 'Could not reach the server. Check your connection and try again.';
 
+// The single wording for this client's own timeout — a distinct case from a dropped connection,
+// since the server may still be working when the client gives up on it.
+const TIMEOUT_ERROR_MESSAGE = 'The server took too long to respond. Try again.';
+
 /** Thrown when `fetch` itself never produces an HTTP response — a dropped connection, DNS
  * failure, or the request's own timeout. `status` is `0`, the sentinel for "no server status to
- * report," distinguishing this from any status a server actually returned. */
+ * report," distinguishing this from any status a server actually returned. `reason` distinguishes
+ * the two causes for callers that word them differently. */
 export class TransportError extends ApiError {
-  constructor() {
-    super(0, TRANSPORT_ERROR_MESSAGE);
+  readonly reason: 'timeout' | 'network';
+
+  constructor(reason: 'timeout' | 'network' = 'network') {
+    super(0, reason === 'timeout' ? TIMEOUT_ERROR_MESSAGE : TRANSPORT_ERROR_MESSAGE);
+    this.reason = reason;
   }
 }
 
@@ -71,9 +80,10 @@ export class TransportError extends ApiError {
 // streamed separately — nothing awaits it inline through this helper.
 const DEFAULT_TIMEOUT_MS = 30_000;
 
-// A document upload carries a full file body over what may be a much slower link than the JSON
-// calls above; the default budget would abort a large file partway through.
-const UPLOAD_TIMEOUT_MS = 120_000;
+// A large-body call — a document upload's file, or a document version's stored bytes read back as
+// a blob — carries a full body over what may be a much slower link than the JSON calls above; the
+// default budget would abort one partway through in either direction.
+const LARGE_BODY_TIMEOUT_MS = 120_000;
 
 function extractMessage(body: Record<string, unknown>, fallback: string): string {
   const { message } = body;
@@ -161,8 +171,17 @@ async function fetchGuarded<T>(
     });
 
     if (res.status === 401 && !path.startsWith('/auth/')) {
-      window.location.assign('/login');
-      throw new ApiError(401, 'Unauthorized');
+      window.location.assign(loginHrefFor(window.location));
+      throw new ApiError(401, 'Your session has expired. Sign in again.');
+    }
+
+    if (res.status === 429) {
+      const retryAfterSeconds = readRetryAfterSeconds(res);
+      const message =
+        retryAfterSeconds !== undefined
+          ? `Too many attempts. Try again in ${retryAfterSeconds} second${retryAfterSeconds === 1 ? '' : 's'}.`
+          : 'Too many attempts. Try again in a moment.';
+      throw new ApiError(429, message, undefined, retryAfterSeconds);
     }
 
     if (!res.ok) {
@@ -178,9 +197,8 @@ async function fetchGuarded<T>(
     // server that answered is not a transport failure — and so does anything unrecognized, because
     // swallowing it into a generic message would hide a real defect rather than surface it.
     if (err instanceof ApiError) throw err;
-    if (timeoutController.signal.aborted || err instanceof TypeError) {
-      throw new TransportError();
-    }
+    if (timeoutController.signal.aborted) throw new TransportError('timeout');
+    if (err instanceof TypeError) throw new TransportError('network');
     throw err;
   } finally {
     clearTimeout(timeoutId);
@@ -199,7 +217,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return fetchGuarded(
     path,
     { ...init, headers },
-    isFormData ? UPLOAD_TIMEOUT_MS : DEFAULT_TIMEOUT_MS,
+    isFormData ? LARGE_BODY_TIMEOUT_MS : DEFAULT_TIMEOUT_MS,
     async (res) => {
       if (res.status === 204) {
         return undefined as T;
@@ -225,7 +243,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
  * assumptions — for the one response shape that is not JSON: a document version's stored bytes,
  * which the PDF pane needs as a `blob:` object URL rather than a direct-download href. */
 async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
-  return fetchGuarded(path, init, DEFAULT_TIMEOUT_MS, (res) => res.blob());
+  return fetchGuarded(path, init, LARGE_BODY_TIMEOUT_MS, (res) => res.blob());
 }
 
 function jsonBody(data: unknown): RequestInit {
@@ -519,6 +537,9 @@ export function listAnswers(params?: {
   runStatus?: AnswerRunStatus;
   sort?: AnswerSortField;
   sortDir?: SortDirection;
+  // ISO instants filtering createdAt; the server requires to after from.
+  from?: string;
+  to?: string;
 }): Promise<WithCount<Answer>> {
   const query = new URLSearchParams();
   if (params?.skip !== undefined) query.set('skip', String(params.skip));
@@ -526,6 +547,8 @@ export function listAnswers(params?: {
   if (params?.runStatus) query.set('runStatus', params.runStatus);
   if (params?.sort !== undefined) query.set('sort', params.sort);
   if (params?.sortDir !== undefined) query.set('sortDir', params.sortDir);
+  if (params?.from !== undefined) query.set('from', params.from);
+  if (params?.to !== undefined) query.set('to', params.to);
   const qs = query.toString();
   return request<WithCount<Answer>>(`/answers${qs ? `?${qs}` : ''}`);
 }
@@ -645,6 +668,7 @@ export function listApprovals(params?: {
   state?: ApprovalState;
   sort?: ApprovalSortField;
   sortDir?: SortDirection;
+  workflowId?: string;
 }): Promise<WithCount<Approval>> {
   const query = new URLSearchParams();
   if (params?.skip !== undefined) query.set('skip', String(params.skip));
@@ -652,6 +676,7 @@ export function listApprovals(params?: {
   if (params?.state) query.set('state', params.state);
   if (params?.sort !== undefined) query.set('sort', params.sort);
   if (params?.sortDir !== undefined) query.set('sortDir', params.sortDir);
+  if (params?.workflowId) query.set('workflowId', params.workflowId);
   const qs = query.toString();
   return request<WithCount<Approval>>(`/approvals${qs ? `?${qs}` : ''}`);
 }
@@ -671,11 +696,7 @@ export function decideApproval(
 
 export type WorkflowRunStatus = 'queued' | 'running' | 'completed' | 'failed';
 
-// Only the workflows that record a run row. `answer-question` and `ingest-document-version` run
-// without one, so they never appear here. Absent on rows written before the field existed.
-// `'rescan-conflicts'` is no longer a workflow this codebase starts; kept for existing rows that
-// carry it, since no current code path writes it.
-export type WorkflowRunType = 'resolve-conflict' | 'sync-source' | 'rescan-conflicts';
+export type WorkflowRunType = NonNullable<Schemas['WorkflowRunResponseDto']['workflowType']>;
 
 export type WorkflowRun = Schemas['WorkflowRunResponseDto'];
 
@@ -698,6 +719,9 @@ export function listWorkflowRuns(params?: {
   limit?: number;
   sort?: WorkflowRunSortField;
   sortDir?: SortDirection;
+  // ISO instants filtering createdAt; the server requires to after from.
+  from?: string;
+  to?: string;
 }): Promise<WithCount<WorkflowRun>> {
   const query = new URLSearchParams();
   if (params?.workflowId) query.set('workflowId', params.workflowId);
@@ -707,6 +731,8 @@ export function listWorkflowRuns(params?: {
   if (params?.limit !== undefined) query.set('limit', String(params.limit));
   if (params?.sort !== undefined) query.set('sort', params.sort);
   if (params?.sortDir !== undefined) query.set('sortDir', params.sortDir);
+  if (params?.from !== undefined) query.set('from', params.from);
+  if (params?.to !== undefined) query.set('to', params.to);
   const qs = query.toString();
   return request<WithCount<WorkflowRun>>(`/workflow-runs${qs ? `?${qs}` : ''}`);
 }
@@ -744,7 +770,7 @@ export interface AuditEventView {
 
 export type AuditEventSortField = 'createdAt' | 'action' | 'origin';
 
-// Five independent optional filters, so this one builds its query with
+// Seven independent optional filters, so this one builds its query with
 // URLSearchParams rather than the ad-hoc template literals above.
 export function listAuditEvents(params?: {
   skip?: number;
@@ -756,6 +782,9 @@ export function listAuditEvents(params?: {
   refusalReason?: string;
   sort?: AuditEventSortField;
   sortDir?: SortDirection;
+  // ISO instants filtering createdAt; the server requires to after from.
+  from?: string;
+  to?: string;
 }): Promise<WithCount<AuditEventView>> {
   const query = new URLSearchParams();
   if (params?.skip !== undefined) query.set('skip', String(params.skip));
@@ -767,6 +796,8 @@ export function listAuditEvents(params?: {
   if (params?.refusalReason) query.set('refusalReason', params.refusalReason);
   if (params?.sort !== undefined) query.set('sort', params.sort);
   if (params?.sortDir !== undefined) query.set('sortDir', params.sortDir);
+  if (params?.from !== undefined) query.set('from', params.from);
+  if (params?.to !== undefined) query.set('to', params.to);
   const qs = query.toString();
   return request<WithCount<AuditEventView>>(`/audit-events${qs ? `?${qs}` : ''}`);
 }
@@ -850,7 +881,9 @@ export function updateSource(
     enabled?: boolean;
     connectivity?: SourceConnectivity;
     reachability?: SourceReachability;
-    owner?: string;
+    // Omit to leave the owner unchanged; send null to clear it. jsonBody's JSON.stringify keeps
+    // an explicit null in the request body while dropping an omitted (undefined) key entirely.
+    owner?: string | null;
     tracked?: boolean;
     sourceClass?: DocumentSourceClass;
   },
@@ -1209,6 +1242,9 @@ export type LedgerCell = StrictOmit<
 
 export type LedgerCellState = LedgerCell['state'];
 
+/** The fields `/ledger` will actually order by — the ledger cell's own identity columns. */
+export type LedgerCellSortField = 'entity' | 'measure' | 'period';
+
 export function listLedgerCells(params?: {
   skip?: number;
   limit?: number;
@@ -1216,6 +1252,8 @@ export function listLedgerCells(params?: {
   measure?: string;
   state?: LedgerCellState;
   period?: string;
+  sort?: LedgerCellSortField;
+  sortDir?: SortDirection;
 }): Promise<WithCount<LedgerCell>> {
   const query = new URLSearchParams();
   if (params?.skip !== undefined) query.set('skip', String(params.skip));
@@ -1224,6 +1262,8 @@ export function listLedgerCells(params?: {
   if (params?.measure !== undefined) query.set('measure', params.measure);
   if (params?.state !== undefined) query.set('state', params.state);
   if (params?.period !== undefined) query.set('period', params.period);
+  if (params?.sort !== undefined) query.set('sort', params.sort);
+  if (params?.sortDir !== undefined) query.set('sortDir', params.sortDir);
   const qs = query.toString();
   return request<WithCount<LedgerCell>>(`/ledger${qs ? `?${qs}` : ''}`);
 }
@@ -1243,11 +1283,13 @@ export function listLedgerFacts(params: {
   entity: string;
   measure: string;
   period?: string;
+  limit?: number;
 }): Promise<WithCount<LedgerFact>> {
   const query = new URLSearchParams();
   query.set('entity', params.entity);
   query.set('measure', params.measure);
   if (params.period !== undefined) query.set('period', params.period);
+  if (params.limit !== undefined) query.set('limit', String(params.limit));
   return request<WithCount<LedgerFact>>(`/ledger/facts?${query.toString()}`);
 }
 

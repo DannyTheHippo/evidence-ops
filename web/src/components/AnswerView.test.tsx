@@ -408,9 +408,51 @@ describe('AnswerView', () => {
       }),
     );
 
-    const links = screen.getAllByRole('link', { name: 'Review conflict' });
+    const links = screen.getAllByRole('link', { name: /Review conflict/ });
     expect(links).toHaveLength(2);
     expect(links[0]).toHaveAttribute('href', '/adjudication?kind=conflicts&selected=conflict-1');
     expect(links[1]).toHaveAttribute('href', '/adjudication?kind=conflicts&selected=conflict-2');
+  });
+
+  it('names each conflict link by its conflict, not by a shared verb', () => {
+    renderView(
+      baseAnswer({
+        conflictIds: ['conflict-1', 'conflict-2'],
+        outcome: {
+          kind: 'conflicting_evidence',
+          factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+          values: [],
+        },
+      }),
+    );
+
+    // Visible text stays 'Review conflict' on both links; the accessible name carries the id so
+    // assistive tech announces which conflict each link opens.
+    expect(screen.getAllByText('Review conflict')).toHaveLength(2);
+    expect(screen.getByRole('link', { name: 'Review conflict conflict-1' })).toHaveAttribute(
+      'href',
+      '/adjudication?kind=conflicts&selected=conflict-1',
+    );
+    expect(screen.getByRole('link', { name: 'Review conflict conflict-2' })).toHaveAttribute(
+      'href',
+      '/adjudication?kind=conflicts&selected=conflict-2',
+    );
+  });
+
+  it('truncates an unresolved value chunk id and offers the full value to copy', () => {
+    renderView(
+      baseAnswer({
+        conflictIds: ['conflict-1'],
+        outcome: {
+          kind: 'conflicting_evidence',
+          factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+          values: [{ value: 6.4, unit: 'percent', sourceChunkId: 'z'.repeat(64) }],
+        },
+      }),
+    );
+
+    expect(screen.getByText(`${'z'.repeat(8)}…zzzz`)).toBeInTheDocument();
+    expect(screen.queryByText('z'.repeat(64))).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy chunk id' })).toBeInTheDocument();
   });
 });

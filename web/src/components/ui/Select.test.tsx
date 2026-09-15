@@ -77,4 +77,18 @@ describe('Select', () => {
 
     expect(onBlur).toHaveBeenCalledTimes(1);
   });
+
+  it('merges a caller className after the select class', () => {
+    render(
+      <Select
+        label="Entity type"
+        options={OPTIONS}
+        value="all"
+        onChange={() => {}}
+        className="entity-select"
+      />,
+    );
+
+    expect(screen.getByLabelText('Entity type')).toHaveClass('select', 'entity-select');
+  });
 });

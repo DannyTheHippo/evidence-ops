@@ -1,9 +1,10 @@
+/// <reference types="vite/client" />
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as auth from '../../lib/auth';
 import { useBreadcrumbs } from '../../lib/breadcrumbs';
-import { formatRelativeTimestamp } from '../../lib/format-timestamp';
+import primitivesCss from '../../styles/primitives.css?raw';
 import Topbar from './Topbar';
 
 /** Publishes a fixed three-level trail for the duration it is mounted — stands in for a page that
@@ -14,6 +15,20 @@ function TrailPublisher() {
     { label: 'Sources', to: '/sources' },
     { label: 'Acme Tower' },
   ]);
+  return null;
+}
+
+/** Publishes a two-level trail whose first (and only non-current) crumb carries a route — stands
+ * in for the common "Section > current record" case, where that crumb should render as a link. */
+function TwoLevelPublisher() {
+  useBreadcrumbs([{ label: 'Answers', to: '/answers' }, { label: 'What is the cap rate?' }]);
+  return null;
+}
+
+/** Publishes a single, implausibly long current-page crumb, to exercise `.breadcrumb-current`'s
+ * truncation. */
+function LongCrumbPublisher() {
+  useBreadcrumbs([{ label: 'x'.repeat(200) }]);
   return null;
 }
 
@@ -52,44 +67,33 @@ describe('Topbar', () => {
     expect(screen.getByRole('button', { name: 'Account' })).toBeInTheDocument();
   });
 
-  it('shows email, role and member-since as informational items beside a real Logout action', async () => {
+  it('names the trigger with email and role and offers Logout as the only item', async () => {
     mockAuthedSession();
     const onLogout = vi.fn();
     render(<Topbar breadcrumbFallback="Sources" onOpenMenu={() => {}} onLogout={onLogout} />);
 
-    const trigger = await screen.findByRole('button', { name: 'user@example.com' });
+    const trigger = await screen.findByRole('button', { name: 'user@example.com, Member' });
     fireEvent.click(trigger);
 
-    const emailItem = screen.getByRole('menuitem', { name: 'user@example.com' });
-    const roleItem = screen.getByRole('menuitem', { name: 'Member' });
-    const memberSinceItem = screen.getByRole('menuitem', {
-      name: `Member since ${formatRelativeTimestamp(ME.createdAt)}`,
-    });
-    expect(emailItem).toHaveAttribute('aria-disabled', 'true');
-    expect(roleItem).toHaveAttribute('aria-disabled', 'true');
-    expect(memberSinceItem).toHaveAttribute('aria-disabled', 'true');
-
+    expect(screen.getAllByRole('menuitem')).toHaveLength(1);
     const logoutItem = screen.getByRole('menuitem', { name: 'Logout' });
     expect(logoutItem).not.toHaveAttribute('aria-disabled');
     fireEvent.click(logoutItem);
     expect(onLogout).toHaveBeenCalledOnce();
   });
 
-  it('opens the account menu on click, moves focus with ArrowDown, closes on Escape and returns focus to the trigger', async () => {
+  it('opens the account menu on click, closes on Escape and returns focus to the trigger', async () => {
     mockAuthedSession();
     render(<Topbar breadcrumbFallback="Sources" onOpenMenu={() => {}} onLogout={() => {}} />);
 
-    const trigger = await screen.findByRole('button', { name: 'user@example.com' });
+    const trigger = await screen.findByRole('button', { name: 'user@example.com, Member' });
     trigger.focus();
     fireEvent.click(trigger);
 
-    const items = screen.getAllByRole('menuitem');
-    expect(items[0]).toHaveFocus();
+    const logoutItem = screen.getByRole('menuitem', { name: 'Logout' });
+    expect(logoutItem).toHaveFocus();
 
-    fireEvent.keyDown(items[0], { key: 'ArrowDown' });
-    expect(items[1]).toHaveFocus();
-
-    fireEvent.keyDown(items[1], { key: 'Escape' });
+    fireEvent.keyDown(logoutItem, { key: 'Escape' });
 
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
@@ -131,8 +135,56 @@ describe('Topbar', () => {
     expect(within(nav).getByRole('link', { name: 'Sources' })).toBeInTheDocument();
     const current = within(nav).getByText('Acme Tower');
     expect(current).toHaveAttribute('aria-current', 'page');
-    // The Section crumb is never a link, even though it is not the current page.
+    expect(current).toHaveClass('breadcrumb-current');
+    // "Evidence" carries no `to` in this fixture, so it stays plain text — not because it is
+    // the first crumb.
     expect(within(nav).queryByRole('link', { name: 'Evidence' })).not.toBeInTheDocument();
+  });
+
+  it('links a non-last crumb that carries a route, including the first, and marks the last as the current page', () => {
+    vi.spyOn(auth, 'ensureSession').mockReturnValue(new Promise(() => {}));
+    render(
+      <MemoryRouter>
+        <Topbar breadcrumbFallback="Sources" onOpenMenu={() => {}} onLogout={() => {}} />
+        <TwoLevelPublisher />
+      </MemoryRouter>,
+    );
+
+    const nav = screen.getByRole('navigation', { name: 'Breadcrumb' });
+    expect(within(nav).getByRole('link', { name: 'Answers' })).toBeInTheDocument();
+    const current = within(nav).getByText('What is the cap rate?');
+    expect(current).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('renders separators that are hidden from assistive tech', () => {
+    vi.spyOn(auth, 'ensureSession').mockReturnValue(new Promise(() => {}));
+    const { container } = render(
+      <MemoryRouter>
+        <Topbar breadcrumbFallback="Sources" onOpenMenu={() => {}} onLogout={() => {}} />
+        <TrailPublisher />
+      </MemoryRouter>,
+    );
+
+    const separators = container.querySelectorAll('.breadcrumb-sep');
+    expect(separators.length).toBeGreaterThan(0);
+    separators.forEach((separator) => expect(separator).toHaveAttribute('aria-hidden', 'true'));
+  });
+
+  it('truncates a very long current crumb without displacing the account control', async () => {
+    mockAuthedSession();
+    render(
+      <MemoryRouter>
+        <Topbar breadcrumbFallback="Sources" onOpenMenu={() => {}} onLogout={() => {}} />
+        <LongCrumbPublisher />
+      </MemoryRouter>,
+    );
+
+    const nav = screen.getByRole('navigation', { name: 'Breadcrumb' });
+    const current = within(nav).getByText('x'.repeat(200));
+    expect(current).toHaveClass('breadcrumb-current');
+    expect(
+      await screen.findByRole('button', { name: 'user@example.com, Member' }),
+    ).toBeInTheDocument();
   });
 
   it('shows no persistent identity while the session probe is pending', () => {
@@ -146,12 +198,94 @@ describe('Topbar', () => {
     mockAuthedSession();
     render(<Topbar breadcrumbFallback="Sources" onOpenMenu={() => {}} onLogout={() => {}} />);
 
-    // "Member" only ever renders as part of the persistent identity block while the account menu
-    // is closed (the dropdown holding the same word as a menuitem is not in the tree yet), so its
-    // presence alone proves the block rendered.
+    // "Member" renders once, inside the persistent identity block's Badge — the trigger's own
+    // sr-only name carries the role too, but as part of the single compound "email, role" string,
+    // not as an exact-text match of "Member" alone.
     expect(await screen.findByText('Member')).toBeInTheDocument();
-    // The email now appears twice: the account menu trigger's sr-only accessible name, and this
-    // block's visible copy.
-    expect(screen.getAllByText('user@example.com')).toHaveLength(2);
+    // Likewise the plain "user@example.com" text matches only the identity block's visible copy;
+    // the trigger's sr-only name is the compound "user@example.com, Member" string.
+    expect(screen.getAllByText('user@example.com')).toHaveLength(1);
+  });
+
+  // Both menus sit at the topbar's end edge, so a surface growing from the trigger's start edge
+  // runs past the viewport. jsdom has no layout, so the stylesheet is loaded and the placement is
+  // read from the computed style of the surface — against its `.menu` container where CSS anchor
+  // positioning is supported, or against a stubbed `getBoundingClientRect` where it is not.
+  describe('menu placement at the end edge', () => {
+    const originalShow = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'showPopover');
+    const originalHide = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'hidePopover');
+    let sheet: HTMLStyleElement;
+
+    function restore(name: 'showPopover' | 'hidePopover', original?: PropertyDescriptor) {
+      if (original) {
+        Object.defineProperty(HTMLElement.prototype, name, original);
+      } else {
+        delete (HTMLElement.prototype as Partial<HTMLElement>)[name];
+      }
+    }
+
+    beforeEach(() => {
+      sheet = document.createElement('style');
+      sheet.textContent = primitivesCss;
+      document.head.append(sheet);
+      // A browser with the popover API: placement then depends on CSS anchor positioning support.
+      Object.defineProperty(HTMLElement.prototype, 'showPopover', {
+        configurable: true,
+        value: vi.fn(),
+      });
+      Object.defineProperty(HTMLElement.prototype, 'hidePopover', {
+        configurable: true,
+        value: vi.fn(),
+      });
+      vi.spyOn(auth, 'ensureSession').mockReturnValue(new Promise(() => {}));
+    });
+
+    afterEach(() => {
+      sheet.remove();
+      vi.unstubAllGlobals();
+      restore('showPopover', originalShow);
+      restore('hidePopover', originalHide);
+    });
+
+    const openSurface = (triggerName: string) => {
+      render(<Topbar breadcrumbFallback="Sources" onOpenMenu={() => {}} onLogout={() => {}} />);
+      const trigger = screen.getByRole('button', { name: triggerName });
+      fireEvent.click(trigger);
+      return document.getElementById(trigger.getAttribute('aria-controls')!)!;
+    };
+
+    it.each(['Account', 'Theme: System'])(
+      'places the %s menu surface at the trigger end edge',
+      (triggerName) => {
+        vi.stubGlobal('CSS', { supports: () => true });
+
+        expect(openSurface(triggerName)).toHaveClass('popover-surface--bottom-end');
+      },
+    );
+
+    it.each(['Account', 'Theme: System'])(
+      'pins the %s menu surface to the trigger end edge where CSS anchor positioning is unsupported',
+      (triggerName) => {
+        vi.stubGlobal('CSS', { supports: () => false });
+        vi.stubGlobal('innerWidth', 1440);
+        // jsdom has no layout engine, so every element's real rect is all zeros — stubbed here,
+        // keyed on the surface's own class, the way Sidebar.test.tsx stubs its drawer box.
+        vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (
+          this: Element,
+        ) {
+          return this.classList.contains('popover-surface')
+            ? new DOMRect(0, 0, 200, 120)
+            : new DOMRect(1300, 10, 80, 32);
+        });
+
+        const surface = openSurface(triggerName);
+
+        expect(surface).not.toHaveAttribute('popover');
+        const style = getComputedStyle(surface);
+        expect(style.position).toBe('fixed');
+        // Pinned to the trigger's own end edge: 1300 + 80 (trigger right) − 200 (surface width).
+        expect(style.left).toBe('1180px');
+      },
+    );
   });
 });

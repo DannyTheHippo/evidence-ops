@@ -953,15 +953,23 @@
             }
           },
           "409": {
-            "description": "This change would leave the tenant with no admin.",
+            "description": "The removal is refused: it would leave the tenant with no admin, or the caller is removing themselves.",
             "content": {
               "application/json": {
                 "examples": {
-                  "example": {
+                  "lastAdmin": {
                     "summary": "Last admin protected",
                     "value": {
                       "statusCode": 409,
-                      "message": "Tenant 'tenant-a' must always keep at least one admin; changing user '65f1c2e4a1b2c3d4e5f6a7b8' to 'member' would leave none",
+                      "message": "Tenant 'tenant-a' must always keep at least one admin; removing user '65f1c2e4a1b2c3d4e5f6a7b8' would leave none",
+                      "error": "Conflict"
+                    }
+                  },
+                  "self": {
+                    "summary": "Self-removal refused",
+                    "value": {
+                      "statusCode": 409,
+                      "message": "User '65f1c2e4a1b2c3d4e5f6a7b8' cannot remove themselves from the tenant",
                       "error": "Conflict"
                     }
                   }
@@ -1652,6 +1660,523 @@
         },
         "tags": [
           "documents"
+        ]
+      }
+    },
+    "/workflow-runs": {
+      "get": {
+        "operationId": "WorkflowRunsController_list",
+        "parameters": [
+          {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "workflowId",
+            "required": false,
+            "in": "query",
+            "description": "Underlying Temporal workflow id to filter by. Omit it to list every run for the caller's tenant, most recent first.",
+            "schema": {
+              "example": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "Filter by run status. Matches the stored row only — this endpoint never queries the live workflow engine, so a run whose engine-side status has since moved on can still match its previous stored status here.",
+            "schema": {
+              "example": "running",
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "completed",
+                "failed"
+              ]
+            }
+          },
+          {
+            "name": "workflowType",
+            "required": false,
+            "in": "query",
+            "description": "Filter by which workflow the run projects. Includes 'rescan-conflicts', a legacy type no current workflow writes — accepted so a tenant with an existing legacy row can still filter it into view, not because new rows of that type can appear.",
+            "schema": {
+              "example": "resolve-conflict",
+              "type": "string",
+              "enum": [
+                "resolve-conflict",
+                "sync-source",
+                "rescan-conflicts",
+                "answer-question",
+                "ingest-document-version"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "Only rows created at or after this instant. ISO-8601 instant with date, time and offset (`Z` or `±hh:mm`), as `toISOString()` emits.",
+            "schema": {
+              "example": "2026-07-01T00:00:00.000Z",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "Only rows created strictly before this instant; must be later than from. ISO-8601 instant with date, time and offset (`Z` or `±hh:mm`), as `toISOString()` emits.",
+            "schema": {
+              "example": "2026-08-01T00:00:00.000Z",
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Field to sort by. Defaults to createdAt.",
+            "schema": {
+              "example": "createdAt",
+              "type": "string",
+              "enum": [
+                "createdAt",
+                "status",
+                "workflowType"
+              ]
+            }
+          },
+          {
+            "name": "sortDir",
+            "required": false,
+            "in": "query",
+            "description": "Sort direction. Defaults to desc.",
+            "schema": {
+              "example": "desc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Runs for the caller's tenant, most recent first. Filters to a single workflow when workflowId is given, and/or to a status or workflowType — both match the durable row, never the live engine (see WorkflowRunResponseDto.status). Omitting every filter lists every run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "One running run",
+                    "value": {
+                      "docs": [
+                        {
+                          "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "workflowId": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
+                          "workflowType": "resolve-conflict",
+                          "status": "running",
+                          "subjectId": "65f1c2e4a1b2c3d4e5f6a7c0",
+                          "subjectType": "Answer",
+                          "createdAt": "2026-07-01T00:00:00.000Z"
+                        }
+                      ],
+                      "count": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "workflow-runs"
+        ]
+      }
+    },
+    "/workflow-runs/{id}/events": {
+      "get": {
+        "operationId": "WorkflowRunsController_streamRun",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/event-stream. Polls every 1.5s until status reaches a terminal state, emitting the final state before closing. `run` events carry the exact shape GET /workflow-runs/:id returns; `approvals` events carry the same {docs,count} shape GET /approvals returns, filtered to this run's own pending approval rather than the tenant's whole inbox; a `heartbeat` event fires every 15s; a terminal `error` event means the client should fall back to polling both endpoints. Re-checks the connecting session every 30s and closes if it is gone or moved tenants."
+          },
+          "429": {
+            "description": "The caller's tenant or user is already at its open-SSE-stream cap.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Open-stream cap reached",
+                    "value": {
+                      "statusCode": 429,
+                      "message": "User 'user-1' is at its open-stream limit (10)",
+                      "error": "Too Many Requests"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "workflow-runs"
+        ]
+      }
+    },
+    "/workflow-runs/{id}": {
+      "get": {
+        "operationId": "WorkflowRunsController_getById",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run's current status, best-effort refreshed from the live workflow engine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Running resolveConflict run",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "workflowId": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
+                      "workflowType": "resolve-conflict",
+                      "status": "running",
+                      "subjectId": "65f1c2e4a1b2c3d4e5f6a7c0",
+                      "subjectType": "Answer",
+                      "createdAt": "2026-07-01T00:00:00.000Z",
+                      "stale": false
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "WorkflowRun does not exist.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown workflow run",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "WorkflowRun '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "workflow-runs"
+        ]
+      }
+    },
+    "/approvals": {
+      "get": {
+        "operationId": "ApprovalsController_list",
+        "parameters": [
+          {
+            "name": "select",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated fields to include; `_id` is always returned.",
+            "schema": {
+              "example": "name,status",
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "required": false,
+            "in": "query",
+            "description": "Number of documents to skip (offset).",
+            "schema": {
+              "minimum": 0,
+              "default": 0,
+              "example": 0,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Maximum number of documents to return.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "state",
+            "required": false,
+            "in": "query",
+            "description": "Approval state to filter by. Defaults to `pending` — this endpoint is the pending inbox.",
+            "schema": {
+              "example": "pending",
+              "type": "string",
+              "enum": [
+                "pending",
+                "approved",
+                "rejected",
+                "timed_out"
+              ]
+            }
+          },
+          {
+            "name": "workflowId",
+            "required": false,
+            "in": "query",
+            "description": "Narrows the inbox to approvals requested by one workflow. Omit it for the tenant's whole inbox.",
+            "schema": {
+              "example": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Field to sort by. Defaults to createdAt.",
+            "schema": {
+              "example": "createdAt",
+              "type": "string",
+              "enum": [
+                "createdAt",
+                "state",
+                "decidedAt"
+              ]
+            }
+          },
+          {
+            "name": "sortDir",
+            "required": false,
+            "in": "query",
+            "description": "Sort direction. Defaults to desc.",
+            "schema": {
+              "example": "desc",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated pending-approval inbox.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalListResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "One pending approval",
+                    "value": {
+                      "docs": [
+                        {
+                          "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                          "subject": {
+                            "entityType": "Conflict",
+                            "entityId": "65f1c2e4a1b2c3d4e5f6a7b9"
+                          },
+                          "action": "resolve_conflict",
+                          "summary": "Resolve Northgate Business Park cap_rate (2025-03) in favor of 5.25% over 6.10%.",
+                          "requestedBy": "analyst@example.com",
+                          "workflowId": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
+                          "state": "pending",
+                          "createdAt": "2026-07-01T00:00:00.000Z"
+                        }
+                      ],
+                      "count": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "approvals"
+        ]
+      }
+    },
+    "/approvals/{id}/decision": {
+      "post": {
+        "operationId": "ApprovalsController_decide",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecideApprovalRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The approval after recording the decision.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalResponseDto"
+                },
+                "examples": {
+                  "example": {
+                    "summary": "Approved",
+                    "value": {
+                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
+                      "subject": {
+                        "entityType": "Conflict",
+                        "entityId": "65f1c2e4a1b2c3d4e5f6a7b9"
+                      },
+                      "action": "resolve_conflict",
+                      "summary": "Resolve Northgate Business Park cap_rate (2025-03) in favor of 5.25% over 6.10%.",
+                      "requestedBy": "analyst@example.com",
+                      "workflowId": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
+                      "state": "approved",
+                      "createdAt": "2026-07-01T00:00:00.000Z",
+                      "decidedBy": "reviewer@example.com",
+                      "decidedAt": "2026-07-02T00:00:00.000Z",
+                      "decisionReason": "Evidence checks out."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller does not hold the admin role required to decide an approval.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Insufficient role",
+                    "value": {
+                      "statusCode": 403,
+                      "message": "Insufficient role for this action",
+                      "error": "Forbidden"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Approval does not exist for this tenant.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Unknown approval",
+                    "value": {
+                      "statusCode": 404,
+                      "message": "Approval '65f1c2e4a1b2c3d4e5f6a7b8' not found",
+                      "error": "Not Found"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Approval was already decided.",
+            "content": {
+              "application/json": {
+                "examples": {
+                  "example": {
+                    "summary": "Already approved",
+                    "value": {
+                      "statusCode": 409,
+                      "message": "Approval '65f1c2e4a1b2c3d4e5f6a7b8' is already 'approved' — a decision cannot be re-applied",
+                      "error": "Conflict"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "approvals"
         ]
       }
     },
@@ -3230,490 +3755,6 @@
         ]
       }
     },
-    "/workflow-runs": {
-      "get": {
-        "operationId": "WorkflowRunsController_list",
-        "parameters": [
-          {
-            "name": "select",
-            "required": false,
-            "in": "query",
-            "description": "Comma-separated fields to include; `_id` is always returned.",
-            "schema": {
-              "example": "name,status",
-              "type": "string"
-            }
-          },
-          {
-            "name": "skip",
-            "required": false,
-            "in": "query",
-            "description": "Number of documents to skip (offset).",
-            "schema": {
-              "minimum": 0,
-              "default": 0,
-              "example": 0,
-              "type": "number"
-            }
-          },
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "description": "Maximum number of documents to return.",
-            "schema": {
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20,
-              "example": 20,
-              "type": "number"
-            }
-          },
-          {
-            "name": "workflowId",
-            "required": false,
-            "in": "query",
-            "description": "Underlying Temporal workflow id to filter by. Omit it to list every run for the caller's tenant, most recent first.",
-            "schema": {
-              "example": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
-              "type": "string"
-            }
-          },
-          {
-            "name": "status",
-            "required": false,
-            "in": "query",
-            "description": "Filter by run status. Matches the stored row only — this endpoint never queries the live workflow engine, so a run whose engine-side status has since moved on can still match its previous stored status here.",
-            "schema": {
-              "example": "running",
-              "type": "string",
-              "enum": [
-                "queued",
-                "running",
-                "completed",
-                "failed"
-              ]
-            }
-          },
-          {
-            "name": "workflowType",
-            "required": false,
-            "in": "query",
-            "description": "Filter by which workflow the run projects. Includes 'rescan-conflicts', a legacy type no current workflow writes — accepted so a tenant with an existing legacy row can still filter it into view, not because new rows of that type can appear.",
-            "schema": {
-              "example": "resolve-conflict",
-              "type": "string",
-              "enum": [
-                "resolve-conflict",
-                "sync-source",
-                "rescan-conflicts"
-              ]
-            }
-          },
-          {
-            "name": "sort",
-            "required": false,
-            "in": "query",
-            "description": "Field to sort by. Defaults to createdAt.",
-            "schema": {
-              "example": "createdAt",
-              "type": "string",
-              "enum": [
-                "createdAt",
-                "status",
-                "workflowType"
-              ]
-            }
-          },
-          {
-            "name": "sortDir",
-            "required": false,
-            "in": "query",
-            "description": "Sort direction. Defaults to desc.",
-            "schema": {
-              "example": "desc",
-              "type": "string",
-              "enum": [
-                "asc",
-                "desc"
-              ]
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Runs for the caller's tenant, most recent first. Filters to a single workflow when workflowId is given, and/or to a status or workflowType — both match the durable row, never the live engine (see WorkflowRunResponseDto.status). Omitting every filter lists every run.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkflowRunResponseDto"
-                },
-                "examples": {
-                  "example": {
-                    "summary": "One running run",
-                    "value": {
-                      "docs": [
-                        {
-                          "id": "65f1c2e4a1b2c3d4e5f6a7b8",
-                          "workflowId": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
-                          "workflowType": "resolve-conflict",
-                          "status": "running",
-                          "subjectId": "65f1c2e4a1b2c3d4e5f6a7c0",
-                          "subjectType": "Answer",
-                          "createdAt": "2026-07-01T00:00:00.000Z"
-                        }
-                      ],
-                      "count": 1
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "workflow-runs"
-        ]
-      }
-    },
-    "/workflow-runs/{id}/events": {
-      "get": {
-        "operationId": "WorkflowRunsController_streamRun",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "text/event-stream. Polls every 1.5s until status reaches a terminal state, emitting the final state before closing. `run` events carry the exact shape GET /workflow-runs/:id returns; `approvals` events carry the exact shape GET /approvals returns (the tenant's whole pending inbox, not just this run's); a `heartbeat` event fires every 15s; a terminal `error` event means the client should fall back to polling both endpoints. Re-checks the connecting session every 30s and closes if it is gone or moved tenants."
-          },
-          "429": {
-            "description": "The caller's tenant or user is already at its open-SSE-stream cap.",
-            "content": {
-              "application/json": {
-                "examples": {
-                  "example": {
-                    "summary": "Open-stream cap reached",
-                    "value": {
-                      "statusCode": 429,
-                      "message": "User 'user-1' is at its open-stream limit (10)",
-                      "error": "Too Many Requests"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "workflow-runs"
-        ]
-      }
-    },
-    "/workflow-runs/{id}": {
-      "get": {
-        "operationId": "WorkflowRunsController_getById",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The run's current status, best-effort refreshed from the live workflow engine.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkflowRunResponseDto"
-                },
-                "examples": {
-                  "example": {
-                    "summary": "Running resolveConflict run",
-                    "value": {
-                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
-                      "workflowId": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
-                      "workflowType": "resolve-conflict",
-                      "status": "running",
-                      "subjectId": "65f1c2e4a1b2c3d4e5f6a7c0",
-                      "subjectType": "Answer",
-                      "createdAt": "2026-07-01T00:00:00.000Z"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "WorkflowRun does not exist.",
-            "content": {
-              "application/json": {
-                "examples": {
-                  "example": {
-                    "summary": "Unknown workflow run",
-                    "value": {
-                      "statusCode": 404,
-                      "message": "WorkflowRun '65f1c2e4a1b2c3d4e5f6a7b8' not found",
-                      "error": "Not Found"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "workflow-runs"
-        ]
-      }
-    },
-    "/approvals": {
-      "get": {
-        "operationId": "ApprovalsController_list",
-        "parameters": [
-          {
-            "name": "select",
-            "required": false,
-            "in": "query",
-            "description": "Comma-separated fields to include; `_id` is always returned.",
-            "schema": {
-              "example": "name,status",
-              "type": "string"
-            }
-          },
-          {
-            "name": "skip",
-            "required": false,
-            "in": "query",
-            "description": "Number of documents to skip (offset).",
-            "schema": {
-              "minimum": 0,
-              "default": 0,
-              "example": 0,
-              "type": "number"
-            }
-          },
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "description": "Maximum number of documents to return.",
-            "schema": {
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20,
-              "example": 20,
-              "type": "number"
-            }
-          },
-          {
-            "name": "state",
-            "required": false,
-            "in": "query",
-            "description": "Approval state to filter by. Defaults to `pending` — this endpoint is the pending inbox.",
-            "schema": {
-              "example": "pending",
-              "type": "string",
-              "enum": [
-                "pending",
-                "approved",
-                "rejected",
-                "timed_out"
-              ]
-            }
-          },
-          {
-            "name": "sort",
-            "required": false,
-            "in": "query",
-            "description": "Field to sort by. Defaults to createdAt.",
-            "schema": {
-              "example": "createdAt",
-              "type": "string",
-              "enum": [
-                "createdAt",
-                "state",
-                "decidedAt"
-              ]
-            }
-          },
-          {
-            "name": "sortDir",
-            "required": false,
-            "in": "query",
-            "description": "Sort direction. Defaults to desc.",
-            "schema": {
-              "example": "desc",
-              "type": "string",
-              "enum": [
-                "asc",
-                "desc"
-              ]
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Paginated pending-approval inbox.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApprovalListResponseDto"
-                },
-                "examples": {
-                  "example": {
-                    "summary": "One pending approval",
-                    "value": {
-                      "docs": [
-                        {
-                          "id": "65f1c2e4a1b2c3d4e5f6a7b8",
-                          "subject": {
-                            "entityType": "Conflict",
-                            "entityId": "65f1c2e4a1b2c3d4e5f6a7b9"
-                          },
-                          "action": "resolve_conflict",
-                          "summary": "Resolve Northgate Business Park cap_rate (2025-03) in favor of 5.25% over 6.10%.",
-                          "requestedBy": "analyst@example.com",
-                          "workflowId": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
-                          "state": "pending",
-                          "createdAt": "2026-07-01T00:00:00.000Z"
-                        }
-                      ],
-                      "count": 1
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "approvals"
-        ]
-      }
-    },
-    "/approvals/{id}/decision": {
-      "post": {
-        "operationId": "ApprovalsController_decide",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DecideApprovalRequestDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "The approval after recording the decision.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApprovalResponseDto"
-                },
-                "examples": {
-                  "example": {
-                    "summary": "Approved",
-                    "value": {
-                      "id": "65f1c2e4a1b2c3d4e5f6a7b8",
-                      "subject": {
-                        "entityType": "Conflict",
-                        "entityId": "65f1c2e4a1b2c3d4e5f6a7b9"
-                      },
-                      "action": "resolve_conflict",
-                      "summary": "Resolve Northgate Business Park cap_rate (2025-03) in favor of 5.25% over 6.10%.",
-                      "requestedBy": "analyst@example.com",
-                      "workflowId": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
-                      "state": "approved",
-                      "createdAt": "2026-07-01T00:00:00.000Z",
-                      "decidedBy": "reviewer@example.com",
-                      "decidedAt": "2026-07-02T00:00:00.000Z",
-                      "decisionReason": "Evidence checks out."
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Caller does not hold the admin role required to decide an approval.",
-            "content": {
-              "application/json": {
-                "examples": {
-                  "example": {
-                    "summary": "Insufficient role",
-                    "value": {
-                      "statusCode": 403,
-                      "message": "Insufficient role for this action",
-                      "error": "Forbidden"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Approval does not exist for this tenant.",
-            "content": {
-              "application/json": {
-                "examples": {
-                  "example": {
-                    "summary": "Unknown approval",
-                    "value": {
-                      "statusCode": 404,
-                      "message": "Approval '65f1c2e4a1b2c3d4e5f6a7b8' not found",
-                      "error": "Not Found"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Approval was already decided.",
-            "content": {
-              "application/json": {
-                "examples": {
-                  "example": {
-                    "summary": "Already approved",
-                    "value": {
-                      "statusCode": 409,
-                      "message": "Approval '65f1c2e4a1b2c3d4e5f6a7b8' is already 'approved' — a decision cannot be re-applied",
-                      "error": "Conflict"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "approvals"
-        ]
-      }
-    },
     "/ledger": {
       "get": {
         "operationId": "LedgerController_listCells",
@@ -4403,6 +4444,26 @@
                 "completed",
                 "failed"
               ]
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "Only rows created at or after this instant. ISO-8601 instant with date, time and offset (`Z` or `±hh:mm`), as `toISOString()` emits.",
+            "schema": {
+              "example": "2026-07-01T00:00:00.000Z",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "Only rows created strictly before this instant; must be later than from. ISO-8601 instant with date, time and offset (`Z` or `±hh:mm`), as `toISOString()` emits.",
+            "schema": {
+              "example": "2026-08-01T00:00:00.000Z",
+              "type": "string"
             }
           },
           {
@@ -5900,6 +5961,26 @@
             }
           },
           {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "Only rows created at or after this instant. ISO-8601 instant with date, time and offset (`Z` or `±hh:mm`), as `toISOString()` emits.",
+            "schema": {
+              "example": "2026-07-01T00:00:00.000Z",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "Only rows created strictly before this instant; must be later than from. ISO-8601 instant with date, time and offset (`Z` or `±hh:mm`), as `toISOString()` emits.",
+            "schema": {
+              "example": "2026-08-01T00:00:00.000Z",
+              "type": "string"
+            }
+          },
+          {
             "name": "sort",
             "required": false,
             "in": "query",
@@ -7048,6 +7129,208 @@
           "locator"
         ]
       },
+      "WorkflowRunResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "WorkflowRun identifier."
+          },
+          "workflowId": {
+            "type": "string",
+            "example": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
+            "description": "Underlying Temporal workflow id."
+          },
+          "workflowType": {
+            "type": "string",
+            "example": "resolve-conflict",
+            "enum": [
+              "resolve-conflict",
+              "sync-source",
+              "rescan-conflicts",
+              "answer-question",
+              "ingest-document-version"
+            ],
+            "description": "Which workflow this run projects. Absent on rows written before the field existed."
+          },
+          "status": {
+            "type": "string",
+            "example": "running",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed"
+            ],
+            "description": "Run status. On GET /workflow-runs/:id and the SSE stream, best-effort refreshed from the live engine (cached up to 15s, falling back to this durable value on an engine failure). On the list endpoint, always the durable row as last written by the workflow — the list never queries the engine, so a status filter there matches stored state, not live state."
+          },
+          "errorMessage": {
+            "type": "string",
+            "example": "Timed out waiting for approval",
+            "description": "Error detail, present only when status is failed."
+          },
+          "outcome": {
+            "type": "string",
+            "example": "resolved",
+            "enum": [
+              "resolved",
+              "rejected",
+              "timed_out"
+            ],
+            "description": "The workflow's own verdict, written when it ends. Present on a resolve-conflict run; absent on every other type and on rows written before the field existed."
+          },
+          "subjectId": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7c0",
+            "description": "Identifier of the entity this run acted on, present when the run carries a subject reference. Read alongside subjectType, never alone."
+          },
+          "subjectType": {
+            "type": "string",
+            "example": "Answer",
+            "description": "The subjectId's entity type, present exactly when subjectId is."
+          },
+          "stale": {
+            "type": "boolean",
+            "example": false,
+            "description": "True when this response refreshed from the live engine and the engine reported the workflow unknown to it while the stored row was still non-terminal — the signal for a run orphaned by a workflow that ended through a path that never recorded its end, whose Temporal history has since fallen out of retention. status stays the durable row value in that case, unwritten. False for a terminal row, a live engine answer, or an engine call failure (falls back to the durable status). Present only on a response built from a read that asked the engine for live status; absent everywhere else means status freshness was never checked, not that it is known fresh."
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "Run creation timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "workflowId",
+          "status",
+          "createdAt"
+        ]
+      },
+      "ApprovalResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
+            "description": "Approval identifier."
+          },
+          "subject": {
+            "type": "object",
+            "example": {
+              "entityType": "Conflict",
+              "entityId": "65f1c2e4a1b2c3d4e5f6a7b9"
+            },
+            "description": "The entity this approval gates."
+          },
+          "action": {
+            "type": "string",
+            "example": "resolve_conflict",
+            "description": "The action being approved."
+          },
+          "summary": {
+            "type": "string",
+            "example": "Resolve Northgate Business Park cap_rate (2025-03) in favor of 5.25% over 6.10%.",
+            "description": "Human-readable summary of the requested action."
+          },
+          "requestedBy": {
+            "type": "string",
+            "example": "reviewer@example.com",
+            "description": "Who or what requested the approval."
+          },
+          "workflowId": {
+            "type": "string",
+            "example": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
+            "description": "Underlying Temporal workflow id this approval gates, present when requested via a workflow (matches WorkflowRun.workflowId) — absent for an approval created outside one."
+          },
+          "state": {
+            "type": "string",
+            "example": "pending",
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "timed_out"
+            ],
+            "description": "Approval state."
+          },
+          "decidedBy": {
+            "type": "string",
+            "example": "reviewer@example.com",
+            "description": "Who decided the approval."
+          },
+          "decidedAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-02T00:00:00.000Z",
+            "description": "When the decision was made."
+          },
+          "decisionReason": {
+            "type": "string",
+            "example": "Evidence checks out.",
+            "description": "Optional rationale for the decision."
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "Approval creation timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "subject",
+          "action",
+          "summary",
+          "state",
+          "createdAt"
+        ]
+      },
+      "ApprovalListResponseDto": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number",
+            "example": 2,
+            "description": "Total number of documents returned."
+          },
+          "docs": {
+            "description": "Pending approvals awaiting a decision.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApprovalResponseDto"
+            }
+          }
+        },
+        "required": [
+          "count",
+          "docs"
+        ]
+      },
+      "DecideApprovalRequestDto": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "string",
+            "example": "approved",
+            "enum": [
+              "approved",
+              "rejected"
+            ],
+            "description": "Human decision on the pending approval request."
+          },
+          "reason": {
+            "type": "string",
+            "example": "Evidence checks out; the spreadsheet figure is the current underwriting value.",
+            "description": "Optional rationale for the decision."
+          }
+        },
+        "required": [
+          "decision"
+        ]
+      },
       "HarvestedAliasResponseDto": {
         "type": "object",
         "properties": {
@@ -7743,191 +8026,6 @@
         },
         "required": [
           "winningFactId"
-        ]
-      },
-      "WorkflowRunResponseDto": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
-            "description": "WorkflowRun identifier."
-          },
-          "workflowId": {
-            "type": "string",
-            "example": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
-            "description": "Underlying Temporal workflow id."
-          },
-          "workflowType": {
-            "type": "string",
-            "example": "resolve-conflict",
-            "enum": [
-              "resolve-conflict",
-              "sync-source",
-              "rescan-conflicts"
-            ],
-            "description": "Which workflow this run projects. Absent on rows written before the field existed."
-          },
-          "status": {
-            "type": "string",
-            "example": "running",
-            "enum": [
-              "queued",
-              "running",
-              "completed",
-              "failed"
-            ],
-            "description": "Run status. On GET /workflow-runs/:id and the SSE stream, best-effort refreshed from the live engine (cached up to 15s, falling back to this durable value on an engine failure). On the list endpoint, always the durable row as last written by the workflow — the list never queries the engine, so a status filter there matches stored state, not live state."
-          },
-          "errorMessage": {
-            "type": "string",
-            "example": "Timed out waiting for approval",
-            "description": "Error detail, present only when status is failed."
-          },
-          "subjectId": {
-            "type": "string",
-            "example": "65f1c2e4a1b2c3d4e5f6a7c0",
-            "description": "Identifier of the entity this run acted on, present when the run carries a subject reference. Read alongside subjectType, never alone."
-          },
-          "subjectType": {
-            "type": "string",
-            "example": "Answer",
-            "description": "The subjectId's entity type, present exactly when subjectId is."
-          },
-          "createdAt": {
-            "format": "date-time",
-            "type": "string",
-            "example": "2026-07-01T00:00:00.000Z",
-            "description": "Run creation timestamp."
-          }
-        },
-        "required": [
-          "id",
-          "workflowId",
-          "status",
-          "createdAt"
-        ]
-      },
-      "ApprovalResponseDto": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "example": "65f1c2e4a1b2c3d4e5f6a7b8",
-            "description": "Approval identifier."
-          },
-          "subject": {
-            "type": "object",
-            "example": {
-              "entityType": "Conflict",
-              "entityId": "65f1c2e4a1b2c3d4e5f6a7b9"
-            },
-            "description": "The entity this approval gates."
-          },
-          "action": {
-            "type": "string",
-            "example": "resolve_conflict",
-            "description": "The action being approved."
-          },
-          "summary": {
-            "type": "string",
-            "example": "Resolve Northgate Business Park cap_rate (2025-03) in favor of 5.25% over 6.10%.",
-            "description": "Human-readable summary of the requested action."
-          },
-          "requestedBy": {
-            "type": "string",
-            "example": "reviewer@example.com",
-            "description": "Who or what requested the approval."
-          },
-          "workflowId": {
-            "type": "string",
-            "example": "a3f1b2c4-5678-4d9e-9abc-1234567890ab",
-            "description": "Underlying Temporal workflow id this approval gates, present when requested via a workflow (matches WorkflowRun.workflowId) — absent for an approval created outside one."
-          },
-          "state": {
-            "type": "string",
-            "example": "pending",
-            "enum": [
-              "pending",
-              "approved",
-              "rejected",
-              "timed_out"
-            ],
-            "description": "Approval state."
-          },
-          "decidedBy": {
-            "type": "string",
-            "example": "reviewer@example.com",
-            "description": "Who decided the approval."
-          },
-          "decidedAt": {
-            "format": "date-time",
-            "type": "string",
-            "example": "2026-07-02T00:00:00.000Z",
-            "description": "When the decision was made."
-          },
-          "decisionReason": {
-            "type": "string",
-            "example": "Evidence checks out.",
-            "description": "Optional rationale for the decision."
-          },
-          "createdAt": {
-            "format": "date-time",
-            "type": "string",
-            "example": "2026-07-01T00:00:00.000Z",
-            "description": "Approval creation timestamp."
-          }
-        },
-        "required": [
-          "id",
-          "subject",
-          "action",
-          "summary",
-          "state",
-          "createdAt"
-        ]
-      },
-      "ApprovalListResponseDto": {
-        "type": "object",
-        "properties": {
-          "count": {
-            "type": "number",
-            "example": 2,
-            "description": "Total number of documents returned."
-          },
-          "docs": {
-            "description": "Pending approvals awaiting a decision.",
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ApprovalResponseDto"
-            }
-          }
-        },
-        "required": [
-          "count",
-          "docs"
-        ]
-      },
-      "DecideApprovalRequestDto": {
-        "type": "object",
-        "properties": {
-          "decision": {
-            "type": "string",
-            "example": "approved",
-            "enum": [
-              "approved",
-              "rejected"
-            ],
-            "description": "Human decision on the pending approval request."
-          },
-          "reason": {
-            "type": "string",
-            "example": "Evidence checks out; the spreadsheet figure is the current underwriting value.",
-            "description": "Optional rationale for the decision."
-          }
-        },
-        "required": [
-          "decision"
         ]
       },
       "LedgerCellResponseDto": {
@@ -8958,6 +9056,43 @@
           "owner"
         ]
       },
+      "SourceLastSyncResponseDto": {
+        "type": "object",
+        "properties": {
+          "startedAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:00:00.000Z",
+            "description": "When the most recent sync attempt started."
+          },
+          "finishedAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:01:12.000Z",
+            "description": "When the most recent sync attempt finished."
+          },
+          "status": {
+            "type": "string",
+            "example": "ok",
+            "enum": [
+              "ok",
+              "failed"
+            ],
+            "description": "Outcome of the most recent sync attempt — 'ok' or 'failed'."
+          },
+          "error": {
+            "type": "string",
+            "example": "ENOENT: no such file or directory",
+            "description": "Error detail, present only when status is failed."
+          },
+          "nextSweepAt": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2026-07-01T00:06:12.000Z",
+            "description": "Estimated time of the next sweep, projected from the last finished attempt and the sync interval. Present only while the sync loop appears to still be running — an approximation, not a guarantee, since nothing clears this the moment a loop actually stops."
+          }
+        }
+      },
       "SourceResponseDto": {
         "type": "object",
         "properties": {
@@ -9010,6 +9145,14 @@
             "type": "string",
             "example": "ENOENT: no such file or directory",
             "description": "Error detail, present only when lastSyncStatus is failed."
+          },
+          "lastSync": {
+            "description": "Diagnostic view of the most recent sync attempt. Absent when this source has never been synced.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SourceLastSyncResponseDto"
+              }
+            ]
           },
           "fileCount": {
             "type": "number",
@@ -9188,6 +9331,14 @@
             "example": "ENOENT: no such file or directory",
             "description": "Error detail, present only when lastSyncStatus is failed."
           },
+          "lastSync": {
+            "description": "Diagnostic view of the most recent sync attempt. Absent when this source has never been synced.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SourceLastSyncResponseDto"
+              }
+            ]
+          },
           "fileCount": {
             "type": "number",
             "example": 42,
@@ -9294,9 +9445,10 @@
             "description": "Whether the estate's own access posture lets this system reach this source at all."
           },
           "owner": {
-            "type": "string",
+            "type": "object",
             "example": "Jane Doe, IT",
-            "description": "Person or team accountable for this source."
+            "description": "Person or team accountable for this source. Omit the field to leave it unchanged; send null to clear it. An empty string is rejected — it is not a clear instruction.",
+            "nullable": true
           },
           "tracked": {
             "type": "boolean",

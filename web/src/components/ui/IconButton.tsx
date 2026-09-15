@@ -19,9 +19,20 @@ interface IconButtonProps extends Omit<
  * through to `Button`'s underlying `<button>` — a keyboard reorder control needs to move focus onto
  * a specific button after a state change, which only works if the DOM node is reachable from the
  * caller. */
-export default function IconButton({ icon, ref, className, ...rest }: IconButtonProps) {
+export default function IconButton({
+  icon,
+  ref,
+  className,
+  size = 'sm',
+  ...rest
+}: IconButtonProps) {
   return (
-    <Button ref={ref} className={['btn--icon', className].filter(Boolean).join(' ')} {...rest}>
+    <Button
+      ref={ref}
+      size={size}
+      className={['btn--icon', className].filter(Boolean).join(' ')}
+      {...rest}
+    >
       {icon}
     </Button>
   );

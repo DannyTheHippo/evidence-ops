@@ -10,5 +10,11 @@ export function formatBytes(bytes: number): string {
     value /= 1024;
     unitIndex += 1;
   }
+  // toFixed(1) can round a value just under 1024 up to "1024.0" (e.g. 1048575 B) — promote once
+  // more so the rendered number always stays under 1000.
+  if (Number(value.toFixed(1)) >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
   return `${value.toFixed(1)} ${units[unitIndex]}`;
 }

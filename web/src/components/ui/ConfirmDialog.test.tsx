@@ -32,9 +32,38 @@ describe('ConfirmDialog', () => {
     );
 
     const busyButton = screen.getByRole('button', { name: 'Revoke…' });
-    expect(busyButton).toBeDisabled();
+    expect(busyButton).toBeEnabled();
     fireEvent.click(busyButton);
     expect(onConfirm).toHaveBeenCalledOnce();
+  });
+
+  it('keeps focus on Confirm while the action is in flight', () => {
+    const { rerender } = render(
+      <ConfirmDialog
+        open
+        onClose={() => {}}
+        title="Revoke session"
+        body="This signs the device out immediately."
+        confirmLabel="Revoke"
+        onConfirm={() => {}}
+      />,
+    );
+
+    screen.getByRole('button', { name: 'Revoke' }).focus();
+
+    rerender(
+      <ConfirmDialog
+        open
+        onClose={() => {}}
+        title="Revoke session"
+        body="This signs the device out immediately."
+        confirmLabel="Revoke"
+        busy
+        onConfirm={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Revoke…' })).toHaveFocus();
   });
 
   it('keeps the dialog open with cancel reachable while an error is showing', () => {

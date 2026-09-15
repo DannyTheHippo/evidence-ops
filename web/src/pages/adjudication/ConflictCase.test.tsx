@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Conflict } from '../../api/client';
@@ -129,6 +129,20 @@ const undecidedConflict: Conflict = {
   explanation: 'No configured rule distinguishes between these sources.',
 };
 
+// Open, but the evidence behind it no longer resolves — the request endpoint answers 500 for this
+// row, so the pane must offer no action to send.
+const unscorableConflict: Conflict = {
+  ...openConflict,
+  id: 'conflict-7',
+  stale: false,
+  staleReason: undefined,
+  unscorable: true,
+  unscorableReason: '1 of 2 disagreeing fact(s) no longer resolve to an ExtractedFact.',
+  proposedWinnerFactId: undefined,
+  ruleFired: undefined,
+  explanation: undefined,
+};
+
 // Resolved with no `resolution` record — data written before Phase 3B started persisting one, or
 // an older row the timeout branch decided without a full record landing yet.
 const resolvedNoRecordConflict: Conflict = {
@@ -161,7 +175,11 @@ function LocationProbe() {
   return <output aria-label="current location">{location.pathname}</output>;
 }
 
-function renderCase(conflict: Conflict, fetchMock?: ReturnType<typeof vi.fn>) {
+function renderCase(
+  conflict: Conflict,
+  fetchMock?: ReturnType<typeof vi.fn>,
+  pendingApprovalId?: string,
+) {
   if (fetchMock) vi.stubGlobal('fetch', fetchMock);
   render(
     <MemoryRouter>
@@ -173,6 +191,7 @@ function renderCase(conflict: Conflict, fetchMock?: ReturnType<typeof vi.fn>) {
               conflict={conflict}
               metricLabels={metricLabels}
               documentIndex={documentIndex}
+              pendingApprovalId={pendingApprovalId}
             />
           }
         />
@@ -203,6 +222,29 @@ describe('ConflictCase', () => {
     ).toBeInTheDocument();
   });
 
+  it('groups thousands in the spread and the resolution confirmation without changing a small value', async () => {
+    const largeSpreadConflict: Conflict = {
+      ...openConflict,
+      id: 'conflict-8',
+      magnitude: 1250000,
+      magnitudeUnit: 'sqft',
+      values: [{ ...openConflict.values[0], value: 720000, unit: 'usd' }],
+    };
+    renderCase(largeSpreadConflict);
+
+    expect(screen.getByText('1,250,000 sqft')).toBeInTheDocument();
+    expect(screen.getByText('720,000 usd')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Request resolution' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Request resolution' });
+
+    expect(
+      within(dialog).getByText(
+        'Request resolution using 720,000 usd as the winning value? This starts a workflow run that needs approval.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('offers a primary resolve action on the recommended card only, secondary on every other', () => {
     renderCase(threeWayConflict);
 
@@ -227,6 +269,56 @@ describe('ConflictCase', () => {
     const resolveButton = screen.getByRole('button', { name: 'Request resolution' });
     expect(resolveButton).toHaveClass('btn--secondary');
     expect(resolveButton).not.toHaveClass('btn--primary');
+  });
+
+  it('offers no resolution action on an unscorable conflict and says why', () => {
+    renderCase(unscorableConflict);
+
+    expect(screen.queryByRole('button', { name: 'Request resolution' })).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Not resolvable while its evidence is missing — restore the missing evidence, or dismiss the conflict.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('1 of 2 disagreeing fact(s) no longer resolve to an ExtractedFact.'),
+    ).toBeInTheDocument();
+  });
+
+  it('says a resolution is already pending and links to the decision', () => {
+    renderCase(openConflict, undefined, 'approval-9');
+
+    expect(screen.getByText('Resolution pending — awaiting approval.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open the decision' })).toHaveAttribute(
+      'href',
+      '/adjudication?kind=decisions&state=pending&selected=approval-9',
+    );
+    expect(screen.queryByRole('button', { name: 'Request resolution' })).not.toBeInTheDocument();
+  });
+
+  it('surfaces a resolution failure in the pane when the dialog was dismissed first', async () => {
+    let settle: (response: Response) => void = () => {};
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          settle = resolve;
+        }),
+    );
+    renderCase(openConflict, fetchMock);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Request resolution' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Request resolution' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Request resolution' }));
+    // Dismissed while the request is still in flight — the header close control stays live under
+    // `busy`, where Cancel is disabled.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    settle(jsonResponse({ message: 'Fact already resolved' }, 409));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Fact already resolved');
   });
 
   it('requests a resolution on confirm and navigates to the started run', async () => {

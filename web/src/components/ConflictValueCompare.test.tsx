@@ -201,6 +201,38 @@ describe('ConflictValueCompare', () => {
     );
 
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
-    expect(screen.getByText('chunk-a')).toBeInTheDocument();
+    const chip = screen.getByText('chunk-a');
+    expect(chip).toHaveAttribute('tabindex', '0');
+
+    const copyButton = screen.getByRole('button', { name: 'Copy source chunk id' });
+    expect(chip.closest('.value-compare-trace')).not.toBeNull();
+    expect(chip.closest('.value-compare-trace')).toBe(copyButton.closest('.value-compare-trace'));
+  });
+
+  it('groups thousands in a value figure without changing a small value', () => {
+    renderCompare(
+      <ConflictValueCompare
+        values={[
+          value({ factId: 'fact-1', value: 1250000, unit: 'usd' }),
+          value({ factId: 'fact-2', value: 6.1, unit: 'percent', sourceChunkId: 'chunk-b' }),
+        ]}
+        documentIndex={documentIndex}
+      />,
+    );
+
+    expect(screen.getByText('1,250,000 usd')).toBeInTheDocument();
+    expect(screen.getByText('6.1 percent')).toBeInTheDocument();
+  });
+
+  it('exposes the full source chunk id without hovering', () => {
+    const { container } = renderCompare(
+      <ConflictValueCompare
+        values={[value({ documentVersionId: 'docver-missing' })]}
+        documentIndex={documentIndex}
+      />,
+    );
+
+    expect(container.querySelector('[title]')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy source chunk id' })).toBeInTheDocument();
   });
 });

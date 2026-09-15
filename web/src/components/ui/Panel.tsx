@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 
 interface PanelProps {
   /** Names the panel's contents for a screen reader — the scrollbar this element falls back to on
@@ -7,15 +7,18 @@ interface PanelProps {
   'aria-label': string;
   children: ReactNode;
   className?: string;
+  /** Reaches the root `<section>`, e.g. to move focus onto the panel after a state change. */
+  ref?: Ref<HTMLElement>;
 }
 
 /** The scrollable-region wrapper a wide table needs: `role="region"` plus `aria-label` give the
  * fallback horizontal scrollbar (`.panel`'s `overflow: auto`, between 768px and 1023px) an
  * announced name instead of an anonymous `<div>`, and `tabIndex={0}` makes the container itself a
  * focusable stop so keyboard scrolling can reach content a mouse would otherwise be required for. */
-export default function Panel({ 'aria-label': ariaLabel, children, className }: PanelProps) {
+export default function Panel({ 'aria-label': ariaLabel, children, className, ref }: PanelProps) {
   return (
     <section
+      ref={ref}
       className={['panel', className].filter(Boolean).join(' ')}
       tabIndex={0}
       role="region"

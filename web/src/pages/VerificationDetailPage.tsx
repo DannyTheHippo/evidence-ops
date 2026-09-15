@@ -1,18 +1,34 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { ApiError, getVerificationById, type Verification } from '../api/client';
+import { ApiError, getVerificationById, type ClaimVerdict, type Verification } from '../api/client';
 import AttestationBundleView from '../components/AttestationBundleView';
-import Badge from '../components/ui/Badge';
+import Alert from '../components/ui/Alert';
+import Badge, { type BadgeTone } from '../components/ui/Badge';
 import CopyButton from '../components/ui/CopyButton';
 import DescriptionList from '../components/ui/DescriptionList';
 import EmptyState from '../components/ui/EmptyState';
 import LinkButton from '../components/ui/LinkButton';
 import PageHeader from '../components/ui/PageHeader';
+import Panel from '../components/ui/Panel';
 import Skeleton from '../components/ui/Skeleton';
+import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
 import Timestamp from '../components/ui/Timestamp';
+import { VERDICT_LABELS } from '../lib/answer-verdicts';
 import { useBreadcrumbs } from '../lib/breadcrumbs';
-import { shortId } from '../lib/identifiers';
+import { shortId, truncateSha256 } from '../lib/identifiers';
+import { formatLocator } from '../lib/locator';
+import { useAbortableEffect } from '../lib/use-latest';
 import { useSession } from '../lib/use-session';
+
+// Mirrors the verdict-to-tone mapping the attestation bundle uses for the same four grounding-
+// check outcomes; a submitted verification never reaches the bundle-only `survived`/`dropped`
+// verdicts, so this map covers `ClaimVerdict` rather than the bundle's wider union.
+const VERDICT_TONE: Record<ClaimVerdict, BadgeTone> = {
+  grounded: 'verified',
+  not_grounded: 'rejected',
+  no_evidence_retrieved: 'neutral',
+  conflicting_evidence: 'caution',
+};
 
 /**
  * Read-only detail view for one verification run: who requested it, the fixed advisory every
@@ -28,27 +44,25 @@ export default function VerificationDetailPage() {
   const session = useSession();
   const isAdmin = session.status === 'authed' && session.me.role === 'admin';
 
-  useEffect(() => {
-    if (!id) return;
-    let cancelled = false;
+  useAbortableEffect(
+    (isCurrent) => {
+      if (!id) return;
 
-    getVerificationById(id)
-      .then((result) => {
-        if (!cancelled) setVerification(result);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        if (err instanceof ApiError && err.status === 404) {
-          setNotFound(true);
-          return;
-        }
-        setError(err instanceof Error ? err.message : 'Failed to load verification');
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [id]);
+      getVerificationById(id)
+        .then((result) => {
+          if (isCurrent()) setVerification(result);
+        })
+        .catch((err: unknown) => {
+          if (!isCurrent()) return;
+          if (err instanceof ApiError && err.status === 404) {
+            setNotFound(true);
+            return;
+          }
+          setError(err instanceof Error ? err.message : 'Failed to load verification');
+        });
+    },
+    [id],
+  );
 
   useBreadcrumbs([
     { label: 'Answers', to: '/answers' },
@@ -84,11 +98,7 @@ export default function VerificationDetailPage() {
         </p>
       )}
 
-      {error && (
-        <p className="error error--page" role="alert">
-          {error}
-        </p>
-      )}
+      {error && <Alert tone="rejected">{error}</Alert>}
 
       {notFound && (
         <EmptyState
@@ -105,7 +115,7 @@ export default function VerificationDetailPage() {
 
       {verification && (
         <>
-          <p className="notice">{verification.advisory}</p>
+          <Alert tone="info">{verification.advisory}</Alert>
 
           {isAdmin && (
             <div className="run-cost-footer">
@@ -122,7 +132,78 @@ export default function VerificationDetailPage() {
             </div>
           )}
 
-          <AttestationBundleView kind="verifications" subjectId={verification.id} />
+          <section className="card">
+            <div className="card-head">
+              <h2 className="card-title">Claims and verdicts</h2>
+            </div>
+            <Panel aria-label="Claims and verdicts">
+              <Table caption="Claims and verdicts">
+                <thead>
+                  <tr>
+                    <TableHeaderCell>Claim</TableHeaderCell>
+                    <TableHeaderCell>Verdict</TableHeaderCell>
+                    <TableHeaderCell>Reason</TableHeaderCell>
+                    <TableHeaderCell>Citations</TableHeaderCell>
+                  </tr>
+                </thead>
+                <tbody>
+                  {verification.results.map((result, resultIndex) => (
+                    <tr key={`result-${resultIndex}`}>
+                      <TableCell label="Claim">{verification.claims[result.claimIndex]}</TableCell>
+                      <TableCell label="Verdict">
+                        <Badge tone={VERDICT_TONE[result.verdict]}>
+                          {VERDICT_LABELS[result.verdict]}
+                        </Badge>
+                      </TableCell>
+                      <TableCell label="Reason">{result.reasonCode ?? '—'}</TableCell>
+                      <TableCell label="Citations">
+                        {result.citations && result.citations.length > 0 ? (
+                          <ul className="citations">
+                            {result.citations.map((citation, citationIndex) => (
+                              <li key={citationIndex} className="citation">
+                                <span className="trace-chip mono">
+                                  {formatLocator(citation.locator)} ·{' '}
+                                  {truncateSha256(citation.chunkId)}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <span className="cell-sub">—</span>
+                        )}
+                      </TableCell>
+                    </tr>
+                  ))}
+                  {verification.claims
+                    .map((statement, claimIndex) => ({ statement, claimIndex }))
+                    .filter(
+                      ({ claimIndex }) =>
+                        !verification.results.some((result) => result.claimIndex === claimIndex),
+                    )
+                    .map(({ statement, claimIndex }) => (
+                      <tr key={`missing-${claimIndex}`}>
+                        <TableCell label="Claim">{statement}</TableCell>
+                        <TableCell label="Verdict">
+                          <span className="cell-sub">No result recorded</span>
+                        </TableCell>
+                        <TableCell label="Reason">
+                          <span className="cell-sub">—</span>
+                        </TableCell>
+                        <TableCell label="Citations">
+                          <span className="cell-sub">—</span>
+                        </TableCell>
+                      </tr>
+                    ))}
+                </tbody>
+              </Table>
+            </Panel>
+          </section>
+
+          <AttestationBundleView
+            kind="verifications"
+            subjectId={verification.id}
+            attestationHash={verification.attestationHash}
+          />
         </>
       )}
     </div>

@@ -3,6 +3,13 @@ import { describe, expect, it, vi } from 'vitest';
 import Menu from './Menu';
 
 const items = [
+  { label: 'Rename', onSelect: vi.fn() },
+  { label: 'Duplicate', onSelect: vi.fn() },
+  { label: 'Archive', onSelect: vi.fn() },
+  { label: 'Remove', onSelect: vi.fn(), tone: 'danger' as const },
+];
+
+const accountItems = [
   { label: 'user@example.com' },
   { label: 'Admin' },
   { label: 'Member since Jan 2026' },
@@ -33,6 +40,17 @@ describe('Menu', () => {
 
     const menuItems = screen.getAllByRole('menuitem');
     expect(menuItems[0]).toHaveFocus();
+  });
+
+  it('focuses the last item on ArrowUp from the trigger', () => {
+    render(<Menu trigger="Account" items={items} />);
+
+    const trigger = screen.getByRole('button', { name: 'Account' });
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: 'ArrowUp' });
+
+    const menuItems = screen.getAllByRole('menuitem');
+    expect(menuItems[menuItems.length - 1]).toHaveFocus();
   });
 
   it('moves roving focus between items with ArrowDown/ArrowUp, wrapping at each end', () => {
@@ -116,16 +134,38 @@ describe('Menu', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 
-  it('renders an item with no onSelect as aria-disabled and does not close the menu on click', () => {
+  it('closes on an outside click without stealing focus back', () => {
+    render(<Menu trigger="Account" items={items} />);
+
+    const trigger = screen.getByRole('button', { name: 'Account' });
+    fireEvent.click(trigger);
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+
+    fireEvent.mouseDown(document.body);
+
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(trigger).not.toHaveFocus();
+  });
+
+  it('presents an informational row as text, not a menu item', () => {
+    render(<Menu trigger="Account" items={accountItems} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Account' }));
+
+    expect(screen.getByText('user@example.com')).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'user@example.com' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('menuitem')).toHaveLength(1);
+  });
+
+  it('activates an item on a mouse click', () => {
     render(<Menu trigger="Account" items={items} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Account' }));
-    const infoItem = screen.getByRole('menuitem', { name: 'user@example.com' });
-    expect(infoItem).toHaveAttribute('aria-disabled', 'true');
+    const item = screen.getByRole('menuitem', { name: 'Rename' });
 
-    fireEvent.click(infoItem);
-
-    expect(screen.getByRole('menu')).toBeInTheDocument();
+    // jsdom cannot reproduce the null-relatedTarget focusout a mouse click raises in Safari and
+    // Firefox on macOS; a canceled mousedown is the observable half of the guard against it.
+    expect(fireEvent.mouseDown(item)).toBe(false);
   });
 
   it('calls onSelect and closes the menu when an actionable item is activated', () => {
@@ -140,17 +180,59 @@ describe('Menu', () => {
   });
 
   it('renders a danger-toned item with the danger modifier class', () => {
-    render(
-      <Menu
-        trigger="Account"
-        items={[{ label: 'Remove member', onSelect: vi.fn(), tone: 'danger' }]}
-      />,
-    );
+    render(<Menu trigger="Account" items={items} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Account' }));
 
-    expect(screen.getByRole('menuitem', { name: 'Remove member' })).toHaveClass(
-      'menu-item--danger',
+    expect(screen.getByRole('menuitem', { name: 'Remove' })).toHaveClass('menu-item--danger');
+  });
+
+  it('places the surface at the trigger start edge by default', () => {
+    render(<Menu trigger="Account" items={items} />);
+
+    const trigger = screen.getByRole('button', { name: 'Account' });
+    fireEvent.click(trigger);
+
+    expect(document.getElementById(trigger.getAttribute('aria-controls')!)).toHaveClass(
+      'popover-surface--bottom-start',
     );
+  });
+
+  it('forwards its placement to the surface', () => {
+    render(<Menu trigger="Account" items={items} placement="bottom-end" />);
+
+    const trigger = screen.getByRole('button', { name: 'Account' });
+    fireEvent.click(trigger);
+
+    expect(document.getElementById(trigger.getAttribute('aria-controls')!)).toHaveClass(
+      'popover-surface--bottom-end',
+    );
+  });
+
+  // jsdom has no layout engine, so a real trigger near the viewport's end edge — the People
+  // row-action menu's case — is stubbed rather than positioned by CSS. `Popover` owns the flip;
+  // this pins it through `Menu`'s default `placement`, the People row menu's case.
+  it('flips a default-placed surface to the trigger end edge when it would overflow the viewport, without a placement prop', () => {
+    vi.stubGlobal('CSS', { supports: () => false });
+    vi.stubGlobal('innerWidth', 1440);
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: Element,
+    ) {
+      return this.classList.contains('popover-surface')
+        ? new DOMRect(0, 0, 200, 120)
+        : new DOMRect(1300, 10, 80, 32);
+    });
+
+    render(<Menu trigger="Actions" items={items} />);
+    const trigger = screen.getByRole('button', { name: 'Actions' });
+    fireEvent.click(trigger);
+
+    const surface = document.getElementById(trigger.getAttribute('aria-controls')!)!;
+    // Trigger left (1300) + surface width (200) = 1500 > innerWidth (1440): flips end-aligned,
+    // pinned to the trigger's own right edge (1300 + 80 − 200 = 1180).
+    expect(surface).toHaveStyle({ left: '1180px' });
+
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 });

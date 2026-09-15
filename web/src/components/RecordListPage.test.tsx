@@ -53,14 +53,16 @@ describe('RecordListPage', () => {
     expect(screen.queryByText('Body')).not.toBeInTheDocument();
   });
 
-  it('renders the alert alongside the ready body on a refresh error, keeping existing rows', () => {
+  it('renders a page error as an alert beside ready rows, keeping existing rows', () => {
     render(
       <RecordListPage {...baseProps} status={{ kind: 'ready' }} error="Failed to refresh widgets">
         <p>Body</p>
       </RecordListPage>,
     );
 
-    expect(screen.getByRole('alert')).toHaveTextContent('Failed to refresh widgets');
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Failed to refresh widgets');
+    expect(alert).toHaveClass('alert--rejected');
     expect(screen.getByText('Body')).toBeInTheDocument();
   });
 
@@ -147,6 +149,28 @@ describe('RecordListPage', () => {
     );
 
     expect(screen.queryByText('Filter form')).not.toBeInTheDocument();
+  });
+
+  it('renders view and toolbarEnd in the first toolbar row and filters in the second', () => {
+    render(
+      <RecordListPage
+        {...baseProps}
+        status={{ kind: 'ready' }}
+        view={<div>View switch</div>}
+        toolbarEnd={<span>12 results</span>}
+        filters={<div>Filter form</div>}
+      >
+        <p>Body</p>
+      </RecordListPage>,
+    );
+
+    const viewRow = screen.getByText('View switch').parentElement;
+    expect(viewRow).toHaveClass('toolbar-row--view');
+    expect(viewRow).toContainElement(screen.getByText('12 results'));
+
+    const filterRow = screen.getByText('Filter form').parentElement;
+    expect(filterRow).toHaveClass('toolbar-row--filters');
+    expect(viewRow?.nextElementSibling).toBe(filterRow);
   });
 
   it('renders the lead slot before the toolbar and omits it when absent', () => {

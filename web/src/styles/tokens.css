@@ -11,9 +11,8 @@
   --hairline: #dbe1ea;
   --hairline-strong: #c1c9d6;
 
-  /* Text — --muted is for plain surfaces only. Text sitting on a translucent status
-     or signal tint uses --ink-dim: --muted over a tint composites to 4.47–4.61:1,
-     which is at the AA boundary for 11–13px body text. */
+  /* Text — --muted is for plain surfaces only; text sitting on a translucent status or signal
+     tint uses --ink-dim instead, since --muted's contrast over a tint varies by palette. */
   --ink: #10141c;
   --ink-dim: #3c4657;
   --muted: #5a6478;
@@ -35,10 +34,10 @@
   /* Status — each tone carries a background, an ink and a line so meaning survives
      without colour, paired with the existing shape marker on the element. */
   --status-verified-bg: rgba(11, 122, 82, 0.1);
-  --status-verified-ink: #0b7a52;
+  --status-verified-ink: #086646;
   --status-verified-line: rgba(11, 122, 82, 0.35);
   --status-caution-bg: rgba(143, 92, 0, 0.1);
-  --status-caution-ink: #8f5c00;
+  --status-caution-ink: #7a4f00;
   --status-caution-line: rgba(143, 92, 0, 0.35);
   --status-reject-bg: rgba(176, 34, 63, 0.1);
   --status-reject-ink: #b0223f;
@@ -49,6 +48,9 @@
   --status-neutral-bg: var(--surface-3);
   --status-neutral-ink: var(--ink-dim);
   --status-neutral-line: var(--hairline-strong);
+
+  /* Search-match and text-selection background — shared because both are the same treatment. */
+  --highlight: rgba(143, 92, 0, 0.28);
 
   /* Type — system stacks. Mono gets its own display size and tracking. */
   --font-display: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
@@ -84,9 +86,7 @@
   --space-4: 1rem;
   --space-5: 1.25rem;
   --space-6: 1.5rem;
-  --space-7: 1.75rem;
   --space-8: 2rem;
-  --space-10: 2.5rem;
   /* Density — semantic aliases over the spacing scale, tunable independently of it: row rhythm
      for an actionable/table row, the horizontal cell padding on that same row, and the gap between
      a claim and its evidence in the apparatus. */
@@ -99,7 +99,6 @@
   --radius-sm: 5px;
   --radius-xs: 4px;
   --radius-pill: 999px;
-  --shadow: 0 1px 2px rgba(20, 22, 30, 0.04), 0 6px 16px rgba(20, 22, 30, 0.06);
   --shadow-pop: 0 2px 6px rgba(16, 20, 28, 0.08), 0 12px 32px rgba(16, 20, 28, 0.16);
   --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--signal);
   /* The focus ring for a control whose parent clips overflow — an outset shadow like --ring would
@@ -124,6 +123,15 @@
   --control-pad-x: var(--space-3);
   --control-pad-y: var(--space-2);
   --target-min: 24px;
+  --control-w-sm: 10rem;
+  --control-w-md: 18rem;
+  --control-w-lg: 28rem;
+  --control-line: #7f8a9c;
+  /* A table body row's height: one `--control-h-sm` control, plus `--density-row` block padding
+     above and below it, plus the 1px collapsed row border. `box-sizing: border-box` counts padding
+     and border inside a cell's `height`, so a text row, a small-button row and a menu-trigger row
+     all resolve to this one value. */
+  --row-h: calc(var(--control-h-sm) + 2 * var(--density-row) + 1px);
 
   /* Motion — cross-cutting timing values for transitions and looping animations, named by role
      rather than speed so a call site never has to guess which token maps to which duration. */
@@ -175,6 +183,10 @@
   --dialog-w-sm: 26rem;
   --dialog-w-md: 32rem;
   --dialog-w-lg: 44rem;
+  --drawer-w-sm: 20rem;
+  --drawer-w-md: 26rem;
+  --drawer-w-lg: 34rem;
+  --tooltip-w-max: 18rem;
   --dialog-backdrop: color-mix(in srgb, var(--ink) 40%, transparent);
 
   /* Breakpoints — documentation only; a custom property cannot appear inside a @media prelude, so
@@ -204,7 +216,7 @@
     /* Text */
     --ink: #e8ecf3;
     --ink-dim: #b7c0d1;
-    --muted: #8b96ab;
+    --muted: #98a3b8;
 
     --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b96ab' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
@@ -232,7 +244,9 @@
     --status-neutral-ink: var(--ink-dim);
     --status-neutral-line: var(--hairline-strong);
 
-    --shadow: 0 1px 0 rgba(255, 255, 255, 0.02), 0 8px 24px rgba(0, 0, 0, 0.35);
+    --control-line: #5f6b82;
+    --highlight: rgba(224, 172, 61, 0.32);
+
     --shadow-pop: 0 2px 6px rgba(0, 0, 0, 0.3), 0 16px 40px rgba(0, 0, 0, 0.5);
     --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--signal);
     color-scheme: dark;
@@ -259,7 +273,7 @@
     /* Text */
     --ink: #e8ecf3;
     --ink-dim: #b7c0d1;
-    --muted: #8b96ab;
+    --muted: #98a3b8;
 
     --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b96ab' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
@@ -287,7 +301,9 @@
     --status-neutral-ink: var(--ink-dim);
     --status-neutral-line: var(--hairline-strong);
 
-    --shadow: 0 1px 0 rgba(255, 255, 255, 0.02), 0 8px 24px rgba(0, 0, 0, 0.35);
+    --control-line: #5f6b82;
+    --highlight: rgba(224, 172, 61, 0.32);
+
     --shadow-pop: 0 2px 6px rgba(0, 0, 0, 0.3), 0 16px 40px rgba(0, 0, 0, 0.5);
     --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--signal);
     color-scheme: dark;

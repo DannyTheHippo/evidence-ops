@@ -11,9 +11,9 @@ The SPA uses **plain CSS split across eight fixed files under `web/src/styles/`*
 imported from `web/src/main.tsx` as eight explicit imports in that exact order — the order is the
 cascade, so it stays visible where someone would look for it rather than hidden behind a barrel
 file. `views.css` holds layout that every routed view sits in (`.container`, `.view`, `.page-head`
-and their responsive rules); `features.css` holds the product feature blocks built on top of it
-(citations, conflicts, the run timeline, the verification ledger, dropped claims, dashboard rows,
-table cell states). `print.css` **MUST stay last** — its `@media print` block overrides an
+and their responsive rules); `features.css` holds the product feature blocks built on top of it, grouped under area banners
+(`/* ── <Area>: <topic> ─…─ */`) in this order: Shared, Home, Sources, Data room, Ledger, measures &
+entities, Answers, Runs, Admin & identity. `print.css` **MUST stay last** — its `@media print` block overrides an
 unconditional rule from every earlier stylesheet and carries no specificity of its own, so it only
 wins the cascade by sitting after all seven other imports; `web/src/test/styles-contract.test.ts`
 pins this order and fails if `print.css` is not last. No Tailwind, no CSS Modules, no CSS-in-JS, no

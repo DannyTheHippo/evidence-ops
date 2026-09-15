@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   listWorkflowRuns,
   type SortDirection,
@@ -11,6 +11,7 @@ import { IconActivity } from '../components/icons';
 import RecordListPage, { type RecordListStatus } from '../components/RecordListPage';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
+import DateRange from '../components/ui/DateRange';
 import EmptyState from '../components/ui/EmptyState';
 import FilterBar from '../components/ui/FilterBar';
 import LinkButton from '../components/ui/LinkButton';
@@ -20,17 +21,26 @@ import Select from '../components/ui/Select';
 import SortableHeaderCell from '../components/ui/SortableHeaderCell';
 import Table, { RowLink, TableCell, TableRow } from '../components/ui/Table';
 import Timestamp from '../components/ui/Timestamp';
-import { shortId, workflowTypeLabel } from '../lib/identifiers';
+import Tooltip from '../components/ui/Tooltip';
+import {
+  dateRangeKey,
+  isDateRangeActive,
+  readDateRange,
+  toDateRangeInstants,
+  writeDateRange,
+} from '../lib/date-range';
+import { WORKFLOW_TYPE_LABELS, shortId, workflowTypeLabel } from '../lib/identifiers';
+import { clampPageSize, clampSkip, pickOption } from '../lib/paging';
+import { runOutcomeView, runStatusView } from '../lib/run-status';
+import { useAbortableEffect } from '../lib/use-latest';
+import { useResultAnnouncer } from '../lib/use-result-announcer';
 import { useUrlState } from '../lib/use-url-state';
 
-const PAGE_SIZE = 25;
+const PAGE_SIZE_OPTIONS = [25, 50, 100];
 
-const STATUS_TONE: Record<WorkflowRunStatus, 'verified' | 'info' | 'neutral' | 'rejected'> = {
-  completed: 'verified',
-  running: 'info',
-  queued: 'neutral',
-  failed: 'rejected',
-};
+// Matches the server's `@IsIn` lists in `list-workflow-runs.request.dto.ts`.
+const SORT_FIELDS: readonly WorkflowRunSortField[] = ['createdAt', 'status', 'workflowType'];
+const SORT_DIRECTIONS: readonly SortDirection[] = ['asc', 'desc'];
 
 const STATUS_OPTIONS = [
   { value: '', label: 'All statuses' },
@@ -40,23 +50,35 @@ const STATUS_OPTIONS = [
   { value: 'failed', label: 'Failed' },
 ];
 
-// `rescan-conflicts` has no current writer (client.ts's `WorkflowRunType`) — kept selectable only
-// so an existing stored row stays reachable, labelled as legacy so it doesn't read as a type the
-// system still produces.
-const WORKFLOW_TYPE_OPTIONS = [
+// Derived from `WORKFLOW_TYPE_LABELS` so this filter always covers every type the server can
+// send — a value missing from that `Record<WorkflowRunType, string>` fails identifiers.ts to
+// compile rather than staying unreachable here. `rescan-conflicts` has no current writer; the
+// suffix keeps it selectable for an existing stored row without reading as a type the system
+// still produces.
+const WORKFLOW_TYPE_OPTIONS: { value: WorkflowRunType | ''; label: string }[] = [
   { value: '', label: 'All types' },
-  { value: 'resolve-conflict', label: 'Conflict resolution' },
-  { value: 'sync-source', label: 'Source sync' },
-  { value: 'rescan-conflicts', label: 'Conflict rescan (legacy)' },
+  ...(Object.entries(WORKFLOW_TYPE_LABELS) as [WorkflowRunType, string][]).map(
+    ([value, label]) => ({
+      value,
+      label: value === 'rescan-conflicts' ? `${label} (legacy)` : label,
+    }),
+  ),
 ];
 
 // Declared at module scope: `useUrlState` adopts `defaults` once on mount and keeps that
 // identity, but only needs it stable in value — a module-level object satisfies both. Typed as
 // plain `string` fields, not `as const` literals, so the values written back through
 // `setUrlState` — themselves unions like `WorkflowRunSortField` — stay assignable.
-const URL_DEFAULTS: Record<'status' | 'workflowType' | 'sort' | 'sortDir' | 'skip', string> = {
+const URL_DEFAULTS: Record<
+  'status' | 'workflowType' | 'range' | 'from' | 'to' | 'limit' | 'sort' | 'sortDir' | 'skip',
+  string
+> = {
   status: '',
   workflowType: '',
+  range: '',
+  from: '',
+  to: '',
+  limit: '25',
   sort: 'createdAt',
   sortDir: 'desc',
   skip: '0',
@@ -66,49 +88,77 @@ export default function RunsPage() {
   const [urlState, setUrlState] = useUrlState(URL_DEFAULTS);
   const appliedStatus = urlState.status as WorkflowRunStatus | '';
   const appliedWorkflowType = urlState.workflowType as WorkflowRunType | '';
-  const sort = urlState.sort as WorkflowRunSortField;
-  const sortDir = urlState.sortDir as SortDirection;
-  const skip = Number(urlState.skip);
+  // A hand-edited or stale `sort`/`sortDir` falls back to the page default rather than reaching
+  // the API with a value its `@IsIn` decorator refuses, which would otherwise blank the page.
+  const sort = pickOption(urlState.sort, SORT_FIELDS, 'createdAt');
+  const sortDir = pickOption(urlState.sortDir, SORT_DIRECTIONS, 'desc');
+  const dateRange = readDateRange(urlState);
+  const dateRangeActive = isDateRangeActive(dateRange);
+  // `''` while the range filters nothing, so revealing an empty Custom range neither refetches nor
+  // announces; the `DateRange` change handler below resets `skip` on the same key, so it stays put
+  // too.
+  const dateKey = dateRangeKey(dateRange);
+  const skip = clampSkip(urlState.skip);
+  const pageSize = clampPageSize(urlState.limit, PAGE_SIZE_OPTIONS, 25);
+  const filterKey = JSON.stringify({
+    status: appliedStatus,
+    workflowType: appliedWorkflowType,
+    date: dateKey,
+  });
 
-  // Only these, not the `Select`s' own values, drive the fetch — the filter applies on submit,
-  // not on every selection change.
-  const [draftStatus, setDraftStatus] = useState(appliedStatus);
-  const [draftWorkflowType, setDraftWorkflowType] = useState(appliedWorkflowType);
   const [runs, setRuns] = useState<WorkflowRun[] | null>(null);
   const [count, setCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const announceResult = useResultAnnouncer();
 
-  useEffect(() => {
-    listWorkflowRuns({
+  useAbortableEffect(
+    (isCurrent) => {
+      // Resolved here, not during render: a `24h` range yields new instants on every call.
+      const { from, to } = toDateRangeInstants(dateRange);
+      listWorkflowRuns({
+        skip,
+        limit: pageSize,
+        status: appliedStatus === '' ? undefined : appliedStatus,
+        workflowType: appliedWorkflowType === '' ? undefined : appliedWorkflowType,
+        sort,
+        sortDir,
+        from,
+        to,
+      })
+        .then(({ docs, count: total }) => {
+          if (!isCurrent()) return;
+          setRuns(docs);
+          setCount(total);
+          setError(null);
+          announceResult(filterKey, `${total} run${total === 1 ? '' : 's'}`);
+        })
+        .catch((err: unknown) => {
+          if (!isCurrent()) return;
+          setError(err instanceof Error ? err.message : 'Failed to load workflow runs');
+        });
+    },
+    [
       skip,
-      limit: PAGE_SIZE,
-      status: appliedStatus === '' ? undefined : appliedStatus,
-      workflowType: appliedWorkflowType === '' ? undefined : appliedWorkflowType,
+      pageSize,
+      appliedStatus,
+      appliedWorkflowType,
       sort,
       sortDir,
-    })
-      .then(({ docs, count: total }) => {
-        setRuns(docs);
-        setCount(total);
-        setError(null);
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : 'Failed to load workflow runs');
-      });
-  }, [skip, appliedStatus, appliedWorkflowType, sort, sortDir]);
-
-  function handleApply() {
-    setUrlState({
-      status: draftStatus,
-      workflowType: draftWorkflowType,
-      skip: URL_DEFAULTS.skip,
-    });
-  }
+      dateKey,
+      filterKey,
+      announceResult,
+    ],
+  );
 
   function handleClear() {
-    setDraftStatus('');
-    setDraftWorkflowType('');
-    setUrlState({ status: '', workflowType: '', skip: URL_DEFAULTS.skip });
+    setUrlState({
+      status: '',
+      workflowType: '',
+      range: '',
+      from: '',
+      to: '',
+      skip: URL_DEFAULTS.skip,
+    });
   }
 
   function handleSort(field: WorkflowRunSortField) {
@@ -120,7 +170,7 @@ export default function RunsPage() {
     setUrlState({ sort: field, sortDir: nextDir, skip: URL_DEFAULTS.skip });
   }
 
-  const hasFilter = appliedStatus !== '' || appliedWorkflowType !== '';
+  const hasFilter = appliedStatus !== '' || appliedWorkflowType !== '' || dateRangeActive;
 
   // Zero rows still resolves to `ready` rather than RecordListPage's own `empty` kind — that kind's
   // EmptyState carries no `className`, and the unfiltered case needs `empty-state--zero` to read as
@@ -136,20 +186,32 @@ export default function RunsPage() {
     <RecordListPage
       eyebrow="Runs"
       title="Runs"
-      description="Workflow runs across ingestion, sync, and resolution. Status is the last recorded value, not a live read of the workflow engine — open a run for its current state."
+      description="Workflow runs across questions, ingestion, sync, and resolution. Status is the last recorded value, not a live read of the workflow engine — open a run for its current state."
       filters={
-        <FilterBar onApply={handleApply} onClear={handleClear} hasFilter={hasFilter}>
+        <FilterBar label="Run filters" onClear={handleClear} hasFilter={hasFilter}>
           <Select
             label="Status"
+            width="md"
             options={STATUS_OPTIONS}
-            value={draftStatus}
-            onChange={(value) => setDraftStatus(value as WorkflowRunStatus | '')}
+            value={appliedStatus}
+            onChange={(value) => setUrlState({ status: value, skip: URL_DEFAULTS.skip })}
           />
           <Select
             label="Type"
+            width="md"
             options={WORKFLOW_TYPE_OPTIONS}
-            value={draftWorkflowType}
-            onChange={(value) => setDraftWorkflowType(value as WorkflowRunType | '')}
+            value={appliedWorkflowType}
+            onChange={(value) => setUrlState({ workflowType: value, skip: URL_DEFAULTS.skip })}
+          />
+          <DateRange
+            label="Created"
+            value={dateRange}
+            onChange={(value) =>
+              setUrlState({
+                ...writeDateRange(value),
+                ...(dateRangeKey(value) !== dateKey ? { skip: URL_DEFAULTS.skip } : {}),
+              })
+            }
           />
         </FilterBar>
       }
@@ -160,8 +222,13 @@ export default function RunsPage() {
           <Pager
             count={count}
             skip={skip}
-            pageSize={PAGE_SIZE}
+            pageSize={pageSize}
             onSkipChange={(next) => setUrlState({ skip: String(next) })}
+            onPageSizeChange={(next) =>
+              setUrlState({ limit: String(next), skip: URL_DEFAULTS.skip })
+            }
+            pageSizeOptions={PAGE_SIZE_OPTIONS}
+            showJump
           />
         )
       }
@@ -170,7 +237,7 @@ export default function RunsPage() {
         <EmptyState
           icon={<IconActivity size={24} />}
           title="No runs match this filter"
-          description="Clear or adjust the status or type filter above."
+          description="Clear or adjust the status, type or date filters above."
           action={
             <Button variant="secondary" onClick={handleClear}>
               Show all runs
@@ -191,12 +258,16 @@ export default function RunsPage() {
 
       {runs && runs.length > 0 && (
         <Panel aria-label="Workflow runs, most recent first">
-          <Table caption="Workflow runs, most recent first">
+          <Table caption="Workflow runs, most recent first" className="runs-grid">
+            <colgroup>
+              <col className="col-wide" />
+              <col />
+              <col className="col-narrow" />
+            </colgroup>
             <thead>
               <tr>
-                {/* No Triggered-by column: `subjectId`/`subjectType` are unset on every
-                    resolve-conflict and sync-source run (client.ts's `WorkflowRun`), so a
-                    rendered column would carry no content on effectively every row. */}
+                {/* No Triggered-by column: this list view has no per-row space for the subject
+                    link WorkflowRunPage renders — that stays a detail-page affordance. */}
                 <SortableHeaderCell<WorkflowRunSortField>
                   field="workflowType"
                   label="Type"
@@ -221,31 +292,46 @@ export default function RunsPage() {
               </tr>
             </thead>
             <tbody>
-              {runs.map((run) => (
-                <TableRow key={run.id} to={`/workflow-runs/${run.id}`}>
-                  <TableCell label="Type">
-                    <RowLink to={`/workflow-runs/${run.id}`}>
-                      {workflowTypeLabel(run.workflowType)}
-                    </RowLink>
-                    <p className="cell-sub mono" title={run.workflowId}>
-                      {shortId(run.workflowId)}
-                    </p>
-                  </TableCell>
-                  <TableCell label="Status">
-                    <Badge tone={STATUS_TONE[run.status]}>{run.status}</Badge>
-                    {run.status === 'failed' && run.errorMessage && (
-                      <p className="cell-sub">
-                        <span className="cell-truncate" title={run.errorMessage}>
-                          {run.errorMessage}
-                        </span>
+              {runs.map((run) => {
+                const statusView = runStatusView(run.status);
+                return (
+                  <TableRow key={run.id} to={`/workflow-runs/${run.id}`}>
+                    <TableCell label="Type">
+                      <RowLink to={`/workflow-runs/${run.id}`}>
+                        {workflowTypeLabel(run.workflowType)}
+                      </RowLink>
+                      <p className="cell-sub mono">
+                        <Tooltip content={run.workflowId}>
+                          <span className="cell-truncate" tabIndex={0}>
+                            {shortId(run.workflowId)}
+                          </span>
+                        </Tooltip>
                       </p>
-                    )}
-                  </TableCell>
-                  <TableCell label="Created" className="cell-sub">
-                    <Timestamp value={run.createdAt} />
-                  </TableCell>
-                </TableRow>
-              ))}
+                    </TableCell>
+                    <TableCell label="Status">
+                      <Badge tone={statusView.tone}>{statusView.label}</Badge>
+                      {run.outcome && (
+                        <p className="cell-sub">{runOutcomeView(run.outcome).label}</p>
+                      )}
+                      {run.status === 'failed' && run.errorMessage && (
+                        <p className="cell-sub">
+                          <Tooltip content={run.errorMessage}>
+                            <span className="cell-truncate" tabIndex={0}>
+                              {run.errorMessage}
+                            </span>
+                          </Tooltip>
+                        </p>
+                      )}
+                      {run.status === 'failed' && !run.errorMessage && (
+                        <p className="cell-sub">Reason not recorded</p>
+                      )}
+                    </TableCell>
+                    <TableCell label="Created" className="cell-sub">
+                      <Timestamp value={run.createdAt} />
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </tbody>
           </Table>
         </Panel>

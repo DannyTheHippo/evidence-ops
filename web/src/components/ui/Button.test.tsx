@@ -36,4 +36,31 @@ describe('Button', () => {
     expect(onClick).toHaveBeenCalledOnce();
     expect(button).toHaveClass('btn', 'btn--primary', 'custom');
   });
+
+  it('sets aria-busy and swaps to busyLabel', () => {
+    render(
+      <Button busy busyLabel="Saving…">
+        Save
+      </Button>,
+    );
+
+    const button = screen.getByRole('button', { name: 'Saving…' });
+    expect(button).toHaveAttribute('aria-busy', 'true');
+    expect(button).toHaveClass('btn--busy');
+  });
+
+  it('stays enabled and swallows onClick while busy', () => {
+    const onClick = vi.fn();
+    render(
+      <Button busy onClick={onClick}>
+        Save
+      </Button>,
+    );
+
+    const button = screen.getByRole('button', { name: 'Save' });
+    expect(button).toBeEnabled();
+    button.click();
+
+    expect(onClick).not.toHaveBeenCalled();
+  });
 });

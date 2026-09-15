@@ -8,6 +8,12 @@ interface AnswerEnrichment {
   conflictChunkIndex: Map<string, ConflictChunkResolution>;
 }
 
+// `ListConflictsRequestDto.ids` carries the same `@ArrayMaxSize(MAX_PAGINATION_LIMIT)` as every
+// other list endpoint's page size, so a single answer touching more conflicts than that would
+// otherwise fail the whole request rather than resolve the first batch — chunked and merged the
+// same way `resolveDocumentVersions` handles its own id list.
+const CONFLICT_LOOKUP_BATCH_SIZE = 100;
+
 /**
  * Resolves the two display enrichments a completed answer needs beyond what the answer payload
  * itself carries: citation/conflict-value document titles, and — for `conflicting_evidence` —
@@ -24,27 +30,29 @@ export function useAnswerEnrichment(answer: Answer | null): AnswerEnrichment {
     Map<string, ConflictChunkResolution>
   >(new Map());
 
-  // Narrowed to this answer's conflictIds; listConflicts({ limit: 100 }) is the API's max page
-  // size, so a chunk belonging to a conflict past the first 100 falls back to its raw
-  // sourceChunkId in AnswerView — acceptable at demo scale, upgradeable to server-side enrichment
-  // without changing this contract.
   useEffect(() => {
     if (answer?.runStatus !== 'completed' || answer.outcome?.kind !== 'conflicting_evidence')
       return;
     if (answer.conflictIds.length === 0) return;
     let cancelled = false;
 
-    listConflicts({ limit: 100 })
-      .then(({ docs }) => {
+    const batches: string[][] = [];
+    for (let i = 0; i < answer.conflictIds.length; i += CONFLICT_LOOKUP_BATCH_SIZE) {
+      batches.push(answer.conflictIds.slice(i, i + CONFLICT_LOOKUP_BATCH_SIZE));
+    }
+
+    Promise.all(batches.map((ids) => listConflicts({ ids })))
+      .then((results) => {
         if (cancelled) return;
         const index = new Map<string, ConflictChunkResolution>();
-        for (const conflict of docs) {
-          if (!answer.conflictIds.includes(conflict.id)) continue;
-          for (const value of conflict.values) {
-            index.set(value.sourceChunkId, {
-              documentVersionId: value.documentVersionId,
-              locator: value.locator,
-            });
+        for (const { docs } of results) {
+          for (const conflict of docs) {
+            for (const value of conflict.values) {
+              index.set(value.sourceChunkId, {
+                documentVersionId: value.documentVersionId,
+                locator: value.locator,
+              });
+            }
           }
         }
         setConflictChunkIndex(index);

@@ -114,27 +114,28 @@ describe('ApprovalDecisionDialog', () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
-  it('submits on Enter in the reason field', async () => {
+  it('Enter in the reason field inserts a newline instead of confirming', () => {
     const { onConfirm } = renderDialog();
 
-    fireEvent.change(screen.getByLabelText('Reason (optional)'), {
-      target: { value: 'Evidence checks out.' },
-    });
     fireEvent.keyDown(screen.getByLabelText('Reason (optional)'), { key: 'Enter' });
 
-    await waitFor(() => {
-      expect(onConfirm).toHaveBeenCalledWith('approved', 'Evidence checks out.');
-    });
+    expect(onConfirm).not.toHaveBeenCalled();
   });
 
-  it('does not submit on Shift+Enter in the reason field, since it inserts a newline instead', () => {
-    const { onConfirm } = renderDialog();
+  // Regression: focus is driven by `Dialog`'s `initialFocusRef`, applied after its
+  // `showModal()` step, rather than `autoFocus` on the button — see `ConfirmDialog.test.tsx`
+  // for why. jsdom has no `HTMLDialogElement.showModal`, so this confirms the mechanism's
+  // result, not the ordering against a real browser.
+  it('moves initial focus to Cancel when the decision is a rejection', () => {
+    renderDialog({ decision: 'rejected' });
 
-    fireEvent.keyDown(screen.getByLabelText('Reason (optional)'), {
-      key: 'Enter',
-      shiftKey: true,
-    });
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Reject' })).not.toHaveFocus();
+  });
 
-    expect(onConfirm).not.toHaveBeenCalled();
+  it('leaves initial focus at the reason field for an approval', () => {
+    renderDialog({ decision: 'approved' });
+
+    expect(screen.getByRole('button', { name: 'Cancel' })).not.toHaveFocus();
   });
 });

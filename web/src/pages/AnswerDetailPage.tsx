@@ -1,6 +1,7 @@
 import { useParams } from 'react-router-dom';
 import AnswerWorkspace from '../components/AnswerWorkspace';
 import AttestationBundleView from '../components/AttestationBundleView';
+import Alert from '../components/ui/Alert';
 import Badge from '../components/ui/Badge';
 import CopyButton from '../components/ui/CopyButton';
 import EmptyState from '../components/ui/EmptyState';
@@ -19,12 +20,23 @@ interface AnswerDetailPageProps {
 
 export default function AnswerDetailPage({ pollIntervalMs }: AnswerDetailPageProps) {
   const { id } = useParams<{ id: string }>();
-  const { answer, error, notFound } = useAnswerRun({ answerId: id ?? null, pollIntervalMs });
+  const { answer, error, notFound, streamState } = useAnswerRun({
+    answerId: id ?? null,
+    pollIntervalMs,
+  });
+  const followUpHref = answer
+    ? `/answers?q=${encodeURIComponent(answer.questionText)}`
+    : '/answers';
+  // The document title reads the crumb label, not the PageHeader title below, so an unclamped
+  // question renders an unreadably long browser tab; the topbar's own `.breadcrumb-current`
+  // already truncates the rendered crumb visually.
+  const crumbLabel = answer
+    ? answer.questionText.length > 60
+      ? `${answer.questionText.slice(0, 60)}…`
+      : answer.questionText
+    : 'Answer';
 
-  useBreadcrumbs([
-    { label: 'Answers', to: '/answers' },
-    { label: answer ? answer.questionText : 'Answer' },
-  ]);
+  useBreadcrumbs([{ label: 'Answers', to: '/answers' }, { label: crumbLabel }]);
 
   return (
     <div className="view view--roomy answer-detail">
@@ -32,14 +44,14 @@ export default function AnswerDetailPage({ pollIntervalMs }: AnswerDetailPagePro
         eyebrow="Answers"
         title={answer ? answer.questionText : 'Answer'}
         actions={
-          <div className="form-actions">
-            <LinkButton to="/answers" variant="ghost" size="sm">
+          <>
+            <LinkButton to={followUpHref} variant="ghost" size="sm">
               Ask a follow-up
             </LinkButton>
             <LinkButton to="/answers" variant="secondary" size="sm">
               Back to answers
             </LinkButton>
-          </div>
+          </>
         }
       />
 
@@ -61,17 +73,9 @@ export default function AnswerDetailPage({ pollIntervalMs }: AnswerDetailPagePro
         </p>
       )}
 
-      {error && (
-        <p className="error error--page" role="alert">
-          {error}
-        </p>
-      )}
+      {error && <Alert tone="rejected">{error}</Alert>}
 
-      {!id && (
-        <p className="error error--page" role="alert">
-          No answer id provided.
-        </p>
-      )}
+      {!id && <Alert tone="rejected">No answer id provided.</Alert>}
 
       {notFound && (
         <EmptyState
@@ -86,22 +90,14 @@ export default function AnswerDetailPage({ pollIntervalMs }: AnswerDetailPagePro
 
       {!answer && !error && !notFound && id && <Skeleton label="Loading answer…" />}
 
-      {answer && <AnswerWorkspace answer={answer} variant="detail" />}
+      {answer && <AnswerWorkspace answer={answer} variant="detail" streamState={streamState} />}
 
       {answer && answer.runStatus === 'completed' && (
-        <AttestationBundleView kind="answers" subjectId={answer.id} />
-      )}
-
-      {answer && answer.runStatus === 'failed' && (
-        <div className="form-actions">
-          <LinkButton
-            to={`/answers?q=${encodeURIComponent(answer.questionText)}`}
-            variant="secondary"
-            size="sm"
-          >
-            Ask this question again
-          </LinkButton>
-        </div>
+        <AttestationBundleView
+          kind="answers"
+          subjectId={answer.id}
+          attestationHash={answer.attestationHash}
+        />
       )}
     </div>
   );

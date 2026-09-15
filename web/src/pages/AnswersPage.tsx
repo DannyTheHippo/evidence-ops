@@ -5,14 +5,15 @@ import {
   type Answer,
   type AnswerRunStatus,
   type AnswerSortField,
-  type ClaimVerdict,
   type SortDirection,
   type Verification,
-  type VerifyClaimResult,
 } from '../api/client';
 import { IconFileText } from '../components/icons';
 import RecordListPage, { type RecordListStatus } from '../components/RecordListPage';
 import Badge from '../components/ui/Badge';
+import Button from '../components/ui/Button';
+import DateRange from '../components/ui/DateRange';
+import EmptyState from '../components/ui/EmptyState';
 import FilterBar from '../components/ui/FilterBar';
 import Pager from '../components/ui/Pager';
 import Panel from '../components/ui/Panel';
@@ -21,11 +22,28 @@ import Select from '../components/ui/Select';
 import SortableHeaderCell from '../components/ui/SortableHeaderCell';
 import Table, { RowLink, TableCell, TableHeaderCell, TableRow } from '../components/ui/Table';
 import Timestamp from '../components/ui/Timestamp';
+import Tooltip from '../components/ui/Tooltip';
 import { answerBadge } from '../lib/answer-status';
+import { verdictTally } from '../lib/answer-verdicts';
+import {
+  dateRangeKey,
+  isDateRangeActive,
+  readDateRange,
+  toDateRangeInstants,
+  writeDateRange,
+} from '../lib/date-range';
+import { clampPageSize, clampSkip, pickOption } from '../lib/paging';
+import { useAbortableEffect } from '../lib/use-latest';
+import { useResultAnnouncer } from '../lib/use-result-announcer';
 import { useUrlState } from '../lib/use-url-state';
 import AnswerComposer from './answers/AnswerComposer';
 
-const PAGE_SIZE = 25;
+const DEFAULT_PAGE_SIZE = 25;
+const PAGE_SIZE_OPTIONS = [DEFAULT_PAGE_SIZE, 50, 100];
+
+// Matches the server's `@IsIn` list in `list-answers.request.dto.ts`.
+const SORT_FIELDS: readonly AnswerSortField[] = ['createdAt', 'runStatus', 'claimCoverage'];
+const SORT_DIRECTIONS: readonly SortDirection[] = ['asc', 'desc'];
 
 /** Buckets a 0–1 coverage fraction into one of eleven deciles (`0`–`10`) for
  * `coverage-meter--N`'s fill width — state stays on a modifier class rather than an inline
@@ -49,34 +67,28 @@ const KIND_OPTIONS: { value: HistoryKind; label: string }[] = [
   { value: 'verifications', label: 'Verifications' },
 ];
 
-const VERDICT_LABELS: Record<ClaimVerdict, string> = {
-  grounded: 'grounded',
-  not_grounded: 'not grounded',
-  no_evidence_retrieved: 'no evidence retrieved',
-  conflicting_evidence: 'conflicting evidence',
+// The fourth column holds a different fact per kind — the route an answer took, and the caller
+// that requested a verification — so its header names the fact rather than the position.
+const PATH_HEADER: Record<HistoryKind, string> = {
+  answers: 'Answer path',
+  verifications: 'Requested by',
 };
-
-/** Tallies a verification run's per-claim verdicts into one mono line, in `VERDICT_LABELS`
- * order, omitting any verdict no claim in the run reached. */
-function verdictTally(results: VerifyClaimResult[]): string {
-  const counts = new Map<ClaimVerdict, number>();
-  for (const result of results) {
-    counts.set(result.verdict, (counts.get(result.verdict) ?? 0) + 1);
-  }
-  return (Object.keys(VERDICT_LABELS) as ClaimVerdict[])
-    .filter((verdict) => (counts.get(verdict) ?? 0) > 0)
-    .map((verdict) => `${counts.get(verdict)} ${VERDICT_LABELS[verdict]}`)
-    .join(' · ');
-}
 
 // Declared at module scope: `useUrlState` adopts `defaults` once on mount and keeps that
 // identity, but only needs it stable in value — a module-level object satisfies both. Typed as
 // plain `string` fields, not `as const` literals, so the values written back through
 // `setUrlState` — themselves unions like `AnswerSortField` — stay assignable.
-const URL_DEFAULTS: Record<'q' | 'kind' | 'runStatus' | 'sort' | 'sortDir' | 'skip', string> = {
+const URL_DEFAULTS: Record<
+  'q' | 'kind' | 'runStatus' | 'range' | 'from' | 'to' | 'limit' | 'sort' | 'sortDir' | 'skip',
+  string
+> = {
   q: '',
   kind: 'answers',
   runStatus: '',
+  range: '',
+  from: '',
+  to: '',
+  limit: String(DEFAULT_PAGE_SIZE),
   sort: 'createdAt',
   sortDir: 'desc',
   skip: '0',
@@ -86,50 +98,85 @@ export default function AnswersPage() {
   const [urlState, setUrlState] = useUrlState(URL_DEFAULTS);
   const kind = urlState.kind as HistoryKind;
   const appliedRunStatus = urlState.runStatus as AnswerRunStatus | '';
-  const sort = urlState.sort as AnswerSortField;
-  const sortDir = urlState.sortDir as SortDirection;
-  const skip = Number(urlState.skip);
+  // A hand-edited or stale `sort`/`sortDir` falls back to the page default rather than reaching
+  // the API with a value its `@IsIn` decorator refuses, which would otherwise blank the page.
+  const sort = pickOption(urlState.sort, SORT_FIELDS, 'createdAt');
+  const sortDir = pickOption(urlState.sortDir, SORT_DIRECTIONS, 'desc');
+  const skip = clampSkip(urlState.skip);
+  const pageSize = clampPageSize(urlState.limit, PAGE_SIZE_OPTIONS, DEFAULT_PAGE_SIZE);
+  const dateRange = readDateRange(urlState);
+  // `''` while the range filters nothing, so revealing an empty Custom range neither refetches nor
+  // announces; the `DateRange` change handler below resets `skip` on the same key, so it stays put
+  // too.
+  const dateKey = dateRangeKey(dateRange);
+  const filterKey = JSON.stringify({ kind, runStatus: appliedRunStatus, dateKey });
 
-  // Only this, not the `Select`'s own value, drives the fetch — the filter applies on submit,
-  // not on every selection change.
-  const [draftRunStatus, setDraftRunStatus] = useState(appliedRunStatus);
   const [answers, setAnswers] = useState<Answer[] | null>(null);
   const [verifications, setVerifications] = useState<Verification[] | null>(null);
-  const [count, setCount] = useState(0);
+  // Split so a late response for the other kind can never land on this kind's total — a shared
+  // counter would still cross kinds even with the sequence guard below, since a same-kind guard
+  // says nothing about which kind a response belongs to.
+  const [answersCount, setAnswersCount] = useState(0);
+  const [verificationsCount, setVerificationsCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  // Bumped by the composer once a run has been seeded, so the history list refetches and the new
-  // `queued` row appears — the composer's own submit never navigates away from this page.
+  // Bumped by the composer once a run has been seeded or a run it started settles, so the history
+  // list refetches — the composer's own submit never navigates away from this page.
   const [reloadKey, setReloadKey] = useState(0);
+  const announceResult = useResultAnnouncer();
 
-  useEffect(() => {
-    if (kind === 'answers') {
-      listAnswers({
-        skip,
-        limit: PAGE_SIZE,
-        runStatus: appliedRunStatus === '' ? undefined : appliedRunStatus,
-        sort,
-        sortDir,
-      })
-        .then(({ docs, count: total }) => {
-          setAnswers(docs);
-          setCount(total);
-          setError(null);
+  useAbortableEffect(
+    (isCurrent) => {
+      if (kind === 'answers') {
+        // Resolved here, not during render: a `24h` range yields a different instant on every call.
+        const { from, to } = toDateRangeInstants(dateRange);
+        listAnswers({
+          skip,
+          limit: pageSize,
+          runStatus: appliedRunStatus === '' ? undefined : appliedRunStatus,
+          sort,
+          sortDir,
+          from,
+          to,
         })
-        .catch((err: unknown) => {
-          setError(err instanceof Error ? err.message : 'Failed to load answers');
-        });
-    } else {
-      listVerifications({ skip, limit: PAGE_SIZE, sort: 'createdAt', sortDir })
-        .then(({ docs, count: total }) => {
-          setVerifications(docs);
-          setCount(total);
-          setError(null);
-        })
-        .catch((err: unknown) => {
-          setError(err instanceof Error ? err.message : 'Failed to load verifications');
-        });
-    }
-  }, [kind, skip, appliedRunStatus, sort, sortDir, reloadKey]);
+          .then(({ docs, count: total }) => {
+            if (!isCurrent()) return;
+            setAnswers(docs);
+            setAnswersCount(total);
+            setError(null);
+            announceResult(filterKey, `${total} answer${total === 1 ? '' : 's'}`);
+          })
+          .catch((err: unknown) => {
+            if (!isCurrent()) return;
+            setError(err instanceof Error ? err.message : 'Failed to load answers');
+          });
+      } else {
+        listVerifications({ skip, limit: pageSize, sort: 'createdAt', sortDir })
+          .then(({ docs, count: total }) => {
+            if (!isCurrent()) return;
+            setVerifications(docs);
+            setVerificationsCount(total);
+            setError(null);
+            announceResult(filterKey, `${total} verification${total === 1 ? '' : 's'}`);
+          })
+          .catch((err: unknown) => {
+            if (!isCurrent()) return;
+            setError(err instanceof Error ? err.message : 'Failed to load verifications');
+          });
+      }
+    },
+    [
+      kind,
+      skip,
+      pageSize,
+      appliedRunStatus,
+      sort,
+      sortDir,
+      dateKey,
+      reloadKey,
+      filterKey,
+      announceResult,
+    ],
+  );
 
   // A rephrase link elsewhere carries `?q=` into this page; the composer adopts it into its draft
   // on render, and this strips it right after so a later reload can't overwrite a newer draft.
@@ -137,13 +184,8 @@ export default function AnswersPage() {
     if (urlState.q) setUrlState({ q: '' });
   }, [urlState.q, setUrlState]);
 
-  function handleApply() {
-    setUrlState({ runStatus: draftRunStatus, skip: URL_DEFAULTS.skip });
-  }
-
   function handleClear() {
-    setDraftRunStatus('');
-    setUrlState({ runStatus: '', skip: URL_DEFAULTS.skip });
+    setUrlState({ runStatus: '', range: '', from: '', to: '', skip: URL_DEFAULTS.skip });
   }
 
   function handleSort(field: AnswerSortField) {
@@ -156,43 +198,51 @@ export default function AnswersPage() {
   }
 
   function handleKindChange(next: HistoryKind) {
-    // The sort resets with the kind: `claimCoverage`/`runStatus` carried over from the answers
-    // kind would leave the verifications `Created` header reading as inactive.
-    setUrlState({ kind: next, skip: URL_DEFAULTS.skip, sort: URL_DEFAULTS.sort });
+    // Resets only the kind being switched to, and only here — never on a `skip`/`sort`/filter
+    // change, which would unmount the still-visible `Pager` mid-click. Without this, switching
+    // back to a kind visited earlier in the session would flash that stale page before the fresh
+    // fetch lands.
+    if (next === 'answers') {
+      setAnswers(null);
+    } else {
+      setVerifications(null);
+    }
+    // The sort resets with the kind: a `claimCoverage`/`runStatus` sort field carried over from
+    // the answers kind would leave the verifications `Created` header reading as inactive. The
+    // answer filters reset too — the verifications list takes no run-status or date params, so a
+    // filter left in the URL would silently narrow the answers list again on the way back, with
+    // the `FilterBar` unmounted and unable to show it.
+    setUrlState({
+      kind: next,
+      runStatus: '',
+      range: '',
+      from: '',
+      to: '',
+      skip: URL_DEFAULTS.skip,
+      sort: URL_DEFAULTS.sort,
+    });
   }
 
-  const hasFilter = kind === 'answers' && appliedRunStatus !== '';
+  const hasFilter = kind === 'answers' && (appliedRunStatus !== '' || isDateRangeActive(dateRange));
   const items = kind === 'answers' ? answers : verifications;
+  const count = kind === 'answers' ? answersCount : verificationsCount;
 
   let status: RecordListStatus;
   if (items === null) {
     status = error
       ? { kind: 'blank' }
       : { kind: 'loading', label: `Loading ${kind === 'answers' ? 'answers' : 'verifications'}…` };
-  } else if (items.length === 0) {
-    if (kind === 'verifications') {
-      status = {
-        kind: 'empty',
-        icon: <IconFileText size={24} />,
-        title: 'No verifications yet',
-        description: 'Runs of verify_claims over MCP appear here.',
-      };
-    } else if (hasFilter) {
-      status = {
-        kind: 'empty',
-        icon: <IconFileText size={24} />,
-        title: 'No answers match this filter',
-        description: 'Clear or adjust the run status filter above.',
-      };
-    } else {
-      status = {
-        kind: 'empty',
-        icon: <IconFileText size={24} />,
-        title: 'No answers yet',
-        description: 'Ask a question above to see it appear here.',
-      };
-    }
+  } else if (items.length === 0 && kind === 'verifications') {
+    status = {
+      kind: 'empty',
+      icon: <IconFileText size={24} />,
+      title: 'No verifications yet',
+      description: 'Runs of verify_claims over MCP appear here.',
+    };
   } else {
+    // Zero answer rows still resolves to `ready` rather than RecordListPage's own `empty` kind —
+    // that kind's EmptyState carries no `className`, and the unfiltered case needs
+    // `empty-state--zero` to read as an earned-zero state rather than a filtered-empty one.
     status = { kind: 'ready' };
   }
 
@@ -205,27 +255,39 @@ export default function AnswersPage() {
         <AnswerComposer
           initialQuestion={urlState.q}
           onRunStarted={() => setReloadKey((n) => n + 1)}
+          onRunSettled={() => setReloadKey((n) => n + 1)}
+        />
+      }
+      view={
+        <SegmentedControl<HistoryKind>
+          aria-label="History kind"
+          options={KIND_OPTIONS}
+          value={kind}
+          onChange={handleKindChange}
         />
       }
       filters={
-        <>
-          <SegmentedControl<HistoryKind>
-            aria-label="History kind"
-            options={KIND_OPTIONS}
-            value={kind}
-            onChange={handleKindChange}
-          />
-          {kind === 'answers' && (
-            <FilterBar onApply={handleApply} onClear={handleClear} hasFilter={hasFilter}>
-              <Select
-                label="Run status"
-                options={RUN_STATUS_OPTIONS}
-                value={draftRunStatus}
-                onChange={(value) => setDraftRunStatus(value as AnswerRunStatus | '')}
-              />
-            </FilterBar>
-          )}
-        </>
+        kind === 'answers' && (
+          <FilterBar label="Answer filters" onClear={handleClear} hasFilter={hasFilter}>
+            <Select
+              label="Run status"
+              width="sm"
+              options={RUN_STATUS_OPTIONS}
+              value={appliedRunStatus}
+              onChange={(value) => setUrlState({ runStatus: value, skip: URL_DEFAULTS.skip })}
+            />
+            <DateRange
+              label="Created"
+              value={dateRange}
+              onChange={(value) =>
+                setUrlState({
+                  ...writeDateRange(value),
+                  ...(dateRangeKey(value) !== dateKey ? { skip: URL_DEFAULTS.skip } : {}),
+                })
+              }
+            />
+          </FilterBar>
+        )
       }
       toolbarEnd={
         items && (
@@ -243,19 +305,52 @@ export default function AnswersPage() {
           <Pager
             count={count}
             skip={skip}
-            pageSize={PAGE_SIZE}
+            pageSize={pageSize}
             onSkipChange={(next) => setUrlState({ skip: String(next) })}
+            onPageSizeChange={(next) =>
+              setUrlState({ limit: String(next), skip: URL_DEFAULTS.skip })
+            }
+            pageSizeOptions={PAGE_SIZE_OPTIONS}
+            showJump
           />
         )
       }
     >
+      {kind === 'answers' && items && items.length === 0 && hasFilter && (
+        <EmptyState
+          icon={<IconFileText size={24} />}
+          title="No answers match this filter"
+          description="Clear or adjust the run status or date filter above."
+          action={
+            <Button variant="secondary" onClick={handleClear}>
+              Show all answers
+            </Button>
+          }
+        />
+      )}
+
+      {kind === 'answers' && items && items.length === 0 && !hasFilter && (
+        <EmptyState
+          className="empty-state--zero"
+          icon={<IconFileText size={24} />}
+          title="No answers yet"
+          description="Ask a question above to see it appear here."
+        />
+      )}
+
       {items && items.length > 0 && (
         <Panel aria-label="Answers and verifications">
-          <Table caption="Answers and verifications with their grounding">
+          <Table caption="Answers and verifications with their grounding" className="answers-grid">
+            <colgroup>
+              <col />
+              <col className="col-badge" />
+              <col className="col-compact" />
+              <col className="col-narrow" />
+              <col className="col-narrow" />
+            </colgroup>
             <thead>
               <tr>
                 <TableHeaderCell>Subject</TableHeaderCell>
-                <TableHeaderCell>Kind</TableHeaderCell>
                 {kind === 'answers' ? (
                   <SortableHeaderCell<AnswerSortField>
                     field="runStatus"
@@ -267,7 +362,7 @@ export default function AnswersPage() {
                 ) : (
                   <TableHeaderCell>Result</TableHeaderCell>
                 )}
-                <TableHeaderCell>Path</TableHeaderCell>
+                <TableHeaderCell>{PATH_HEADER[kind]}</TableHeaderCell>
                 {kind === 'answers' ? (
                   <SortableHeaderCell<AnswerSortField>
                     field="claimCoverage"
@@ -295,14 +390,11 @@ export default function AnswersPage() {
                     return (
                       <TableRow key={answer.id} to={`/answers/${answer.id}`}>
                         <TableCell label="Subject">
-                          <RowLink to={`/answers/${answer.id}`}>
-                            <span className="cell-truncate" title={answer.questionText}>
-                              {answer.questionText}
-                            </span>
-                          </RowLink>
-                        </TableCell>
-                        <TableCell label="Kind">
-                          <Badge tone="info">answer</Badge>
+                          <Tooltip content={answer.questionText}>
+                            <RowLink to={`/answers/${answer.id}`}>
+                              <span className="cell-truncate">{answer.questionText}</span>
+                            </RowLink>
+                          </Tooltip>
                         </TableCell>
                         <TableCell label="Result">
                           <Badge tone={badge.tone}>{badge.label}</Badge>
@@ -310,7 +402,7 @@ export default function AnswersPage() {
                             <Badge tone="caution">citation withdrawn</Badge>
                           )}
                         </TableCell>
-                        <TableCell label="Path">
+                        <TableCell label={PATH_HEADER.answers}>
                           {answer.answerPath ? (
                             <span className="mono">{answer.answerPath}</span>
                           ) : (
@@ -346,21 +438,20 @@ export default function AnswersPage() {
                       to={`/answers/verifications/${verification.id}`}
                     >
                       <TableCell label="Subject">
-                        <RowLink to={`/answers/verifications/${verification.id}`}>
-                          <span className="cell-truncate" title={verification.claims.join(' | ')}>
-                            {verification.claims[0]}
-                            {verification.claims.length > 1 &&
-                              ` +${verification.claims.length - 1} more`}
-                          </span>
-                        </RowLink>
-                      </TableCell>
-                      <TableCell label="Kind">
-                        <Badge tone="neutral">verification</Badge>
+                        <Tooltip content={verification.claims.join(' | ')}>
+                          <RowLink to={`/answers/verifications/${verification.id}`}>
+                            <span className="cell-truncate">
+                              {verification.claims[0]}
+                              {verification.claims.length > 1 &&
+                                ` +${verification.claims.length - 1} more`}
+                            </span>
+                          </RowLink>
+                        </Tooltip>
                       </TableCell>
                       <TableCell label="Result" className="mono">
                         {verdictTally(verification.results)}
                       </TableCell>
-                      <TableCell label="Path">
+                      <TableCell label={PATH_HEADER.verifications}>
                         <span className="mono">{verification.requestedBy.kind}</span>
                       </TableCell>
                       <TableCell label="Coverage">

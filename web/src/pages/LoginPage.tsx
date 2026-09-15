@@ -1,15 +1,17 @@
-import { useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { login, register } from '../api/client';
 import AuthCanvas from '../components/AuthCanvas';
+import Alert from '../components/ui/Alert';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
+import LinkButton from '../components/ui/LinkButton';
 import PasswordInput from '../components/ui/PasswordInput';
-import PasswordRules, {
-  PASSWORD_MAX_LENGTH,
-  PASSWORD_MIN_LENGTH,
-} from '../components/ui/PasswordRules';
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '../components/ui/PasswordRules';
+import { announce } from '../lib/announce';
 import { useFormSubmit } from '../lib/use-form-submit';
+import { resolveReturnTo } from '../lib/return-to';
+import { useSession } from '../lib/use-session';
 
 type Mode = 'login' | 'signup';
 type Field = 'email' | 'password';
@@ -24,6 +26,9 @@ interface CredentialsFormProps {
   onEmailChange: (value: string) => void;
   password: string;
   onPasswordChange: (value: string) => void;
+  /** Where a successful submit navigates to; computed once by the caller so the sign-in flow and
+   * the "already signed in" notice always agree on the same destination. */
+  returnTo: string;
 }
 
 /**
@@ -38,13 +43,27 @@ function CredentialsForm({
   onEmailChange,
   password,
   onPasswordChange,
+  returnTo,
 }: CredentialsFormProps) {
   const navigate = useNavigate();
+  const passwordMet =
+    password.length >= PASSWORD_MIN_LENGTH && password.length <= PASSWORD_MAX_LENGTH;
+  // Tracks the previous render's `passwordMet` so the announcement fires only on the transition
+  // to met, not on every keystroke once the rule is already satisfied.
+  const wasMetRef = useRef(passwordMet);
+
+  useEffect(() => {
+    if (mode === 'signup' && passwordMet && !wasMetRef.current) {
+      announce(`${PASSWORD_MIN_LENGTH}–${PASSWORD_MAX_LENGTH} characters — met`);
+    }
+    wasMetRef.current = passwordMet;
+  }, [mode, passwordMet]);
 
   function validate(): Partial<Record<Field, string>> {
     const errors: Partial<Record<Field, string>> = {};
-    if (!email.trim()) errors.email = 'Email is required.';
-    else if (!EMAIL_PATTERN.test(email)) errors.email = 'Enter a valid email address.';
+    const trimmed = email.trim();
+    if (!trimmed) errors.email = 'Email is required.';
+    else if (!EMAIL_PATTERN.test(trimmed)) errors.email = 'Enter a valid email address.';
 
     if (!password) {
       errors.password = 'Password is required.';
@@ -60,23 +79,20 @@ function CredentialsForm({
   }
 
   async function submit() {
-    if (mode === 'signup') await register(email, password);
-    await login(email, password);
-    await navigate('/');
+    const trimmed = email.trim();
+    if (mode === 'signup') await register(trimmed, password);
+    await login(trimmed, password);
+    await navigate(returnTo);
   }
 
-  const { pending, formError, onSubmit, fieldProps } = useFormSubmit<Field>({
+  const { pending, formError, cooldownSeconds, onSubmit, fieldProps } = useFormSubmit<Field>({
     validate,
     submit,
   });
 
   return (
     <>
-      {formError && (
-        <p className="error" role="alert">
-          {formError}
-        </p>
-      )}
+      {formError && <Alert tone="rejected">{formError}</Alert>}
       <form onSubmit={onSubmit} className="form" noValidate>
         <Input
           {...fieldProps('email')}
@@ -86,25 +102,33 @@ function CredentialsForm({
           onChange={onEmailChange}
           autoComplete="email"
         />
-        <div className="field">
-          <PasswordInput
-            {...fieldProps('password')}
-            label="Password"
-            value={password}
-            onChange={onPasswordChange}
-            autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-          />
-          {mode === 'signup' && <PasswordRules password={password} />}
-        </div>
-        <Button type="submit" variant="primary" className="auth-submit">
-          {pending
-            ? mode === 'login'
-              ? 'Signing in…'
-              : 'Creating account…'
-            : mode === 'login'
-              ? 'Sign in'
-              : 'Create an account'}
+        <PasswordInput
+          {...fieldProps('password')}
+          label="Password"
+          value={password}
+          onChange={onPasswordChange}
+          autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+          hint={
+            mode === 'signup'
+              ? `${PASSWORD_MIN_LENGTH}–${PASSWORD_MAX_LENGTH} characters${passwordMet ? ' — met' : ''}`
+              : undefined
+          }
+        />
+        <Button
+          type="submit"
+          variant="primary"
+          className="auth-submit"
+          busy={pending}
+          busyLabel={mode === 'login' ? 'Signing in…' : 'Creating workspace…'}
+          aria-disabled={cooldownSeconds > 0}
+        >
+          {mode === 'login' ? 'Sign in' : 'Create workspace'}
         </Button>
+        {cooldownSeconds > 0 && (
+          <span className="field-hint">
+            Try again in {cooldownSeconds} second{cooldownSeconds === 1 ? '' : 's'}.
+          </span>
+        )}
       </form>
     </>
   );
@@ -115,6 +139,9 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const location = useLocation();
+  const session = useSession();
+  const returnTo = resolveReturnTo(location.search);
 
   function toggleMode() {
     setMode((current) => (current === 'login' ? 'signup' : 'login'));
@@ -125,14 +152,33 @@ export default function LoginPage() {
 
   return (
     <AuthCanvas
-      title={mode === 'login' ? 'Sign in' : 'Create an account'}
+      title={mode === 'login' ? 'Sign in' : 'Create a new workspace'}
+      description={
+        mode === 'signup'
+          ? "This creates a new, separate workspace with you as its admin. Joining a colleague's workspace happens through their invitation link, not here."
+          : undefined
+      }
       ref={headingRef}
       footer={
         <Button type="button" variant="ghost" onClick={toggleMode}>
-          {mode === 'login' ? 'Need an account? Create one' : 'Have an account? Sign in'}
+          {mode === 'login'
+            ? 'Need a workspace? Create a new workspace'
+            : 'Have an account? Sign in'}
         </Button>
       }
     >
+      {session.status === 'authed' && (
+        <Alert
+          tone="info"
+          action={
+            <LinkButton to={returnTo} variant="secondary" size="sm">
+              Continue
+            </LinkButton>
+          }
+        >
+          You&apos;re already signed in.
+        </Alert>
+      )}
       <CredentialsForm
         key={mode}
         mode={mode}
@@ -140,6 +186,7 @@ export default function LoginPage() {
         onEmailChange={setEmail}
         password={password}
         onPasswordChange={setPassword}
+        returnTo={returnTo}
       />
     </AuthCanvas>
   );

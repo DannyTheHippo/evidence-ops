@@ -5,6 +5,8 @@ describe('workflowTypeLabel', () => {
   it('names each workflow type a run can carry', () => {
     expect(workflowTypeLabel('resolve-conflict')).toBe('Conflict resolution');
     expect(workflowTypeLabel('sync-source')).toBe('Source sync');
+    expect(workflowTypeLabel('answer-question')).toBe('Question answering');
+    expect(workflowTypeLabel('ingest-document-version')).toBe('Document ingest');
   });
 
   it('falls back to a generic label for a row written before the API recorded a type', () => {

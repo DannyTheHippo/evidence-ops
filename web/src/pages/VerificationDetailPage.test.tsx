@@ -1,9 +1,17 @@
-import { render, screen } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clearSession } from '../lib/auth';
 import { getBreadcrumbTrail } from '../lib/breadcrumbs';
 import VerificationDetailPage from './VerificationDetailPage';
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -36,18 +44,21 @@ const verification = {
   atoms: [],
   usage: { promptTokens: 100, completionTokens: 20, costUsd: 0.0025 },
   createdAt: new Date().toISOString(),
+  // The bundle no longer auto-fetches without a pinned hash — carried here so the existing
+  // auto-load cases keep exercising that path rather than flipping to the Generate button.
+  attestationHash: 'hash-1',
 };
 
 // A minimal bundle satisfying `AttestationBundleView`'s render — the fields under test here never
 // exercise its claim/decision rendering, only that the section mounts.
-function attestationResponse(): Response {
+function attestationResponse(subjectId = verification.id, claims = verification.claims): Response {
   return jsonResponse({
     schemaVersion: 1,
     kind: 'verification',
-    subjectId: verification.id,
+    subjectId,
     tenantId: 't',
     producedAt: new Date().toISOString(),
-    subject: { claims: verification.claims },
+    subject: { claims },
     outcome: null,
     claims: [],
     decisions: [],
@@ -58,7 +69,11 @@ function attestationResponse(): Response {
 
 // Dispatches by URL — the verification fetch, `useSession()`'s own `/auth/me` probe, and
 // `AttestationBundleView`'s `/attestation` fetch all share this one stubbed `fetch`.
-function stubFetch(me: typeof admin | typeof member | null, verificationResponse: Response) {
+function stubFetch(
+  me: typeof admin | typeof member | null,
+  verificationResponse: Response,
+  verificationId = 'ver-1',
+) {
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL) => {
@@ -66,9 +81,11 @@ function stubFetch(me: typeof admin | typeof member | null, verificationResponse
       if (url === '/api/v1/auth/me') {
         return me ? Promise.resolve(jsonResponse(me)) : Promise.resolve(jsonResponse({}, 401));
       }
-      if (url === '/api/v1/verifications/ver-1') return Promise.resolve(verificationResponse);
-      if (url === '/api/v1/verifications/ver-1/attestation') {
-        return Promise.resolve(attestationResponse());
+      if (url === `/api/v1/verifications/${verificationId}`) {
+        return Promise.resolve(verificationResponse);
+      }
+      if (url === `/api/v1/verifications/${verificationId}/attestation`) {
+        return Promise.resolve(attestationResponse(verificationId));
       }
       if (url.startsWith('/api/v1/documents/versions/lookup')) {
         return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
@@ -161,5 +178,96 @@ describe('VerificationDetailPage', () => {
     renderAt('ver-1');
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Verification unavailable');
+  });
+
+  it('renders each claim verdict without the attestation bundle', async () => {
+    stubFetch(
+      member,
+      jsonResponse({
+        ...verification,
+        claims: ['The cap rate is approximately 6.10%.', 'Occupancy is 92%.'],
+        results: [
+          { claimIndex: 0, verdict: 'grounded', citations: [] },
+          { claimIndex: 1, verdict: 'not_grounded', reasonCode: 'no_citation', citations: [] },
+        ],
+      }),
+    );
+
+    renderAt('ver-1');
+
+    expect(await screen.findByText('grounded')).toBeInTheDocument();
+    expect(screen.getByText('not grounded')).toBeInTheDocument();
+    expect(screen.getByText('no_citation')).toBeInTheDocument();
+    expect(screen.getByText('Occupancy is 92%.')).toBeInTheDocument();
+  });
+
+  it('shows a placeholder row for a claim with no recorded result', async () => {
+    stubFetch(
+      member,
+      jsonResponse({
+        ...verification,
+        claims: ['The cap rate is approximately 6.10%.', 'Occupancy is 92%.'],
+        results: [{ claimIndex: 0, verdict: 'grounded', citations: [] }],
+      }),
+    );
+
+    renderAt('ver-1');
+
+    expect(await screen.findByText('Occupancy is 92%.')).toBeInTheDocument();
+    expect(screen.getByText('No result recorded')).toBeInTheDocument();
+  });
+
+  it('does not render a stale verification that resolves after navigating away', async () => {
+    const first = deferred<Response>();
+    const verificationOne = { ...verification, id: 'ver-1', claims: ['First claim'] };
+    const verificationTwo = { ...verification, id: 'ver-2', claims: ['Second claim'] };
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : '';
+        if (url === '/api/v1/auth/me') return Promise.resolve(jsonResponse(member));
+        if (url === '/api/v1/verifications/ver-1') return first.promise;
+        if (url === '/api/v1/verifications/ver-1/attestation') {
+          return Promise.resolve(attestationResponse('ver-1', verificationOne.claims));
+        }
+        if (url === '/api/v1/verifications/ver-2') {
+          return Promise.resolve(jsonResponse(verificationTwo));
+        }
+        if (url === '/api/v1/verifications/ver-2/attestation') {
+          return Promise.resolve(attestationResponse('ver-2', verificationTwo.claims));
+        }
+        if (url.startsWith('/api/v1/documents/versions/lookup')) {
+          return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+        }
+        return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/answers/verifications/ver-1']}>
+        <Link to="/answers/verifications/ver-2">Go to second verification</Link>
+        <Routes>
+          <Route path="/answers/verifications/:id" element={<VerificationDetailPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Loading verification…');
+
+    fireEvent.click(screen.getByText('Go to second verification'));
+
+    expect(await screen.findByRole('heading', { name: 'Second claim' })).toBeInTheDocument();
+
+    // The first verification's request finally settles after navigation moved to the second —
+    // its `id`-keyed effect was already cleaned up, so this must not overwrite what's rendered.
+    first.resolve(jsonResponse(verificationOne));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByRole('heading', { name: 'First claim' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Second claim' })).toBeInTheDocument();
   });
 });

@@ -24,12 +24,13 @@ export default function PasswordInput({
   error,
   value,
   onChange,
+  'aria-describedby': describedBy,
   ...rest
 }: PasswordInputProps) {
   const [visible, setVisible] = useState(false);
 
   return (
-    <Field id={id} label={label} hint={hint} error={error}>
+    <Field id={id} label={label} hint={hint} error={error} describedBy={describedBy}>
       {(inputProps) => (
         <div className="password-input">
           <input
@@ -41,11 +42,11 @@ export default function PasswordInput({
           />
           <button
             type="button"
-            className="btn--icon password-input-toggle"
-            aria-pressed={visible}
+            className="password-input-toggle"
+            aria-controls={inputProps.id}
             onClick={() => setVisible((was) => !was)}
           >
-            {visible ? 'Hide' : 'Show'}
+            {visible ? 'Hide password' : 'Show password'}
           </button>
         </div>
       )}

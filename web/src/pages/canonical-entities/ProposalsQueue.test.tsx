@@ -1,6 +1,9 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import { useState } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CanonicalEntity } from '../../api/client';
+import type { ResolvedVersion } from '../../lib/document-index';
 import ProposalsQueue from './ProposalsQueue';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -35,6 +38,27 @@ const entityWithNoProposals: CanonicalEntity = {
   createdAt: '2026-07-02T00:00:00.000Z',
 };
 
+// Most cases carry no resolved document, so the row falls back to the raw version id and never
+// touches the workbench `Link` — those cases render outside a `MemoryRouter` without issue.
+const emptyDocumentIndex = new Map<string, ResolvedVersion>();
+
+// Patches a decision back into `entities` the way CanonicalEntitiesPage does, so a decided row
+// actually leaves the queue — a static `entities` prop keeps every row mounted and proves nothing
+// about what happens to focus when one goes.
+function StatefulQueue({ initial }: { initial: CanonicalEntity[] }) {
+  const [entities, setEntities] = useState(initial);
+  return (
+    <ProposalsQueue
+      entities={entities}
+      documentIndex={emptyDocumentIndex}
+      onEntityChanged={(updated) =>
+        setEntities((current) => current.map((row) => (row.id === updated.id ? updated : row)))
+      }
+      onScanned={() => Promise.resolve()}
+    />
+  );
+}
+
 describe('ProposalsQueue', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -45,6 +69,7 @@ describe('ProposalsQueue', () => {
     render(
       <ProposalsQueue
         entities={[entityWithNoProposals]}
+        documentIndex={emptyDocumentIndex}
         onEntityChanged={() => {}}
         onScanned={() => Promise.resolve()}
       />,
@@ -54,10 +79,11 @@ describe('ProposalsQueue', () => {
     expect(screen.getAllByRole('button', { name: 'Scan for near matches' })).toHaveLength(1);
   });
 
-  it('lists a proposal with its citation, only for rows carrying one', () => {
+  it('lists a proposal with its citation, only for rows carrying one', async () => {
     render(
       <ProposalsQueue
         entities={[entityWithProposal, entityWithNoProposals]}
+        documentIndex={emptyDocumentIndex}
         onEntityChanged={() => {}}
         onScanned={() => Promise.resolve()}
       />,
@@ -73,18 +99,47 @@ describe('ProposalsQueue', () => {
     expect(screen.getByText('Acme Tower')).toBeInTheDocument();
     expect(screen.getByText('Acme Tower, LLC')).toBeInTheDocument();
     expect(screen.getByText('p.2')).toBeInTheDocument();
-    // The quote carries the full text in its title, since the rendered text clamps to two lines.
-    expect(screen.getByTitle(proposedAlias.quote)).toHaveTextContent(
-      /Acme Tower, LLC reported NOI/,
-    );
+    // Clamped to two lines, so keyboard focus on the quote opens the full text.
+    const quote = screen.getByText(/Acme Tower, LLC reported NOI/);
+    expect(quote).toHaveAttribute('tabindex', '0');
+    quote.focus();
+    const quoteTooltip = await screen.findByRole('tooltip');
+    expect(quoteTooltip).toHaveTextContent(proposedAlias.quote);
+    expect(quote).toHaveAttribute('aria-describedby', quoteTooltip.id);
+    // The document is unresolved, so the evidence falls back to the raw version id.
+    expect(screen.getByText('version-1')).toBeInTheDocument();
     // Southpark Commons carries no proposal and never appears as a row.
     expect(screen.queryByText('Southpark Commons')).not.toBeInTheDocument();
+  });
+
+  it("links a proposal's evidence to the document workbench", () => {
+    const documentIndex = new Map<string, ResolvedVersion>([
+      [
+        'version-1',
+        { documentId: 'doc-1', documentTitle: 'Rent Roll Q1', withdrawn: false, sourceKind: 'pdf' },
+      ],
+    ]);
+
+    render(
+      <MemoryRouter>
+        <ProposalsQueue
+          entities={[entityWithProposal]}
+          documentIndex={documentIndex}
+          onEntityChanged={() => {}}
+          onScanned={() => Promise.resolve()}
+        />
+      </MemoryRouter>,
+    );
+
+    const link = screen.getByRole('link', { name: 'Rent Roll Q1' });
+    expect(link).toHaveAttribute('href', '/documents/doc-1/versions/version-1');
   });
 
   it('counts only the proposals from the entities this page loaded, singular and plural alike', () => {
     const { rerender } = render(
       <ProposalsQueue
         entities={[entityWithProposal]}
+        documentIndex={emptyDocumentIndex}
         onEntityChanged={() => {}}
         onScanned={() => Promise.resolve()}
       />,
@@ -98,6 +153,7 @@ describe('ProposalsQueue', () => {
     rerender(
       <ProposalsQueue
         entities={[entityWithProposal, secondEntityWithProposal]}
+        documentIndex={emptyDocumentIndex}
         onEntityChanged={() => {}}
         onScanned={() => Promise.resolve()}
       />,
@@ -109,13 +165,18 @@ describe('ProposalsQueue', () => {
     render(
       <ProposalsQueue
         entities={[entityWithProposal]}
+        documentIndex={emptyDocumentIndex}
         onEntityChanged={() => {}}
         onScanned={() => Promise.resolve()}
       />,
     );
 
-    expect(screen.getByRole('button', { name: 'Confirm' })).toHaveClass('btn--primary', 'btn--sm');
-    expect(screen.getByRole('button', { name: 'Reject' })).toHaveClass('btn--ghost', 'btn--sm');
+    expect(
+      screen.getByRole('button', { name: 'Confirm "Acme Tower, LLC" for "Acme Tower"' }),
+    ).toHaveClass('btn--primary', 'btn--sm');
+    expect(
+      screen.getByRole('button', { name: 'Reject "Acme Tower, LLC" for "Acme Tower"' }),
+    ).toHaveClass('btn--ghost', 'btn--sm');
   });
 
   it('confirms a proposal, notifying and handing the updated row back to the caller', async () => {
@@ -136,12 +197,15 @@ describe('ProposalsQueue', () => {
     render(
       <ProposalsQueue
         entities={[entityWithProposal]}
+        documentIndex={emptyDocumentIndex}
         onEntityChanged={onEntityChanged}
         onScanned={() => Promise.resolve()}
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Confirm "Acme Tower, LLC" for "Acme Tower"' }),
+    );
 
     await vi.waitFor(() => expect(onEntityChanged).toHaveBeenCalledWith(applied));
   });
@@ -164,19 +228,22 @@ describe('ProposalsQueue', () => {
     render(
       <ProposalsQueue
         entities={[entityWithProposal]}
+        documentIndex={emptyDocumentIndex}
         onEntityChanged={onEntityChanged}
         onScanned={() => Promise.resolve()}
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Reject "Acme Tower, LLC" for "Acme Tower"' }),
+    );
     expect(screen.getByRole('dialog', { name: 'Reject "Acme Tower, LLC"?' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Reject alias' }));
 
     await vi.waitFor(() => expect(onEntityChanged).toHaveBeenCalledWith(revoked));
   });
 
-  it('disables both reject-dialog buttons while the request is in flight, blocking a second click', async () => {
+  it('marks the reject-dialog confirm button busy and disables Cancel while the request is in flight, blocking a second click', async () => {
     let resolveReject: (response: Response) => void = () => {};
     const fetchMock = vi.fn((url: string) => {
       if (url === '/api/v1/canonical-entities/entity-1/harvested-aliases/revoke') {
@@ -191,16 +258,32 @@ describe('ProposalsQueue', () => {
     render(
       <ProposalsQueue
         entities={[entityWithProposal]}
+        documentIndex={emptyDocumentIndex}
         onEntityChanged={() => {}}
         onScanned={() => Promise.resolve()}
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Reject "Acme Tower, LLC" for "Acme Tower"' }),
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Reject alias' }));
 
-    expect(screen.getByRole('button', { name: 'Reject alias…' })).toBeDisabled();
+    const busyButton = screen.getByRole('button', { name: 'Reject alias…' });
+    expect(busyButton).toHaveAttribute('aria-busy', 'true');
+    // Busy, not disabled — it holds focus while the request is in flight and guards its own click.
+    expect(busyButton).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+
+    const rejectCallsBeforeSecondClick = fetchMock.mock.calls.filter(
+      ([url]) => url === '/api/v1/canonical-entities/entity-1/harvested-aliases/revoke',
+    ).length;
+    fireEvent.click(busyButton);
+    expect(
+      fetchMock.mock.calls.filter(
+        ([url]) => url === '/api/v1/canonical-entities/entity-1/harvested-aliases/revoke',
+      ).length,
+    ).toBe(rejectCallsBeforeSecondClick);
 
     resolveReject(
       jsonResponse({
@@ -209,6 +292,56 @@ describe('ProposalsQueue', () => {
       }),
     );
     await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('moves focus off the decided row instead of dropping it to the body', async () => {
+    const secondAlias = { ...proposedAlias, alias: 'Southpark Cmns' };
+    const secondEntity: CanonicalEntity = {
+      ...entityWithNoProposals,
+      harvestedAliases: [secondAlias],
+    };
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/canonical-entities/entity-1/harvested-aliases/apply') {
+        return Promise.resolve(
+          jsonResponse({
+            ...entityWithProposal,
+            harvestedAliases: [{ ...proposedAlias, status: 'applied' }],
+          }),
+        );
+      }
+      if (url === '/api/v1/canonical-entities/entity-2/harvested-aliases/apply') {
+        return Promise.resolve(
+          jsonResponse({
+            ...secondEntity,
+            harvestedAliases: [{ ...secondAlias, status: 'applied' }],
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<StatefulQueue initial={[entityWithProposal, secondEntity]} />);
+
+    const [firstConfirm, secondConfirm] = screen.getAllByRole('button', { name: /^Confirm "/ });
+    firstConfirm.focus();
+    fireEvent.click(firstConfirm);
+
+    // In flight, and still holding focus — the row goes busy rather than disabled, so nothing is
+    // dropped to <body> before the row itself leaves.
+    expect(firstConfirm).toHaveAttribute('aria-busy', 'true');
+    expect(firstConfirm).toBeEnabled();
+    expect(firstConfirm).toHaveFocus();
+
+    // The decided row unmounts; focus lands on the row that took its place, not on <body>.
+    await vi.waitFor(() => expect(secondConfirm).toHaveFocus());
+
+    fireEvent.click(secondConfirm);
+
+    // Nothing is left to review, so the queue's own heading takes focus.
+    await vi.waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Proposed aliases' })).toHaveFocus(),
+    );
   });
 
   it('shows a confirm decision error on the shared error surface, not inside the row, and leaves the row for a retry', async () => {
@@ -220,17 +353,22 @@ describe('ProposalsQueue', () => {
     render(
       <ProposalsQueue
         entities={[entityWithProposal]}
+        documentIndex={emptyDocumentIndex}
         onEntityChanged={() => {}}
         onScanned={() => Promise.resolve()}
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Confirm "Acme Tower, LLC" for "Acme Tower"' }),
+    );
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Row changed underneath it');
     expect(alert.closest('tr')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Confirm' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Confirm "Acme Tower, LLC" for "Acme Tower"' }),
+    ).toBeInTheDocument();
   });
 
   it('scans for near matches and reloads through the caller-supplied callback', async () => {
@@ -246,6 +384,7 @@ describe('ProposalsQueue', () => {
     render(
       <ProposalsQueue
         entities={[entityWithNoProposals]}
+        documentIndex={emptyDocumentIndex}
         onEntityChanged={() => {}}
         onScanned={onScanned}
       />,
@@ -265,6 +404,7 @@ describe('ProposalsQueue', () => {
     render(
       <ProposalsQueue
         entities={[entityWithNoProposals]}
+        documentIndex={emptyDocumentIndex}
         onEntityChanged={() => {}}
         onScanned={() => Promise.resolve()}
       />,

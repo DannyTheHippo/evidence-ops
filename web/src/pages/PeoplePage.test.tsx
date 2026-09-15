@@ -16,7 +16,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 const ME_URL = '/api/v1/auth/me';
 const DEFAULT_MEMBERS_URL = '/api/v1/users?skip=0&limit=25&sort=email&sortDir=asc';
-const DEFAULT_INVITATIONS_URL = '/api/v1/invitations?skip=0&limit=25';
+const DEFAULT_INVITATIONS_URL = '/api/v1/invitations?skip=0&limit=25&sort=createdAt&sortDir=desc';
 
 const admin = {
   id: 'user-1',
@@ -123,7 +123,7 @@ describe('PeoplePage', () => {
     await screen.findByText('admin@example.com');
     switchToInvitations();
 
-    expect(await screen.findByText('colleague@example.com')).toBeInTheDocument();
+    expect(await screen.findByRole('cell', { name: 'colleague@example.com' })).toBeInTheDocument();
     expect(screen.getByText('pending')).toBeInTheDocument();
 
     expect(
@@ -153,6 +153,20 @@ describe('PeoplePage', () => {
     const memberRow = screen.getByText('member@example.com').closest('tr');
     expect(adminRow).toHaveTextContent('(you)');
     expect(memberRow).not.toHaveTextContent('(you)');
+  });
+
+  it('never offers to remove your own membership', async () => {
+    stubFetch({
+      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
+    });
+
+    renderPage();
+    await screen.findByText('admin@example.com');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for admin@example.com' }));
+
+    expect(screen.getByRole('menuitem', { name: 'Revoke sessions' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Remove member' })).not.toBeInTheDocument();
   });
 
   it('changes a member to admin via the kebab menu and updates the row in place', async () => {
@@ -230,6 +244,23 @@ describe('PeoplePage', () => {
     });
     expect(within(dialog).getByText(/browser session/i)).toBeInTheDocument();
     expect(within(dialog).getByText(/API key/i)).toBeInTheDocument();
+  });
+
+  it('warns that revoking your own sessions signs you out here too', async () => {
+    stubFetch({
+      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
+    });
+
+    renderPage();
+    await screen.findByText('admin@example.com');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for admin@example.com' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Revoke sessions' }));
+
+    const dialog = screen.getByRole('dialog', {
+      name: 'Revoke sessions for "admin@example.com"?',
+    });
+    expect(within(dialog).getByText(/signs you out of this browser too/i)).toBeInTheDocument();
   });
 
   it('confirming a session revocation calls the API and closes the dialog', async () => {
@@ -330,7 +361,7 @@ describe('PeoplePage', () => {
   it('reproduces the Invitations segment, paged, from a deep link', async () => {
     stubFetch({
       [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
-      '/api/v1/invitations?skip=25&limit=25': () =>
+      '/api/v1/invitations?skip=25&limit=25&sort=createdAt&sortDir=desc': () =>
         jsonResponse({ docs: [pendingInvitation], count: 30 }),
     });
 
@@ -339,7 +370,48 @@ describe('PeoplePage', () => {
     expect(
       await screen.findByRole('region', { name: 'Invitations minted for this tenant' }),
     ).toBeInTheDocument();
-    expect(screen.getByText('colleague@example.com')).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: 'colleague@example.com' })).toBeInTheDocument();
+  });
+
+  it('renders the Members segment, pressed, when the view query param is unrecognized', async () => {
+    stubFetch({
+      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
+    });
+
+    renderPage(['/people?view=bogus']);
+
+    expect(await screen.findByText('admin@example.com')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Members' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('clamps an invalid limit or skip on either list to its default, and the view switch still works', async () => {
+    stubFetch({
+      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
+      [DEFAULT_INVITATIONS_URL]: () => jsonResponse({ docs: [pendingInvitation], count: 1 }),
+    });
+
+    renderPage(['/people?limit=7&skip=-1&invLimit=x&invSkip=-3']);
+
+    expect(await screen.findByText('admin@example.com')).toBeInTheDocument();
+
+    switchToInvitations();
+    expect(await screen.findByRole('cell', { name: 'colleague@example.com' })).toBeInTheDocument();
+  });
+
+  it('falls back to the default sort and direction on either list for a hand-edited URL', async () => {
+    stubFetch({
+      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
+      [DEFAULT_INVITATIONS_URL]: () => jsonResponse({ docs: [pendingInvitation], count: 1 }),
+    });
+
+    renderPage(['/people?sort=bogus&sortDir=up&invSort=bogus&invSortDir=up']);
+
+    expect(await screen.findByText('admin@example.com')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    switchToInvitations();
+    expect(await screen.findByRole('cell', { name: 'colleague@example.com' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('shows a fragment-carried invite link exactly once at mint, switching to the Invitations segment', async () => {
@@ -368,12 +440,15 @@ describe('PeoplePage', () => {
       expect.stringContaining(`mailto:${mintedInvitation.email}`),
     );
     // The mint switches the page onto the Invitations segment and moves focus onto the panel
-    // holding the one copy of the link that will ever exist — deferred a frame, so this settles
-    // rather than asserting synchronously.
-    expect(screen.getByRole('button', { name: 'Invitations' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
+    // holding the one copy of the link that will ever exist. The segment switch round-trips
+    // through the URL (react-router's setSearchParams), which commits a render after the one
+    // that painted the link text above.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Invitations' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+    });
     await waitFor(() => {
       expect(document.activeElement).toHaveClass('secret-reveal');
     });
@@ -384,6 +459,69 @@ describe('PeoplePage', () => {
     expect(JSON.parse((mintCall?.[1] as RequestInit).body as string)).toEqual({
       email: 'new-hire@example.com',
       role: 'member',
+    });
+  });
+
+  it('keeps the one-time invite link on screen across a segment switch', async () => {
+    stubFetch({
+      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
+      '/api/v1/invitations': (init) =>
+        init?.method === 'POST'
+          ? jsonResponse(mintedInvitation, 201)
+          : Promise.reject(new Error('unexpected method')),
+    });
+
+    renderPage();
+    await screen.findByText('admin@example.com');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Invite member' }));
+    const dialog = screen.getByRole('dialog', { name: 'Invite member' });
+    fireEvent.change(within(dialog).getByLabelText('Email'), {
+      target: { value: 'new-hire@example.com' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Invite' }));
+
+    const expectedLink = `${window.location.origin}/invite#token=${mintedInvitation.token}`;
+    expect(await screen.findByText(expectedLink)).toBeInTheDocument();
+
+    // The panel is rendered at page level, outside both view branches, so switching segments
+    // cannot unmount it while it holds the only copy of a live token.
+    fireEvent.click(screen.getByRole('button', { name: 'Members' }));
+    expect(screen.getByText(expectedLink)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Invitations' }));
+    expect(screen.getByText(expectedLink)).toBeInTheDocument();
+  });
+
+  it('never keeps a minted token in list state, refetching the wire shape instead', async () => {
+    const fetchMock = stubFetch({
+      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
+      [DEFAULT_INVITATIONS_URL]: () => jsonResponse({ docs: [pendingInvitation], count: 1 }),
+      '/api/v1/invitations': (init) =>
+        init?.method === 'POST'
+          ? jsonResponse(mintedInvitation, 201)
+          : Promise.reject(new Error('unexpected method')),
+    });
+
+    renderPage();
+    await screen.findByText('admin@example.com');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Invite member' }));
+    const dialog = screen.getByRole('dialog', { name: 'Invite member' });
+    fireEvent.change(within(dialog).getByLabelText('Email'), {
+      target: { value: 'new-hire@example.com' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Invite' }));
+
+    // The row that appears comes from the list endpoint's own response, never from splicing the
+    // minted shape (token included) directly into state.
+    expect(await screen.findByRole('cell', { name: 'colleague@example.com' })).toBeInTheDocument();
+    expect(screen.queryByRole('cell', { name: mintedInvitation.email })).not.toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.filter(([url]) => url === DEFAULT_INVITATIONS_URL).length).toBe(
+        2,
+      );
     });
   });
 
@@ -446,9 +584,9 @@ describe('PeoplePage', () => {
     renderPage();
     await screen.findByText('admin@example.com');
     switchToInvitations();
-    await screen.findByText('colleague@example.com');
+    await screen.findByRole('cell', { name: 'colleague@example.com' });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Resend' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Resend/ }));
 
     const dialog = screen.getByRole('dialog', {
       name: `Resend the invitation to "${pendingInvitation.email}"?`,
@@ -472,9 +610,9 @@ describe('PeoplePage', () => {
     renderPage();
     await screen.findByText('admin@example.com');
     switchToInvitations();
-    await screen.findByText('colleague@example.com');
+    await screen.findByRole('cell', { name: 'colleague@example.com' });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Resend' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Resend/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Resend invitation' }));
 
     const expectedLink = `${window.location.origin}/invite#token=${resent.token}`;
@@ -482,7 +620,7 @@ describe('PeoplePage', () => {
     expect(screen.getByText(/previous link has already stopped working/i)).toBeInTheDocument();
   });
 
-  it('revoking an invitation marks it revoked and hides its actions', async () => {
+  it('revoking an invitation marks it revoked, hides its actions and focuses its row', async () => {
     stubFetch({
       [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
       [DEFAULT_INVITATIONS_URL]: () => jsonResponse({ docs: [pendingInvitation], count: 1 }),
@@ -495,16 +633,46 @@ describe('PeoplePage', () => {
     renderPage();
     await screen.findByText('admin@example.com');
     switchToInvitations();
-    await screen.findByText('colleague@example.com');
+    const emailCell = await screen.findByRole('cell', { name: 'colleague@example.com' });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Revoke' }));
+    // fireEvent.click moves no focus, so the opener is focused first, as a real press would.
+    const opener = screen.getByRole('button', { name: /^Revoke/ });
+    opener.focus();
+    fireEvent.click(opener);
     fireEvent.click(screen.getByRole('button', { name: 'Revoke invitation' }));
 
     await waitFor(() => {
       expect(screen.getByText('revoked')).toBeInTheDocument();
     });
-    expect(screen.queryByRole('button', { name: 'Resend' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Revoke' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Resend/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Revoke/ })).not.toBeInTheDocument();
+    // The revoke removed the opener, so focus lands on the row rather than on `body`.
+    expect(emailCell.closest('tr')).toHaveFocus();
+    expect(document.body).not.toHaveFocus();
+  });
+
+  it('sorts invitations by a column, writing the sort into the URL', async () => {
+    const fetchMock = stubFetch({
+      [DEFAULT_MEMBERS_URL]: () => jsonResponse({ docs: [admin], count: 1 }),
+      [DEFAULT_INVITATIONS_URL]: () => jsonResponse({ docs: [pendingInvitation], count: 1 }),
+      '/api/v1/invitations?skip=0&limit=25&sort=email&sortDir=desc': () =>
+        jsonResponse({ docs: [pendingInvitation], count: 1 }),
+    });
+
+    renderPage();
+    await screen.findByText('admin@example.com');
+    switchToInvitations();
+    await screen.findByRole('cell', { name: 'colleague@example.com' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sort by Email' }));
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(
+          ([url]) => url === '/api/v1/invitations?skip=0&limit=25&sort=email&sortDir=desc',
+        ),
+      ).toBe(true);
+    });
   });
 
   it('admits an admin to the route wrapped in RequireAdmin', async () => {
@@ -530,7 +698,7 @@ describe('PeoplePage', () => {
     expect(await screen.findByRole('heading', { name: 'People' })).toBeInTheDocument();
   });
 
-  it('bounces a member away from the route wrapped in RequireAdmin', async () => {
+  it('shows a member the 403 view for the route wrapped in RequireAdmin', async () => {
     stubFetch({}, () => jsonResponse(member));
 
     render(
@@ -549,7 +717,10 @@ describe('PeoplePage', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('home probe')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { level: 1, name: "You don't have access to this page" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('home probe')).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'People' })).not.toBeInTheDocument();
   });
 });

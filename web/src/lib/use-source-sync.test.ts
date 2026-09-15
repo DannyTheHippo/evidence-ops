@@ -1,6 +1,6 @@
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { WorkflowRun } from '../api/client';
+import type { Source, WorkflowRun } from '../api/client';
 import { clearToasts, getToasts } from '../components/ui/toast';
 import { useSourceSync } from './use-source-sync';
 
@@ -11,7 +11,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-// Dispatches by URL and method, matching SourcesPage.test.tsx's stubFetch shape.
+// Dispatches by URL, matching SourcesPage.test.tsx's stubFetch shape.
 type RouteHandler = (init?: RequestInit) => Response | Promise<Response>;
 
 function stubFetch(routes: Record<string, RouteHandler>) {
@@ -24,19 +24,9 @@ function stubFetch(routes: Record<string, RouteHandler>) {
   return fetchMock;
 }
 
-// A fetch response the test releases by hand, so an in-flight poll can be made to land after a
-// later one — the ordering a wall-clock delay can only approximate.
-function deferredResponse(body: unknown): { response: Promise<Response>; release: () => void } {
-  let release!: () => void;
-  const response = new Promise<Response>((resolve) => {
-    release = () => resolve(jsonResponse(body));
-  });
-  return { response, release };
-}
-
 // Drives the fake clock and lets each fetch settle through its response-parsing promise chain, so
 // assertions read committed state instead of racing it.
-async function tick(ms = 0): Promise<void> {
+async function tick(ms: number): Promise<void> {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(ms);
     await vi.advanceTimersByTimeAsync(0);
@@ -53,6 +43,24 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   };
 }
 
+function makeSource(overrides: Partial<Source> = {}): Source {
+  return {
+    id: 'source-1',
+    name: 'Deal Room Inbox',
+    kind: 'local-folder',
+    path: 'deal-room',
+    enabled: true,
+    fileCount: 3,
+    connectivity: 'connector',
+    reachability: 'live',
+    owner: 'Jane Doe, IT',
+    tracked: true,
+    sourceClass: 'unclassified',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
 describe('useSourceSync', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -61,26 +69,31 @@ describe('useSourceSync', () => {
     clearToasts();
   });
 
-  it('starts a sync, holds the returned run, and toasts success', async () => {
-    const run = makeRun({ status: 'completed' });
+  it('toasts "Sync requested" whether or not a loop was already running', async () => {
+    vi.useFakeTimers();
     stubFetch({
-      '/api/v1/sources/source-1/sync': () => jsonResponse(run, 201),
+      '/api/v1/sources/source-1/sync': () => jsonResponse(makeRun(), 201),
+      '/api/v1/sources/source-2/sync': () =>
+        jsonResponse(makeRun({ id: 'run-2', workflowId: 'wf-2' }), 200),
     });
 
-    const { result } = renderHook(() => useSourceSync(5));
-
+    const { result: freshStart } = renderHook(() => useSourceSync(5));
     await act(async () => {
-      await result.current.startSync('source-1', 'Deal Room Inbox');
+      await freshStart.current.startSync('source-1', 'Deal Room Inbox');
     });
 
-    expect(result.current.run).toEqual(run);
-    expect(result.current.isPolling).toBe(false);
-    expect(getToasts()).toContainEqual(
-      expect.objectContaining({ kind: 'success', message: 'Sync started for Deal Room Inbox.' }),
-    );
+    const { result: alreadyRunning } = renderHook(() => useSourceSync(5));
+    await act(async () => {
+      await alreadyRunning.current.startSync('source-2', 'Filing Cabinet');
+    });
+
+    expect(getToasts()).toEqual([
+      expect.objectContaining({ kind: 'success', message: 'Sync requested for Deal Room Inbox.' }),
+      expect.objectContaining({ kind: 'success', message: 'Sync requested for Filing Cabinet.' }),
+    ]);
   });
 
-  it('reports a failed start without leaving starting stuck true, and toasts the error', async () => {
+  it('keeps the error inline and leaves the toast store empty on a failed start', async () => {
     stubFetch({
       '/api/v1/sources/source-1/sync': () =>
         jsonResponse({ message: 'Sync already in progress' }, 409),
@@ -94,51 +107,109 @@ describe('useSourceSync', () => {
 
     expect(result.current.syncError).toBe('Sync already in progress');
     expect(result.current.starting).toBe(false);
-    expect(getToasts()).toContainEqual(
-      expect.objectContaining({ kind: 'error', message: 'Sync already in progress' }),
-    );
+    expect(result.current.sweepState).toBe('idle');
+    expect(getToasts()).toEqual([]);
   });
 
-  it('stops polling the sync run once it reaches a terminal state', async () => {
-    const runningRun = makeRun({ status: 'running' });
-    const completedRun = makeRun({ status: 'completed' });
-
-    const fetchMock = stubFetch({
-      '/api/v1/sources/source-1/sync': () => jsonResponse(runningRun, 201),
-      '/api/v1/workflow-runs/run-1': () => jsonResponse(completedRun),
+  it('polls the source until lastSyncAt advances past the request, then settles once', async () => {
+    vi.useFakeTimers();
+    const before = new Date(0).toISOString();
+    const onSettled = vi.fn();
+    let call = 0;
+    stubFetch({
+      '/api/v1/sources/source-1/sync': () => jsonResponse(makeRun(), 201),
+      '/api/v1/sources/source-1': () => {
+        call += 1;
+        // The first two reads still carry the sync-before-request timestamp; only the third
+        // reflects a sweep that started after `startSync` recorded `requestedAt`.
+        const lastSyncAt = call < 3 ? before : new Date(Date.now()).toISOString();
+        return jsonResponse(makeSource({ lastSyncAt, lastSyncStatus: 'ok' }));
+      },
     });
 
-    const { result } = renderHook(() => useSourceSync(5));
+    const { result } = renderHook(() => useSourceSync(1000, onSettled));
+
+    await act(async () => {
+      await result.current.startSync('source-1', 'Deal Room Inbox');
+    });
+    expect(result.current.sweepState).toBe('waiting');
+
+    await tick(1000);
+    await tick(1000);
+    expect(result.current.sweepState).toBe('waiting');
+
+    await tick(1000);
+
+    expect(result.current.sweepState).toBe('settled');
+    expect(result.current.source?.lastSyncAt).not.toBe(before);
+    expect(result.current.isPolling).toBe(false);
+    expect(onSettled).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports timed-out without an error when the sweep does not settle within the cap', async () => {
+    vi.useFakeTimers();
+    stubFetch({
+      '/api/v1/sources/source-1/sync': () => jsonResponse(makeRun(), 201),
+      '/api/v1/sources/source-1': () => jsonResponse(makeSource()),
+    });
+
+    const { result } = renderHook(() => useSourceSync(20_000));
 
     await act(async () => {
       await result.current.startSync('source-1', 'Deal Room Inbox');
     });
 
-    await waitFor(() => {
-      expect(result.current.isPolling).toBe(false);
-    });
-    expect(result.current.run).toEqual(completedRun);
+    await tick(20_000);
+    await tick(20_000);
+    await tick(20_000);
+    await tick(20_000);
 
-    // Assert the poll count stops growing rather than that a poisoned response fails to apply:
-    // with a short interval several polls are in flight before the effect tears down, so a
-    // state-based assertion alone races that teardown.
-    const pollCalls = () =>
-      fetchMock.mock.calls.filter(([url]) => url === '/api/v1/workflow-runs/run-1').length;
-    const callsAtCompletion = pollCalls();
-    await new Promise((resolve) => setTimeout(resolve, 60));
-
-    expect(pollCalls()).toBe(callsAtCompletion);
+    expect(result.current.sweepState).toBe('timed-out');
+    expect(result.current.syncError).toBeNull();
+    expect(result.current.isPolling).toBe(false);
   });
 
-  it('keeps a single polling interval across sync-run ticks that repeat the same status', async () => {
+  it('reaches timed-out, not stuck waiting, when every poll fails', async () => {
     vi.useFakeTimers();
-    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
-    const runningRun = makeRun({ status: 'running' });
-    // Each poll deserialises into a fresh object, so an effect keyed on the run object rather than
-    // its id and status would tear the interval down and rebuild it on every tick.
-    const fetchMock = stubFetch({
-      '/api/v1/sources/source-1/sync': () => jsonResponse(runningRun, 201),
-      '/api/v1/workflow-runs/run-1': () => jsonResponse(runningRun),
+    let call = 0;
+    stubFetch({
+      '/api/v1/sources/source-1/sync': () => jsonResponse(makeRun(), 201),
+      '/api/v1/sources/source-1': () => {
+        call += 1;
+        return jsonResponse({ message: 'Source unavailable' }, 500);
+      },
+    });
+
+    const { result } = renderHook(() => useSourceSync(20_000));
+
+    await act(async () => {
+      await result.current.startSync('source-1', 'Deal Room Inbox');
+    });
+
+    await tick(20_000);
+    await tick(20_000);
+    await tick(20_000);
+    await tick(20_000);
+
+    expect(result.current.sweepState).toBe('timed-out');
+    expect(result.current.isPolling).toBe(false);
+    expect(result.current.syncError).toBe('Source unavailable');
+
+    const callsAtDeadline = call;
+    await tick(20_000);
+    await tick(20_000);
+    expect(call).toBe(callsAtDeadline);
+  });
+
+  it('a 404 poll response ends the sweep at once, without waiting for the deadline', async () => {
+    vi.useFakeTimers();
+    let call = 0;
+    stubFetch({
+      '/api/v1/sources/source-1/sync': () => jsonResponse(makeRun(), 201),
+      '/api/v1/sources/source-1': () => {
+        call += 1;
+        return jsonResponse({ message: "Source 'source-1' not found" }, 404);
+      },
     });
 
     const { result } = renderHook(() => useSourceSync(1000));
@@ -146,33 +217,33 @@ describe('useSourceSync', () => {
     await act(async () => {
       await result.current.startSync('source-1', 'Deal Room Inbox');
     });
-    await tick();
 
-    expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+    await tick(1000);
+
+    expect(result.current.sweepState).toBe('gone');
+    expect(result.current.syncError).toBe("Source 'source-1' not found");
+    expect(call).toBe(1);
 
     await tick(1000);
     await tick(1000);
-    await tick(1000);
-
-    expect(
-      fetchMock.mock.calls.filter(([url]) => url === '/api/v1/workflow-runs/run-1').length,
-    ).toBe(3);
-    expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+    expect(call).toBe(1);
   });
 
-  it('drops a sync-run poll response that lands after a later one already completed the run', async () => {
-    const runningRun = makeRun({ status: 'running' });
-    const completedRun = makeRun({ status: 'completed' });
-    // The first poll's own response, held back until after a later poll reported completion.
-    // Applying it would walk the run backwards from a finished sync to a running one.
-    const stale = deferredResponse(runningRun);
-
-    let pollCall = 0;
+  it('never starts a second poll while one is still in flight', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let release: (() => void) | undefined;
     stubFetch({
-      '/api/v1/sources/source-1/sync': () => jsonResponse(runningRun, 201),
-      '/api/v1/workflow-runs/run-1': () => {
-        pollCall += 1;
-        return pollCall === 1 ? stale.response : jsonResponse(completedRun);
+      '/api/v1/sources/source-1/sync': () => jsonResponse(makeRun(), 201),
+      '/api/v1/sources/source-1': () => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        return new Promise<Response>((resolve) => {
+          release = () => {
+            inFlight -= 1;
+            resolve(jsonResponse(makeSource()));
+          };
+        });
       },
     });
 
@@ -182,26 +253,22 @@ describe('useSourceSync', () => {
       await result.current.startSync('source-1', 'Deal Room Inbox');
     });
 
-    await waitFor(() => {
-      expect(result.current.run).toEqual(completedRun);
-    });
+    // Real timers: lets several 5ms ticks elapse while the first poll's response is still
+    // pending, so an in-flight guard is the only thing that could keep a second one from firing.
+    await new Promise((resolve) => setTimeout(resolve, 30));
 
-    // act's async exit crosses a macrotask boundary, which drains the released response's whole
-    // promise chain — no timer, so no wall-clock race.
-    await act(async () => {
-      stale.release();
-      await stale.response;
-    });
-
-    expect(result.current.run).toEqual(completedRun);
-    expect(result.current.isPolling).toBe(false);
+    expect(maxInFlight).toBe(1);
+    release?.();
   });
 
-  it('drops a late poll response after unmount instead of setting state on the unmounted hook', async () => {
-    const runningRun = makeRun({ status: 'running' });
+  it('drops a poll response that lands after unmount instead of setting state on the unmounted hook', async () => {
+    let release!: () => void;
+    const deferred = new Promise<Response>((resolve) => {
+      release = () => resolve(jsonResponse(makeSource()));
+    });
     stubFetch({
-      '/api/v1/sources/source-1/sync': () => jsonResponse(runningRun, 201),
-      '/api/v1/workflow-runs/run-1': () => jsonResponse(runningRun),
+      '/api/v1/sources/source-1/sync': () => jsonResponse(makeRun(), 201),
+      '/api/v1/sources/source-1': () => deferred,
     });
 
     const { result, unmount } = renderHook(() => useSourceSync(5));
@@ -210,71 +277,12 @@ describe('useSourceSync', () => {
       await result.current.startSync('source-1', 'Deal Room Inbox');
     });
 
-    // No assertion on result.current after unmount — this only proves the poll's cleanup does
-    // not throw or warn ("state update on an unmounted component") once a scheduled tick lands.
-    act(() => unmount());
+    // Real timers here: lets the 5ms interval fire and issue its (still-unresolved) fetch
+    // before the hook unmounts out from under it.
     await new Promise((resolve) => setTimeout(resolve, 20));
-  });
 
-  it('reports a poll failure without clearing the in-flight run', async () => {
-    const runningRun = makeRun({ status: 'running' });
-    stubFetch({
-      '/api/v1/sources/source-1/sync': () => jsonResponse(runningRun, 201),
-      '/api/v1/workflow-runs/run-1': () =>
-        jsonResponse({ message: 'Failed to poll sync run' }, 500),
-    });
-
-    const { result } = renderHook(() => useSourceSync(5));
-
-    await act(async () => {
-      await result.current.startSync('source-1', 'Deal Room Inbox');
-    });
-
-    await waitFor(() => {
-      expect(result.current.syncError).toBe('Failed to poll sync run');
-    });
-    expect(result.current.run).toEqual(runningRun);
-  });
-
-  it('fires onSettled exactly once once a poll reaches a terminal state, never while polling continues', async () => {
-    const runningRun = makeRun({ status: 'running' });
-    const completedRun = makeRun({ status: 'completed' });
-    const onSettled = vi.fn();
-    stubFetch({
-      '/api/v1/sources/source-1/sync': () => jsonResponse(runningRun, 201),
-      '/api/v1/workflow-runs/run-1': () => jsonResponse(completedRun),
-    });
-
-    const { result } = renderHook(() => useSourceSync(5, onSettled));
-
-    await act(async () => {
-      await result.current.startSync('source-1', 'Deal Room Inbox');
-    });
-
-    // The start response itself is still 'running' — no terminal status to settle on yet.
-    expect(onSettled).not.toHaveBeenCalled();
-
-    await waitFor(() => {
-      expect(result.current.isPolling).toBe(false);
-    });
-
-    expect(onSettled).toHaveBeenCalledTimes(1);
-  });
-
-  it('fires onSettled once for a run that starts already terminal, with no poll involved', async () => {
-    const completedRun = makeRun({ status: 'completed' });
-    const onSettled = vi.fn();
-    stubFetch({
-      '/api/v1/sources/source-1/sync': () => jsonResponse(completedRun, 201),
-    });
-
-    const { result } = renderHook(() => useSourceSync(5, onSettled));
-
-    await act(async () => {
-      await result.current.startSync('source-1', 'Deal Room Inbox');
-    });
-
-    expect(onSettled).toHaveBeenCalledTimes(1);
-    expect(result.current.isPolling).toBe(false);
+    unmount();
+    release();
+    await deferred;
   });
 });

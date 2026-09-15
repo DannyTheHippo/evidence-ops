@@ -23,4 +23,19 @@ describe('icons', () => {
       expect(svg).toHaveClass('custom-icon');
     });
   });
+
+  it('renders every glyph on one grid and stroke weight', () => {
+    iconEntries.forEach(([, Icon]) => {
+      const { container } = render(<Icon />);
+      const svg = container.querySelector('svg');
+
+      expect(svg).toHaveAttribute('viewBox', '0 0 16 16');
+      expect(svg).toHaveAttribute('stroke-width', '1.5');
+    });
+  });
+
+  it('renders the directional collapse pair', () => {
+    expect(Icons.IconPanelLeftClose).toBeDefined();
+    expect(Icons.IconPanelLeftOpen).toBeDefined();
+  });
 });

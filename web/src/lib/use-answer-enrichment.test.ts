@@ -102,7 +102,7 @@ describe('useAnswerEnrichment', () => {
     });
   });
 
-  it('resolves conflict chunks narrowed to the answer conflictIds, falling back for an unmatched chunk', async () => {
+  it('joins conflicts by id rather than reading the first page', async () => {
     const conflicts = {
       docs: [
         {
@@ -123,30 +123,13 @@ describe('useAnswerEnrichment', () => {
           status: 'open',
           createdAt: new Date().toISOString(),
         },
-        {
-          id: 'conflict-2',
-          factKey: { entity: 'Other Park', metric: 'cap_rate', period: '2025-03' },
-          factIds: ['fact-b'],
-          values: [
-            {
-              factId: 'fact-b',
-              value: 7.0,
-              unit: 'percent',
-              sourceChunkId: 'chunk-b',
-              documentVersionId: 'docver-2',
-              locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 1 },
-            },
-          ],
-          magnitude: 0.01,
-          status: 'open',
-          createdAt: new Date().toISOString(),
-        },
       ],
-      count: 2,
+      count: 1,
     };
 
     const fetchMock = vi.fn((url: string) => {
-      if (url === '/api/v1/conflicts?limit=100') return Promise.resolve(jsonResponse(conflicts));
+      if (url === '/api/v1/conflicts?ids=conflict-1')
+        return Promise.resolve(jsonResponse(conflicts));
       return Promise.reject(new Error(`Unhandled fetch: ${url}`));
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -169,7 +152,60 @@ describe('useAnswerEnrichment', () => {
         locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 2 },
       });
     });
-    // conflict-2 is not in this answer's conflictIds, so its chunk is left unresolved.
-    expect(result.current.conflictChunkIndex.get('chunk-b')).toBeUndefined();
+  });
+
+  it('chunks a conflictIds list past the server page cap into multiple requests', async () => {
+    const manyIds = Array.from({ length: 150 }, (_, i) => `conflict-${i}`);
+    const requestedUrls: string[] = [];
+    const fetchMock = vi.fn((url: string) => {
+      requestedUrls.push(url);
+      return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const answer: Answer = {
+      ...baseAnswer,
+      outcome: {
+        kind: 'conflicting_evidence',
+        factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+        values: [{ value: 6.1, unit: 'percent', sourceChunkId: 'chunk-a' }],
+      },
+      conflictIds: manyIds,
+    };
+
+    renderHook(() => useAnswerEnrichment(answer));
+
+    await waitFor(() => {
+      expect(requestedUrls.length).toBe(2);
+    });
+    expect(new URLSearchParams(requestedUrls[0].split('?')[1]).get('ids')).toBe(
+      manyIds.slice(0, 100).join(','),
+    );
+    expect(new URLSearchParams(requestedUrls[1].split('?')[1]).get('ids')).toBe(
+      manyIds.slice(100).join(','),
+    );
+  });
+
+  it('still renders when the conflict join fails', async () => {
+    const fetchMock = vi.fn(() => Promise.reject(new Error('network error')));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const answer: Answer = {
+      ...baseAnswer,
+      outcome: {
+        kind: 'conflicting_evidence',
+        factKey: { entity: 'Northgate Business Park', metric: 'cap_rate', period: '2025-03' },
+        values: [{ value: 6.1, unit: 'percent', sourceChunkId: 'chunk-a' }],
+      },
+      conflictIds: ['conflict-1'],
+    };
+
+    const { result } = renderHook(() => useAnswerEnrichment(answer));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled();
+    });
+    expect(result.current.conflictChunkIndex.size).toBe(0);
+    expect(result.current.documentIndex.size).toBe(0);
   });
 });

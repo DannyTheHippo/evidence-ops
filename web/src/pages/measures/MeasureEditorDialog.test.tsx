@@ -177,6 +177,40 @@ describe('MeasureEditorDialog', () => {
     expect(onSaved).not.toHaveBeenCalled();
   });
 
+  it('offers only the factor-1 units as the canonical unit and lists the unit table read-only', () => {
+    render(
+      <MeasureEditorDialog
+        measure={measure}
+        mode="confirm"
+        onClose={() => {}}
+        onSaved={() => {}}
+      />,
+    );
+
+    const canonicalUnit = screen.getByLabelText<HTMLSelectElement>('Canonical unit');
+    const optionLabels = Array.from(canonicalUnit.options).map((option) => option.value);
+    expect(optionLabels).toEqual(['ratio']);
+    expect(canonicalUnit).toHaveValue('ratio');
+
+    expect(screen.getByText('ratio ×1')).toBeInTheDocument();
+    expect(screen.getByText('percent ×0.01')).toBeInTheDocument();
+  });
+
+  it("falls back to the measure's own canonical unit when no unit carries factor 1", () => {
+    render(
+      <MeasureEditorDialog
+        measure={{ ...measure, units: [] }}
+        mode="confirm"
+        onClose={() => {}}
+        onSaved={() => {}}
+      />,
+    );
+
+    const canonicalUnit = screen.getByLabelText<HTMLSelectElement>('Canonical unit');
+    expect(Array.from(canonicalUnit.options).map((option) => option.value)).toEqual(['ratio']);
+    expect(canonicalUnit).toHaveValue('ratio');
+  });
+
   it('calls onClose from the cancel action', () => {
     const onClose = vi.fn();
     render(

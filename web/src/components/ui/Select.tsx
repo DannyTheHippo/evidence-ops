@@ -1,17 +1,12 @@
 import type { SelectHTMLAttributes } from 'react';
 import Field from './Field';
 
-// `className` is omitted, not merged: the control sets its own `.select` class after the rest
-// spread, so a caller-passed one would be dropped without any error. Omitting it makes that a
-// compile failure instead of a silently ignored prop.
-interface SelectProps extends Omit<
-  SelectHTMLAttributes<HTMLSelectElement>,
-  'value' | 'onChange' | 'className'
-> {
+interface SelectProps extends Omit<SelectHTMLAttributes<HTMLSelectElement>, 'value' | 'onChange'> {
   label: string;
   hint?: string;
   error?: string;
   optional?: boolean;
+  width?: 'sm' | 'md' | 'lg' | 'full';
   options: { value: string; label: string }[];
   value: string;
   onChange: (value: string) => void;
@@ -22,26 +17,41 @@ interface SelectProps extends Omit<
  * platform, not a hand-rolled listbox. Rest props (`disabled`, `name`, `required`, `onBlur`, …)
  * pass through to the underlying `<select>`. `id`, when supplied, flows through `Field` rather
  * than the rest spread, so it reaches both the `<label htmlFor>` and the select itself instead
- * of being overwritten by Field's generated id. `optional` marks the minority case in a form,
- * rendering its suffix inside the label so the accessible name reads "Label (optional)". */
+ * of being overwritten by Field's generated id. A caller `aria-describedby` also flows through
+ * `Field`, which merges it with the hint and error ids. `optional` marks the minority case in a form,
+ * rendering its suffix inside the label so the accessible name reads "Label (optional)".
+ * `width`, though `@types/react` does not declare it on `SelectHTMLAttributes`, is forwarded to
+ * `Field` only — never spread onto the DOM node. A caller-passed `className` is merged after the
+ * control's own `.select` class rather than overwriting it. */
 export default function Select({
   id,
   label,
   hint,
   error,
   optional,
+  width,
   options,
   value,
   onChange,
+  className,
+  'aria-describedby': describedBy,
   ...rest
 }: SelectProps) {
   return (
-    <Field id={id} label={label} hint={hint} error={error} optional={optional}>
+    <Field
+      id={id}
+      label={label}
+      hint={hint}
+      error={error}
+      describedBy={describedBy}
+      optional={optional}
+      width={width}
+    >
       {(inputProps) => (
         <select
           {...rest}
           {...inputProps}
-          className="select"
+          className={className ? `select ${className}` : 'select'}
           value={value}
           onChange={(e) => onChange(e.target.value)}
         >

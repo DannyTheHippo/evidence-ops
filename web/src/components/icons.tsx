@@ -50,6 +50,44 @@ export function IconPanelLeft({ size = 16, className }: IconProps) {
   );
 }
 
+/** Panel-with-rail glyph with an inward chevron, marking a sidebar collapse control. */
+export function IconPanelLeftClose({ size = 16, className }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      focusable="false"
+      className={className}
+      {...strokeProps}
+    >
+      <rect x="2" y="3" width="12" height="10" rx="1.5" />
+      <path d="M6.5 3V13" />
+      <path d="M11 6.5L9 8L11 9.5" />
+    </svg>
+  );
+}
+
+/** Panel-with-rail glyph with an outward chevron, marking a sidebar expand control. */
+export function IconPanelLeftOpen({ size = 16, className }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      focusable="false"
+      className={className}
+      {...strokeProps}
+    >
+      <rect x="2" y="3" width="12" height="10" rx="1.5" />
+      <path d="M6.5 3V13" />
+      <path d="M9 6.5L11 8L9 9.5" />
+    </svg>
+  );
+}
+
 export function IconAlertTriangle({ size = 16, className }: IconProps) {
   return (
     <svg

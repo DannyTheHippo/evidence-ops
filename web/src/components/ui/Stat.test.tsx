@@ -29,6 +29,14 @@ describe('Stat', () => {
     expect(screen.getByText('128')).not.toHaveClass('stat-row-value--neutral');
   });
 
+  it('renders a prose value without the numeric register', () => {
+    render(<Stat label="Default interval" value="Every 6 hours" kind="text" />);
+
+    const valueEl = screen.getByText('Every 6 hours');
+    expect(valueEl).toHaveClass('stat-row-value--text');
+    expect(valueEl).not.toHaveClass('mono');
+  });
+
   it('renders as a link to its detail view when to is supplied', () => {
     render(
       <MemoryRouter>

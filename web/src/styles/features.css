@@ -1,4 +1,4 @@
-/* ── Claims, citations & conflicts ──────────────────────────────────────── */
+/* ── Shared: claims, citations & value comparison ────────────────────────── */
 
 /* The skeleton-to-answer swap is the only entrance in the app; the outcome is written
    atomically server-side, so without this the page would jump from nothing to everything in
@@ -62,8 +62,41 @@
   border-color: var(--signal-line);
   background: var(--signal-soft);
 }
+.value-compare-trace {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
 
-/* ── Conflict queue ──────────────────────────────────────────────────────── */
+.value-compare-figure {
+  font-size: var(--text-xl);
+  font-weight: 600;
+}
+/* Cancels the card's own padding on two sides and the top so the band reads as a ribbon flush
+   with the card's edges, then restores clearance below it so the figure lines up with a
+   non-recommended card's. */
+.value-compare-band {
+  display: block;
+  margin: calc(var(--space-3) * -1) calc(var(--space-4) * -1) var(--space-2);
+  padding: var(--space-1) var(--space-4);
+  background: var(--signal);
+  color: var(--signal-ink);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+/* Withdrawn evidence dims through ink weight, never opacity — opacity composites the card's text
+   with its background and drags the whole card below the AA contrast floor, not just the value. */
+.value-compare-item--withdrawn,
+.value-compare-item--withdrawn .cell-sub {
+  color: var(--ink-dim);
+}
+.value-compare-action {
+  margin-top: var(--space-2);
+}
+
+/* ── Shared: queue list rows ─────────────────────────────────────────────── */
 
 /* Stacks the rows of the primary pane of a SplitView `ratio="queue"` master-detail. Each row is a
    full-width `<button>` carrying `card queue-item`, not a `<li>` click handler, so it is a real
@@ -75,38 +108,85 @@
   gap: var(--space-3);
 }
 
-/* ── Run step label ──────────────────────────────────────────────────────── */
-
-/* The label text inside a `.run-step` (the run-rail instrument below) — bold and a step up from
-   that instrument's own inherited size, standing beside the step's `Timestamp`. Colour comes
-   entirely from `.run-step`'s own idle/done/active/rejected state, never set here. */
-.timeline-step-label {
-  font-weight: 600;
+/* The three fixed slots inside a `QueueList` row (`card queue-item`): identity (title plus a
+   status badge), quantifier, and age. `.queue-item-identity`'s `:first-child` gets `min-width: 0`
+   for the same reason `.card-head` does — a flex item's default auto minimum is its content size,
+   which would push the row wider than the card instead of letting the title ellipsis. */
+.queue-item-identity {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.queue-item-identity > :first-child {
+  min-width: 0;
+}
+.queue-item-quantifier {
+  margin-top: var(--space-1);
+  color: var(--ink-dim);
   font-size: var(--text-sm);
 }
+.queue-item-age {
+  margin-top: var(--space-1);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
 
-/* ── Table content states ────────────────────────────────────────────────── */
+/* Selected state for a `QueueList` row, keyed off `aria-current` rather than an `.is-active`
+   modifier class — the ARIA attribute already carries the semantic, so nothing here duplicates it
+   on a class React would otherwise have to keep in sync. Same `--signal-soft`/`--signal-line`
+   pairing as the table's own selected-row treatment, plus a left inset marking the row as current
+   the way a vertical rule marks the active item in a nav list. */
+.queue-item[aria-current='true'] {
+  border-color: var(--signal-line);
+  border-left: 2px solid var(--signal-line);
+  background: var(--signal-soft);
+}
+
+/* ── Shared: table cell states & truncation ──────────────────────────────── */
 
 .cell-sub {
   color: var(--muted);
   font-size: var(--text-xs);
   overflow-wrap: anywhere;
 }
+/* A `<p className="cell-sub">` sub-line inside a table cell sits flush under its value; the
+   paragraph's default `1em` block margins would otherwise pad every two-line row with blank space. */
+.grid td .cell-sub {
+  margin: 0;
+}
 
-/* ── Truncated cell text ─────────────────────────────────────────────────── */
-
-/* Auto table layout ignores max-width on a td directly, so the ellipsis lives on an inline-block
-   span inside the cell instead. `title` on that span keeps the full text reachable. */
+/* Auto table layout ignores max-width on a td directly, so the ellipsis lives on a block-level
+   span filling the cell instead. Exposing the full value is left to the caller — a `Tooltip` on
+   the span, or a visually-hidden sibling — this class only clips and ellipsizes. */
 .cell-truncate {
-  display: inline-block;
-  max-width: 42ch;
+  display: block;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  vertical-align: bottom;
+}
+/* Pairs a cell's truncated value (a `.cell-truncate` span, wrapped or not in a `Tooltip`'s
+   `.tooltip-anchor`) with one trailing icon action on the same line: the flex row keeps both
+   side by side regardless of `.tooltip-anchor`'s own `display: block`, the first child shrinks
+   past its content width so the ellipsis can engage instead of pushing the action out of the row,
+   and the action itself keeps `.btn.btn--icon`'s own minimum target size as a floor. Unaffected by
+   the stacked phone layout below 768px: the row still lays its two children out the same way
+   inside the now block-level, auto-height `<td>`. */
+.cell-truncate-action {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.cell-truncate-action > :first-child {
+  flex: 1;
+  min-width: 0;
 }
 
-/* ── Dashboard ───────────────────────────────────────────────────────────── */
+/* ── Home: dashboard rows & get-started stepper ──────────────────────────── */
 
 /* Base list reset for .dashboard-answers lives in primitives.css's shared list-reset rule; it
    needs no override here. */
@@ -132,7 +212,413 @@
   overflow-wrap: anywhere;
 }
 
-/* ── Verification ledger ─────────────────────────────────────────────────── */
+/* The first-run checklist's ordered list. `<ol>` semantics announce each step's position for
+   free, so the numbered marker below is decorative rather than the only source of that count. */
+.stepper {
+  list-style: none;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+/* Same border-left-carries-state language as `.run-step`/`.ledger-outcome`, on the
+   same `--rail-line-*` tokens, so a done step reads as the same species of signal as a reached
+   run step or a verified ledger outcome. */
+.stepper-step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--rail-line-idle);
+  border-radius: var(--radius-sm);
+}
+.stepper-step.is-done {
+  border-left-color: var(--rail-line-verified);
+}
+.stepper-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  font-weight: 600;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.stepper-step.is-done .stepper-marker {
+  color: var(--status-verified-ink);
+  border-color: var(--rail-line-verified);
+}
+.stepper-label {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── Home: dashboard stats, work queue & corpus health ───────────────────── */
+
+/* The loading placeholder stands in for the stat row and the three cards below it, none of which
+   obey the primitive's reading measure, and its four skeleton fields carry .stat-row's own grid so
+   the placeholder occupies the same columns the stats land in. */
+.dashboard-skeleton .skeleton {
+  max-width: none;
+}
+.dashboard-skeleton .skeleton-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--control-w-sm), max-content));
+  gap: var(--space-6);
+}
+.dashboard-skeleton > * + * {
+  margin-top: var(--space-4);
+}
+
+/* A row's name-and-detail text wraps onto its own line once the row's actions no longer fit beside
+   it, and shrinks below its content width rather than pushing the actions off the card. */
+.actionable-row {
+  flex-wrap: wrap;
+}
+.actionable-row-text {
+  min-width: 0;
+  flex: 1 1 var(--control-w-sm);
+}
+@media (max-width: 560px) {
+  .actionable-row .form-actions {
+    width: 100%;
+  }
+}
+
+/* Secondary lines under a card title and at the end of a card's list: a failure breakdown and a
+   link to the full list the card shows only the first few rows of. */
+.dashboard-breakdown,
+.dashboard-more {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+/* ── Sources: sources list, sync health, estate inventory & class drift ──── */
+
+/* Wraps SourcesPage's SegmentedControl only — its count renders through a shared, unstyled
+   aria-hidden span, so this is the one place that count can be given the tabular-numeral
+   treatment every other rendered count in the app already gets. */
+.sources-segmented .btn span[aria-hidden] {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The timed-out sweep line beside the run link — a status the loop is still working on, not an
+   error, so it reads as muted secondary text rather than an alert. */
+.sources-sweep-note {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+/* The `min-width` floor `primitives.css`'s `.grid:has(colgroup)` comment describes: each table's
+   own fixed `.col-*` widths, summed, plus 15rem for the free column. Below that width `.panel`
+   scrolls the table horizontally rather than starving the free column below a readable floor.
+   The widest floor, `.sources-grid` at 57rem + 15rem = 72rem (1152px at a 16px root), fits a
+   1440px viewport with a 17px classic scrollbar: `.container` scrolls with no `scrollbar-gutter`,
+   leaving 1440 − 220 sidebar − 48 padding − 17 scrollbar − 2 panel border = 1153px. */
+.sources-grid {
+  min-width: 72rem;
+}
+.sources-grid--inventory {
+  min-width: 50rem;
+}
+.source-detail-grid {
+  min-width: 48rem;
+}
+
+/* ── Data room: document detail & fidelity notice ────────────────────────── */
+
+/* A version's or document's fidelity gaps, set off from the ingestion badge above it by a
+   hairline rather than the thicker state-carrying rail `.ledger-outcome`/`.run-step` use —
+   this is a footnote alongside a status, not the status itself. */
+.fidelity-notice {
+  margin-top: var(--space-2);
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--hairline-strong);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* The document detail page's delete section: a quiet, hairline-bordered card in the danger
+   tone rather than a filled caution band — a destructive action should be findable at the foot
+   of the page, not prominent. */
+.card--danger {
+  border-color: var(--status-reject-line);
+}
+.card--danger .form-actions {
+  justify-content: flex-end;
+}
+
+/* ── Data room: document workbench & evidence reader ─────────────────────── */
+
+/* The PDF pane's `<iframe>`, sized to fill the reading column `SplitView`'s 'reader' ratio gives
+   it rather than the pane's natural content height. */
+.workbench-frame {
+  width: 100%;
+  height: 80vh;
+  min-height: 480px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+/* The evidence chunk reader: a collapsible outline of a version's stored chunks, grouped by
+   page/sheet/heading/slide. */
+.evidence-reader {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.evidence-group + .evidence-group {
+  margin-top: var(--space-3);
+}
+.evidence-chunk {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+}
+/* Programmatic focus (the `?chunk=` deep link landing here) draws no ring; genuine keyboard
+   traversal still does. */
+.evidence-chunk:focus {
+  outline: none;
+}
+.evidence-chunk:focus-visible,
+.evidence-chunk[aria-current='location']:focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: var(--ring);
+}
+.evidence-chunk-text {
+  margin: var(--space-1) 0;
+}
+
+/* The reading-surface variant: capped to the shared reading measure and set in the reading
+   line-height, unlike the rail variant, which keeps its existing, denser default. */
+.evidence-reader--reading {
+  max-width: var(--measure-reading);
+}
+.evidence-reader--reading .evidence-chunk-text {
+  font-size: var(--text-base);
+  line-height: var(--leading-snug);
+}
+
+/* A group's summary as a full-width row — its own locator on the left, a mono chunk count on the
+   right — rather than the bare label a native <summary> renders alone. */
+.evidence-group summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border-top: 1px solid var(--hairline);
+  padding: var(--space-2) 0;
+  cursor: pointer;
+  font-weight: 600;
+}
+.evidence-group:first-of-type summary {
+  border-top: none;
+}
+
+/* Fades a group's revealed chunks in on open. A <details> element's content moves between
+   display: none and displayed as the browser toggles `open`, and a CSS animation restarts on
+   every such display change — no JS listener is needed to retrigger it per toggle. */
+.evidence-chunk-list {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  animation: evidence-group-content-enter var(--motion-enter-sm) ease-out;
+}
+@keyframes evidence-group-content-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* The copy control reads as secondary chrome until the chunk it belongs to is actually in play —
+   dimmed at rest, restored on hover or on focus-within so a keyboard user tabbing onto the button
+   itself sees it at full strength rather than relying on a hover it can never produce. */
+.evidence-chunk .form-actions .btn--secondary {
+  color: var(--ink-dim);
+}
+.evidence-chunk:hover .form-actions .btn--secondary,
+.evidence-chunk:focus-within .form-actions .btn--secondary {
+  color: var(--ink);
+}
+
+/* The deep-link landing chunk: an inset rail rather than a border, so it costs no layout shift; a
+   scroll margin clearing sticky chrome per WCAG 2.2 SC 2.4.11; and a one-time settle fade driven
+   entirely by @starting-style rather than a JS-triggered animation, so base.css's
+   prefers-reduced-motion query remains the single switch that can turn it off. */
+.evidence-chunk[aria-current='location'] {
+  border-color: var(--signal-line);
+  background: var(--signal-soft);
+  scroll-margin-top: var(--scroll-margin-sticky);
+  box-shadow: inset 2px 0 0 var(--signal-line);
+  transition:
+    opacity var(--motion-enter-sm) ease-out,
+    background var(--motion-enter-sm) ease-out;
+}
+@starting-style {
+  .evidence-chunk[aria-current='location'] {
+    opacity: 0;
+    background: transparent;
+  }
+}
+
+/* ── Data room: document list, upload panel, liveness & version drill-in ─── */
+
+/* The upload form and its queue standing side by side — the form narrow enough that it never
+   competes with the queue for a reader's attention, the queue taking whatever room is left.
+   Collapses to one column at 1023px via `.split-view`'s own shared media query. */
+.split-view--upload {
+  grid-template-columns: 360px 1fr;
+}
+
+/* The upload queue: a persistent record of a batch's outcome, standing beside the form rather
+   than a toast that would disappear before "3 of 5 uploaded" could be read. */
+.upload-queue {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.upload-queue-empty {
+  margin: 0;
+}
+.upload-queue-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--density-row) 0;
+  border-top: 1px solid var(--hairline);
+}
+.upload-queue-row:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.upload-queue-name {
+  overflow-wrap: anywhere;
+}
+/* Forces the failure message onto its own line below the name/badge pair, rather than wrapping
+   awkwardly between them. */
+.upload-queue-message {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+/* The status line's count-and-label text, its detail sentence, and the Refresh button that only
+   appears once a filter or sort takes the list off the live channel — one flex row so the three
+   space themselves consistently and wrap as a unit rather than the label and Refresh crowding a
+   long detail sentence against the edge of the toolbar. */
+.data-room-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* `Tooltip` wraps its child in an inline-block `.tooltip-anchor`, which sizes to the child's own
+   content rather than the cell around it — inside a `.cell-truncate` cell the content is the
+   untruncated text, so the anchor would grow to fit it and leave the ellipsis nothing to clip.
+   `display: block` lets the anchor fill the cell, so `.cell-truncate` clips against the cell
+   width instead. Where the anchor sits inside a `.cell-truncate-action` row alongside a trailing
+   button, that row's own `flex: 1` on its first child does the filling instead — flex sizing
+   overrides a flex item's own `display`, so this rule still applies there but contributes nothing
+   beyond it. */
+.grid .tooltip-anchor {
+  display: block;
+}
+
+/* Stands the Clear finished action off the row list above it once a batch reaches a terminal
+   state. */
+.upload-queue-actions {
+  margin-top: var(--space-3);
+}
+
+/* The drawer's full 64-character digest, beside its CopyButton — long enough to need an explicit
+   break opportunity rather than overflowing the drawer. */
+.version-hash {
+  overflow-wrap: anywhere;
+}
+
+/* The `min-width` floor described in `primitives.css`'s `.grid:has(colgroup)` comment, sized to
+   this table's own fixed `.col-*` widths. */
+.documents-grid {
+  min-width: 71.5rem;
+}
+
+/* ── Ledger, measures & entities: canonical entities & proposals queue ───── */
+
+/* Groups the proposals queue's page-scoped count with its scan action, so `.card-head`'s
+   space-between splits title from this cluster rather than spreading title/count/button evenly
+   across the row. */
+.queue-head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* A proposal's quote, set on its own line below the locator pill and indented by a hairline —
+   the same footnote-under-a-header treatment `.fidelity-notice` uses — then clamped to two lines
+   so a long passage never stretches the row. The wrapping `Tooltip` still exposes the full quote
+   on hover or keyboard focus via `aria-describedby`. */
+.proposal-evidence-quote {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--hairline-strong);
+  color: var(--ink-dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ── Ledger, measures & entities: measures queue & unit table ────────────── */
+
+/* The measures queue row's label: a plain `<span>`, since the row is a `<button>` whose content
+   model admits no heading element, carrying `.card-title`'s size and weight so the truncated text
+   still reads as the row's title. */
+.queue-row-label {
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+/* `Tooltip`'s inline-block anchor sits between `.queue-item-identity` and the row label, the
+   same gap `.grid .tooltip-anchor` closes: its shrink-to-fit sizing would measure the untruncated
+   label before `.cell-truncate` can clip it. `display: block` lets the anchor take the width the
+   flex row's `min-width: 0` first-child rule already shrinks it to, so the label inside clips
+   against that width instead of its own content. */
+.queue-item-identity .tooltip-anchor {
+  display: block;
+}
+
+/* Wraps a measure's read-only unit table (`.trace-chip` entries) onto as many lines as it needs
+   beside the canonical-unit select, instead of the chips running together with no gap. */
+.unit-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* ── Answers: verification ledger & dropped claims band ──────────────────── */
+
 /* The retrieval-to-verification funnel at the head of every completed answer. Sits above the
    apparatus, so it renders before ProvenanceRail/the conflict block in DOM order. */
 .ledger {
@@ -207,7 +693,6 @@
   border-left-color: var(--rail-line-degraded);
 }
 
-/* ── Dropped claims band ─────────────────────────────────────────────────── */
 /* A dedicated section below the apparatus, not a trailing footnote — a caution-bordered card in
    the same border-left idiom `.ledger-outcome`/`.run-step` use for state, so a dropped claim
    reads as its own integrity signal rather than a generic notice. Count and server-authored
@@ -226,7 +711,10 @@
   font-size: var(--text-md);
   font-weight: 600;
 }
-.dropped-claims-list {
+/* List reset shared by the dropped-claims band and the attestation card's checks and decisions
+   rows. */
+.dropped-claims-list,
+.attestation-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -257,117 +745,7 @@
   font-style: italic;
 }
 
-/* ── Document workbench ──────────────────────────────────────────────────── */
-
-/* The PDF pane's `<iframe>`, sized to fill the reading column `SplitView`'s 'reader' ratio gives
-   it rather than the pane's natural content height. */
-.workbench-frame {
-  width: 100%;
-  height: 80vh;
-  min-height: 480px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  background: var(--surface-2);
-}
-
-/* The evidence chunk reader: a collapsible outline of a version's stored chunks, grouped by
-   page/sheet/heading/slide. */
-.evidence-reader {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-.evidence-group summary {
-  cursor: pointer;
-  font-weight: 600;
-}
-.evidence-group + .evidence-group {
-  margin-top: var(--space-3);
-}
-.evidence-chunk-list {
-  list-style: none;
-  margin: var(--space-2) 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-.evidence-chunk {
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  border: 1px solid transparent;
-}
-/* Programmatic focus (the `?chunk=` deep link landing here) draws no ring; genuine keyboard
-   traversal still does — the same split #main-content uses in base.css. */
-.evidence-chunk:focus {
-  outline: none;
-}
-.evidence-chunk:focus-visible {
-  outline: none;
-  box-shadow: var(--ring);
-}
-.evidence-chunk[aria-current='location'] {
-  border-color: var(--signal-line);
-  background: var(--signal-soft);
-}
-.evidence-chunk-text {
-  margin: var(--space-1) 0;
-}
-
-/* ── Auth ────────────────────────────────────────────────────────────────── */
-
-/* The frame LoginPage and InvitePage draw before any session exists — no sidebar or topbar to sit
-   inside, so this owns the whole viewport instead of `.container`. Centred by grid; at the ≤560px
-   breakpoint it top-aligns instead, so an opening on-screen keyboard shrinking the viewport never
-   re-centres the card and jumps the layout underneath a visitor's thumb. */
-.auth-view {
-  display: grid;
-  place-items: center;
-  min-height: 100dvh;
-  padding: var(--space-6);
-}
-.auth-canvas {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-6);
-  width: 100%;
-  max-width: var(--dialog-w-sm);
-}
-.brand-lockup {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-}
-.brand-wordmark {
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: var(--text-lg);
-}
-/* No box-shadow: elevation in this design language means "floats above the page", which a static
-   page panel never does — `.card`'s own hairline border is the only edge this needs. */
-.card--auth {
-  width: 100%;
-  max-width: var(--dialog-w-sm);
-}
-.auth-alt {
-  text-align: center;
-}
-/* The one signal control on either page — full width so it reads as the primary action rather
-   than one button among several. */
-.auth-submit {
-  width: 100%;
-}
-
-@media (max-width: 560px) {
-  .auth-view {
-    align-items: start;
-    padding-top: var(--space-8);
-  }
-}
-
-/* ── Ask composer ────────────────────────────────────────────────────────── */
+/* ── Answers: composer & run stage strip ─────────────────────────────────── */
 
 /* The composer is the `.card` `AnswerComposer.tsx` renders above the Answers page's run history.
    Everything below styles what sits inside it. */
@@ -384,7 +762,7 @@
   min-width: 0;
   height: var(--control-h-hero);
   padding: 0 var(--control-pad-x);
-  border: 1px solid var(--hairline-strong);
+  border: 1px solid var(--control-line);
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
@@ -392,11 +770,12 @@
   font-size: var(--text-md);
 }
 .composer-input:hover {
-  border-color: var(--muted);
+  border-color: var(--signal-line);
 }
 .composer-input:focus-visible {
-  outline: none;
-  border-color: var(--signal);
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  border-color: var(--signal-line);
   box-shadow: var(--ring);
 }
 .composer-input:disabled {
@@ -429,13 +808,16 @@
   border-radius: var(--radius-xs);
   padding: 0 var(--space-1);
 }
+/* A flex item of `.composer-meta`; `min-width: 0` lets it shrink below its widest chip's content
+   width so a chip's own `max-width: 100%` resolves against the row's real width instead of an
+   oversized box. */
 .composer-examples {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+  min-width: 0;
 }
 
-/* ── RunStageStrip ───────────────────────────────────────────────────────── */
 /* Rotates ProvenanceRail's filled/pulsing/outline marker language horizontal, joined by a
    hairline connector rather than rail.css's vertical border-left thread. */
 
@@ -516,58 +898,7 @@
   flex-shrink: 0;
 }
 
-/* ── Get-started stepper ─────────────────────────────────────────────────── */
-
-/* The first-run checklist's ordered list. `<ol>` semantics announce each step's position for
-   free, so the numbered marker below is decorative rather than the only source of that count. */
-.stepper {
-  list-style: none;
-  margin: var(--space-4) 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-/* Same border-left-carries-state language as `.run-step`/`.ledger-outcome`, on the
-   same `--rail-line-*` tokens, so a done step reads as the same species of signal as a reached
-   run step or a verified ledger outcome. */
-.stepper-step {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  background: var(--surface-2);
-  border: 1px solid var(--hairline);
-  border-left: 3px solid var(--rail-line-idle);
-  border-radius: var(--radius-sm);
-}
-.stepper-step.is-done {
-  border-left-color: var(--rail-line-verified);
-}
-.stepper-marker {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--control-h-sm);
-  height: var(--control-h-sm);
-  flex-shrink: 0;
-  border-radius: 50%;
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  font-weight: 600;
-  font-size: var(--text-xs);
-  color: var(--muted);
-}
-.stepper-step.is-done .stepper-marker {
-  color: var(--status-verified-ink);
-  border-color: var(--rail-line-verified);
-}
-.stepper-label {
-  flex: 1;
-  min-width: 0;
-}
-
-/* ── W5c: answers list, answer detail, answer apparatus ─────────────────── */
+/* ── Answers: answers list, answer detail & apparatus ────────────────────── */
 
 /* A compact claim-coverage indicator for a table cell: a short hairline track plus the mono
    percentage that carries the accessible value — the track itself is `aria-hidden`, decorative
@@ -659,224 +990,53 @@
   border-top: 1px solid var(--hairline);
 }
 
-/* ── W7a: document detail & fidelity notice ─────────────────────────────── */
-
-/* A version's or document's fidelity gaps, set off from the ingestion badge above it by a
-   hairline rather than the thicker state-carrying rail `.ledger-outcome`/`.run-step` use —
-   this is a footnote alongside a status, not the status itself. */
-.fidelity-notice {
-  margin-top: var(--space-2);
-  padding-left: var(--space-3);
-  border-left: 1px solid var(--hairline-strong);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
+/* The `min-width` floor described in `primitives.css`'s `.grid:has(colgroup)` comment, sized to
+   this table's own fixed `.col-*` widths. */
+.answers-grid {
+  min-width: 53rem;
 }
 
-/* The document detail page's delete section: a quiet, hairline-bordered card in the danger
-   tone rather than a filled caution band — a destructive action should be findable at the foot
-   of the page, not prominent. */
-.card--danger {
-  border-color: var(--status-reject-line);
-}
-.card--danger .form-actions {
-  justify-content: flex-end;
-}
+/* ── Answers: live connection, attestation & print disclosure ────────────── */
 
-/* ── W7c: document workbench & evidence reader ──────────────────────────── */
-
-/* The reading-surface variant: capped to the shared reading measure and set in the reading
-   line-height, unlike the rail variant, which keeps its existing, denser default. */
-.evidence-reader--reading {
-  max-width: var(--measure-reading);
-}
-.evidence-reader--reading .evidence-chunk-text {
-  font-size: var(--text-base);
-  line-height: var(--leading-snug);
-}
-
-/* A group's summary as a full-width row — its own locator on the left, a mono chunk count on the
-   right — rather than the bare label a native <summary> renders alone. */
-.evidence-group summary {
+/* Mirrors `.connection-status` (shell.css): the transport line under `RunStageStrip` while a run
+   is in flight. */
+.answers-connection {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  border-top: 1px solid var(--hairline);
-  padding: var(--space-2) 0;
-}
-.evidence-group:first-of-type summary {
-  border-top: none;
-}
-
-/* Fades a group's revealed chunks in on open. A <details> element's content moves between
-   display: none and displayed as the browser toggles `open`, and a CSS animation restarts on
-   every such display change — no JS listener is needed to retrigger it per toggle. */
-.evidence-chunk-list {
-  animation: evidence-group-content-enter var(--motion-enter-sm) ease-out;
-}
-@keyframes evidence-group-content-enter {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-/* The copy control reads as secondary chrome until the chunk it belongs to is actually in play —
-   dimmed at rest, restored on hover or on focus-within so a keyboard user tabbing onto the button
-   itself sees it at full strength rather than relying on a hover it can never produce. */
-.evidence-chunk .form-actions .btn--secondary {
-  color: var(--ink-dim);
-}
-.evidence-chunk:hover .form-actions .btn--secondary,
-.evidence-chunk:focus-within .form-actions .btn--secondary {
-  color: var(--ink);
-}
-
-/* The deep-link landing chunk: an inset rail rather than a border, so it costs no layout shift; a
-   scroll margin clearing sticky chrome per WCAG 2.2 SC 2.4.11; and a one-time settle fade driven
-   entirely by @starting-style rather than a JS-triggered animation, so base.css's
-   prefers-reduced-motion query remains the single switch that can turn it off. */
-.evidence-chunk[aria-current='location'] {
-  scroll-margin-top: var(--scroll-margin-sticky);
-  box-shadow: inset 2px 0 0 var(--signal-line);
-  transition:
-    opacity var(--motion-enter-sm) ease-out,
-    background var(--motion-enter-sm) ease-out;
-}
-@starting-style {
-  .evidence-chunk[aria-current='location'] {
-    opacity: 0;
-    background: transparent;
-  }
-}
-
-/* ── W7b: document list & upload restructure ────────────────────────────── */
-
-/* The upload form and its queue standing side by side — the form narrow enough that it never
-   competes with the queue for a reader's attention, the queue taking whatever room is left.
-   Collapses to one column at 1023px via `.split-view`'s own shared media query. */
-.split-view--upload {
-  grid-template-columns: 360px 1fr;
-}
-
-/* Drag-and-drop is a progressive enhancement over the native file input the card still shows —
-   the border is the whole affordance, so it only needs a colour change, not a layout shift that
-   would jump content under a pointer mid-drag. */
-.upload-card {
-  transition: border-color var(--motion-press) ease;
-}
-.upload-card[data-dragover] {
-  border-color: var(--signal-line);
-}
-
-/* The upload queue: a persistent record of a batch's outcome, standing beside the form rather
-   than a toast that would disappear before "3 of 5 uploaded" could be read. */
-.upload-queue {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
   gap: var(--space-2);
 }
-.upload-queue-empty {
-  margin: 0;
-}
-.upload-queue-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  padding: var(--density-row) 0;
-  border-top: 1px solid var(--hairline);
-}
-.upload-queue-row:first-child {
-  border-top: none;
-  padding-top: 0;
-}
-.upload-queue-name {
-  overflow-wrap: anywhere;
-}
-/* Forces the failure message onto its own line below the name/badge pair, rather than wrapping
-   awkwardly between them. */
-.upload-queue-message {
-  flex-basis: 100%;
-  margin: 0;
+
+/* One size below `.card-title`, for a card's secondary heading (`Attested claims`, `Decisions`). */
+.card-subtitle {
+  font-size: var(--text-md);
+  font-weight: 600;
 }
 
-/* ── W8b: QueueList & approvals queue ────────────────────────────────────── */
+/* Without `::details-content` support this rule is dropped and the disclosure prints collapsed —
+   the quoted passage and dropped-claim statement stay hidden, never a blank gap. */
+@media print {
+  .apparatus-quote-disclosure::details-content,
+  .dropped-claim-disclosure::details-content {
+    content-visibility: visible;
+    block-size: auto;
+  }
+}
 
-/* The three fixed slots inside a `QueueList` row (`card queue-item`): identity (title plus a
-   status badge), quantifier, and age. `.queue-item-identity`'s `:first-child` gets `min-width: 0`
-   for the same reason `.card-head` does — a flex item's default auto minimum is its content size,
-   which would push the row wider than the card instead of letting the title ellipsis. */
-.queue-item-identity {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
+/* ── Runs: step label, run rail, connection chip & approval card ─────────── */
+
+/* The `min-width` floor described in `primitives.css`'s `.grid:has(colgroup)` comment, sized to
+   this table's own fixed `.col-*` widths. */
+.runs-grid {
+  min-width: 34rem;
 }
-.queue-item-identity > :first-child {
-  min-width: 0;
-}
-.queue-item-quantifier {
-  margin-top: var(--space-1);
-  color: var(--ink-dim);
+
+/* The label text inside a `.run-step` (the run-rail instrument below) — bold and a step up from
+   that instrument's own inherited size, standing beside the step's `Timestamp`. Colour comes
+   entirely from `.run-step`'s own idle/done/active/rejected state, never set here. */
+.timeline-step-label {
+  font-weight: 600;
   font-size: var(--text-sm);
 }
-.queue-item-age {
-  margin-top: var(--space-1);
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--muted);
-  font-size: var(--text-xs);
-}
-
-/* Selected state for a `QueueList` row, keyed off `aria-current` rather than an `.is-active`
-   modifier class — the ARIA attribute already carries the semantic, so nothing here duplicates it
-   on a class React would otherwise have to keep in sync. Same `--signal-soft`/`--signal-line`
-   pairing as the table's own selected-row treatment, plus a left inset marking the row as current
-   the way a vertical rule marks the active item in a nav list. */
-.queue-item[aria-current='true'] {
-  border-color: var(--signal-line);
-  border-left: 2px solid var(--signal-line);
-  background: var(--signal-soft);
-}
-
-/* ── W8c: conflicts queue & value comparison ─────────────────────────────── */
-
-.value-compare-figure {
-  font-size: var(--text-xl);
-  font-weight: 600;
-}
-/* Cancels the card's own padding on two sides and the top so the band reads as a ribbon flush
-   with the card's edges, then restores clearance below it so the figure lines up with a
-   non-recommended card's. */
-.value-compare-band {
-  display: block;
-  margin: calc(var(--space-3) * -1) calc(var(--space-4) * -1) var(--space-2);
-  padding: var(--space-1) var(--space-4);
-  background: var(--signal);
-  color: var(--signal-ink);
-  font-size: var(--text-xs);
-  font-weight: 600;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-}
-/* Withdrawn evidence dims through ink weight, never opacity — opacity composites the card's text
-   with its background and drags the whole card below the AA contrast floor, not just the value. */
-.value-compare-item--withdrawn,
-.value-compare-item--withdrawn .cell-sub {
-  color: var(--ink-dim);
-}
-.value-compare-action {
-  margin-top: var(--space-2);
-}
-
-/* ── W8d: run timeline instrument & connection chip ──────────────────────── */
 
 /* One continuous left rail for a run's steps, replacing the disconnected cards this page rendered
    before — each step's border-left is the rail line and its ::before is the marker riding on top
@@ -948,8 +1108,8 @@
   }
 }
 
-/* Names the transport beside the run's status badge, never the data — see WorkflowRunPage.tsx's
-   `connectionChipLabel` for why "Live" is not a word this chip is allowed to use. */
+/* Names the transport beside the run's status badge, never the data — `CONNECTION_LABELS` is the
+   one vocabulary every stream-backed surface reads. */
 .connection-chip {
   display: inline-flex;
   align-items: center;
@@ -987,16 +1147,83 @@
   color: var(--ink);
 }
 
-/* ── W9b: sources list ────────────────────────────────────────────────── */
-/* Wraps SourcesPage's SegmentedControl only — its count renders through a shared, unstyled
-   aria-hidden span, so this is the one place that count can be given the tabular-numeral
-   treatment every other rendered count in the app already gets. */
-.sources-segmented .btn span[aria-hidden] {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
+/* ── Runs: run rail declined state ───────────────────────────────────────── */
+
+/* A step that was reached and settled without an affirmative outcome — a refusal or a timeout —
+   on the same border-left-carries-state language as `.run-step--done`/`--rejected` above, using
+   the caution line rather than the verified or reject one: this is a normal ending, not a failure. */
+.run-step--declined {
+  color: var(--ink);
+  border-left-color: var(--rail-line-degraded);
+}
+.run-step--declined::before {
+  background: var(--rail-line-degraded);
+  border-color: var(--rail-line-degraded);
 }
 
-/* ── W10a: one-time secret panel ─────────────────────────────────────────── */
+/* ── Admin & identity: auth frame ────────────────────────────────────────── */
+
+/* The frame LoginPage and InvitePage draw before any session exists — no sidebar or topbar to sit
+   inside, so this owns the whole viewport instead of `.container`. Centred by grid; at the ≤560px
+   breakpoint it top-aligns instead, so an opening on-screen keyboard shrinking the viewport never
+   re-centres the card and jumps the layout underneath a visitor's thumb. */
+.auth-view {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: var(--space-6);
+}
+.auth-canvas {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-6);
+  width: 100%;
+  max-width: var(--dialog-w-sm);
+}
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+}
+.brand-wordmark {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--text-lg);
+}
+/* No box-shadow: elevation in this design language means "floats above the page", which a static
+   page panel never does — `.card`'s own hairline border is the only edge this needs. */
+.card--auth {
+  width: 100%;
+  max-width: var(--dialog-w-sm);
+}
+.auth-alt {
+  text-align: center;
+}
+/* The one signal control on either page — full width so it reads as the primary action rather
+   than one button among several. */
+.auth-submit {
+  width: 100%;
+}
+
+@media (max-width: 560px) {
+  .auth-view {
+    align-items: start;
+    padding-top: var(--space-8);
+  }
+}
+
+/* `main.container`'s own gutter already supplies inline spacing at this width, so `.auth-view`'s
+   padding on top of it double-pads the card edge against the viewport. */
+@media (max-width: 560px) {
+  .auth-view {
+    padding-inline: 0;
+  }
+}
+
+/* ── Admin & identity: one-time secret panel ─────────────────────────────── */
+
 /* Shared by every surface that hands back a plaintext value exactly once — a minted invitation
    link, a minted or rotated API token. The left hairline is the one place `.card`'s neutral
    border is overridden, so a live secret reads as distinct from every other panel on the page
@@ -1021,36 +1248,10 @@
   font-size: var(--text-xs);
 }
 
-/* ── W10c: canonical entities, proposals queue & entity editor ───────────── */
+/* ── Admin & identity: audit console filters ─────────────────────────────── */
 
-/* Groups the proposals queue's page-scoped count with its scan action, so `.card-head`'s
-   space-between splits title from this cluster rather than spreading title/count/button evenly
-   across the row. */
-.queue-head-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-/* A proposal's quote, set on its own line below the locator pill and indented by a hairline —
-   the same footnote-under-a-header treatment `.fidelity-notice` uses — then clamped to two lines
-   so a long passage never stretches the row. The full quote still reaches a mouse or a screen
-   reader through the element's own `title`. */
-.proposal-evidence-quote {
-  margin: var(--space-1) 0 0;
-  padding-left: var(--space-3);
-  border-left: 1px solid var(--hairline-strong);
-  color: var(--ink-dim);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-/* ── W10b: API keys & audit console ──────────────────────────────────────── */
-
-/* Stacks FilterBar's own control row above the applied-filter chip row as one flex child of
-   Toolbar's start slot, so the chips sit below the filters rather than beside them. */
+/* Spaces FilterBar and the applied-filter chip row as one full-width column inside the toolbar's
+   filter row. */
 .audit-filters {
   display: flex;
   flex-direction: column;

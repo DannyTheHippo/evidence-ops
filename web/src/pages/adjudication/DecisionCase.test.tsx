@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Approval, Conflict } from '../../api/client';
+import { clearToasts, getToasts } from '../../components/ui/toast';
 import type { ResolvedVersion } from '../../lib/document-index';
 import DecisionCase from './DecisionCase';
 
@@ -84,7 +85,7 @@ function renderCase(
   fetchMock?: ReturnType<typeof vi.fn>,
 ) {
   if (fetchMock) vi.stubGlobal('fetch', fetchMock);
-  render(
+  return render(
     <MemoryRouter>
       <Routes>
         <Route
@@ -114,6 +115,7 @@ describe('DecisionCase', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    clearToasts();
   });
 
   it('renders the decider and reason for an already-decided approval', () => {
@@ -127,12 +129,15 @@ describe('DecisionCase', () => {
   });
 
   it('renders the proposal strip and the sourced value compare for a joined conflict', () => {
-    renderCase({ conflict: authorityConflict });
+    const { container } = renderCase({ conflict: authorityConflict });
 
-    expect(screen.getByText('recommended · authority')).toBeInTheDocument();
+    // `ConflictValueCompare` is the sole source of the strip — the pane states its own fact key
+    // above it and nothing else, so the recommendation reads once, not twice.
+    expect(container.querySelectorAll('.policy-strip')).toHaveLength(1);
+    expect(screen.getAllByText('Recommended · authority')).toHaveLength(2);
     expect(
       screen.getByText(
-        "5.25 percent — Source 'chunk-a' outranks the other value's source under the authority policy.",
+        "Source 'chunk-a' outranks the other value's source under the authority policy.",
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'View conflict' })).toHaveAttribute(
@@ -146,15 +151,14 @@ describe('DecisionCase', () => {
     expect(screen.queryByRole('button', { name: 'Request resolution' })).not.toBeInTheDocument();
   });
 
-  it('renders the no-recommendation line instead of a policy strip when the policy declined', () => {
+  it('renders the no-recommendation line once, from ConflictValueCompare, when the policy declined', () => {
     renderCase({ conflict: undecidedConflict });
 
-    // Twice — the compact `.cell-sub` line and `ConflictValueCompare`'s own strip both state it.
     expect(
-      screen.getAllByText(
+      screen.getByText(
         'Policy has no recommendation for this conflict — No configured rule distinguishes between these sources.',
       ),
-    ).toHaveLength(2);
+    ).toBeInTheDocument();
     expect(screen.queryByText(/^recommended ·/)).not.toBeInTheDocument();
   });
 
@@ -289,5 +293,45 @@ describe('DecisionCase', () => {
     fireEvent.click(screen.getByRole('button', { name: 'View run' }));
 
     expect(await screen.findByText('No run found for this workflow.')).toBeInTheDocument();
+  });
+
+  it('closes the dialog and asks the page to refetch when the approval was already decided', async () => {
+    const onDecided = vi.fn();
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/approvals/approval-1/decision') {
+        return Promise.resolve(jsonResponse({ message: 'Approval already decided' }, 409));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    renderCase({ onDecided }, fetchMock);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    const dialog = screen.getByRole('dialog', { name: 'Approve this approval' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(onDecided).toHaveBeenCalledWith('approval-1', { refetch: true });
+    expect(getToasts()).toContainEqual(expect.objectContaining({ kind: 'error' }));
+  });
+
+  it('keeps the dialog open with the message for any other failure', async () => {
+    const onDecided = vi.fn();
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/approvals/approval-1/decision') {
+        return Promise.resolve(jsonResponse({ message: 'Internal error' }, 500));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    renderCase({ onDecided }, fetchMock);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    const dialog = screen.getByRole('dialog', { name: 'Approve this approval' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve' }));
+
+    expect(await within(dialog).findByText('Internal error')).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(onDecided).not.toHaveBeenCalled();
   });
 });

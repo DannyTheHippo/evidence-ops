@@ -2,10 +2,13 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import type { ConflictRuleFired, ConflictValue } from '../api/client';
 import { workbenchHref } from '../lib/citation-link';
+import { formatValue } from '../lib/format-value';
 import { truncateSha256 } from '../lib/identifiers';
 import { formatLocator } from '../lib/locator';
 import type { ResolvedVersion } from '../lib/document-index';
 import Badge from './ui/Badge';
+import CopyButton from './ui/CopyButton';
+import Tooltip from './ui/Tooltip';
 
 interface ValueTraceChipProps {
   value: ConflictValue;
@@ -13,28 +16,36 @@ interface ValueTraceChipProps {
 }
 
 // Mirrors ProvenanceRail's TraceChip: a resolved value links into the workbench at its exact
-// source chunk, an unresolved one renders the same label as a plain, non-interactive `<span>`
-// rather than a guessed or dead link.
+// source chunk, an unresolved one renders the same label as a plain, non-interactive `<span>`.
+// Both carry the full id in a `Tooltip` rather than `title`, anchored on a focusable element so
+// keyboard focus opens it: the workbench link in the resolved branch, the chip itself in the
+// unresolved one, which also keeps a `CopyButton` beside it.
 function ValueTraceChip({ value, resolved }: ValueTraceChipProps) {
   const label = truncateSha256(value.sourceChunkId);
   if (resolved) {
     return (
-      <Link
-        to={workbenchHref({
-          documentId: resolved.documentId,
-          versionId: value.documentVersionId,
-          chunkId: value.sourceChunkId,
-        })}
-        className="trace-chip mono"
-        title={value.sourceChunkId}
-      >
-        {label}
-      </Link>
+      <Tooltip content={value.sourceChunkId}>
+        <Link
+          to={workbenchHref({
+            documentId: resolved.documentId,
+            versionId: value.documentVersionId,
+            chunkId: value.sourceChunkId,
+          })}
+          className="trace-chip mono"
+        >
+          {label}
+        </Link>
+      </Tooltip>
     );
   }
   return (
-    <span className="trace-chip mono" title={value.sourceChunkId}>
-      {label}
+    <span className="value-compare-trace">
+      <Tooltip content={value.sourceChunkId}>
+        <span className="trace-chip mono" tabIndex={0}>
+          {label}
+        </span>
+      </Tooltip>
+      <CopyButton text={value.sourceChunkId} label="Copy source chunk id" iconOnly />
     </span>
   );
 }
@@ -108,7 +119,7 @@ export default function ConflictValueCompare({
                 <span className="value-compare-band">Recommended · {ruleFired}</span>
               )}
               <span className="value-compare-figure mono">
-                {value.value} {value.unit}
+                {formatValue(value.value, value.unit)}
               </span>
               <span className="cell-sub">
                 {title} — {formatLocator(value.locator)}

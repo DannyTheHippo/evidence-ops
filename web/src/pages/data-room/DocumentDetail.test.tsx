@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { clearSession } from '../../lib/auth';
@@ -31,6 +31,7 @@ const documentDetail = {
   title: 'Q3 Rent Roll',
   sourceKind: 'xlsx',
   mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  sourceClass: 'spreadsheet',
   createdAt: new Date().toISOString(),
   currentVersion: {
     id: 'v-1',
@@ -109,6 +110,7 @@ describe('DocumentDetail', () => {
     // The description list's own current-version summary, distinct from the version table's
     // own "v1"/"completed" cell for the same version.
     expect(screen.getByText('xlsx')).toBeInTheDocument();
+    expect(screen.getByText('Spreadsheet')).toBeInTheDocument();
     expect(screen.getByText('Deleting a document cannot be undone.')).toBeInTheDocument();
   });
 
@@ -240,5 +242,78 @@ describe('DocumentDetail', () => {
 
     expect(await screen.findByRole('button', { name: 'Delete' })).toBeInTheDocument();
     expect(screen.queryByText('Deleting evidence requires an admin.')).not.toBeInTheDocument();
+  });
+
+  it('opens a version details drawer exposing the full sha256, from a keyboard-reachable control', async () => {
+    stubFetch({
+      '/api/v1/auth/me': () => jsonResponse(admin),
+      '/api/v1/documents/doc-1': () => jsonResponse(documentDetail),
+    });
+
+    renderDetail();
+
+    const detailsButton = await screen.findByRole('button', {
+      name: 'Version 1 details, Q3 Rent Roll',
+    });
+    detailsButton.focus();
+    fireEvent.click(detailsButton);
+
+    expect(await screen.findByRole('dialog', { name: 'Version 1' })).toBeInTheDocument();
+    expect(screen.getByText('a'.repeat(64))).toBeInTheDocument();
+  });
+
+  it('advances a pending version to completed as the poll ticks', async () => {
+    vi.useFakeTimers();
+    const pendingVersion = { ...documentDetail.currentVersion, ingestionStatus: 'pending' };
+    const pendingDetail = {
+      ...documentDetail,
+      currentVersion: pendingVersion,
+      versions: [pendingVersion],
+    };
+    const completedDetail = documentDetail;
+
+    let call = 0;
+    const fetchMock = vi.fn((url: string) => {
+      if (url === '/api/v1/auth/me') return Promise.resolve(jsonResponse(admin));
+      if (url === '/api/v1/documents/doc-1') {
+        call += 1;
+        return Promise.resolve(jsonResponse(call === 1 ? pendingDetail : completedDetail));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderDetail();
+
+    await vi.waitFor(() => expect(screen.getAllByText('pending').length).toBeGreaterThan(0));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+
+    await vi.waitFor(() => expect(screen.queryByText('pending')).not.toBeInTheDocument());
+    expect(screen.getAllByText('completed').length).toBeGreaterThan(0);
+
+    vi.useRealTimers();
+  });
+
+  it('keeps the confirm dialog open, carrying the error, when the delete request fails', async () => {
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url === '/api/v1/auth/me') return Promise.resolve(jsonResponse(admin));
+      if (url === '/api/v1/documents/doc-1' && init?.method === 'DELETE') {
+        return Promise.resolve(jsonResponse({ message: 'Document has active citations' }, 409));
+      }
+      if (url === '/api/v1/documents/doc-1') return Promise.resolve(jsonResponse(documentDetail));
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete document' }));
+
+    expect(await screen.findByText('Document has active citations')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Delete "Q3 Rent Roll"?' })).toBeInTheDocument();
   });
 });

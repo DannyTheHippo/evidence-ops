@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Answer } from '../api/client';
 import { clearSession } from '../lib/auth';
+import { CONNECTION_LABELS, type StreamState } from '../lib/use-event-stream';
 import AnswerWorkspace from './AnswerWorkspace';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -55,10 +56,14 @@ function stubSession(me: typeof admin | typeof member) {
   );
 }
 
-function renderWorkspace(answer: Answer, variant: 'ask' | 'detail' = 'ask') {
+function renderWorkspace(
+  answer: Answer,
+  variant: 'ask' | 'detail' = 'ask',
+  streamState?: StreamState,
+) {
   return render(
     <MemoryRouter>
-      <AnswerWorkspace answer={answer} variant={variant} />
+      <AnswerWorkspace answer={answer} variant={variant} streamState={streamState} />
     </MemoryRouter>,
   );
 }
@@ -83,9 +88,9 @@ describe('AnswerWorkspace', () => {
     stubSession(member);
     renderWorkspace(baseAnswer({ runStatus: 'running', outcome: undefined }), 'detail');
 
-    expect(screen.queryByRole('heading')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Answer' })).toBeInTheDocument();
     expect(
-      await screen.findByText('Still answering — check back once this run completes.'),
+      await screen.findByText('Still answering — this page updates as the run progresses.'),
     ).toBeInTheDocument();
   });
 
@@ -116,4 +121,50 @@ describe('AnswerWorkspace', () => {
     expect(screen.queryByText('Run cost')).not.toBeInTheDocument();
     expect(screen.queryByText('$0.0042')).not.toBeInTheDocument();
   });
+
+  it('shows the transport label from the shared vocabulary while a run is in flight', async () => {
+    stubSession(member);
+    renderWorkspace(baseAnswer({ runStatus: 'running', outcome: undefined }), 'ask', 'stale');
+
+    expect(await screen.findByText('Stale')).toBeInTheDocument();
+    expect(
+      screen.getByText('. No updates for 35 seconds — reconnecting.', { exact: false }),
+    ).toBeInTheDocument();
+  });
+
+  it('renders no connection label once the run is terminal', async () => {
+    stubSession(member);
+    renderWorkspace(baseAnswer({ runStatus: 'completed' }), 'detail', 'live');
+
+    await screen.findByText('No document mentions the cap rate.');
+    expect(screen.queryByText('Live')).not.toBeInTheDocument();
+  });
+
+  it('never labels a stale stream as live', async () => {
+    stubSession(member);
+    renderWorkspace(
+      baseAnswer({ runStatus: 'running', outcome: undefined }),
+      'ask',
+      'reconnecting',
+    );
+
+    expect(await screen.findByText('Reconnecting')).toBeInTheDocument();
+    expect(screen.queryByText('Live')).not.toBeInTheDocument();
+  });
+
+  it.each<StreamState>(['connecting', 'live', 'stale', 'reconnecting', 'fallback'])(
+    "renders the connection dot's tone class for %s",
+    async (streamState) => {
+      stubSession(member);
+      const { container } = renderWorkspace(
+        baseAnswer({ runStatus: 'running', outcome: undefined }),
+        'ask',
+        streamState,
+      );
+
+      await screen.findByText(CONNECTION_LABELS[streamState].label);
+      const tone = streamState === 'fallback' ? 'polling' : streamState;
+      expect(container.querySelector(`.connection-dot--${tone}`)).toBeInTheDocument();
+    },
+  );
 });

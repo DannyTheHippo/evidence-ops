@@ -15,9 +15,9 @@ web/src/
 ├── lib/use-session.ts    reactive hook over that cache
 ├── lib/document-index.ts, lib/locator.ts   pure helpers
 ├── pages/*.tsx           one file per route, colocated *.test.tsx
-├── styles/               six fixed files, imported in this order from main.tsx:
-│                         tokens.css, base.css, primitives.css, shell.css, rail.css, views.css
-│                         (hex/rgba literals legal only in tokens.css)
+├── styles/               eight fixed files, imported in this order from main.tsx:
+│                         tokens.css, base.css, primitives.css, shell.css, rail.css, views.css,
+│                         features.css, print.css (hex/rgba literals legal only in tokens.css)
 └── test/setup.ts         vitest setup (jest-dom via /vitest, explicit afterEach(cleanup))
 ```
 
@@ -41,14 +41,15 @@ function RequireAuth({ children }: { children: ReactNode }) {
 The SPA holds no credential of its own — the session is an HttpOnly cookie — so `useSession()` asks
 the server. `ensureSession()` (`lib/auth.ts`) probes `GET /auth/me` once, shares one in-flight probe
 across concurrent callers, and caches the result module-scope; only login (`setSession`) and logout
-(`clearSession`) invalidate it. Both fail **closed**: any non-200 resolves to `anon`. There is no
+(`clearSession`) invalidate it. Both fail **closed** per call: a definite 401 caches `anon`; any other rejection resolves to `anon`
+for that call only and leaves the cache unprobed, so the next call re-probes. There is no
 `AuthContext` and no auth state in a store. These guards decide only what renders — each server
 route carries its own guard, which is the boundary. react-router-dom v7 declarative API only — no
 `createBrowserRouter`, no loaders, no actions.
 
 ## Page component shape
 
-`useState` for local state, a plain `async function` handler invoked as `onSubmit={(e) => void handleSubmit(e)}` (the `void` satisfies `no-floating-promises` under `recommendedTypeChecked`), `loading`/`error` tracked as local state, errors rendered with `role="alert"`.
+`useState` for local state, a plain `async function` handler invoked as `onSubmit={(e) => void handleSubmit(e)}` (the `void` satisfies `no-floating-promises` under `recommendedTypeChecked`), `loading`/`error` tracked as local state; a field error announces by moving focus to the summary or control, never `role="alert"`; a page-level failure renders through `Alert`, whose `rejected` tone is `role="alert"` and every other tone is `role="status"`.
 
 ## API access
 

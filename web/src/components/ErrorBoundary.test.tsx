@@ -79,6 +79,19 @@ describe('ErrorBoundary', () => {
     Object.defineProperty(window, 'location', { configurable: true, value: realLocation });
   });
 
+  it('renders an app-scope fallback with a level-1 heading, the route and the message', () => {
+    render(
+      <ErrorBoundary resetKey="/a" scope="app">
+        <Thrower />
+      </ErrorBoundary>,
+    );
+
+    expect(
+      screen.getByRole('heading', { level: 1, name: "This page couldn't load" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('/a · render boom')).toBeInTheDocument();
+  });
+
   it('clears a caught error and shows the new children once resetKey changes', () => {
     const { rerender } = render(
       <ErrorBoundary resetKey="/a">

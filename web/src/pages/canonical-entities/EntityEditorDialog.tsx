@@ -4,9 +4,10 @@ import {
   updateCanonicalEntity,
   type CanonicalEntity,
 } from '../../api/client';
+import Alert from '../../components/ui/Alert';
 import Button from '../../components/ui/Button';
 import Dialog from '../../components/ui/Dialog';
-import Field from '../../components/ui/Field';
+import Input from '../../components/ui/Input';
 import Textarea from '../../components/ui/Textarea';
 import { notify } from '../../components/ui/toast';
 import { useFormSubmit } from '../../lib/use-form-submit';
@@ -108,20 +109,17 @@ export default function EntityEditorDialog({ entity, onClose, onSaved }: EntityE
       size="md"
     >
       <form ref={formRef} onSubmit={onSubmit} className="form" noValidate>
-        <Field id={nameId} label="Canonical name" error={nameError}>
-          {(inputProps) => (
-            <input
-              type="text"
-              value={canonicalName}
-              onChange={(e) => setCanonicalName(e.target.value)}
-              onBlur={nameBlur}
-              onKeyDown={handleNameKeyDown}
-              placeholder="Northgate Plaza"
-              disabled={pending}
-              {...inputProps}
-            />
-          )}
-        </Field>
+        <Input
+          id={nameId}
+          label="Canonical name"
+          error={nameError}
+          value={canonicalName}
+          onChange={setCanonicalName}
+          onBlur={nameBlur}
+          onKeyDown={handleNameKeyDown}
+          placeholder="Northgate Plaza"
+          disabled={pending}
+        />
         <Textarea
           id={aliasesId}
           label="Aliases"
@@ -136,11 +134,7 @@ export default function EntityEditorDialog({ entity, onClose, onSaved }: EntityE
           disabled={pending}
         />
 
-        {formError && (
-          <p className="error" role="alert">
-            {formError}
-          </p>
-        )}
+        {formError && <Alert tone="rejected">{formError}</Alert>}
 
         <div className="form-actions">
           <Button type="button" variant="ghost" disabled={pending} onClick={onClose}>

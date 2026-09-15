@@ -23,8 +23,10 @@ interface RadioGroupProps {
 
 /** `fieldset`/`legend` plus native exclusive radios, for a small set of options where every value —
  * including the "off" one — is a named, permanent state rather than an unchecked default a user
- * forgot to change. `error` renders inside the fieldset and describes the group via
- * `aria-describedby`/`aria-invalid`, matching `Field`'s labelled-control shape one level up. */
+ * forgot to change. `error` renders inside the fieldset, which describes the group via
+ * `aria-describedby`; `aria-invalid` lands on each radio rather than the fieldset, because ARIA 1.2
+ * does not support it on `role="group"`. Each option's `hint` reaches its own radio through
+ * `aria-describedby`, keeping the hint out of the radio's accessible name. */
 export default function RadioGroup({
   legend,
   options,
@@ -48,26 +50,34 @@ export default function RadioGroup({
     <fieldset
       className="radio-group"
       aria-describedby={error ? errorId : undefined}
-      aria-invalid={error ? true : undefined}
       onBlur={handleBlur}
     >
       <legend className="radio-group-legend">{legend}</legend>
-      {options.map((option, index) => (
-        <label key={option.value} className="radio-group-option">
-          <input
-            type="radio"
-            id={index === 0 ? groupId : undefined}
-            name={name}
-            value={option.value}
-            checked={value === option.value}
-            onChange={() => onChange(option.value)}
-          />
-          <span className="radio-group-option-text">
-            {option.label}
-            {option.hint && <span className="field-hint">{option.hint}</span>}
-          </span>
-        </label>
-      ))}
+      {options.map((option, index) => {
+        const hintId = option.hint ? `${groupId}-${option.value}-hint` : undefined;
+        return (
+          <div key={option.value} className="radio-group-option">
+            <label className="radio-group-option-label">
+              <input
+                type="radio"
+                id={index === 0 ? groupId : undefined}
+                name={name}
+                value={option.value}
+                checked={value === option.value}
+                onChange={() => onChange(option.value)}
+                aria-describedby={hintId}
+                aria-invalid={error ? true : undefined}
+              />
+              <span className="radio-group-option-text">{option.label}</span>
+            </label>
+            {option.hint && (
+              <span id={hintId} className="field-hint">
+                {option.hint}
+              </span>
+            )}
+          </div>
+        );
+      })}
       {error && (
         <p id={errorId} className="field-error">
           <span className="sr-only">Error: </span>

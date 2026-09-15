@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { FormEvent } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api/client';
 import { useFormSubmit } from './use-form-submit';
 
@@ -28,6 +28,10 @@ function deferred<T>(): {
 type Field = 'name' | 'owner';
 
 describe('useFormSubmit', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('shows no error before any field has been touched or submitted', () => {
     const { result } = renderHook(() =>
       useFormSubmit<Field>({
@@ -364,5 +368,54 @@ describe('useFormSubmit', () => {
       'Owner is required',
       'Name is required',
     ]);
+  });
+
+  it('counts down a 429 cooldown and refuses submit until it ends', async () => {
+    vi.useFakeTimers();
+    const submit = vi.fn().mockRejectedValue(new ApiError(429, 'Too many attempts.', undefined, 5));
+    const { result } = renderHook(() => useFormSubmit<Field>({ submit }));
+
+    act(() => {
+      result.current.onSubmit(fakeEvent());
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(result.current.cooldownSeconds).toBe(5);
+    expect(result.current.formError).toBe('Too many attempts. Try again in 5 seconds.');
+
+    // A submit attempt during the cooldown never reaches `submit` again.
+    act(() => {
+      result.current.onSubmit(fakeEvent());
+    });
+    expect(submit).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(result.current.cooldownSeconds).toBe(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(result.current.cooldownSeconds).toBe(0);
+    expect(result.current.formError).toBeNull();
+  });
+
+  it('falls back to a 30 s window when Retry-After is absent', async () => {
+    vi.useFakeTimers();
+    const submit = vi.fn().mockRejectedValue(new ApiError(429, 'Too many attempts.'));
+    const { result } = renderHook(() => useFormSubmit<Field>({ submit }));
+
+    act(() => {
+      result.current.onSubmit(fakeEvent());
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(result.current.cooldownSeconds).toBe(30);
+    expect(result.current.formError).toBe('Too many attempts. Try again in 30 seconds.');
   });
 });

@@ -132,7 +132,7 @@ describe('AnswerDetailPage', () => {
 
     expect(await screen.findByText('running')).toBeInTheDocument();
     expect(
-      screen.getByText('Still answering — check back once this run completes.'),
+      screen.getByText('Still answering — this page updates as the run progresses.'),
     ).toBeInTheDocument();
   });
 
@@ -314,7 +314,7 @@ describe('AnswerDetailPage', () => {
     );
     expect(screen.getByRole('link', { name: 'Ask a follow-up' })).toHaveAttribute(
       'href',
-      '/answers',
+      `/answers?q=${encodeURIComponent(completedAnswer.questionText)}`,
     );
   });
 
@@ -339,13 +339,34 @@ describe('AnswerDetailPage', () => {
     renderAt('answer-1');
     await screen.findByText('No document mentions the cap rate.');
 
-    expect(getBreadcrumbTrail()).toEqual([
-      { label: 'Answers', to: '/answers' },
-      { label: 'What is the cap rate?' },
-    ]);
+    // useBreadcrumbs publishes from its own effect, one tick after the render that painted the
+    // outcome above (App.test.tsx's document.title assertion documents the same lag).
+    await waitFor(() => {
+      expect(getBreadcrumbTrail()).toEqual([
+        { label: 'Answers', to: '/answers' },
+        { label: 'What is the cap rate?' },
+      ]);
+    });
   });
 
-  it('offers to ask a failed run again, carrying the original question as a query param', async () => {
+  it('clamps a long question in the breadcrumb', async () => {
+    const longQuestion = `${'What is the cap rate for the property at '.repeat(3)}the corner?`;
+    const longAnswer = { ...completedAnswer, questionText: longQuestion };
+    vi.stubGlobal('fetch', mockAnswerFetch(longAnswer));
+
+    renderAt('answer-1');
+    // The PageHeader title keeps the full text — only the published crumb clamps.
+    await screen.findByRole('heading', { name: longQuestion });
+
+    await waitFor(() => {
+      expect(getBreadcrumbTrail()).toEqual([
+        { label: 'Answers', to: '/answers' },
+        { label: `${longQuestion.slice(0, 60)}…` },
+      ]);
+    });
+  });
+
+  it('carries the question into the follow-up link', async () => {
     const failedAnswer = {
       id: 'answer-1',
       questionText: 'What is the cap rate?',
@@ -358,10 +379,11 @@ describe('AnswerDetailPage', () => {
 
     renderAt('answer-1');
 
-    expect(await screen.findByRole('link', { name: 'Ask this question again' })).toHaveAttribute(
+    expect(await screen.findByRole('link', { name: 'Ask a follow-up' })).toHaveAttribute(
       'href',
       `/answers?q=${encodeURIComponent('What is the cap rate?')}`,
     );
+    expect(screen.queryByRole('link', { name: 'Ask this question again' })).not.toBeInTheDocument();
   });
 
   it('renders the answerPath badge and the attestation hash chip once the answer loads', async () => {
@@ -395,6 +417,30 @@ describe('AnswerDetailPage', () => {
     renderAt('answer-1');
 
     expect(await screen.findByRole('heading', { name: 'Attestation' })).toBeInTheDocument();
+  });
+
+  it('does not auto-generate an attestation for an answer with no pinned hash', async () => {
+    const fetchMock = mockAnswerFetch(completedAnswer);
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderAt('answer-1');
+
+    expect(await screen.findByRole('button', { name: 'Generate attestation' })).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => url === `/api/v1/answers/${completedAnswer.id}/attestation`,
+      ),
+    ).toBe(false);
+  });
+
+  it('auto-loads the attestation bundle when the answer already carries a pinned hash', async () => {
+    const ledgerAnswer = { ...completedAnswer, attestationHash: 'a'.repeat(64) };
+    vi.stubGlobal('fetch', mockAnswerFetch(ledgerAnswer));
+
+    renderAt('answer-1');
+
+    expect(await screen.findByRole('heading', { name: 'Attested claims' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Download attestation' })).toBeInTheDocument();
   });
 
   it('does not render the attestation section for a run still in flight', async () => {

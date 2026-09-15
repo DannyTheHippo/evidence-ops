@@ -75,6 +75,19 @@ export default function MeasureEditorDialog({
     measure.stalenessWindowMs !== undefined ? String(measure.stalenessWindowMs) : '',
   );
 
+  // The server accepts only a `units` entry with factor 1 as `canonicalUnit`, so free text could
+  // never succeed with anything but its current value. Falls back to including the measure's own
+  // canonicalUnit when `units` carries no factor-1 entry (an empty unit table, or seed data
+  // missing exactly this one) so the Select always has a valid, selected option.
+  const factorOneUnits = measure.units
+    .filter((unit) => unit.toCanonicalFactor === 1)
+    .map((unit) => ({ value: unit.id, label: unit.id }));
+  const canonicalUnitOptions = factorOneUnits.some(
+    (option) => option.value === measure.canonicalUnit,
+  )
+    ? factorOneUnits
+    : [...factorOneUnits, { value: measure.canonicalUnit, label: measure.canonicalUnit }];
+
   function validate(): Partial<Record<FieldName, string>> {
     const errors: Partial<Record<FieldName, string>> = {};
     if (!label.trim()) errors.label = 'Label is required.';
@@ -156,13 +169,24 @@ export default function MeasureEditorDialog({
           onChange={(next) => setValueType(next as Measure['valueType'])}
           disabled={pending}
         />
-        <Input
+        <Select
           {...canonicalUnitField}
           label="Canonical unit"
+          hint="The canonical unit must be a unit with factor 1. Editing the unit table is not available in the console."
+          options={canonicalUnitOptions}
           value={canonicalUnit}
           onChange={setCanonicalUnit}
           disabled={pending}
         />
+        {measure.units.length > 0 && (
+          <div className="unit-list">
+            {measure.units.map((unit) => (
+              <span key={unit.id} className="trace-chip mono">
+                {unit.id} ×{unit.toCanonicalFactor}
+              </span>
+            ))}
+          </div>
+        )}
         <Select
           {...toleranceKindField}
           label="Tolerance kind"

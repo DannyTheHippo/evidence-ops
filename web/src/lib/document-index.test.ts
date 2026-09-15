@@ -111,6 +111,32 @@ describe('resolveDocumentVersions', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('splits 101 ids into two lookups and merges the maps', async () => {
+    const ids = Array.from({ length: 101 }, (_, i) => `docver-${i}`);
+    const batchesRequested: string[][] = [];
+    const fetchMock = vi.fn((url: string) => {
+      const requested = decodeURIComponent(url.split('versionIds=')[1] ?? '').split(',');
+      batchesRequested.push(requested);
+      return Promise.resolve(
+        jsonResponse({ docs: requested.map((id) => lookupRow(id)), count: requested.length }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const index = await resolveDocumentVersions(ids);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(batchesRequested[0]).toHaveLength(100);
+    expect(batchesRequested[1]).toHaveLength(1);
+    expect(index.size).toBe(101);
+    expect(index.get('docver-100')).toEqual({
+      documentId: 'doc-docver-100',
+      documentTitle: 'Title for docver-100',
+      withdrawn: false,
+      sourceKind: 'pdf',
+    });
+  });
+
   it('dedupes repeated ids into a single request', async () => {
     const fetchMock = vi.fn((url: string) => {
       if (url === '/api/v1/documents/versions/lookup?versionIds=docver-1') {

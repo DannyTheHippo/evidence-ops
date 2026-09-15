@@ -26,11 +26,16 @@
 
   /* Chrome that exists to operate the app, not to be read on paper. `.toast-stack` is
      `position: fixed`, which print pagination repeats on every page it would otherwise land on
-     if left visible. */
+     if left visible. `.tooltip-surface`, `.popover-surface` and `.drawer` are the same shape —
+     transient, viewport-anchored overlay content with nothing paper-relevant left to print once
+     the page it sits over is already on the sheet. */
   .skip-link,
   .sidebar,
   .topbar,
-  .toast-stack {
+  .toast-stack,
+  .tooltip-surface,
+  .popover-surface,
+  .drawer {
     display: none;
   }
 
@@ -38,25 +43,28 @@
      "background graphics" option, off by default) unless told to render exactly as authored.
      Scoped to the places state or proportion is encoded that way — the funnel bar, the coverage
      meter's fill, the rail's and run-rail's filled-vs-outline node markers, the badge's status
-     silhouette — rather than applied globally, which would also print every card and surface tint. */
+     silhouette, the value-compare recommended band — rather than applied globally, which would
+     also print every card and surface tint. Without this, `.value-compare-band`'s background
+     drops and its `--signal-ink` text prints in place on the bare page colour, both light. */
   .ledger-bar,
   .coverage-meter-fill,
   .rail-node::before,
   .run-step::before,
-  .badge::before {
+  .badge::before,
+  .value-compare-band {
     print-color-adjust: exact;
     -webkit-print-color-adjust: exact;
   }
 
-  /* A SegmentedControl (`.control-row[role='group']`) is an on-screen switch between views; on
+  /* A SegmentedControl (`.segmented-control`) is an on-screen switch between views; on
      paper only the option actually chosen is a fact worth keeping. Every other option is dropped,
      and the selected button sheds its `.btn` chrome — height, minimum width, border, and the
      `--signal` background whose `--signal-ink` text would otherwise print as invisible
      white-on-white — to read as a plain label instead. */
-  .control-row[role='group'] .btn:not([aria-pressed='true']) {
+  .segmented-control .btn:not([aria-pressed='true']) {
     display: none;
   }
-  .control-row[role='group'] .btn[aria-pressed='true'] {
+  .segmented-control .btn[aria-pressed='true'] {
     display: inline;
     min-width: 0;
     height: auto;

@@ -58,6 +58,24 @@ describe('SegmentedControl', () => {
     expect(screen.getByText('(12)')).toHaveAttribute('aria-hidden', 'true');
   });
 
+  it('announces an option count through its description', () => {
+    render(
+      <SegmentedControl
+        options={OPTIONS}
+        value="tracked"
+        onChange={() => {}}
+        aria-label="Source list"
+      />,
+    );
+
+    expect(
+      screen.getByRole('button', { name: 'Repository inventory' }),
+    ).toHaveAccessibleDescription('12 items');
+    expect(screen.getByRole('button', { name: 'Tracked sources' })).not.toHaveAttribute(
+      'aria-describedby',
+    );
+  });
+
   it('names the group', () => {
     render(
       <SegmentedControl
@@ -69,5 +87,20 @@ describe('SegmentedControl', () => {
     );
 
     expect(screen.getByRole('group', { name: 'Source list' })).toBeInTheDocument();
+  });
+
+  it('renders its group with its own class, not the generic control row', () => {
+    render(
+      <SegmentedControl
+        options={OPTIONS}
+        value="tracked"
+        onChange={() => {}}
+        aria-label="Source list"
+      />,
+    );
+
+    const group = screen.getByRole('group', { name: 'Source list' });
+    expect(group).toHaveClass('segmented-control');
+    expect(group).not.toHaveClass('control-row');
   });
 });

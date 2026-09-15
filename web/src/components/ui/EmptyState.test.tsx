@@ -20,4 +20,16 @@ describe('EmptyState', () => {
 
     expect(screen.getByRole('button', { name: 'Upload' })).toBeInTheDocument();
   });
+
+  it('renders the title as a heading when a level is given', () => {
+    render(<EmptyState title="No documents yet" headingLevel={2} />);
+
+    expect(screen.getByRole('heading', { level: 2, name: 'No documents yet' })).toBeInTheDocument();
+  });
+
+  it('renders the title as plain text when no level is given', () => {
+    render(<EmptyState title="No documents yet" />);
+
+    expect(screen.queryByRole('heading')).not.toBeInTheDocument();
+  });
 });

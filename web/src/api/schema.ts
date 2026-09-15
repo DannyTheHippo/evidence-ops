@@ -324,6 +324,86 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/workflow-runs': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['WorkflowRunsController_list'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/workflow-runs/{id}/events': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['WorkflowRunsController_streamRun'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/workflow-runs/{id}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['WorkflowRunsController_getById'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/approvals': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations['ApprovalsController_list'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/approvals/{id}/decision': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations['ApprovalsController_decide'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/canonical-entities': {
     parameters: {
       query?: never;
@@ -510,86 +590,6 @@ export interface paths {
     get?: never;
     put?: never;
     post: operations['ConflictsController_requestResolution'];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  '/workflow-runs': {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get: operations['WorkflowRunsController_list'];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  '/workflow-runs/{id}/events': {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get: operations['WorkflowRunsController_streamRun'];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  '/workflow-runs/{id}': {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get: operations['WorkflowRunsController_getById'];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  '/approvals': {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get: operations['ApprovalsController_list'];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  '/approvals/{id}/decision': {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    put?: never;
-    post: operations['ApprovalsController_decide'];
     delete?: never;
     options?: never;
     head?: never;
@@ -1411,6 +1411,152 @@ export interface components {
        */
       locator: Record<string, never>;
     };
+    WorkflowRunResponseDto: {
+      /**
+       * @description WorkflowRun identifier.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      id: string;
+      /**
+       * @description Underlying Temporal workflow id.
+       * @example a3f1b2c4-5678-4d9e-9abc-1234567890ab
+       */
+      workflowId: string;
+      /**
+       * @description Which workflow this run projects. Absent on rows written before the field existed.
+       * @example resolve-conflict
+       * @enum {string}
+       */
+      workflowType?:
+        | 'resolve-conflict'
+        | 'sync-source'
+        | 'rescan-conflicts'
+        | 'answer-question'
+        | 'ingest-document-version';
+      /**
+       * @description Run status. On GET /workflow-runs/:id and the SSE stream, best-effort refreshed from the live engine (cached up to 15s, falling back to this durable value on an engine failure). On the list endpoint, always the durable row as last written by the workflow — the list never queries the engine, so a status filter there matches stored state, not live state.
+       * @example running
+       * @enum {string}
+       */
+      status: 'queued' | 'running' | 'completed' | 'failed';
+      /**
+       * @description Error detail, present only when status is failed.
+       * @example Timed out waiting for approval
+       */
+      errorMessage?: string;
+      /**
+       * @description The workflow's own verdict, written when it ends. Present on a resolve-conflict run; absent on every other type and on rows written before the field existed.
+       * @example resolved
+       * @enum {string}
+       */
+      outcome?: 'resolved' | 'rejected' | 'timed_out';
+      /**
+       * @description Identifier of the entity this run acted on, present when the run carries a subject reference. Read alongside subjectType, never alone.
+       * @example 65f1c2e4a1b2c3d4e5f6a7c0
+       */
+      subjectId?: string;
+      /**
+       * @description The subjectId's entity type, present exactly when subjectId is.
+       * @example Answer
+       */
+      subjectType?: string;
+      /**
+       * @description True when this response refreshed from the live engine and the engine reported the workflow unknown to it while the stored row was still non-terminal — the signal for a run orphaned by a workflow that ended through a path that never recorded its end, whose Temporal history has since fallen out of retention. status stays the durable row value in that case, unwritten. False for a terminal row, a live engine answer, or an engine call failure (falls back to the durable status). Present only on a response built from a read that asked the engine for live status; absent everywhere else means status freshness was never checked, not that it is known fresh.
+       * @example false
+       */
+      stale?: boolean;
+      /**
+       * Format: date-time
+       * @description Run creation timestamp.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      createdAt: string;
+    };
+    ApprovalResponseDto: {
+      /**
+       * @description Approval identifier.
+       * @example 65f1c2e4a1b2c3d4e5f6a7b8
+       */
+      id: string;
+      /**
+       * @description The entity this approval gates.
+       * @example {
+       *       "entityType": "Conflict",
+       *       "entityId": "65f1c2e4a1b2c3d4e5f6a7b9"
+       *     }
+       */
+      subject: Record<string, never>;
+      /**
+       * @description The action being approved.
+       * @example resolve_conflict
+       */
+      action: string;
+      /**
+       * @description Human-readable summary of the requested action.
+       * @example Resolve Northgate Business Park cap_rate (2025-03) in favor of 5.25% over 6.10%.
+       */
+      summary: string;
+      /**
+       * @description Who or what requested the approval.
+       * @example reviewer@example.com
+       */
+      requestedBy?: string;
+      /**
+       * @description Underlying Temporal workflow id this approval gates, present when requested via a workflow (matches WorkflowRun.workflowId) — absent for an approval created outside one.
+       * @example a3f1b2c4-5678-4d9e-9abc-1234567890ab
+       */
+      workflowId?: string;
+      /**
+       * @description Approval state.
+       * @example pending
+       * @enum {string}
+       */
+      state: 'pending' | 'approved' | 'rejected' | 'timed_out';
+      /**
+       * @description Who decided the approval.
+       * @example reviewer@example.com
+       */
+      decidedBy?: string;
+      /**
+       * Format: date-time
+       * @description When the decision was made.
+       * @example 2026-07-02T00:00:00.000Z
+       */
+      decidedAt?: string;
+      /**
+       * @description Optional rationale for the decision.
+       * @example Evidence checks out.
+       */
+      decisionReason?: string;
+      /**
+       * Format: date-time
+       * @description Approval creation timestamp.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      createdAt: string;
+    };
+    ApprovalListResponseDto: {
+      /**
+       * @description Total number of documents returned.
+       * @example 2
+       */
+      count: number;
+      /** @description Pending approvals awaiting a decision. */
+      docs: components['schemas']['ApprovalResponseDto'][];
+    };
+    DecideApprovalRequestDto: {
+      /**
+       * @description Human decision on the pending approval request.
+       * @example approved
+       * @enum {string}
+       */
+      decision: 'approved' | 'rejected';
+      /**
+       * @description Optional rationale for the decision.
+       * @example Evidence checks out; the spreadsheet figure is the current underwriting value.
+       */
+      reason?: string;
+    };
     HarvestedAliasResponseDto: {
       /**
        * @description Alias as the document wrote it.
@@ -1890,136 +2036,6 @@ export interface components {
        * @example 65f1c2e4a1b2c3d4e5f6a7b9
        */
       winningFactId: string;
-    };
-    WorkflowRunResponseDto: {
-      /**
-       * @description WorkflowRun identifier.
-       * @example 65f1c2e4a1b2c3d4e5f6a7b8
-       */
-      id: string;
-      /**
-       * @description Underlying Temporal workflow id.
-       * @example a3f1b2c4-5678-4d9e-9abc-1234567890ab
-       */
-      workflowId: string;
-      /**
-       * @description Which workflow this run projects. Absent on rows written before the field existed.
-       * @example resolve-conflict
-       * @enum {string}
-       */
-      workflowType?: 'resolve-conflict' | 'sync-source' | 'rescan-conflicts';
-      /**
-       * @description Run status. On GET /workflow-runs/:id and the SSE stream, best-effort refreshed from the live engine (cached up to 15s, falling back to this durable value on an engine failure). On the list endpoint, always the durable row as last written by the workflow — the list never queries the engine, so a status filter there matches stored state, not live state.
-       * @example running
-       * @enum {string}
-       */
-      status: 'queued' | 'running' | 'completed' | 'failed';
-      /**
-       * @description Error detail, present only when status is failed.
-       * @example Timed out waiting for approval
-       */
-      errorMessage?: string;
-      /**
-       * @description Identifier of the entity this run acted on, present when the run carries a subject reference. Read alongside subjectType, never alone.
-       * @example 65f1c2e4a1b2c3d4e5f6a7c0
-       */
-      subjectId?: string;
-      /**
-       * @description The subjectId's entity type, present exactly when subjectId is.
-       * @example Answer
-       */
-      subjectType?: string;
-      /**
-       * Format: date-time
-       * @description Run creation timestamp.
-       * @example 2026-07-01T00:00:00.000Z
-       */
-      createdAt: string;
-    };
-    ApprovalResponseDto: {
-      /**
-       * @description Approval identifier.
-       * @example 65f1c2e4a1b2c3d4e5f6a7b8
-       */
-      id: string;
-      /**
-       * @description The entity this approval gates.
-       * @example {
-       *       "entityType": "Conflict",
-       *       "entityId": "65f1c2e4a1b2c3d4e5f6a7b9"
-       *     }
-       */
-      subject: Record<string, never>;
-      /**
-       * @description The action being approved.
-       * @example resolve_conflict
-       */
-      action: string;
-      /**
-       * @description Human-readable summary of the requested action.
-       * @example Resolve Northgate Business Park cap_rate (2025-03) in favor of 5.25% over 6.10%.
-       */
-      summary: string;
-      /**
-       * @description Who or what requested the approval.
-       * @example reviewer@example.com
-       */
-      requestedBy?: string;
-      /**
-       * @description Underlying Temporal workflow id this approval gates, present when requested via a workflow (matches WorkflowRun.workflowId) — absent for an approval created outside one.
-       * @example a3f1b2c4-5678-4d9e-9abc-1234567890ab
-       */
-      workflowId?: string;
-      /**
-       * @description Approval state.
-       * @example pending
-       * @enum {string}
-       */
-      state: 'pending' | 'approved' | 'rejected' | 'timed_out';
-      /**
-       * @description Who decided the approval.
-       * @example reviewer@example.com
-       */
-      decidedBy?: string;
-      /**
-       * Format: date-time
-       * @description When the decision was made.
-       * @example 2026-07-02T00:00:00.000Z
-       */
-      decidedAt?: string;
-      /**
-       * @description Optional rationale for the decision.
-       * @example Evidence checks out.
-       */
-      decisionReason?: string;
-      /**
-       * Format: date-time
-       * @description Approval creation timestamp.
-       * @example 2026-07-01T00:00:00.000Z
-       */
-      createdAt: string;
-    };
-    ApprovalListResponseDto: {
-      /**
-       * @description Total number of documents returned.
-       * @example 2
-       */
-      count: number;
-      /** @description Pending approvals awaiting a decision. */
-      docs: components['schemas']['ApprovalResponseDto'][];
-    };
-    DecideApprovalRequestDto: {
-      /**
-       * @description Human decision on the pending approval request.
-       * @example approved
-       * @enum {string}
-       */
-      decision: 'approved' | 'rejected';
-      /**
-       * @description Optional rationale for the decision.
-       * @example Evidence checks out; the spreadsheet figure is the current underwriting value.
-       */
-      reason?: string;
     };
     LedgerCellResponseDto: {
       /**
@@ -2603,6 +2619,37 @@ export interface components {
        */
       sourceClass: 'crm-export' | 'pm-export' | 'spreadsheet' | 'memo' | 'report' | 'unclassified';
     };
+    SourceLastSyncResponseDto: {
+      /**
+       * Format: date-time
+       * @description When the most recent sync attempt started.
+       * @example 2026-07-01T00:00:00.000Z
+       */
+      startedAt?: string;
+      /**
+       * Format: date-time
+       * @description When the most recent sync attempt finished.
+       * @example 2026-07-01T00:01:12.000Z
+       */
+      finishedAt?: string;
+      /**
+       * @description Outcome of the most recent sync attempt — 'ok' or 'failed'.
+       * @example ok
+       * @enum {string}
+       */
+      status?: 'ok' | 'failed';
+      /**
+       * @description Error detail, present only when status is failed.
+       * @example ENOENT: no such file or directory
+       */
+      error?: string;
+      /**
+       * Format: date-time
+       * @description Estimated time of the next sweep, projected from the last finished attempt and the sync interval. Present only while the sync loop appears to still be running — an approximation, not a guarantee, since nothing clears this the moment a loop actually stops.
+       * @example 2026-07-01T00:06:12.000Z
+       */
+      nextSweepAt?: string;
+    };
     SourceResponseDto: {
       /**
        * @description Source identifier.
@@ -2651,6 +2698,8 @@ export interface components {
        * @example ENOENT: no such file or directory
        */
       lastSyncError?: string;
+      /** @description Diagnostic view of the most recent sync attempt. Absent when this source has never been synced. */
+      lastSync?: components['schemas']['SourceLastSyncResponseDto'];
       /**
        * @description Number of files this source has synced state for.
        * @example 42
@@ -2771,6 +2820,8 @@ export interface components {
        * @example ENOENT: no such file or directory
        */
       lastSyncError?: string;
+      /** @description Diagnostic view of the most recent sync attempt. Absent when this source has never been synced. */
+      lastSync?: components['schemas']['SourceLastSyncResponseDto'];
       /**
        * @description Number of files this source has synced state for.
        * @example 42
@@ -2832,10 +2883,10 @@ export interface components {
        */
       reachability?: 'live' | 'possible' | 'prohibited';
       /**
-       * @description Person or team accountable for this source.
+       * @description Person or team accountable for this source. Omit the field to leave it unchanged; send null to clear it. An empty string is rejected — it is not a clear instruction.
        * @example Jane Doe, IT
        */
-      owner?: string;
+      owner?: Record<string, never> | null;
       /**
        * @description Whether the sync loop may ever run for this source. 'false' marks an inventory-only row catalogued for the estate map but never synced.
        * @example false
@@ -3654,7 +3705,7 @@ export interface operations {
           'application/json': unknown;
         };
       };
-      /** @description This change would leave the tenant with no admin. */
+      /** @description The removal is refused: it would leave the tenant with no admin, or the caller is removing themselves. */
       409: {
         headers: {
           [name: string]: unknown;
@@ -3964,6 +4015,200 @@ export interface operations {
       };
       /** @description Document version does not exist or belongs to another tenant. */
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  WorkflowRunsController_list: {
+    parameters: {
+      query?: {
+        /** @description Comma-separated fields to include; `_id` is always returned. */
+        select?: string;
+        /** @description Number of documents to skip (offset). */
+        skip?: number;
+        /** @description Maximum number of documents to return. */
+        limit?: number;
+        /** @description Underlying Temporal workflow id to filter by. Omit it to list every run for the caller's tenant, most recent first. */
+        workflowId?: string;
+        /** @description Filter by run status. Matches the stored row only — this endpoint never queries the live workflow engine, so a run whose engine-side status has since moved on can still match its previous stored status here. */
+        status?: 'queued' | 'running' | 'completed' | 'failed';
+        /** @description Filter by which workflow the run projects. Includes 'rescan-conflicts', a legacy type no current workflow writes — accepted so a tenant with an existing legacy row can still filter it into view, not because new rows of that type can appear. */
+        workflowType?:
+          | 'resolve-conflict'
+          | 'sync-source'
+          | 'rescan-conflicts'
+          | 'answer-question'
+          | 'ingest-document-version';
+        /** @description Only rows created at or after this instant. ISO-8601 instant with date, time and offset (`Z` or `±hh:mm`), as `toISOString()` emits. */
+        from?: string;
+        /** @description Only rows created strictly before this instant; must be later than from. ISO-8601 instant with date, time and offset (`Z` or `±hh:mm`), as `toISOString()` emits. */
+        to?: string;
+        /** @description Field to sort by. Defaults to createdAt. */
+        sort?: 'createdAt' | 'status' | 'workflowType';
+        /** @description Sort direction. Defaults to desc. */
+        sortDir?: 'asc' | 'desc';
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Runs for the caller's tenant, most recent first. Filters to a single workflow when workflowId is given, and/or to a status or workflowType — both match the durable row, never the live engine (see WorkflowRunResponseDto.status). Omitting every filter lists every run. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['WorkflowRunResponseDto'];
+        };
+      };
+    };
+  };
+  WorkflowRunsController_streamRun: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description text/event-stream. Polls every 1.5s until status reaches a terminal state, emitting the final state before closing. `run` events carry the exact shape GET /workflow-runs/:id returns; `approvals` events carry the same {docs,count} shape GET /approvals returns, filtered to this run's own pending approval rather than the tenant's whole inbox; a `heartbeat` event fires every 15s; a terminal `error` event means the client should fall back to polling both endpoints. Re-checks the connecting session every 30s and closes if it is gone or moved tenants. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description The caller's tenant or user is already at its open-SSE-stream cap. */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  WorkflowRunsController_getById: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The run's current status, best-effort refreshed from the live workflow engine. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['WorkflowRunResponseDto'];
+        };
+      };
+      /** @description WorkflowRun does not exist. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+    };
+  };
+  ApprovalsController_list: {
+    parameters: {
+      query?: {
+        /** @description Comma-separated fields to include; `_id` is always returned. */
+        select?: string;
+        /** @description Number of documents to skip (offset). */
+        skip?: number;
+        /** @description Maximum number of documents to return. */
+        limit?: number;
+        /** @description Approval state to filter by. Defaults to `pending` — this endpoint is the pending inbox. */
+        state?: 'pending' | 'approved' | 'rejected' | 'timed_out';
+        /** @description Narrows the inbox to approvals requested by one workflow. Omit it for the tenant's whole inbox. */
+        workflowId?: string;
+        /** @description Field to sort by. Defaults to createdAt. */
+        sort?: 'createdAt' | 'state' | 'decidedAt';
+        /** @description Sort direction. Defaults to desc. */
+        sortDir?: 'asc' | 'desc';
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Paginated pending-approval inbox. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ApprovalListResponseDto'];
+        };
+      };
+    };
+  };
+  ApprovalsController_decide: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['DecideApprovalRequestDto'];
+      };
+    };
+    responses: {
+      /** @description The approval after recording the decision. */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ApprovalResponseDto'];
+        };
+      };
+      /** @description Caller does not hold the admin role required to decide an approval. */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description Approval does not exist for this tenant. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': unknown;
+        };
+      };
+      /** @description Approval was already decided. */
+      409: {
         headers: {
           [name: string]: unknown;
         };
@@ -4580,189 +4825,6 @@ export interface operations {
       };
     };
   };
-  WorkflowRunsController_list: {
-    parameters: {
-      query?: {
-        /** @description Comma-separated fields to include; `_id` is always returned. */
-        select?: string;
-        /** @description Number of documents to skip (offset). */
-        skip?: number;
-        /** @description Maximum number of documents to return. */
-        limit?: number;
-        /** @description Underlying Temporal workflow id to filter by. Omit it to list every run for the caller's tenant, most recent first. */
-        workflowId?: string;
-        /** @description Filter by run status. Matches the stored row only — this endpoint never queries the live workflow engine, so a run whose engine-side status has since moved on can still match its previous stored status here. */
-        status?: 'queued' | 'running' | 'completed' | 'failed';
-        /** @description Filter by which workflow the run projects. Includes 'rescan-conflicts', a legacy type no current workflow writes — accepted so a tenant with an existing legacy row can still filter it into view, not because new rows of that type can appear. */
-        workflowType?: 'resolve-conflict' | 'sync-source' | 'rescan-conflicts';
-        /** @description Field to sort by. Defaults to createdAt. */
-        sort?: 'createdAt' | 'status' | 'workflowType';
-        /** @description Sort direction. Defaults to desc. */
-        sortDir?: 'asc' | 'desc';
-      };
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Runs for the caller's tenant, most recent first. Filters to a single workflow when workflowId is given, and/or to a status or workflowType — both match the durable row, never the live engine (see WorkflowRunResponseDto.status). Omitting every filter lists every run. */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['WorkflowRunResponseDto'];
-        };
-      };
-    };
-  };
-  WorkflowRunsController_streamRun: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        id: string;
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description text/event-stream. Polls every 1.5s until status reaches a terminal state, emitting the final state before closing. `run` events carry the exact shape GET /workflow-runs/:id returns; `approvals` events carry the exact shape GET /approvals returns (the tenant's whole pending inbox, not just this run's); a `heartbeat` event fires every 15s; a terminal `error` event means the client should fall back to polling both endpoints. Re-checks the connecting session every 30s and closes if it is gone or moved tenants. */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content?: never;
-      };
-      /** @description The caller's tenant or user is already at its open-SSE-stream cap. */
-      429: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': unknown;
-        };
-      };
-    };
-  };
-  WorkflowRunsController_getById: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        id: string;
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description The run's current status, best-effort refreshed from the live workflow engine. */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['WorkflowRunResponseDto'];
-        };
-      };
-      /** @description WorkflowRun does not exist. */
-      404: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': unknown;
-        };
-      };
-    };
-  };
-  ApprovalsController_list: {
-    parameters: {
-      query?: {
-        /** @description Comma-separated fields to include; `_id` is always returned. */
-        select?: string;
-        /** @description Number of documents to skip (offset). */
-        skip?: number;
-        /** @description Maximum number of documents to return. */
-        limit?: number;
-        /** @description Approval state to filter by. Defaults to `pending` — this endpoint is the pending inbox. */
-        state?: 'pending' | 'approved' | 'rejected' | 'timed_out';
-        /** @description Field to sort by. Defaults to createdAt. */
-        sort?: 'createdAt' | 'state' | 'decidedAt';
-        /** @description Sort direction. Defaults to desc. */
-        sortDir?: 'asc' | 'desc';
-      };
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Paginated pending-approval inbox. */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['ApprovalListResponseDto'];
-        };
-      };
-    };
-  };
-  ApprovalsController_decide: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        id: string;
-      };
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        'application/json': components['schemas']['DecideApprovalRequestDto'];
-      };
-    };
-    responses: {
-      /** @description The approval after recording the decision. */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['ApprovalResponseDto'];
-        };
-      };
-      /** @description Caller does not hold the admin role required to decide an approval. */
-      403: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': unknown;
-        };
-      };
-      /** @description Approval does not exist for this tenant. */
-      404: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': unknown;
-        };
-      };
-      /** @description Approval was already decided. */
-      409: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': unknown;
-        };
-      };
-    };
-  };
   LedgerController_listCells: {
     parameters: {
       query?: {
@@ -4980,6 +5042,10 @@ export interface operations {
         limit?: number;
         /** @description Exact workflow run status to filter by. */
         runStatus?: 'queued' | 'running' | 'completed' | 'failed';
+        /** @description Only rows created at or after this instant. ISO-8601 instant with date, time and offset (`Z` or `±hh:mm`), as `toISOString()` emits. */
+        from?: string;
+        /** @description Only rows created strictly before this instant; must be later than from. ISO-8601 instant with date, time and offset (`Z` or `±hh:mm`), as `toISOString()` emits. */
+        to?: string;
         /** @description Field to sort by. Defaults to createdAt. */
         sort?: 'createdAt' | 'runStatus' | 'claimCoverage';
         /** @description Sort direction. Defaults to desc. */
@@ -5485,6 +5551,10 @@ export interface operations {
         origin?: 'api' | 'mcp';
         /** @description Exact refusal reason to filter by, matching mcp.tool_call.refused rows. */
         refusalReason?: string;
+        /** @description Only rows created at or after this instant. ISO-8601 instant with date, time and offset (`Z` or `±hh:mm`), as `toISOString()` emits. */
+        from?: string;
+        /** @description Only rows created strictly before this instant; must be later than from. ISO-8601 instant with date, time and offset (`Z` or `±hh:mm`), as `toISOString()` emits. */
+        to?: string;
         /** @description Field to sort by. Defaults to createdAt. */
         sort?: 'createdAt' | 'action' | 'origin';
         /** @description Sort direction. Defaults to desc. */

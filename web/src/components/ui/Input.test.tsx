@@ -46,4 +46,12 @@ describe('Input', () => {
 
     expect(onBlur).toHaveBeenCalledTimes(1);
   });
+
+  it('forwards width to the field wrapper, not the input element', () => {
+    render(<Input label="Name" value="" onChange={() => {}} width="sm" />);
+
+    const input = screen.getByLabelText('Name');
+    expect(input.closest('.field')).toHaveClass('field--sm');
+    expect(input).not.toHaveAttribute('width');
+  });
 });

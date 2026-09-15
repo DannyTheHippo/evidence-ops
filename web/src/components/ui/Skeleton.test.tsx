@@ -1,8 +1,22 @@
 import { render, screen } from '@testing-library/react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import Skeleton from './Skeleton';
 
 describe('Skeleton', () => {
+  it('mounts the status region before its label', () => {
+    // Server rendering never runs effects, so this captures exactly the pre-effect first paint —
+    // the region exists and is empty, ahead of the client effect that fills it in.
+    const firstPaint = renderToStaticMarkup(<Skeleton label="Loading documents…" />);
+    const firstPaintDom = new DOMParser().parseFromString(firstPaint, 'text/html');
+    const firstPaintStatus = firstPaintDom.querySelector('[role="status"]');
+    expect(firstPaintStatus).not.toBeNull();
+    expect(firstPaintStatus?.querySelector('.sr-only')?.textContent).toBe('');
+
+    render(<Skeleton label="Loading documents…" />);
+    expect(screen.getByRole('status')).toHaveTextContent('Loading documents…');
+  });
+
   it('exposes a status region containing the label, with the shimmer hidden from a11y', () => {
     render(<Skeleton label="Loading documents…" />);
 

@@ -7,6 +7,9 @@ export interface QueueSlots {
   quantifier: ReactNode;
   /** A muted `Timestamp` plus any decay markers, e.g. a Stale badge. */
   age: ReactNode;
+  /** Concise accessible name for the row's button. Omitted keeps the button's name as the
+   * concatenation of the three slots, which is what MeasuresPage relies on. */
+  name?: string;
 }
 
 interface QueueListProps<T extends { id: string }> {
@@ -87,6 +90,7 @@ export default function QueueList<T extends { id: string }>({
               }}
               className="card queue-item"
               aria-current={isSelected ? 'true' : undefined}
+              aria-label={slots.name}
               tabIndex={isTabStop ? 0 : -1}
               onClick={() => onSelect(item.id)}
               onKeyDown={(event) => handleKeyDown(event, index)}

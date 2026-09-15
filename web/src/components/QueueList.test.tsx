@@ -111,6 +111,33 @@ describe('QueueList', () => {
     expect(onSelect).toHaveBeenCalledWith('c');
   });
 
+  it('names the row by the caller-supplied name instead of its slot text', () => {
+    render(
+      <QueueList
+        items={rows}
+        selectedId="a"
+        onSelect={() => {}}
+        ariaLabel="Rows"
+        renderItem={(row) => ({
+          identity: row.title,
+          quantifier: 'q',
+          age: 'a',
+          name: `${row.title} concise name`,
+        })}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'First concise name' })).toBeInTheDocument();
+  });
+
+  it('keeps the concatenated slot text as the name when none is supplied', () => {
+    renderList('a', () => {});
+
+    const [first] = buttons();
+    expect(first).not.toHaveAttribute('aria-label');
+    expect(first).toHaveAccessibleName('First q a');
+  });
+
   it('clamps at the last row instead of wrapping', () => {
     const onSelect = vi.fn();
     renderList('c', onSelect);

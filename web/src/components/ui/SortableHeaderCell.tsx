@@ -40,7 +40,7 @@ export default function SortableHeaderCell<F extends string>({
         aria-label={actionLabel}
         onClick={() => onSort(field)}
       >
-        <span aria-hidden="true">{label}</span>
+        <span>{label}</span>
         {active &&
           (direction === 'asc' ? <IconChevronUp size={12} /> : <IconChevronDown size={12} />)}
       </button>

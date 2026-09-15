@@ -9,6 +9,9 @@ import { Link } from 'react-router-dom';
 
 interface TableProps {
   caption: string;
+  /** Appended after `grid`, for a page-specific modifier — a `<colgroup>` table's `min-width`
+   * floor, sized to its own fixed columns, lives here rather than as an inline style. */
+  className?: string;
   children: ReactNode;
 }
 
@@ -17,9 +20,9 @@ interface TableProps {
  * dense with sticky headers — a visible caption would displace that layout — so `caption` renders
  * visually hidden via `.sr-only` while still giving the table its accessible name. Native table
  * semantics only: no roving-tabindex ARIA grid, nothing beyond what a `<table>` gives for free. */
-export default function Table({ caption, children }: TableProps) {
+export default function Table({ caption, className, children }: TableProps) {
   return (
-    <table className="grid">
+    <table className={className ? `grid ${className}` : 'grid'}>
       <caption className="sr-only">{caption}</caption>
       {children}
     </table>
@@ -59,7 +62,8 @@ interface TableRowProps {
   children: ReactNode;
   className?: string;
   /** Marks the row as the current selection, e.g. the document workbench's active version — adds
-   * `row--selected` alongside whatever else the row's className resolves to. */
+   * `row--selected` alongside whatever else the row's className resolves to, and sets
+   * `aria-current="true"` so the selection is a programmatic state, not only a visual one. */
   selected?: boolean;
 }
 
@@ -92,7 +96,12 @@ export function TableRow({ to, children, className, selected }: TableRowProps) {
     .join(' ');
 
   return (
-    <tr ref={rowRef} className={classes || undefined} onClick={to ? handleClick : undefined}>
+    <tr
+      ref={rowRef}
+      className={classes || undefined}
+      aria-current={selected ? 'true' : undefined}
+      onClick={to ? handleClick : undefined}
+    >
       {children}
     </tr>
   );
@@ -101,13 +110,16 @@ export function TableRow({ to, children, className, selected }: TableRowProps) {
 interface RowLinkProps {
   to: string;
   children: ReactNode;
+  /** Set by a wrapping `Tooltip`, so the link that takes keyboard focus is also the element the
+   * tooltip describes. */
+  'aria-describedby'?: string;
 }
 
 /** The real, keyboard-reachable and screen-reader-visible anchor a `TableRow`'s click-anywhere
  * enhancement defers to. Render it once, inside the row's primary cell. */
-export function RowLink({ to, children }: RowLinkProps) {
+export function RowLink({ to, children, 'aria-describedby': describedBy }: RowLinkProps) {
   return (
-    <Link to={to} data-row-link className="row-link">
+    <Link to={to} data-row-link className="row-link" aria-describedby={describedBy}>
       {children}
     </Link>
   );

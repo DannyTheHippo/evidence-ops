@@ -1,22 +1,16 @@
 import { useEffect, useState } from 'react';
 import {
+  CONNECTION_LABELS,
+  CONNECTION_TONES,
   getStreamStatus,
   subscribeStreamStatus,
   unsubscribeStreamStatus,
 } from '../../lib/use-event-stream';
 import type { StreamState } from '../../lib/use-event-stream';
 
-type ConnectionTone = 'live' | 'connecting' | 'stale' | 'polling';
-
-const STATE_CONFIG: Partial<Record<StreamState, { label: string; tone: ConnectionTone }>> = {
-  connecting: { label: 'Connecting', tone: 'connecting' },
-  live: { label: 'Live', tone: 'live' },
-  stale: { label: 'Stale', tone: 'stale' },
-  fallback: { label: 'Polling', tone: 'polling' },
-};
-
 /** Reads the module-scope stream status published by whichever page currently holds an
- * `useEventStream` subscription. Renders nothing for `'idle'` — a page holding no stream must not
+ * `useEventStream` subscription, and shows `CONNECTION_LABELS[state]` — the vocabulary every
+ * stream-backed surface shares. Renders nothing for `'idle'` — a page holding no stream must not
  * claim liveness. The wrapper stays mounted regardless of state so the `aria-live` region exists
  * before content ever lands in it; a region created at the same moment as its first content is
  * routinely missed by screen readers. */
@@ -28,16 +22,17 @@ export default function ConnectionStatus() {
     return () => unsubscribeStreamStatus(setState);
   }, []);
 
-  const config = STATE_CONFIG[state];
+  const tone = CONNECTION_TONES[state];
+
+  if (!tone) return <div className="connection-status" aria-live="polite" />;
+
+  const { label, detail } = CONNECTION_LABELS[state];
 
   return (
     <div className="connection-status" aria-live="polite">
-      {config && (
-        <>
-          <span className={`connection-dot connection-dot--${config.tone}`} aria-hidden="true" />
-          <span className="micro-label">{config.label}</span>
-        </>
-      )}
+      <span className={`connection-dot connection-dot--${tone}`} aria-hidden="true" />
+      <span className="micro-label">{label}</span>
+      <span className="sr-only">. {detail}</span>
     </div>
   );
 }

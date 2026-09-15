@@ -32,4 +32,10 @@ describe('PasswordRules', () => {
 
     expect(container.querySelector('svg')).not.toBeInTheDocument();
   });
+
+  it('states the met rule in text', () => {
+    const { container } = render(<PasswordRules password="a-valid-password" />);
+
+    expect(container.querySelector('[aria-live]')).toHaveTextContent('met');
+  });
 });

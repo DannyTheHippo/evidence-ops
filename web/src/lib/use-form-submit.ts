@@ -1,5 +1,10 @@
-import { useId, useRef, useState, type FormEvent, type RefObject } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } from 'react';
 import { ApiError, isFieldValidationError, type FieldError } from '../api/client';
+
+// `retryAfterSeconds` is absent whenever the response carries no `Retry-After` header, or the
+// client could not parse one — this is the client's own fallback window, not a value the server
+// ever chose.
+const DEFAULT_COOLDOWN_SECONDS = 30;
 
 /**
  * Options for {@link useFormSubmit}. `F` is the set of DTO property names the form can show a
@@ -25,8 +30,12 @@ export interface UseFormSubmitResult<F extends string> {
    * validation is being checked, since no request is in flight then. */
   pending: boolean;
   /** A failure with no field to attach to: a transport error, a domain error `mapServerError`
-   * declined, or a field-validation error naming a field the form has no control for. */
+   * declined, or a field-validation error naming a field the form has no control for. Ticks once a
+   * second while `cooldownSeconds` counts down from a 429. */
   formError: string | null;
+  /** Seconds remaining on a 429 cooldown; `0` when none is running. `onSubmit` refuses to call
+   * `submit` again while this is positive. */
+  cooldownSeconds: number;
   /** Client and server field errors merged, client winning where both name the same field. Not
    * filtered by visibility — see `fieldProps` and `summary` for what actually renders. */
   errors: Partial<Record<F, string>>;
@@ -59,11 +68,17 @@ export interface UseFormSubmitResult<F extends string> {
  * instead of being dropped — the API dot-joins nested and indexed paths, so a path like
  * `aliases.0` matches a control registered for `aliases`.
  *
- * Focus moves on the next animation frame after any failed submit: to the summary if a caller
- * attached one (focus is the announcement, so the summary itself needs no `role="alert"`), else to
- * the first invalid control. A `formError`-only failure with no summary attached moves focus
- * nowhere, since there is no control to send it to — the caller renders `formError` into its own
- * inline alert.
+ * Focus moves on the next animation frame after a failed submit other than a 429: to the summary
+ * if a caller attached one (focus is the announcement, so the summary itself needs no
+ * `role="alert"`), else to the first invalid control. A `formError`-only failure with no summary
+ * attached moves focus nowhere, since there is no control to send it to — the caller renders
+ * `formError` into its own inline alert.
+ *
+ * A 429 is handled separately from every other `ApiError`: instead of mapping onto `errors` and
+ * moving focus, it starts a `cooldownSeconds` countdown from `retryAfterSeconds` (falling back to
+ * `DEFAULT_COOLDOWN_SECONDS` when the response carried none), ticking `formError` once a second.
+ * `onSubmit` refuses to call `submit` again while the countdown runs, the same way it already
+ * refuses a second concurrent submit.
  */
 export function useFormSubmit<F extends string>(
   opts: UseFormSubmitOptions<F>,
@@ -74,6 +89,7 @@ export function useFormSubmit<F extends string>(
   const [serverErrors, setServerErrors] = useState<Partial<Record<F, string>>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
 
   const baseId = useId();
   const touchedRef = useRef<Set<F>>(new Set());
@@ -81,12 +97,44 @@ export function useFormSubmit<F extends string>(
   // Holds between the click and the re-render that disables the submit button, which `disabled`
   // alone cannot do — the guard is checked and set synchronously in `onSubmit`, before any await.
   const inFlightRef = useRef(false);
+  const cooldownIntervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   // Insertion order doubles as declaration order: `fieldProps` pushes a name the first time it is
   // called, and a render calls it once per field in the order the form's JSX declares them.
   const fieldOrderRef = useRef<F[]>([]);
   const summaryRef = useRef<HTMLDivElement>(null);
 
   const errors: Partial<Record<F, string>> = { ...serverErrors, ...clientErrors };
+
+  // Clears whichever cooldown interval is running on unmount — a page navigated away from a form
+  // mid-cooldown must not keep ticking a timer against an unmounted hook.
+  useEffect(() => {
+    return () => {
+      if (cooldownIntervalRef.current !== undefined) clearInterval(cooldownIntervalRef.current);
+    };
+  }, []);
+
+  function cooldownMessage(seconds: number): string {
+    return `Too many attempts. Try again in ${seconds} second${seconds === 1 ? '' : 's'}.`;
+  }
+
+  function startCooldown(seconds: number): void {
+    if (cooldownIntervalRef.current !== undefined) clearInterval(cooldownIntervalRef.current);
+    let remaining = seconds;
+    setCooldownSeconds(remaining);
+    setFormError(cooldownMessage(remaining));
+    cooldownIntervalRef.current = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        if (cooldownIntervalRef.current !== undefined) clearInterval(cooldownIntervalRef.current);
+        cooldownIntervalRef.current = undefined;
+        setCooldownSeconds(0);
+        setFormError(null);
+        return;
+      }
+      setCooldownSeconds(remaining);
+      setFormError(cooldownMessage(remaining));
+    }, 1000);
+  }
 
   function fieldId(name: F): string {
     return `${baseId}-${name}`;
@@ -184,10 +232,15 @@ export function useFormSubmit<F extends string>(
       setFormError(null);
       onSuccess?.();
     } catch (err) {
-      const { fieldErrors, topError } = resolveSubmitError(err);
-      setServerErrors(fieldErrors);
-      setFormError(topError);
-      scheduleFocus(fieldErrors, topError);
+      if (err instanceof ApiError && err.status === 429) {
+        setServerErrors({});
+        startCooldown(err.retryAfterSeconds ?? DEFAULT_COOLDOWN_SECONDS);
+      } else {
+        const { fieldErrors, topError } = resolveSubmitError(err);
+        setServerErrors(fieldErrors);
+        setFormError(topError);
+        scheduleFocus(fieldErrors, topError);
+      }
     } finally {
       setPending(false);
       inFlightRef.current = false;
@@ -196,7 +249,7 @@ export function useFormSubmit<F extends string>(
 
   function onSubmit(e: FormEvent<HTMLFormElement>): void {
     e.preventDefault();
-    if (inFlightRef.current) return;
+    if (inFlightRef.current || cooldownSeconds > 0) return;
     inFlightRef.current = true;
     void runSubmit();
   }
@@ -219,6 +272,7 @@ export function useFormSubmit<F extends string>(
   return {
     pending,
     formError,
+    cooldownSeconds,
     errors,
     onSubmit,
     fieldProps,

@@ -154,7 +154,15 @@
   justify-content: center;
   padding: 0;
 }
-.sidebar--collapsed .sidebar-brand-label,
+/* Kept in the accessibility tree rather than `display: none` — the brand carries no `aria-label`
+   of its own, so this text is its only accessible name at rail width. */
+.sidebar--collapsed .sidebar-brand-label {
+  position: absolute;
+  width: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .sidebar--collapsed .sidebar-label,
 .sidebar--collapsed .sidebar-heading,
 .sidebar--collapsed .nav-count {
@@ -176,38 +184,12 @@
 }
 
 /* Drawer nav mirrors the persistent sidebar's spacing but has no width constraint to fight —
-   the dialog itself sets the width. */
+   the drawer sheet itself sets the width via its `size="sm"` prop. Positioning, the backdrop and
+   the enter animation are `Drawer`'s own `.drawer--start` rules; nothing here repositions it. */
 .sidebar-drawer-nav {
   display: flex;
   flex-direction: column;
   gap: var(--space-6);
-}
-
-/* Repositions the shared `.dialog` from its default centred placement to a left-anchored,
-   full-height panel — author `position`/`inset`/`margin` override the browser's default modal
-   centring without touching `showModal()`, so the focus trap, Escape handling, focus restoration
-   and backdrop that `Dialog` provides are unaffected. Scoped to `.sidebar-drawer .dialog` so only
-   the navigation drawer is repositioned; every other `Dialog` consumer keeps the centred card. */
-.sidebar-drawer .dialog {
-  position: fixed;
-  inset: 0 auto 0 0;
-  margin: 0;
-  width: min(300px, calc(100% - var(--space-8)));
-  max-width: none;
-  height: 100%;
-  max-height: none;
-  overflow-y: auto;
-  border-radius: 0;
-  border-right: 1px solid var(--hairline-strong);
-  animation: sidebar-drawer-enter var(--motion-overlay-enter) var(--ease-out);
-}
-@keyframes sidebar-drawer-enter {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(0);
-  }
 }
 
 /* ── Top bar ─────────────────────────────────────────────────────────────── */
@@ -237,6 +219,7 @@
   min-width: 0;
 }
 .breadcrumb li {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -245,16 +228,19 @@
   color: var(--muted);
   white-space: nowrap;
 }
-.breadcrumb li:not(:first-child)::before {
-  content: '/';
+.breadcrumb-sep {
   font-weight: 400;
   color: var(--hairline-strong);
 }
 /* The current page is the one heavy crumb in the trail — every ancestor stays at the lighter
-   500 weight set above. */
-.breadcrumb li:last-child span {
+   500 weight set above. It is also the one crumb long enough to need truncation: the `<h1>` below
+   it restates the full text, so an ellipsis here loses nothing and never needs a `title=`. */
+.breadcrumb-current {
   color: var(--ink);
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 32rem;
 }
 .breadcrumb a {
   color: inherit;
@@ -262,9 +248,20 @@
 .breadcrumb a:hover {
   color: var(--signal);
 }
+/* An ancestor crumb has no `<h1>` below it restating its text the way `.breadcrumb-current`'s page
+   title does, but it still owes its shrunk `li` the same truncation rather than overflowing past
+   it and painting over the next crumb. */
+.breadcrumb li > a,
+.breadcrumb li > span:not(.breadcrumb-sep):not(.breadcrumb-current) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
 /* Shown only at <=560px, in place of whichever leading crumbs `.breadcrumb-collapse` hides
-   there — see the max-width: 560px block below. */
-.breadcrumb-ellipsis {
+   there — see the max-width: 560px block below. Both this and `.breadcrumb-collapse` repeat the
+   `li` type selector to out-rank `.breadcrumb li`'s own `display: flex` above, which otherwise
+   wins on specificity regardless of source order. */
+.breadcrumb li.breadcrumb-ellipsis {
   display: none;
 }
 .connection-status {
@@ -294,6 +291,10 @@
   color: var(--status-info-ink);
   animation: connection-pulse var(--motion-pulse) ease-out infinite;
 }
+.connection-dot--reconnecting {
+  color: var(--status-caution-ink);
+  animation: connection-pulse var(--motion-pulse) ease-out infinite;
+}
 @keyframes connection-pulse {
   0% {
     box-shadow: 0 0 0 0 var(--status-info-line);
@@ -310,9 +311,12 @@
   display: none;
 }
 
-/* Right-hand control cluster: connection status, theme toggle, account menu. */
+/* Right-hand control cluster: connection status, theme toggle, account menu. `flex-shrink: 0`
+   keeps it at its intrinsic width when the breadcrumb track ahead of it runs long — the crumb
+   truncates first, per `.breadcrumb-current` above. */
 .topbar-end {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: var(--space-3);
   margin-left: auto;
@@ -332,14 +336,6 @@
   text-overflow: ellipsis;
   max-width: 14rem;
 }
-/* Separates Logout from the informational email/role/member-since rows above it in the account
-   menu — `:not(:first-child)` so the separator drops out for the anonymous menu, where Logout is
-   the only item. */
-.topbar-end .menu-item--danger:not(:first-child) {
-  margin-top: var(--space-1);
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--hairline);
-}
 .account-avatar {
   display: inline-flex;
   flex: none;
@@ -352,6 +348,17 @@
   color: var(--ink-dim);
   font-size: var(--text-xs);
   font-weight: 600;
+}
+
+/* ── Auth canvas theme control ──────────────────────────────────────────── */
+
+/* `ThemeMenu` has no shell chrome to sit in on the anonymous login/invite canvas, so it is
+   pinned to the same corner the topbar would otherwise occupy. */
+.auth-theme {
+  position: fixed;
+  top: var(--space-4);
+  right: var(--space-4);
+  z-index: var(--z-chrome);
 }
 
 /* ── Responsive ──────────────────────────────────────────────────────────── */
@@ -370,8 +377,17 @@
     justify-content: center;
     padding: 0;
   }
-  /* aria-label on the brand and each NavLink carries the accessible name once these are hidden. */
-  .sidebar-brand-label,
+  /* Kept in the accessibility tree rather than `display: none` — the brand carries no
+     `aria-label` of its own, so this text is its only accessible name at rail width. */
+  .sidebar-brand-label {
+    position: absolute;
+    width: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  /* Each NavLink's own `title=`/`aria-label` carries its accessible name once its text is
+     hidden here. */
   .sidebar-label,
   .nav-count {
     display: none;
@@ -414,10 +430,10 @@
   /* The breadcrumb yields before the controls do: it restates the page title sitting directly
      below it, while each control in `.topbar-end` is the only way to reach what it does. Every
      crumb but the last two collapses into the single ellipsis marker above. */
-  .breadcrumb-collapse {
+  .breadcrumb li.breadcrumb-collapse {
     display: none;
   }
-  .breadcrumb-ellipsis {
+  .breadcrumb li.breadcrumb-ellipsis {
     display: flex;
   }
   .topbar-end {

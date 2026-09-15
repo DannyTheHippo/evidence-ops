@@ -56,7 +56,7 @@ describe('InvitePage', () => {
     renderPage();
 
     expect(screen.getByLabelText('Password')).toBeInTheDocument();
-    expect(screen.getByText('8-72 characters', { exact: false })).toBeInTheDocument();
+    expect(screen.getByText('8–72 characters', { exact: false })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Accept invitation' })).toBeInTheDocument();
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(PREVIEW_URL, expect.anything()));
   });
@@ -88,7 +88,7 @@ describe('InvitePage', () => {
     renderPage();
 
     expect(
-      await screen.findByText('founder@example.com invited you to join as admin.', {
+      await screen.findByText('founder@example.com invited invitee@example.com to join as admin.', {
         exact: false,
       }),
     ).toBeInTheDocument();
@@ -100,8 +100,39 @@ describe('InvitePage', () => {
     renderPage();
 
     expect(
-      await screen.findByText("You've been invited to join as member.", { exact: false }),
+      await screen.findByText('invitee@example.com was invited to join as member.', {
+        exact: false,
+      }),
     ).toBeInTheDocument();
+  });
+
+  it('names the invited email before the form is used', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(previewResponse()));
+
+    renderPage();
+
+    expect(await screen.findByText('invitee@example.com', { exact: false })).toBeInTheDocument();
+    expect(screen.getByLabelText('Password')).toBeInTheDocument();
+  });
+
+  it('keeps the form and offers a retry when the preview is throttled', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === PREVIEW_URL) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ message: 'Too many attempts' }), {
+            status: 429,
+            headers: { 'Content-Type': 'application/json', 'Retry-After': '5' },
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    expect(await screen.findByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Password')).toBeInTheDocument();
   });
 
   it('falls back to the same recovery path as a rejected redemption when the preview itself fails', async () => {
@@ -178,6 +209,60 @@ describe('InvitePage', () => {
     });
   });
 
+  it('signs in without re-registering when the first login after redemption fails', async () => {
+    let loginAttempts = 0;
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url === PREVIEW_URL) {
+        return Promise.resolve(previewResponse());
+      }
+      if (url === '/api/v1/auth/register' && init?.method === 'POST') {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              id: 'user-1',
+              email: 'invitee@example.com',
+              role: 'member',
+              createdAt: '2026-08-01T00:00:00.000Z',
+            },
+            201,
+          ),
+        );
+      }
+      if (url === '/api/v1/auth/login' && init?.method === 'POST') {
+        loginAttempts += 1;
+        if (loginAttempts === 1) return Promise.reject(new TypeError('Failed to fetch'));
+        return Promise.resolve(
+          jsonResponse({
+            user: {
+              id: 'user-1',
+              email: 'invitee@example.com',
+              role: 'member',
+              createdAt: '2026-08-01T00:00:00.000Z',
+            },
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(PREVIEW_URL, expect.anything()));
+    submit('correct-horse-battery');
+
+    await waitFor(() => expect(loginAttempts).toBe(1));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not reach the server. Check your connection and try again.',
+    );
+    expect(screen.getByLabelText('Password')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept invitation' }));
+
+    await waitFor(() => expect(loginAttempts).toBe(2));
+    const registerCalls = fetchMock.mock.calls.filter(([url]) => url === '/api/v1/auth/register');
+    expect(registerCalls).toHaveLength(1);
+  });
+
   it('shows the server-authored reason for a rejected redemption, verbatim, and replaces the form with a recovery path', async () => {
     const fetchMock = vi.fn((url: string) => {
       if (url === PREVIEW_URL) {
@@ -200,6 +285,72 @@ describe('InvitePage', () => {
     // gone and only the two paths that can help remain: a fresh link, or signing in.
     expect(screen.queryByLabelText('Password')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'sign in' })).toHaveAttribute('href', '/login');
+  });
+
+  // A spent token and an unknown one are the same 400 from the server, so the signal is the retry:
+  // a refusal that arrives only after an attempt that could have reached the server means the
+  // account is already there.
+  it('points a retried redemption at sign-in when the token was already spent, keyed on a 400 that arrives only on a retry', async () => {
+    let registerAttempts = 0;
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url === PREVIEW_URL) {
+        return Promise.resolve(previewResponse());
+      }
+      if (url === '/api/v1/auth/register' && init?.method === 'POST') {
+        registerAttempts += 1;
+        // The account is created and the token spent, but the response is lost in transit — the
+        // client sees a transport failure and the operator retries.
+        if (registerAttempts === 1) return Promise.reject(new TypeError('Failed to fetch'));
+        return Promise.resolve(
+          jsonResponse({ message: 'Invitation is invalid, expired, or already used' }, 400),
+        );
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(PREVIEW_URL, expect.anything()));
+    submit('correct-horse-battery');
+
+    await waitFor(() => expect(registerAttempts).toBe(1));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not reach the server. Check your connection and try again.',
+    );
+    expect(screen.getByLabelText('Password')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept invitation' }));
+
+    const recoveryText = await screen.findByText('Your account was created', { exact: false });
+    expect(recoveryText.textContent).toMatch(/^Your account was created — sign in\./);
+    expect(screen.getByRole('link', { name: 'sign in' })).toHaveAttribute('href', '/login');
+    expect(screen.queryByLabelText('Password')).not.toBeInTheDocument();
+    expect(registerAttempts).toBe(2);
+    // The recovery text already explains the account exists — the server's verbatim "invitation
+    // is invalid" message must not render alongside it and contradict it.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('moves focus to the recovery text when redemption is refused', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url === PREVIEW_URL) {
+        return Promise.resolve(previewResponse());
+      }
+      return Promise.resolve(
+        jsonResponse({ message: 'Invitation is invalid, expired, or already used' }, 400),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(PREVIEW_URL, expect.anything()));
+    submit('correct-horse-battery');
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Ask whoever invited you for a new link', { exact: false }),
+      ).toHaveFocus(),
+    );
   });
 
   it('falls back to a connection message instead of a raw browser exception', async () => {

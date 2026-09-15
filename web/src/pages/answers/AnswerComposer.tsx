@@ -1,9 +1,25 @@
 import { useEffect, useRef, useState } from 'react';
-import { startQuestion, type Answer } from '../../api/client';
+import { listCanonicalEntities, startQuestion, type Answer } from '../../api/client';
 import AnswerWorkspace from '../../components/AnswerWorkspace';
+import Alert from '../../components/ui/Alert';
 import Button from '../../components/ui/Button';
+import Combobox, { type ComboboxOption } from '../../components/ui/Combobox';
+import { announce } from '../../lib/announce';
+import { answerBadge } from '../../lib/answer-status';
 import { useAnswerRun } from '../../lib/use-answer-run';
 import { useFormSubmit } from '../../lib/use-form-submit';
+import { useAbortableEffect } from '../../lib/use-latest';
+
+/** The sentence announced once a run reaches a terminal state — `answer.runStatus` is `'failed'`
+ * or `'completed'`. A completed run adds the verification ratio whenever the run produced a
+ * report; an abstention (no claims to verify) has none, so it announces the outcome alone. */
+function terminalAnnouncement(answer: Answer): string {
+  if (answer.runStatus === 'failed') return 'The question run failed.';
+  const { label } = answerBadge(answer);
+  const report = answer.verificationReport;
+  if (!report) return `Answer ready: ${label}.`;
+  return `Answer ready: ${label} — ${report.verifiedClaimCount} of ${report.totalClaimCount} claims verified.`;
+}
 
 interface AnswerComposerProps {
   /** A question to seed the draft with — the Answers page's `?q=` query param, itself set by a
@@ -13,14 +29,17 @@ interface AnswerComposerProps {
   /** Runs once `startQuestion()` resolves and the run has been seeded, so the page can refresh
    * its history list to pick up the new `queued` row. */
   onRunStarted?: () => void;
+  /** Runs once per run when `answer.runStatus` reaches a terminal value (`completed` or
+   * `failed`), so the page can refresh a history row that would otherwise sit at `queued`. */
+  onRunSettled?: () => void;
   // Overridable so tests can poll on a short interval instead of stubbing timers.
   pollIntervalMs?: number;
 }
 
 // Static suggestions, not a recent-query history: a localStorage history would persist tenant
-// content unscoped on a shared machine.
+// content unscoped on a shared machine. They name no entity, because no entity name is common to
+// every tenant — the Entity picker below carries the tenant's own names instead.
 const EXAMPLE_QUESTIONS = [
-  'What is the cap rate for Northgate Business Park in Q1 2025?',
   'What is the current occupancy rate across the portfolio?',
   'Are there any conflicting rent roll figures this quarter?',
 ];
@@ -28,6 +47,7 @@ const EXAMPLE_QUESTIONS = [
 export default function AnswerComposer({
   initialQuestion,
   onRunStarted,
+  onRunSettled,
   pollIntervalMs,
 }: AnswerComposerProps) {
   // The lazy initializer covers a fresh mount, reading before first paint. On its own it would
@@ -57,43 +77,107 @@ export default function AnswerComposer({
     inputRef.current?.focus();
   }, []);
 
-  const { pending, formError, onSubmit, fieldProps } = useFormSubmit<'questionText'>({
-    validate: () => (questionText.trim() ? {} : { questionText: 'Enter a question' }),
-    submit: async () => {
-      const result = await startQuestion(questionText);
-      setSeedAnswer({
-        id: result.id,
-        questionText,
-        runStatus: result.runStatus,
-        citations: [],
-        atoms: [],
-        conflictIds: [],
-        createdAt: new Date().toISOString(),
-        withdrawnCitedDocVersionIds: [],
-      });
-      setAnswerId(result.id);
-      onRunStarted?.();
-    },
-  });
-  const { id: questionId, error: questionError } = fieldProps('questionText');
+  const { pending, formError, cooldownSeconds, onSubmit, fieldProps } =
+    useFormSubmit<'questionText'>({
+      validate: () => (questionText.trim() ? {} : { questionText: 'Enter a question' }),
+      submit: async () => {
+        const result = await startQuestion(questionText);
+        setSeedAnswer({
+          id: result.id,
+          questionText,
+          runStatus: result.runStatus,
+          citations: [],
+          atoms: [],
+          conflictIds: [],
+          createdAt: new Date().toISOString(),
+          withdrawnCitedDocVersionIds: [],
+        });
+        setAnswerId(result.id);
+        onRunStarted?.();
+      },
+    });
+  const {
+    id: questionId,
+    error: questionError,
+    onBlur: questionOnBlur,
+  } = fieldProps('questionText');
 
-  // A failed submit always refocuses the input. The trimmed-empty case is covered by the hook's
-  // own scheduleFocus (see use-form-submit.ts); this covers the other case it deliberately leaves
-  // alone — a plain request failure, reported as `formError` with no field to focus instead.
+  // Refocuses the input once, when `formError` goes from none to an error. The trimmed-empty case
+  // is covered by the hook's own scheduleFocus (see use-form-submit.ts); this covers the case it
+  // leaves alone — a plain request failure, reported as `formError` with no field to focus. A 429
+  // cooldown never refocuses: it rewrites `formError` every second while `cooldownSeconds` is
+  // above 0, and focus stays wherever the operator moved it.
+  const previousFormErrorRef = useRef<string | null>(null);
   useEffect(() => {
-    if (formError) inputRef.current?.focus();
-  }, [formError]);
+    const hadFormError = previousFormErrorRef.current !== null;
+    previousFormErrorRef.current = formError;
+    if (formError && !hadFormError && cooldownSeconds === 0) inputRef.current?.focus();
+  }, [formError, cooldownSeconds]);
 
   function fillExample(example: string) {
     setQuestionText(example);
     inputRef.current?.focus();
   }
 
-  const { answer, error: runError } = useAnswerRun({
+  // The tenant's own canonical entities, offered as a picker rather than baked into the example
+  // chips, which every tenant shares. The endpoint takes no search term, so a tenant past 100
+  // entities is offered the first alphabetical page.
+  const [entityOptions, setEntityOptions] = useState<ComboboxOption[]>([]);
+  const [entity, setEntity] = useState('');
+  useAbortableEffect(
+    (isCurrent) =>
+      listCanonicalEntities({ limit: 100 })
+        .then((result) => {
+          if (!isCurrent()) return;
+          setEntityOptions(
+            result.docs.map((candidate) => ({
+              value: candidate.canonicalName,
+              label: candidate.canonicalName,
+            })),
+          );
+        })
+        .catch(() => {
+          // Fails open: the picker is an aid to writing a question, never a gate on asking one,
+          // so an unreachable list leaves the options empty and the question field usable.
+        }),
+    [],
+  );
+
+  // Appends the chosen name to the draft rather than replacing it, so a question written around
+  // the entity survives the choice. A name already in the draft is not repeated.
+  function insertEntity(canonicalName: string) {
+    setEntity(canonicalName);
+    setQuestionText((draft) => {
+      if (draft.includes(canonicalName)) return draft;
+      const trimmed = draft.trimEnd();
+      return trimmed ? `${trimmed} ${canonicalName}` : canonicalName;
+    });
+    inputRef.current?.focus();
+  }
+
+  const {
+    answer,
+    error: runError,
+    streamState,
+  } = useAnswerRun({
     answerId,
     pollIntervalMs,
     initialAnswer: seedAnswer,
   });
+
+  // Announces the outcome and notifies the page once per run, the moment `runStatus` reaches a
+  // terminal value — keyed on id and status together so a later run reusing the same terminal
+  // status still announces, and a re-render of the same terminal snapshot never announces twice.
+  const settledKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!answer) return;
+    if (answer.runStatus !== 'completed' && answer.runStatus !== 'failed') return;
+    const key = `${answer.id}:${answer.runStatus}`;
+    if (settledKeyRef.current === key) return;
+    settledKeyRef.current = key;
+    announce(terminalAnnouncement(answer));
+    onRunSettled?.();
+  }, [answer, onRunSettled]);
 
   return (
     <>
@@ -102,6 +186,17 @@ export default function AnswerComposer({
           <h2 className="card-title">Ask a question</h2>
         </div>
         <form onSubmit={onSubmit} className="form" noValidate>
+          {/* Its own control rather than a combobox over the question field: Enter asks, and a
+              combobox on that input would take the key for option selection instead. */}
+          <Combobox
+            label="Entity"
+            optional
+            width="md"
+            options={entityOptions}
+            value={entity}
+            onChange={insertEntity}
+            placeholder="Add an entity to the question"
+          />
           <div className="composer-row">
             {/* Label-less against the heading above, not the page title — the page itself is
                 titled "Answers", which the question field would only repeat. */}
@@ -112,18 +207,27 @@ export default function AnswerComposer({
               aria-label="Question"
               aria-describedby={questionError ? `${questionId}-error` : undefined}
               aria-invalid={questionError ? true : undefined}
+              aria-busy={pending}
               className="composer-input"
               value={questionText}
               onChange={(e) => setQuestionText(e.target.value)}
-              placeholder="What is the cap rate for Northgate Business Park in Q1 2025?"
-              disabled={pending}
+              onBlur={questionOnBlur}
+              placeholder="Ask a question about your evidence"
+              readOnly={pending}
             />
-            <Button type="submit" variant="primary" className="composer-ask" disabled={pending}>
-              {pending ? 'Asking…' : 'Ask'}
+            <Button
+              type="submit"
+              variant="primary"
+              className="composer-ask"
+              busy={pending}
+              busyLabel="Asking…"
+            >
+              Ask
             </Button>
           </div>
           {questionError && (
             <p id={`${questionId}-error`} className="field-error">
+              <span className="sr-only">Error: </span>
               {questionError}
             </p>
           )}
@@ -141,7 +245,7 @@ export default function AnswerComposer({
                     disabled={pending}
                     onClick={() => fillExample(example)}
                   >
-                    {example}
+                    <span className="btn-label">{example}</span>
                   </button>
                 ))}
               </div>
@@ -150,13 +254,9 @@ export default function AnswerComposer({
         </form>
       </section>
 
-      {formError && (
-        <p className="error" role="alert">
-          {formError}
-        </p>
-      )}
+      {formError && <Alert tone="rejected">{formError}</Alert>}
 
-      {answer && <AnswerWorkspace answer={answer} variant="ask" />}
+      {answer && <AnswerWorkspace answer={answer} variant="ask" streamState={streamState} />}
 
       {runError && (
         <p className="error" role="alert">

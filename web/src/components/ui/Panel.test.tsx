@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import { createRef } from 'react';
 import { describe, expect, it } from 'vitest';
 import Panel from './Panel';
 
@@ -25,5 +26,16 @@ describe('Panel', () => {
     );
 
     expect(screen.getByRole('region', { name: 'Sources' })).toHaveClass('panel', 'extra');
+  });
+
+  it('forwards ref to the root region element', () => {
+    const ref = createRef<HTMLElement>();
+    render(
+      <Panel aria-label="Sources" ref={ref}>
+        <p>Rows</p>
+      </Panel>,
+    );
+
+    expect(ref.current).toBe(screen.getByRole('region', { name: 'Sources' }));
   });
 });

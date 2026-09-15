@@ -1,4 +1,5 @@
 import type { ReactNode, Ref } from 'react';
+import ThemeMenu from './shell/ThemeMenu';
 
 interface AuthCanvasProps {
   title: string;
@@ -21,6 +22,9 @@ export default function AuthCanvas({ title, description, children, footer, ref }
   return (
     <div className="auth-view">
       <div className="auth-canvas">
+        <div className="auth-theme">
+          <ThemeMenu />
+        </div>
         <div className="brand-lockup">
           <span className="brand-mark" aria-hidden="true" />
           <span className="brand-wordmark">Evidence Ops</span>

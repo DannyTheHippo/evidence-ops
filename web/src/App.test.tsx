@@ -1,9 +1,10 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import { RequireAdmin } from './AuthenticatedRoutes';
+import { clearToasts, getToasts, notify } from './components/ui/toast';
 import * as auth from './lib/auth';
+import { subscribeAnnouncements, unsubscribeAnnouncements } from './lib/announce';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -107,7 +108,7 @@ describe('App / RequireAuth', () => {
 
     // Logout lives inside the topbar's account menu, so the menu has to be open before the item
     // exists in the tree at all.
-    fireEvent.click(await screen.findByRole('button', { name: 'user@example.com' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'user@example.com, Member' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Logout' }));
 
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
@@ -178,87 +179,36 @@ describe('App / admin-only nav link', () => {
     expect(screen.queryByRole('link', { name: 'Audit events' })).not.toBeInTheDocument();
   });
 
-  it('renders no Audit events link while the session probe is still pending', () => {
-    vi.spyOn(auth, 'ensureSession').mockReturnValue(new Promise(() => {}));
+  it('renders no chrome while the session probe is pending, then the sidebar once authed', async () => {
+    let resolveProbe: (me: {
+      id: string;
+      email: string;
+      role: 'member';
+      createdAt: string;
+    }) => void = () => {};
+    vi.spyOn(auth, 'ensureSession').mockReturnValue(
+      new Promise((resolve) => {
+        resolveProbe = resolve;
+      }),
+    );
+    stubMeFetch('member');
 
     renderAtHome();
 
-    // The chrome is route-based, so the rest of the nav is already on screen — the link is absent
-    // because the role is unknown, not because the header has yet to render.
-    expect(screen.getByRole('link', { name: 'Home' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Audit events' })).not.toBeInTheDocument();
-  });
-});
+    // The shell is gated on an authed session, not just the route — a pending probe shows the
+    // loading skeleton instead of chrome with a role-unknown nav.
+    expect(screen.queryByRole('navigation', { name: 'Primary' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Home' })).not.toBeInTheDocument();
 
-function renderRequireAdmin() {
-  render(
-    <MemoryRouter initialEntries={['/admin-only']}>
-      <Routes>
-        <Route
-          path="/admin-only"
-          element={
-            <RequireAdmin>
-              <p>admin content</p>
-            </RequireAdmin>
-          }
-        />
-        <Route path="/" element={<p>home probe</p>} />
-        <Route path="/login" element={<p>login probe</p>} />
-      </Routes>
-    </MemoryRouter>,
-  );
-}
-
-describe('RequireAdmin', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  it('an admin sees the wrapped content', async () => {
-    vi.spyOn(auth, 'ensureSession').mockResolvedValue({
-      id: 'user-1',
-      email: 'admin@example.com',
-      role: 'admin',
-      createdAt: new Date().toISOString(),
-    });
-
-    renderRequireAdmin();
-
-    expect(await screen.findByText('admin content')).toBeInTheDocument();
-  });
-
-  it('a member is redirected to / rather than seeing the wrapped content', async () => {
-    vi.spyOn(auth, 'ensureSession').mockResolvedValue({
+    resolveProbe({
       id: 'user-2',
       email: 'member@example.com',
       role: 'member',
       createdAt: new Date().toISOString(),
     });
 
-    renderRequireAdmin();
-
-    expect(await screen.findByText('home probe')).toBeInTheDocument();
-    expect(screen.queryByText('admin content')).not.toBeInTheDocument();
-  });
-
-  it('an anonymous visitor is redirected to /login', async () => {
-    vi.spyOn(auth, 'ensureSession').mockResolvedValue(null);
-
-    renderRequireAdmin();
-
-    expect(await screen.findByText('login probe')).toBeInTheDocument();
-    expect(screen.queryByText('admin content')).not.toBeInTheDocument();
-  });
-
-  it('renders nothing while the session probe is pending', () => {
-    vi.spyOn(auth, 'ensureSession').mockReturnValue(new Promise(() => {}));
-
-    renderRequireAdmin();
-
-    expect(screen.queryByText('admin content')).not.toBeInTheDocument();
-    expect(screen.queryByText('home probe')).not.toBeInTheDocument();
-    expect(screen.queryByText('login probe')).not.toBeInTheDocument();
+    expect(await screen.findByRole('navigation', { name: 'Primary' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Audit events' })).not.toBeInTheDocument();
   });
 });
 
@@ -266,6 +216,8 @@ describe('App / shell', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    localStorage.clear();
+    clearToasts();
   });
 
   it('renders the skip link as the first link, pointing at the focusable main region', async () => {
@@ -467,5 +419,248 @@ describe('App / shell', () => {
       await screen.findByRole('heading', { name: 'The cap rate is approximately 6.10%.' }),
     ).toBeInTheDocument();
     expect(screen.queryByText('Page not found')).not.toBeInTheDocument();
+  });
+
+  it('moves focus to the page h1 on navigation, resets scrollTop and announces the title', async () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue({
+      id: 'user-1',
+      email: 'user@example.com',
+      role: 'member',
+      createdAt: new Date().toISOString(),
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ docs: [], count: 0 })));
+    const messages: string[] = [];
+    const listener = (message: string) => messages.push(message);
+    subscribeAnnouncements(listener);
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+    await screen.findByRole('heading', { name: 'Home' });
+
+    const main = screen.getByRole('main');
+    main.scrollTop = 200;
+    expect(main.scrollTop).toBe(200);
+
+    fireEvent.click(screen.getByRole('link', { name: 'Sources' }));
+
+    const heading = await screen.findByRole('heading', { name: 'Sources', level: 1 });
+    expect(main.scrollTop).toBe(0);
+    expect(messages).toContain('Sources');
+    // PageHeader's <h1> carries tabIndex={-1}, asserted last so the two lines above still
+    // report if this one fails.
+    expect(heading).toHaveFocus();
+
+    unsubscribeAnnouncements(listener);
+  });
+
+  it('speaks the new page title through the status region on navigation', async () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue({
+      id: 'user-1',
+      email: 'user@example.com',
+      role: 'member',
+      createdAt: new Date().toISOString(),
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ docs: [], count: 0 })));
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+    await screen.findByRole('heading', { name: 'Home' });
+
+    fireEvent.click(screen.getByRole('link', { name: 'Sources' }));
+
+    await screen.findByRole('heading', { name: 'Sources', level: 1 });
+    expect(screen.getByRole('status')).toHaveTextContent('Sources');
+  });
+
+  it('persists the sidebar collapse in localStorage and restores it on mount', async () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue({
+      id: 'user-1',
+      email: 'user@example.com',
+      role: 'member',
+      createdAt: new Date().toISOString(),
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ docs: [], count: 0 })));
+
+    const { unmount } = render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+    await screen.findByRole('heading', { name: 'Home' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
+    expect(localStorage.getItem('evidence-ops-sidebar-collapsed')).toBe('true');
+    unmount();
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+    await screen.findByRole('heading', { name: 'Home' });
+    expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument();
+  });
+
+  it('titles a detail page with its record and page crumbs', async () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue({
+      id: 'user-1',
+      email: 'user@example.com',
+      role: 'member',
+      createdAt: new Date().toISOString(),
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (url.startsWith('/api/v1/documents/versions/lookup')) {
+          return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+        }
+        if (url === '/api/v1/answers/answer-1/attestation') {
+          return Promise.resolve(jsonResponse({}, 404));
+        }
+        return Promise.resolve(
+          jsonResponse({
+            id: 'answer-1',
+            questionText: 'What is the cap rate?',
+            runStatus: 'running',
+            outcome: null,
+            citations: [],
+            conflictIds: [],
+            createdAt: new Date().toISOString(),
+          }),
+        );
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/answers/answer-1']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('heading', { name: 'What is the cap rate?' });
+    // The page's own useBreadcrumbs effect, and the App-level title effect it feeds, each commit
+    // one render after the heading itself, so the title settles a tick later than the heading.
+    await waitFor(() =>
+      expect(document.title).toBe('What is the cap rate? · Answers · Evidence Ops'),
+    );
+  });
+
+  it('shows the Sign in title on /login', () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue(null);
+
+    render(
+      <MemoryRouter initialEntries={['/login']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+    expect(document.title).toBe('Sign in · Evidence Ops');
+  });
+
+  it('shows admin links after a client-side login without a reload', async () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue(null);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (url === '/api/v1/auth/login') {
+          return Promise.resolve(
+            jsonResponse({
+              user: {
+                id: 'admin-1',
+                email: 'admin@example.com',
+                role: 'admin',
+                createdAt: new Date().toISOString(),
+              },
+            }),
+          );
+        }
+        return Promise.resolve(jsonResponse({ docs: [], count: 0 }));
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/login']}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole('heading', { name: 'Sign in' });
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'admin@example.com' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'correct-password' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    expect(await screen.findByRole('link', { name: 'Audit events' })).toBeInTheDocument();
+  });
+
+  it('clears leftover toasts on logout', async () => {
+    vi.spyOn(auth, 'ensureSession').mockResolvedValue({
+      id: 'user-1',
+      email: 'user@example.com',
+      role: 'member',
+      createdAt: new Date().toISOString(),
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ docs: [], count: 0 })));
+    notify('success', 'Something happened');
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <App />
+      </MemoryRouter>,
+    );
+    await screen.findByRole('heading', { name: 'Home' });
+    expect(getToasts()).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'user@example.com, Member' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Logout' }));
+
+    await screen.findByRole('heading', { name: 'Sign in' });
+    expect(getToasts()).toHaveLength(0);
+  });
+});
+
+describe('App / shell / topbar failure', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.doUnmock('./components/shell/Topbar');
+    vi.resetModules();
+  });
+
+  it('renders the app-scope fallback when the topbar throws', async () => {
+    // React logs every error a boundary catches to console.error on its own — expected here, not
+    // a signal of an unhandled failure.
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.doMock('./components/shell/Topbar', () => ({
+      default: () => {
+        throw new Error('topbar boom');
+      },
+    }));
+    vi.resetModules();
+    const freshAuth = await import('./lib/auth');
+    vi.spyOn(freshAuth, 'ensureSession').mockResolvedValue({
+      id: 'user-1',
+      email: 'user@example.com',
+      role: 'member',
+      createdAt: new Date().toISOString(),
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ docs: [], count: 0 })));
+    const { default: FreshApp } = await import('./App');
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <FreshApp />
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: "This page couldn't load" }),
+    ).toBeInTheDocument();
   });
 });

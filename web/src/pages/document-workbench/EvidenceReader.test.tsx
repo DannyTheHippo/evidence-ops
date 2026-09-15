@@ -236,4 +236,92 @@ describe('EvidenceReader', () => {
     expect(status).toHaveAttribute('role', 'status');
     expect(screen.queryByText(/matches$/)).not.toBeInTheDocument();
   });
+
+  it('shows a match that lives in a later group without requiring a click', async () => {
+    const pageThree = evidenceChunk({
+      id: 'chunk-1',
+      text: 'The cap rate is 6.10%.',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 3 },
+    });
+    const pageFive = evidenceChunk({
+      id: 'chunk-2',
+      text: 'Occupancy sits at 94%.',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 5 },
+    });
+    stubFetch({
+      '/api/v1/documents/versions/version-1/chunks': () =>
+        jsonResponse({ docs: [pageThree, pageFive], count: 2 }),
+    });
+
+    renderReader('version-1');
+    await screen.findByText('Page 3');
+
+    const search = await screen.findByLabelText('Search this document');
+    fireEvent.change(search, { target: { value: 'occupancy' } });
+
+    expect(screen.queryByText('Page 3')).not.toBeInTheDocument();
+    const pageFiveGroup = (await screen.findByText('Page 5')).closest('details');
+    expect(pageFiveGroup).toHaveAttribute('open');
+    expect(screen.getByText('Occupancy', { selector: 'mark' })).toBeInTheDocument();
+  });
+
+  it('opens every visible group while a search is active, leaving none wrongly collapsed', async () => {
+    const pageThree = evidenceChunk({
+      id: 'chunk-1',
+      text: 'The cap rate is 6.10%.',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 3 },
+    });
+    const pageFive = evidenceChunk({
+      id: 'chunk-2',
+      text: 'The cap rate held steady last quarter.',
+      locator: { kind: 'pdf-page', extractorVersion: 'v1', page: 5 },
+    });
+    stubFetch({
+      '/api/v1/documents/versions/version-1/chunks': () =>
+        jsonResponse({ docs: [pageThree, pageFive], count: 2 }),
+    });
+
+    renderReader('version-1');
+
+    const search = await screen.findByLabelText('Search this document');
+    fireEvent.change(search, { target: { value: 'cap rate' } });
+
+    const pageThreeGroup = (await screen.findByText('Page 3')).closest('details');
+    const pageFiveGroup = screen.getByText('Page 5').closest('details');
+    expect(pageThreeGroup).toHaveAttribute('open');
+    expect(pageFiveGroup).toHaveAttribute('open');
+  });
+
+  it('tells the operator ingestion is still running when a pending version has no chunks yet', async () => {
+    stubFetch({
+      '/api/v1/documents/versions/version-1/chunks': () => jsonResponse({ docs: [], count: 0 }),
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/documents/doc-1/versions/version-1']}>
+        <EvidenceReader versionId="version-1" ingestionStatus="pending" />
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText(
+        'Ingestion is still running for this version — evidence chunks appear as they are stored.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('No evidence chunks are stored for this version.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('keeps the terminal empty-state message for a non-pending version with no chunks', async () => {
+    stubFetch({
+      '/api/v1/documents/versions/version-1/chunks': () => jsonResponse({ docs: [], count: 0 }),
+    });
+
+    renderReader('version-1');
+
+    expect(
+      await screen.findByText('No evidence chunks are stored for this version.'),
+    ).toBeInTheDocument();
+  });
 });

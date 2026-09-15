@@ -17,4 +17,12 @@ describe('formatBytes', () => {
   it('caps scaling at gigabytes', () => {
     expect(formatBytes(2 * 1024 * 1024 * 1024)).toBe('2.0 GB');
   });
+
+  it('promotes to megabytes rather than rounding to 1024.0 KB', () => {
+    expect(formatBytes(1024 * 1024 - 1)).toBe('1.0 MB');
+  });
+
+  it('promotes to gigabytes rather than rounding to 1024.0 MB', () => {
+    expect(formatBytes(1024 * 1024 * 1024 - 1)).toBe('1.0 GB');
+  });
 });

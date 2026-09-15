@@ -34,4 +34,10 @@ describe('IconButton', () => {
 
     expect(screen.getByRole('button', { name: 'Close' })).toHaveClass('btn--icon', 'menu-toggle');
   });
+
+  it('renders at the compact size by default', () => {
+    render(<IconButton icon={<IconX />} aria-label="Close" />);
+
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveClass('btn--sm');
+  });
 });

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ErrorInfo, ReactNode } from 'react';
 import { Component } from 'react';
 import Button from './ui/Button';
 import LinkButton from './ui/LinkButton';
@@ -9,11 +9,16 @@ interface ErrorBoundaryProps {
    * a crash on one page does not survive navigating to a different one. Changing this value while
    * the boundary is showing its fallback clears the caught error and remounts `children`. */
   resetKey: unknown;
+  /** `'route'` (default) wraps a single routed page. `'app'` wraps the whole shell — its fallback
+   * additionally quotes `resetKey` and the caught error's message, since nothing above it can show
+   * that context to the reader. */
+  scope?: 'route' | 'app';
 }
 
 interface ErrorBoundaryState {
   hasError: boolean;
   resetKey: unknown;
+  error: Error | null;
 }
 
 /**
@@ -24,10 +29,10 @@ interface ErrorBoundaryState {
  * hook equivalent, so a boundary is either a class or a fourth runtime dependency.
  */
 export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { hasError: false, resetKey: this.props.resetKey };
+  state: ErrorBoundaryState = { hasError: false, resetKey: this.props.resetKey, error: null };
 
-  static getDerivedStateFromError(): Partial<ErrorBoundaryState> {
-    return { hasError: true };
+  static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
+    return { hasError: true, error };
   }
 
   static getDerivedStateFromProps(
@@ -35,20 +40,36 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
     state: ErrorBoundaryState,
   ): Partial<ErrorBoundaryState> | null {
     if (props.resetKey === state.resetKey) return null;
-    return { hasError: false, resetKey: props.resetKey };
+    return { hasError: false, resetKey: props.resetKey, error: null };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
+    console.error(
+      `ErrorBoundary caught an error on ${String(this.props.resetKey)}`,
+      error,
+      errorInfo.componentStack,
+    );
   }
 
   render(): ReactNode {
     if (this.state.hasError) {
+      const scope = this.props.scope ?? 'route';
       return (
         // A crash replaces whatever the reader was on, with no other signal that it happened, so
         // the wrapper supplies the live region the fallback itself carries no role for.
         <div role="alert" className="fault">
           <p className="fault-eyebrow mono">RENDER ERROR</p>
-          <p className="fault-title">This page couldn&apos;t load</p>
+          <h1 className="fault-title" tabIndex={-1}>
+            This page couldn&apos;t load
+          </h1>
           <p className="fault-description">
             Something broke while rendering it. Reload to try again.
           </p>
+          {scope === 'app' && (
+            <p className="fault-detail mono">
+              {String(this.state.resetKey)} · {this.state.error?.message}
+            </p>
+          )}
           <div className="fault-actions">
             <Button onClick={() => window.location.reload()}>Reload</Button>
             {/* A plain anchor, not a router `Link`: a full document load is what clears a crashed

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
+  ApiError,
   listApiKeys,
   mintApiKey,
   revokeApiKey,
@@ -12,6 +13,7 @@ import {
 import SecretReveal from '../components/SecretReveal';
 import { IconKey } from '../components/icons';
 import RecordListPage, { type RecordListStatus } from '../components/RecordListPage';
+import Alert from '../components/ui/Alert';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
@@ -23,25 +25,34 @@ import SortableHeaderCell from '../components/ui/SortableHeaderCell';
 import Table, { TableCell, TableHeaderCell } from '../components/ui/Table';
 import Timestamp from '../components/ui/Timestamp';
 import { notify } from '../components/ui/toast';
+import { clampPageSize, clampSkip, pickOption } from '../lib/paging';
 import { useFormSubmit } from '../lib/use-form-submit';
+import { useAbortableEffect } from '../lib/use-latest';
 import { useUrlState } from '../lib/use-url-state';
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE_OPTIONS = [25, 50, 100];
 
 // Declared at module scope so `useUrlState` adopts one stable-in-value object on mount; see
 // AnswersPage for the identity/value distinction that makes an inline literal safe here too.
-const URL_DEFAULTS: Record<'sort' | 'sortDir' | 'skip', string> = {
+const URL_DEFAULTS: Record<'sort' | 'sortDir' | 'skip' | 'limit', string> = {
   sort: 'createdAt',
   sortDir: 'desc',
   skip: '0',
+  limit: '25',
 };
 
+// Matches the server's `@IsIn` list in `list-api-keys.request.dto.ts`.
+const SORT_FIELDS: readonly ApiKeySortField[] = ['createdAt', 'name', 'lastUsedAt', 'expiresAt'];
+const SORT_DIRECTIONS: readonly SortDirection[] = ['asc', 'desc'];
+
 /** Mirrors `CreateApiKeyRequestDto`'s `@MaxDate` bound
- * (`src/features/platform/api-keys/dtos/request/create-api-key.request.dto.ts`) so the picker
- * refuses an out-of-range date before a round trip. The server stays the sole authority: an
- * expiry that slips past this check anyway — clock skew, a stale build — still comes back as its
- * own field-validation error, which `useFormSubmit` folds onto the `expiresAt` field the same way
- * as any other server rejection. */
+ * (`src/features/platform/api-keys/dtos/request/create-api-key.request.dto.ts`), which accepts an
+ * instant at or before `now + 365 days`. A submission sends the end of the picked local day,
+ * clamped to `maxExpiresAt`, so the picker's `max` and the "365 days" preset can offer the
+ * calendar day `now + 365 days` falls on. On that day the key expires at the bound instant rather
+ * than at 23:59:59. The server stays the sole authority: an expiry that slips past this check
+ * anyway — clock skew, a stale build — still comes back as its own field-validation error, which
+ * `useFormSubmit` folds onto the `expiresAt` field the same way as any other server rejection. */
 const MAX_EXPIRY_DAYS = 365;
 const MAX_EXPIRY_MS = MAX_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
 
@@ -66,10 +77,14 @@ function KeyRow({
   apiKey,
   onRevoked,
   onRotated,
+  onNeedsReload,
 }: {
   apiKey: ApiKey;
   onRevoked: (id: string) => void;
   onRotated: (rotated: MintedApiKey) => void;
+  /** Called when a rotate is refused with a 409 (`ApiKeyExpiredException`) — the server, not this
+   * row's own clock, has the last word on expiry, so a stale row is refreshed from it. */
+  onNeedsReload: () => void;
 }) {
   const [rotateOpen, setRotateOpen] = useState(false);
   const [rotating, setRotating] = useState(false);
@@ -79,6 +94,9 @@ function KeyRow({
   const [revokeError, setRevokeError] = useState<string | null>(null);
   const status = keyStatus(apiKey);
   const revoked = Boolean(apiKey.revokedAt);
+  // Receives focus when a revoke closes its dialog: the revoke removes every row action, so the
+  // opener is gone. Programmatically focusable only once the row has no actions of its own.
+  const rowRef = useRef<HTMLTableRowElement>(null);
 
   async function handleRotate() {
     setRotating(true);
@@ -89,7 +107,12 @@ function KeyRow({
       setRotateOpen(false);
       onRotated(rotated);
     } catch (err: unknown) {
-      setRotateError(err instanceof Error ? err.message : 'Failed to rotate key');
+      if (err instanceof ApiError && err.status === 409) {
+        setRotateError('This key has already expired. Mint a new key instead.');
+        onNeedsReload();
+      } else {
+        setRotateError(err instanceof Error ? err.message : 'Failed to rotate key');
+      }
     } finally {
       setRotating(false);
     }
@@ -111,7 +134,7 @@ function KeyRow({
   }
 
   return (
-    <tr>
+    <tr ref={rowRef} tabIndex={revoked ? -1 : undefined}>
       <TableCell label="Name">{apiKey.name}</TableCell>
       <TableCell label="Prefix" className="cell-sub mono">
         {apiKey.tokenPrefix}…
@@ -131,23 +154,30 @@ function KeyRow({
       <TableCell label="Actions" className="cell-actions">
         {!revoked && (
           <>
-            <Button variant="secondary" size="sm" onClick={() => setRotateOpen(true)}>
-              Rotate
-            </Button>
+            {status.label === 'active' && (
+              <>
+                <Button variant="secondary" size="sm" onClick={() => setRotateOpen(true)}>
+                  Rotate<span className="sr-only"> {apiKey.name}</span>
+                </Button>
+                <ConfirmDialog
+                  open={rotateOpen}
+                  onClose={() => setRotateOpen(false)}
+                  title={`Rotate "${apiKey.name}"?`}
+                  body="This issues a fresh token onto this same key — its name, creation date and audit history stay. The current token stops working the instant rotation completes, so anything still using it starts failing right away."
+                  confirmLabel="Rotate key"
+                  destructive
+                  busy={rotating}
+                  error={rotateError ?? undefined}
+                  onConfirm={() => void handleRotate()}
+                />
+              </>
+            )}
             <Button variant="secondary" size="sm" onClick={() => setRevokeOpen(true)}>
-              Revoke
+              Revoke<span className="sr-only"> {apiKey.name}</span>
             </Button>
-            <ConfirmDialog
-              open={rotateOpen}
-              onClose={() => setRotateOpen(false)}
-              title={`Rotate "${apiKey.name}"?`}
-              body="This issues a fresh token onto this same key — its name, creation date and audit history stay. The current token stops working the instant rotation completes, so anything still using it starts failing right away."
-              confirmLabel="Rotate key"
-              destructive
-              busy={rotating}
-              error={rotateError ?? undefined}
-              onConfirm={() => void handleRotate()}
-            />
+            {status.label === 'expired' && (
+              <span className="cell-sub">Expired — mint a new key</span>
+            )}
             <ConfirmDialog
               open={revokeOpen}
               onClose={() => setRevokeOpen(false)}
@@ -157,6 +187,7 @@ function KeyRow({
               destructive
               busy={revoking}
               error={revokeError ?? undefined}
+              fallbackFocusRef={rowRef}
               onConfirm={() => void handleRevoke()}
             />
           </>
@@ -166,12 +197,32 @@ function KeyRow({
   );
 }
 
-/** Formats a `Date` as the local-time string a `datetime-local` input's `max` attribute expects
- * (`YYYY-MM-DDTHH:mm`) — the same local interpretation the browser gives the field's own value. */
-function toDatetimeLocalValue(date: Date): string {
+/** Formats a `Date` as the local calendar date a `type="date"` input's `value`/`max` expects
+ * (`YYYY-MM-DD`) — the same local interpretation the browser gives the field's own value. */
+function toDateInputValue(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
+
+/** Parses a `type="date"` input's `YYYY-MM-DD` value as that day's local midnight. */
+function startOfLocalDay(value: string): Date {
+  const [y, m, d] = value.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+/** Parses a `type="date"` input's `YYYY-MM-DD` value as the last second of that local day — the
+ * instant the server records as the key's expiry, so a key picked for "today" still grants the
+ * rest of today rather than expiring on arrival. */
+function endOfLocalDay(value: string): Date {
+  const [y, m, d] = value.split('-').map(Number);
+  return new Date(y, m - 1, d, 23, 59, 59);
+}
+
+const EXPIRY_PRESET_DAYS = [30, 90, 365];
+
+// Formats `maxExpiresAt`'s time of day for the hint below the picker on the last eligible day,
+// where the expiry instant is the bound itself rather than that day's 23:59:59.
+const maxExpiryTimeFormat = new Intl.DateTimeFormat(undefined, { timeStyle: 'short' });
 
 type MintField = 'name' | 'expiresAt';
 
@@ -190,17 +241,22 @@ function MintKeyDialog({ onClose, onMinted }: MintKeyDialogProps) {
   // Adopted once, at mount, so the picker's `max` and the validation bound below judge the same
   // instant an operator opened the dialog rather than drifting apart as they fill in the form.
   const [maxExpiresAt] = useState(() => Date.now() + MAX_EXPIRY_MS);
+  // The calendar day `maxExpiresAt` falls on — never a fresh `setDate(+365)`, which can land on a
+  // different day than the exact millisecond bound across a DST transition. The picker's `max`,
+  // the "365 days" preset and this validation all read the same day, so they agree with each other
+  // and with the hint text below.
+  const maxExpiryDayValue = toDateInputValue(new Date(maxExpiresAt));
 
   function validate(): Partial<Record<MintField, string>> {
     const errors: Partial<Record<MintField, string>> = {};
     if (!name.trim()) errors.name = 'Name is required.';
     if (expiresAt) {
-      const parsed = new Date(expiresAt).getTime();
-      if (Number.isNaN(parsed)) {
-        errors.expiresAt = 'Enter a valid date and time.';
-      } else if (parsed <= Date.now()) {
+      const startOfDay = startOfLocalDay(expiresAt);
+      if (Number.isNaN(startOfDay.getTime())) {
+        errors.expiresAt = 'Enter a valid date.';
+      } else if (endOfLocalDay(expiresAt).getTime() <= Date.now()) {
         errors.expiresAt = 'Expiry must be in the future.';
-      } else if (parsed > maxExpiresAt) {
+      } else if (startOfDay.getTime() > startOfLocalDay(maxExpiryDayValue).getTime()) {
         errors.expiresAt = 'Expiry cannot be more than 365 days out.';
       }
     }
@@ -208,10 +264,13 @@ function MintKeyDialog({ onClose, onMinted }: MintKeyDialogProps) {
   }
 
   async function submit() {
-    const key = await mintApiKey(
-      name.trim(),
-      expiresAt ? new Date(expiresAt).toISOString() : undefined,
-    );
+    // The picked day's end-of-day instant can fall a few hours past `maxExpiresAt` on the day the
+    // picker offers as its maximum, since that day's `max` is a calendar day and the server's bound
+    // is an exact millisecond — clamped here rather than refused, so the boundary day never 400s.
+    const expiresAtInstant = expiresAt
+      ? new Date(Math.min(endOfLocalDay(expiresAt).getTime(), maxExpiresAt)).toISOString()
+      : undefined;
+    const key = await mintApiKey(name.trim(), expiresAtInstant);
     onMinted(key);
   }
 
@@ -223,15 +282,17 @@ function MintKeyDialog({ onClose, onMinted }: MintKeyDialogProps) {
 
   const nameField = fieldProps('name');
   const expiresField = fieldProps('expiresAt');
+  // On every other day the key expires at 23:59:59 local time; on this last eligible day it
+  // expires at the bound instant itself, which can be up to a day earlier in the clock.
+  const expiresHint =
+    expiresAt === maxExpiryDayValue
+      ? `On this last day the key expires at ${maxExpiryTimeFormat.format(new Date(maxExpiresAt))}, the 365-day limit.`
+      : 'Leave blank and the platform applies its own default expiry, or set a date up to 365 days out.';
 
   return (
     <Dialog open onClose={onClose} title="Mint a key" size="sm">
       <form onSubmit={onSubmit} className="form" noValidate>
-        {formError && (
-          <p className="error" role="alert">
-            {formError}
-          </p>
-        )}
+        {formError && <Alert tone="rejected">{formError}</Alert>}
         <Input
           {...nameField}
           label="Name"
@@ -240,22 +301,44 @@ function MintKeyDialog({ onClose, onMinted }: MintKeyDialogProps) {
           placeholder="CI integration"
           hint="So you can tell this key apart from your others later."
         />
+        <div className="button-row">
+          {EXPIRY_PRESET_DAYS.map((days) => (
+            <Button
+              key={days}
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                if (days === MAX_EXPIRY_DAYS) {
+                  setExpiresAt(maxExpiryDayValue);
+                  return;
+                }
+                const preset = new Date();
+                preset.setDate(preset.getDate() + days);
+                setExpiresAt(toDateInputValue(preset));
+              }}
+            >
+              {days} days
+            </Button>
+          ))}
+        </div>
         <Input
           {...expiresField}
           label="Expires"
           optional
-          type="datetime-local"
-          max={toDatetimeLocalValue(new Date(maxExpiresAt))}
+          width="sm"
+          type="date"
+          max={maxExpiryDayValue}
           value={expiresAt}
           onChange={setExpiresAt}
-          hint="Leave blank and the platform applies its own default expiry, or set a date up to 365 days out."
+          hint={expiresHint}
         />
         <div className="form-actions">
           <Button type="button" variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" disabled={pending}>
-            {pending ? 'Minting…' : 'Mint'}
+          <Button type="submit" busy={pending} busyLabel="Minting…">
+            Mint
           </Button>
         </div>
       </form>
@@ -265,9 +348,12 @@ function MintKeyDialog({ onClose, onMinted }: MintKeyDialogProps) {
 
 export default function ApiKeysPage() {
   const [urlState, setUrlState] = useUrlState(URL_DEFAULTS);
-  const sort = urlState.sort as ApiKeySortField;
-  const sortDir = urlState.sortDir as SortDirection;
-  const skip = Number(urlState.skip);
+  // A hand-edited or stale `sort`/`sortDir` falls back to the page default rather than reaching
+  // the API with a value its `@IsIn` decorator refuses, which would otherwise blank the page.
+  const sort = pickOption(urlState.sort, SORT_FIELDS, 'createdAt');
+  const sortDir = pickOption(urlState.sortDir, SORT_DIRECTIONS, 'desc');
+  const skip = clampSkip(urlState.skip);
+  const limit = clampPageSize(urlState.limit, PAGE_SIZE_OPTIONS, 25);
 
   const [keys, setKeys] = useState<ApiKey[] | null>(null);
   const [count, setCount] = useState(0);
@@ -279,6 +365,10 @@ export default function ApiKeysPage() {
   // exists, matching the server's one-time delivery.
   const [oneTimeToken, setOneTimeToken] = useState<OneTimeToken | null>(null);
   const secretRevealRef = useRef<HTMLElement>(null);
+  // Bumped whenever a mint or an expired-rotate needs a refetch outside the normal
+  // skip/sort/sortDir change — SecretReveal owns the only `beforeunload` guard, so this page holds
+  // no state for that.
+  const [reloadKey, setReloadKey] = useState(0);
 
   // Moves focus to the panel every time a mint or a rotate replaces it — both land here, so both
   // need the same focus move.
@@ -286,39 +376,27 @@ export default function ApiKeysPage() {
     if (oneTimeToken) secretRevealRef.current?.focus();
   }, [oneTimeToken]);
 
-  // The plaintext token above is the only copy that will ever exist; closing the tab or reloading
-  // while the panel holds one destroys it exactly as if the operator had never seen it. In-app
-  // navigation away from this page is not covered — this app uses the declarative router, which
-  // has no navigation-blocking API, only `beforeunload` for a full document unload.
-  useEffect(() => {
-    if (!oneTimeToken) return;
-    function handleBeforeUnload(e: BeforeUnloadEvent) {
-      e.preventDefault();
-      e.returnValue = '';
-    }
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [oneTimeToken]);
-
-  const load = useCallback(() => {
-    return listApiKeys({ skip, limit: PAGE_SIZE, sort, sortDir })
-      .then(({ docs, count: total }) => {
-        setKeys(docs);
-        setCount(total);
-        setError(null);
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : 'Failed to load API keys');
-      });
-  }, [skip, sort, sortDir]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useAbortableEffect(
+    (isCurrent) => {
+      return listApiKeys({ skip, limit, sort, sortDir })
+        .then(({ docs, count: total }) => {
+          if (!isCurrent()) return;
+          setKeys(docs);
+          setCount(total);
+          setError(null);
+        })
+        .catch((err: unknown) => {
+          if (!isCurrent()) return;
+          setError(err instanceof Error ? err.message : 'Failed to load API keys');
+        });
+    },
+    [skip, limit, sort, sortDir, reloadKey],
+  );
 
   function handleMinted(key: MintedApiKey) {
     setOneTimeToken({ key, action: 'minted' });
-    void load();
+    setUrlState({ skip: URL_DEFAULTS.skip });
+    setReloadKey((current) => current + 1);
     notify('success', `Minted "${key.name}".`);
   }
 
@@ -364,15 +442,15 @@ export default function ApiKeysPage() {
   return (
     <>
       <RecordListPage
-        eyebrow="Admin"
+        eyebrow="Account"
         title="API keys"
-        description="Tokens an MCP client uses to authenticate as you."
+        description="Tokens an MCP client uses to authenticate as you. Every member manages their own."
         actions={
           <Button type="button" variant="primary" onClick={() => setMintOpen(true)}>
             Mint key
           </Button>
         }
-        filters={
+        lead={
           oneTimeToken && (
             <SecretReveal
               ref={secretRevealRef}
@@ -389,13 +467,18 @@ export default function ApiKeysPage() {
         }
         error={error ?? undefined}
         status={status}
+        skeletonVariant="table"
         footer={
           keys && (
             <Pager
               count={count}
               skip={skip}
-              pageSize={PAGE_SIZE}
+              pageSize={limit}
               onSkipChange={(next) => setUrlState({ skip: String(next) })}
+              onPageSizeChange={(next) =>
+                setUrlState({ limit: String(next), skip: URL_DEFAULTS.skip })
+              }
+              pageSizeOptions={PAGE_SIZE_OPTIONS}
             />
           )
         }
@@ -445,6 +528,7 @@ export default function ApiKeysPage() {
                     apiKey={key}
                     onRevoked={handleRevoked}
                     onRotated={handleRotated}
+                    onNeedsReload={() => setReloadKey((current) => current + 1)}
                   />
                 ))}
               </tbody>

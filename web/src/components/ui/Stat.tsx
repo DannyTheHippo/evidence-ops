@@ -9,17 +9,28 @@ interface StatProps {
   hint?: string;
   /** Turns the figure into a link to its own detail view. */
   to?: string;
+  /** Selects the value's register: 'numeric' (the default) keeps the large mono tabular figure;
+   * 'text' renders a prose value at the body register, for a stat whose value is a phrase. */
+  kind?: 'numeric' | 'text';
 }
 
-/** One dashboard or detail-page figure: a micro-label, a large mono tabular value, and an
- * optional hint, laid out for `.stat-row`. `tone` reuses `Badge`'s semantic vocabulary so a stat
- * reads consistently with the badges beside it; `neutral` (the default) leaves the value in the
- * page's ordinary ink rather than tinting it. Supplying `to` renders the whole figure as a link
- * to its own detail view instead of a plain `<div>`. */
-export default function Stat({ label, value, tone = 'neutral', hint, to }: StatProps) {
+/** One dashboard or detail-page figure: a micro-label, a value, and an optional hint, laid out for
+ * `.stat-row`. `kind` selects the value's register — the default `'numeric'` keeps the large mono
+ * tabular figure, `'text'` renders a prose value at the body register. `tone` reuses `Badge`'s
+ * semantic vocabulary so a stat reads consistently with the badges beside it; `neutral` (the
+ * default) leaves the value in the page's ordinary ink rather than tinting it. Supplying `to`
+ * renders the whole figure as a link to its own detail view instead of a plain `<div>`. */
+export default function Stat({
+  label,
+  value,
+  tone = 'neutral',
+  hint,
+  to,
+  kind = 'numeric',
+}: StatProps) {
   const valueClass = [
     'stat-row-value',
-    'mono',
+    kind === 'numeric' ? 'mono' : 'stat-row-value--text',
     tone !== 'neutral' ? `stat-row-value--${tone}` : null,
   ]
     .filter(Boolean)

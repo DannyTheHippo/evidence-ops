@@ -1,6 +1,5 @@
 {
   "discoveredAt": "2026-09-03T15:45:52Z",
-  "pathAlias": "/Users/danielhendrich/.claude/aliases/evidence-ops",
   "autonomy": "standing",
   "authorizedWrites": {
     "commit": true,
@@ -203,40 +202,168 @@
     "sampleSize": 5,
     "samples": [
       { "category": "bootstrap", "file": "src/main.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
-      { "category": "bootstrap", "file": "src/app.module.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
-      { "category": "bootstrap", "file": "src/config/app.config.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
-      { "category": "process-bootstrap", "file": "src/worker/main.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
-      { "category": "process-bootstrap", "file": "src/mcp/main.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
-      { "category": "controller", "file": "src/features/common/auth/auth.controller.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
-      { "category": "service", "file": "src/features/common/auth/auth.service.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
-      { "category": "module", "file": "src/features/common/auth/auth.module.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
-      { "category": "guard", "file": "src/features/common/auth/guards/jwt-auth.guard.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
-      { "category": "decorator", "file": "src/shared/decorators/public-route.decorator.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
-      { "category": "dto-request", "file": "src/features/common/auth/dtos/request/register.request.dto.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
-      { "category": "dto-response", "file": "src/features/common/auth/dtos/response/me.response.dto.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
-      { "category": "dto-response", "file": "src/shared/dtos/response/with-count.response.dto.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
-      { "category": "exception", "file": "src/shared/exceptions/base.exception.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
-      { "category": "exception", "file": "src/features/common/auth/exceptions/auth.exception.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
-      { "category": "filter", "file": "src/shared/filters/global-exception.filter.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
-      { "category": "util", "file": "src/shared/utils/to-response-dto.util.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
-      { "category": "schema", "file": "src/database/schemas/administration/user/user.schema.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
-      { "category": "plugin", "file": "src/database/plugins/auditable.plugin.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
-      { "category": "config", "file": "src/config/environment/environment.config.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
-      { "category": "config", "file": "src/config/environment/typed-config.service.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
-      { "category": "test-config", "file": "jest.config.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
-      { "category": "test-config", "file": "jest.e2e.config.ts", "lastSampledAt": "2026-08-10T08:57:15Z" },
-      { "category": "test-util", "file": "test/utils/get-mock-config.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      {
+        "category": "bootstrap",
+        "file": "src/app.module.ts",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
+      {
+        "category": "bootstrap",
+        "file": "src/config/app.config.ts",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
+      {
+        "category": "process-bootstrap",
+        "file": "src/worker/main.ts",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
+      {
+        "category": "process-bootstrap",
+        "file": "src/mcp/main.ts",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
+      {
+        "category": "controller",
+        "file": "src/features/common/auth/auth.controller.ts",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
+      {
+        "category": "service",
+        "file": "src/features/common/auth/auth.service.ts",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
+      {
+        "category": "module",
+        "file": "src/features/common/auth/auth.module.ts",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
+      {
+        "category": "guard",
+        "file": "src/features/common/auth/guards/jwt-auth.guard.ts",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
+      {
+        "category": "decorator",
+        "file": "src/shared/decorators/public-route.decorator.ts",
+        "lastSampledAt": "2026-08-10T08:57:15Z"
+      },
+      {
+        "category": "dto-request",
+        "file": "src/features/common/auth/dtos/request/register.request.dto.ts",
+        "lastSampledAt": "2026-08-10T08:57:15Z"
+      },
+      {
+        "category": "dto-response",
+        "file": "src/features/common/auth/dtos/response/me.response.dto.ts",
+        "lastSampledAt": "2026-08-10T08:57:15Z"
+      },
+      {
+        "category": "dto-response",
+        "file": "src/shared/dtos/response/with-count.response.dto.ts",
+        "lastSampledAt": "2026-08-10T08:57:15Z"
+      },
+      {
+        "category": "exception",
+        "file": "src/shared/exceptions/base.exception.ts",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
+      {
+        "category": "exception",
+        "file": "src/features/common/auth/exceptions/auth.exception.ts",
+        "lastSampledAt": "2026-08-10T08:57:15Z"
+      },
+      {
+        "category": "filter",
+        "file": "src/shared/filters/global-exception.filter.ts",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
+      {
+        "category": "util",
+        "file": "src/shared/utils/to-response-dto.util.ts",
+        "lastSampledAt": "2026-08-10T08:57:15Z"
+      },
+      {
+        "category": "schema",
+        "file": "src/database/schemas/administration/user/user.schema.ts",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
+      {
+        "category": "plugin",
+        "file": "src/database/plugins/auditable.plugin.ts",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
+      {
+        "category": "config",
+        "file": "src/config/environment/environment.config.ts",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
+      {
+        "category": "config",
+        "file": "src/config/environment/typed-config.service.ts",
+        "lastSampledAt": "2026-08-10T08:57:15Z"
+      },
+      {
+        "category": "test-config",
+        "file": "jest.config.ts",
+        "lastSampledAt": "2026-08-10T08:57:15Z"
+      },
+      {
+        "category": "test-config",
+        "file": "jest.e2e.config.ts",
+        "lastSampledAt": "2026-08-10T08:57:15Z"
+      },
+      {
+        "category": "test-util",
+        "file": "test/utils/get-mock-config.ts",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
       { "category": "tsconfig", "file": "tsconfig.json", "lastSampledAt": "2026-08-10T08:57:15Z" },
-      { "category": "ci", "file": ".github/workflows/ci.yml", "lastSampledAt": "2026-08-10T08:57:15Z" },
-      { "category": "ci", "file": ".github/workflows/e2e.yml", "lastSampledAt": "2026-08-10T08:57:15Z" },
-      { "category": "infra", "file": "docker-compose.yml", "lastSampledAt": "2026-09-03T15:45:52Z" },
+      {
+        "category": "ci",
+        "file": ".github/workflows/ci.yml",
+        "lastSampledAt": "2026-08-10T08:57:15Z"
+      },
+      {
+        "category": "ci",
+        "file": ".github/workflows/e2e.yml",
+        "lastSampledAt": "2026-08-10T08:57:15Z"
+      },
+      {
+        "category": "infra",
+        "file": "docker-compose.yml",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
       { "category": "infra", "file": ".husky/pre-commit", "lastSampledAt": "2026-08-10T08:57:15Z" },
-      { "category": "web-component", "file": "web/src/App.tsx", "lastSampledAt": "2026-09-03T15:45:52Z" },
-      { "category": "web-component", "file": "web/src/pages/LoginPage.tsx", "lastSampledAt": "2026-09-03T15:45:52Z" },
-      { "category": "web-api-client", "file": "web/src/api/client.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
-      { "category": "web-test", "file": "web/src/pages/LoginPage.test.tsx", "lastSampledAt": "2026-09-03T15:45:52Z" },
-      { "category": "web-build", "file": "web/vite.config.ts", "lastSampledAt": "2026-09-03T15:45:52Z" },
-      { "category": "web-styles", "file": "web/src/styles.css", "lastSampledAt": "2026-08-10T08:57:15Z" }
+      {
+        "category": "web-component",
+        "file": "web/src/App.tsx",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
+      {
+        "category": "web-component",
+        "file": "web/src/pages/LoginPage.tsx",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
+      {
+        "category": "web-api-client",
+        "file": "web/src/api/client.ts",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
+      {
+        "category": "web-test",
+        "file": "web/src/pages/LoginPage.test.tsx",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
+      {
+        "category": "web-build",
+        "file": "web/vite.config.ts",
+        "lastSampledAt": "2026-09-03T15:45:52Z"
+      },
+      {
+        "category": "web-styles",
+        "file": "web/src/styles.css",
+        "lastSampledAt": "2026-08-10T08:57:15Z"
+      }
     ]
   }
 }

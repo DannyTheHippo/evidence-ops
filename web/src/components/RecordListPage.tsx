@@ -1,4 +1,5 @@
 import type { ReactElement, ReactNode } from 'react';
+import Alert from './ui/Alert';
 import EmptyState from './ui/EmptyState';
 import PageHeader from './ui/PageHeader';
 import Skeleton from './ui/Skeleton';
@@ -29,11 +30,14 @@ export interface RecordListPageProps {
   /** Rendered between the header and the toolbar — a page-level composer or callout, never a
    * filter (`filters` is the toolbar's own slot for that). */
   lead?: ReactNode;
-  /** Rendered below the header, ahead of the status region — typically a `FilterBar`. */
+  /** The view switch at the start of the toolbar's view row — typically a `SegmentedControl`. */
+  view?: ReactNode;
+  /** The toolbar's filter row, below its view row and ahead of the status region — typically a
+   * `FilterBar`. */
   filters?: ReactNode;
-  /** Rendered on the trailing edge of the same toolbar row as `filters` — typically a result
-   * count. Absent by default: a page with no count to show renders a `Toolbar` with only its
-   * start slot, same as before this prop existed. */
+  /** The far edge of the toolbar's view row, beside `view` — typically a result count. The view
+   * row renders while `view` or `toolbarEnd` is present, so a page with neither shows only the
+   * filter row. */
   toolbarEnd?: ReactNode;
   /** Rendered above the status region whenever present, independent of `status.kind` — a failed
    * refresh renders this alongside `ready`'s rows or `empty`'s state, not in place of them. */
@@ -52,8 +56,9 @@ export interface RecordListPageProps {
 
 /**
  * Shared scaffold for a list page: header (`eyebrow`/`title`/`description` plus an optional
- * `actions` slot), an optional `lead` slot between the header and the toolbar, an optional
- * `filters` slot, an optional `error` alert independent of `status`, one region driven by
+ * `actions` slot), an optional `lead` slot between the header and the toolbar, a two-row toolbar
+ * (`view` and `toolbarEnd` in its view row, `filters` in its filter row), an optional `error`
+ * alert independent of `status`, one region driven by
  * `status` — loading renders `Skeleton`, blank renders nothing, empty renders `EmptyState`, and
  * ready renders `children` — and an optional `footer` rendered after that region regardless of
  * `status.kind`.
@@ -71,6 +76,7 @@ export default function RecordListPage({
   description,
   actions,
   lead,
+  view,
   filters,
   toolbarEnd,
   error,
@@ -85,13 +91,9 @@ export default function RecordListPage({
 
       {lead}
 
-      <Toolbar start={filters} end={toolbarEnd} />
+      <Toolbar view={view} filters={filters} end={toolbarEnd} />
 
-      {error && (
-        <p className="error error--page" role="alert">
-          {error}
-        </p>
-      )}
+      {error && <Alert tone="rejected">{error}</Alert>}
 
       {status.kind === 'loading' && (
         <Skeleton label={status.label ?? `Loading ${title}…`} variant={skeletonVariant} />

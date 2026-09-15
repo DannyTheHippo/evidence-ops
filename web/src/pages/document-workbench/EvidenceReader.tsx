@@ -1,8 +1,12 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { listVersionChunks, type EvidenceChunkView } from '../../api/client';
+import {
+  listVersionChunks,
+  type DocumentVersionIngestionStatus,
+  type EvidenceChunkView,
+} from '../../api/client';
 import CopyButton from '../../components/ui/CopyButton';
-import Input from '../../components/ui/Input';
+import SearchInput from '../../components/ui/SearchInput';
 import Skeleton from '../../components/ui/Skeleton';
 import { truncateSha256 } from '../../lib/identifiers';
 import { formatLocator, locatorGroupKey, locatorGroupLabel, pdfPageOf } from '../../lib/locator';
@@ -41,14 +45,20 @@ function chunkCountLabel(count: number): string {
   return `${count} chunk${count === 1 ? '' : 's'}`;
 }
 
-// Wraps every case-insensitive occurrence of `query` in `text` with a `<mark>`. Renders `text`
-// unchanged for an empty or whitespace-only query.
-function highlightMatches(text: string, query: string): ReactNode {
-  const trimmed = query.trim();
-  if (trimmed.length === 0) return text;
-  const pattern = new RegExp(`(${escapeRegExp(trimmed)})`, 'gi');
-  return text.split(pattern).map((part, index) =>
-    part.toLowerCase() === trimmed.toLowerCase() ? (
+// A search's matcher, built once per query rather than once per visible chunk: `regex` splits a
+// chunk's text into parts, `matchLower` identifies which part is the match without re-lowercasing
+// the query for every chunk.
+interface SearchPattern {
+  regex: RegExp;
+  matchLower: string;
+}
+
+// Wraps every case-insensitive occurrence of `pattern`'s query in `text` with a `<mark>`. Renders
+// `text` unchanged when there is no active search.
+function highlightMatches(text: string, pattern: SearchPattern | null): ReactNode {
+  if (!pattern) return text;
+  return text.split(pattern.regex).map((part, index) =>
+    part.toLowerCase() === pattern.matchLower ? (
       <mark key={index} className="search-highlight">
         {part}
       </mark>
@@ -60,11 +70,11 @@ function highlightMatches(text: string, query: string): ReactNode {
 
 interface EvidenceChunkItemProps {
   chunk: EvidenceChunkView;
-  query: string;
+  pattern: SearchPattern | null;
   isTarget: boolean;
 }
 
-function EvidenceChunkItem({ chunk, query, isTarget }: EvidenceChunkItemProps) {
+function EvidenceChunkItem({ chunk, pattern, isTarget }: EvidenceChunkItemProps) {
   const itemRef = useRef<HTMLLIElement | null>(null);
 
   // Runs once the targeted chunk's group has opened and its element exists. Scrolling first and
@@ -88,7 +98,7 @@ function EvidenceChunkItem({ chunk, query, isTarget }: EvidenceChunkItemProps) {
       aria-current={isTarget ? 'location' : undefined}
     >
       <p className="apparatus-locator mono">{locatorLabel}</p>
-      <p className="evidence-chunk-text">{highlightMatches(chunk.text, query)}</p>
+      <p className="evidence-chunk-text">{highlightMatches(chunk.text, pattern)}</p>
       <div className="form-actions">
         <CopyButton
           text={`${locatorLabel}: "${chunk.text}"`}
@@ -109,6 +119,10 @@ interface EvidenceReaderProps {
   // pane there — `null` once the target is known not to be a `pdf-page` locator, or once there is
   // no target at all. Omitted entirely by a non-PDF caller, which has no PDF pane to jump.
   onTargetPageChange?: (page: number | null) => void;
+  // The version's own ingestion status, distinct from `doc.currentVersion` — a reader can be
+  // looking at an older version while a newer one is still ingesting. Omitted by a caller with no
+  // version record to hand.
+  ingestionStatus?: DocumentVersionIngestionStatus;
 }
 
 /**
@@ -121,6 +135,7 @@ export default function EvidenceReader({
   versionId,
   variant = 'rail',
   onTargetPageChange,
+  ingestionStatus,
 }: EvidenceReaderProps) {
   const [searchParams] = useSearchParams();
   const targetChunkId = searchParams.get('chunk') ?? undefined;
@@ -165,6 +180,21 @@ export default function EvidenceReader({
     onTargetPageChange?.(targetChunk ? pdfPageOf(targetChunk.locator) : null);
   }, [targetChunk, onTargetPageChange]);
 
+  // Lowercases every chunk's text at most once per fetch, not once per keystroke.
+  const chunkPairs = useMemo(
+    () => (chunks ?? []).map((chunk) => ({ chunk, lower: chunk.text.toLowerCase() })),
+    [chunks],
+  );
+
+  const trimmedQuery = query.trim();
+  const searchPattern = useMemo<SearchPattern | null>(() => {
+    if (trimmedQuery.length === 0) return null;
+    return {
+      regex: new RegExp(`(${escapeRegExp(trimmedQuery)})`, 'gi'),
+      matchLower: trimmedQuery.toLowerCase(),
+    };
+  }, [trimmedQuery]);
+
   if (error) {
     return (
       <p className="error" role="alert">
@@ -178,19 +208,19 @@ export default function EvidenceReader({
   }
 
   const groups = groupChunks(chunks);
-  const firstGroupKey = groups[0]?.key;
   const targetGroupKey = targetChunk ? locatorGroupKey(targetChunk.locator) : undefined;
 
-  const trimmedQuery = query.trim();
+  const lowerById = new Map(chunkPairs.map((pair) => [pair.chunk.id, pair.lower]));
+  const searchLower = trimmedQuery.toLowerCase();
   const visibleGroups = groups
     .map((group) => ({
       ...group,
-      chunks: group.chunks.filter((chunk) =>
-        chunk.text.toLowerCase().includes(trimmedQuery.toLowerCase()),
-      ),
+      chunks: group.chunks.filter((chunk) => (lowerById.get(chunk.id) ?? '').includes(searchLower)),
     }))
     .filter((group) => group.chunks.length > 0);
   const matchCount = visibleGroups.reduce((total, group) => total + group.chunks.length, 0);
+  const searching = trimmedQuery.length > 0;
+  const firstVisibleGroupKey = visibleGroups[0]?.key;
 
   // Exactly one of the two ever renders — a search either turned up something to report a count
   // for, or it did not, never both at once.
@@ -203,7 +233,7 @@ export default function EvidenceReader({
 
   return (
     <div className={`evidence-reader evidence-reader--${variant}`}>
-      <Input
+      <SearchInput
         label="Search this document"
         placeholder="Search chunk text…"
         value={query}
@@ -218,9 +248,14 @@ export default function EvidenceReader({
         </p>
       )}
 
-      {groups.length === 0 && (
-        <p className="cell-sub">No evidence chunks are stored for this version.</p>
-      )}
+      {groups.length === 0 &&
+        (ingestionStatus === 'pending' ? (
+          <p className="cell-sub">
+            Ingestion is still running for this version — evidence chunks appear as they are stored.
+          </p>
+        ) : (
+          <p className="cell-sub">No evidence chunks are stored for this version.</p>
+        ))}
 
       {searchStatus && (
         <p className="cell-sub" role="status" aria-live="polite">
@@ -230,9 +265,9 @@ export default function EvidenceReader({
 
       {visibleGroups.map((group) => (
         <details
-          key={group.key}
+          key={`${group.key}:${searching}`}
           className="evidence-group"
-          open={group.key === firstGroupKey || group.key === targetGroupKey}
+          open={searching || group.key === firstVisibleGroupKey || group.key === targetGroupKey}
         >
           <summary>
             <span>{group.label}</span>
@@ -243,7 +278,7 @@ export default function EvidenceReader({
               <EvidenceChunkItem
                 key={chunk.id}
                 chunk={chunk}
-                query={query}
+                pattern={searchPattern}
                 isTarget={chunk.id === targetChunk?.id}
               />
             ))}

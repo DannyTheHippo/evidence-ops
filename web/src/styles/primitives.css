@@ -41,6 +41,17 @@
 .btn:not(.btn--sm) {
   min-width: 6.5rem;
 }
+/* Wraps a button's own text so it can truncate independently of the button box — `.example-chip`
+   and a `.segmented-control` segment both use it. `.btn` is `inline-flex` and its label would
+   otherwise be a bare text node, and `text-overflow` only engages on a block box; `min-width: 0`
+   lets the span shrink past its content width as a flex item once the button itself runs short of
+   room. */
+.btn-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .btn--primary {
   background: var(--signal);
   color: var(--signal-ink);
@@ -76,11 +87,20 @@
   border-color: var(--status-reject-line);
 }
 .btn--danger:hover:not(:disabled) {
-  background: var(--status-reject-line);
+  background: var(--status-reject-ink);
+  color: var(--signal-ink);
+}
+/* Stays enabled and at full colour — `.btn:disabled`'s own comment above rules out an
+   opacity-based dim as the least legible combination on `.btn--primary` — so the busy state reads
+   entirely through the swapped `busyLabel` text and the cursor. */
+.btn--busy {
+  cursor: progress;
 }
 /* Icon-only control — holds the minimum WCAG 2.2 (2.5.8) hit target independent of the icon size
-   inside it. */
-.btn--icon {
+   inside it. `:not(.btn--sm)`'s own min-width above resolves two classes deep (`.btn` plus the
+   argument of `:not()`), so a plain `.btn--icon` alone is outranked by it at a non-`sm` size; the
+   doubled `.btn` selector below ties that specificity and wins on source order instead. */
+.btn.btn--icon {
   min-width: var(--target-min);
   min-height: var(--target-min);
 }
@@ -224,22 +244,25 @@
   border-bottom: 1px solid var(--hairline);
   white-space: nowrap;
 }
+/* `height` is a floor on a table cell and includes the block padding and the row border, so
+   `--row-h` is sized to hold both plus one `--control-h-sm` control; a cell with a second line
+   grows past it. */
 .grid tbody td {
+  height: var(--row-h);
   padding: var(--density-row) var(--density-cell-x);
   border-bottom: 1px solid var(--hairline);
   vertical-align: middle;
+  transition: background var(--motion-row-hover) ease;
 }
 .grid tbody tr:last-child td {
   border-bottom: none;
 }
-.grid tbody tr {
-  transition: background var(--motion-row-hover) ease;
-}
 .grid tbody tr:hover td {
   background: var(--surface-2);
 }
-/* Selected-row state — the table counterpart of `.queue-item.is-active`, sharing its
-   `--signal-soft`/`--signal-line` pairing so "selected" reads the same in both places. Declared
+/* Selected-row state — shares the `--signal-soft`/`--signal-line` pairing `.queue-item`'s own
+   `[aria-current='true']` state (features.css) uses, so "selected" reads the same in both places.
+   Declared
    after the hover rule, and at matching specificity, so a selected row that is also hovered keeps
    its selected tint rather than losing it to `:hover`. */
 .grid tbody tr.row--selected td {
@@ -249,14 +272,108 @@
 .grid tbody tr.row--selected td:first-child {
   border-left: 3px solid var(--signal-line);
 }
-.grid .num {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  text-align: right;
+/* A row that takes focus itself through `tabindex="-1"`, e.g. a revoked row whose actions are gone.
+   `:focus`, not `:focus-visible`: script moves focus here right after a pointer-pressed Confirm,
+   which browsers do not match as `:focus-visible`, and Tab never reaches a `tabindex="-1"` row, so
+   `:focus-visible` would never paint. The indicator sits on the cells because a table row paints no
+   reliable outline or shadow of its own; a tint plus a `--signal` left border shows in both the
+   table and the stacked layout below 768px, and the border stays visible in forced colours, which
+   drop the tint. Higher specificity than `.row--selected`, so focus wins over selection. */
+.grid tbody tr[tabindex='-1']:focus td {
+  background: var(--surface-2);
 }
-.cell-actions {
+.grid tbody tr[tabindex='-1']:focus td:first-child {
+  border-left: 3px solid var(--signal);
+}
+.grid td.cell-numeric,
+.grid th.cell-numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.grid td.cell-actions {
   text-align: right;
   white-space: nowrap;
+}
+/* A fixed-layout table sizes no column from its content, so `nowrap` there only pushes a status
+   note, sub-line or alert out of the actions cell; wrapping keeps it inside. Buttons keep their
+   own `.btn` `nowrap`. */
+.grid:has(colgroup) td.cell-actions {
+  white-space: normal;
+}
+/* Tighter than `.form-actions`'s own gap, so a pair of small buttons shares one line inside the
+   actions column's width. */
+.grid td.cell-actions .form-actions {
+  gap: var(--space-2);
+}
+/* The same gap between inline action children placed straight in the cell with no `.form-actions`
+   wrapper: a button (`.btn`), a menu (`.menu`) or a text note (`.cell-sub`, such as ApiKeysPage's
+   "Expired — mint a new key") that follows an earlier one. No other child gets it: an open
+   `Dialog` renders its `<dialog>` in place as a child of the cell and centres through the
+   browser's `margin: auto`, and a block-level `.alert` starts its own line. `~` rather than `+`,
+   because an open `ConfirmDialog` can sit between two buttons (ApiKeysPage's Rotate and Revoke).
+   Each `:is()` counts as one class, so with `.grid` and `.cell-actions` this rule is (0,4,1),
+   above features.css's later `.grid td .cell-sub { margin: 0 }` at (0,2,1), and a note keeps its
+   gap. */
+.grid td.cell-actions > :is(.btn, .menu, .cell-sub) ~ :is(.btn, .menu, .cell-sub) {
+  margin-inline-start: var(--space-2);
+}
+/* A menu trigger in an actions cell matches a small button's height, so its row holds `--row-h`. */
+.grid td.cell-actions .menu-trigger {
+  height: var(--control-h-sm);
+  padding-block: 0;
+}
+/* Auto table layout sizes every column off its cells' content, and a `nowrap` `.cell-truncate`
+   span contributes its full untruncated width to that — `max-width` on a descendant cannot shrink
+   a column below content, which is the whole reason `table-layout: fixed` exists. A `<colgroup>` is
+   the opt-in: a table that renders one keeps every OTHER column at the width its `<col>` states,
+   and the one column with no `<col>` width takes whatever is left. A `<col>` cannot itself carry a
+   `min-width`, so when the fixed columns' widths add up to more than the table's own width, the
+   leftover for that free column is only whatever the difference happens to be — as low as zero.
+   Each page's own `min-width` modifier on `.grid` (in features.css) is the floor: it holds the
+   table at least `fixed-column sum + 15rem` wide, so the free column never has less than 15rem to
+   clip into, and `.panel`'s own scroll picks up whatever that pushes past the panel's width. The
+   widest floor is 72rem (1152px at a 16px root), inside the 1153px a 1440px viewport leaves after
+   the 220px sidebar, 48px `.container` padding, a 17px classic scrollbar and the 2px panel border.
+   A table with no `<colgroup>` is unaffected. */
+.grid:has(colgroup) {
+  table-layout: fixed;
+}
+/* The recurring non-free-text column shapes a fixed `.grid` reaches for, sized to what each
+   actually holds rather than divided evenly: a relative timestamp or small number (`.col-narrow`),
+   a short mono id or enum (`.col-compact`), a short status badge or single-button cluster
+   (`.col-wide`), and a long badge ("conflicting evidence") or a two-button actions row whose busy
+   labels still share one line (`.col-badge`). The one column meant to absorb whatever is left
+   carries none of these. */
+.col-narrow {
+  width: 8rem;
+}
+.col-compact {
+  width: 9rem;
+}
+.col-wide {
+  width: 11rem;
+}
+.col-badge {
+  width: 13rem;
+}
+/* Below `.col-narrow`, for a column whose header — measured against `--text-2xs` at its uppercase
+   tracking, plus the sort chevron and its gap where the header is sortable — needs less than 8rem
+   to stay unclipped. Each size is the smallest quarter-rem step that still clears its header: a
+   bare short label or number (`.col-tiny`), a short label (`.col-thin`), a short label or narrow
+   value that also truncates with a tooltip (`.col-slim`), and a short sortable label whose chevron
+   needs the extra quarter-rem (`.col-snug`). The value inside still needs its own truncation where
+   it can vary in length — these classes bound the column, not the content. */
+.col-tiny {
+  width: 4.5rem;
+}
+.col-thin {
+  width: 5.5rem;
+}
+.col-slim {
+  width: 6.5rem;
+}
+.col-snug {
+  width: 7.5rem;
 }
 /* A row carrying a destination (`TableRow`'s `to`) reads as a pointer target; the actual link
    lives in `.row-link` below, this only signals the row-wide click enhancement layered on it. */
@@ -302,6 +419,12 @@
     display: block;
     width: 100%;
   }
+  /* Releases each page's desktop `min-width` floor (`.sources-grid` and its siblings in
+     features.css), which this selector outranks, so a card fits the viewport instead of scrolling
+     the panel sideways. */
+  .grid:has(td[data-label]) {
+    min-width: 0;
+  }
   .grid:has(td[data-label]) tbody tr {
     margin-bottom: var(--space-3);
     border: 1px solid var(--hairline);
@@ -310,8 +433,17 @@
   .grid:has(td[data-label]) tbody tr:last-child {
     margin-bottom: 0;
   }
+  /* `.grid tbody td`'s own `height: var(--row-h)` is a floor under the desktop table-cell display
+     this query replaces with `display: block`, where `height` instead caps the box — so any value
+     taller than one line (a two-line name, a wrapped badge plus status note, a wrapped button
+     group) overflows into the next cell's label. `height: auto` lets the box grow to its content.
+     `min-height` holds a cell at least `--row-h` tall; a labelled cell with a value already
+     exceeds that, so the floor lifts only a cell with no `data-label` or a labelled cell whose
+     value is empty. */
   .grid:has(td[data-label]) tbody td {
     display: block;
+    height: auto;
+    min-height: var(--row-h);
     border-bottom: none;
     padding: var(--space-2) var(--space-4);
   }
@@ -324,7 +456,7 @@
   }
   /* The desktop grid right-aligns a numeric or actions column against its neighbours; stacked
      under its own label, right alignment only pushes the value away from the label above it. */
-  .grid:has(td[data-label]) tbody td.num,
+  .grid:has(td[data-label]) tbody td.cell-numeric,
   .grid:has(td[data-label]) tbody td.cell-actions {
     text-align: left;
   }
@@ -406,6 +538,30 @@
   transform: rotate(45deg);
 }
 
+/* Forced colours override background and border-color to system colours, collapsing every
+   badge's fill and its ::before marker's currentColor fill into the same pair. border-style and
+   border-width are not forced, so the pill's own border differentiates each state here the way
+   rail.css's border-based fallback already does for the provenance rail. */
+@media (forced-colors: active) {
+  .badge {
+    border-color: CanvasText;
+  }
+  .badge--strong {
+    border-style: double;
+    border-width: 3px;
+  }
+  .badge--possible {
+    border-style: dashed;
+  }
+  .badge--reject {
+    border-style: dotted;
+  }
+  .badge--info {
+    border-style: groove;
+    border-width: 2px;
+  }
+}
+
 /* ── Live indicator ──────────────────────────────────────────────────────── */
 
 /* A small pulsing dot marking content that is still updating — an in-flight answer, a syncing
@@ -433,11 +589,13 @@
 
 /* ── Chips ───────────────────────────────────────────────────────────────── */
 
-/* A canned-query suggestion, offered by the Ask and Search composers alike. Carries only the
-   pill shape and its own resting colours — the reset, height, horizontal padding, small type
-   size, and press feedback all come from `.btn.btn--sm`, which this is always written alongside,
-   never on its own. */
+/* A canned-query suggestion, offered by the Ask and Search composers alike. Carries the pill
+   shape, its own resting colours, and a cap on its own width so a long canned question's `.btn-label`
+   span truncates within its row instead of overflowing past it — the reset, height, horizontal
+   padding, small type size, and press feedback all come from `.btn.btn--sm`, which this is always
+   written alongside, never on its own. */
 .example-chip {
+  max-width: 100%;
   border-radius: var(--radius-pill);
   background: var(--surface-2);
   color: var(--ink-dim);
@@ -455,19 +613,18 @@
   flex-direction: column;
   gap: var(--space-4);
 }
-.form label {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--ink-dim);
-}
 .form-actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-3);
+}
+/* A wrapping row of buttons that is not a form's own submit/cancel row — an expiry preset picker,
+   for instance — so it reaches for its own gap rather than `.form-actions`'s. */
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
 /* Paging controls under a table. Same row layout as .form-actions, but standing off the table it
@@ -483,35 +640,142 @@
 .pager > .cell-sub:last-child {
   margin-left: auto;
 }
-
-/* Filters or actions standing beside a heading rather than stacked in a full-width card.
-   align-items: flex-end keeps a labelled control's input flush with a plain button beside it. */
-.control-row {
+.pager-size {
   display: flex;
-  align-items: flex-end;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  margin-bottom: var(--space-5);
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.pager-jump {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.pager-jump label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+/* The jump field is a bare `<input type="number">`, not composed on `.field` — styled directly
+   rather than inheriting the field family's box. */
+.pager-jump input {
+  width: 4rem;
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--text-xs);
 }
 
 /* ── Toolbar ─────────────────────────────────────────────────────────────── */
 
-/* Control strip between a page header and its data — a `FilterBar`, a `SegmentedControl`, a
-   result count, in any combination across the two edges. */
+/* Control strip between a page header and its data, in up to two rows: the view row (a
+   `SegmentedControl` at the start, the result count at the end) above the filter row (a
+   `FilterBar`). `Toolbar` renders a row only when that row has content. */
 .toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.toolbar-row--view {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--space-3);
-  margin-bottom: var(--space-5);
 }
-.toolbar-start,
+/* Every direct child's shrink-to-fit floor, not only `.segmented-control`'s own — a wrapper div
+   placed around a control (a styling hook for its count, say) has no min-width rule of its own,
+   so its default auto minimum would hold the row open past its edge without this. */
+.toolbar-row--view > * {
+  min-width: 0;
+}
+/* The auto inline-start margin holds the count on the row's far edge, including when the row has no
+   view switch or the count wraps onto a line of its own. */
 .toolbar-end {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-3);
+  margin-inline-start: auto;
+}
+/* `FilterBar`'s `<form>`: one wrapping row of labelled controls whose boxes share a bottom edge, so
+   a control, a checkbox and the ghost Clear button all sit on one line and wrap to another aligned
+   line when the row runs out of width. */
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3) var(--space-4);
+}
+/* A checkbox has no label above it, so it takes a control's height and centres its mark in it to
+   sit on the same line as the inputs beside it. */
+.filter-bar .checkbox {
+  min-height: var(--control-h);
+  align-items: center;
+}
+/* Below this width `.filter-bar`'s own `flex-wrap` puts one control per row regardless — each item
+   otherwise keeps its desktop width (a `field--sm`'s 160px, a content-sized select), leaving a
+   ragged column of different-width rows. Spanning every item to the row's full width instead makes
+   the stacked column even. `.checkbox`'s own children stay left-aligned inside that wider box: only
+   the row width changes here, not `.checkbox`'s internal `justify-content`. `.field--grow` carries
+   its own `flex-basis`/`max-width` at the same (0,1,0) specificity and comes later in the
+   stylesheet, so without the rule below it would keep winning here and stop short of the row. */
+@media (max-width: 560px) {
+  .filter-bar > * {
+    flex: 1 1 100%;
+  }
+  .filter-bar > .field--grow {
+    flex-basis: 100%;
+    max-width: none;
+  }
+}
+/* `SegmentedControl`'s group. It carries no margin: the toolbar's row gap spaces it. Never wraps:
+   a segmented control reads as one strip, so a segment shrinks instead. `min-width: 0` lets the
+   group itself shrink below its segments' combined content width as a flex item of
+   `.toolbar-row--view`, rather than holding the row open to fit them at full size. */
+.segmented-control {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: var(--space-3);
+  min-width: 0;
+}
+/* Overrides `.btn:not(.btn--sm)`'s 6.5rem min-width — at the same (0,2,0) specificity, this wins
+   on source order, since it comes later in the file — so a segment can shrink below its label's
+   content width once the group runs out of row to give it; the label itself then truncates on the
+   `.btn-label` span inside it. */
+.segmented-control > .btn {
+  min-width: 0;
+}
+/* The count stays whole while its sibling `.btn-label` does the shrinking — without `flex: none`
+   it would take its own share of the squeeze and clip alongside the label. */
+.segmented-control > .btn > span[aria-hidden] {
+  flex: none;
+}
+/* At phone width a segmented control's flex basis is the full row, so a wrapping parent such as
+   `.toolbar-row--view` gives it a line of its own, and its segments split that line evenly rather
+   than each keeping its content width — the tighter fit is why a segment's inline padding also
+   drops here. */
+@media (max-width: 560px) {
+  .segmented-control {
+    flex: 1 1 100%;
+  }
+  .segmented-control > .btn {
+    flex: 1 1 0;
+    padding: 0 var(--space-2);
+  }
+  /* A wrapper div standing in for a bare control in the view slot — `.sources-segmented`, for
+     instance — takes the same full-row basis so it, not the control inside it, is what spans the
+     line; the rule above only reaches a `.segmented-control` that sits directly in the row. */
+  .toolbar-row--view > :has(> .segmented-control) {
+    flex: 1 1 100%;
+  }
 }
 
 /* ── Sortable header ─────────────────────────────────────────────────────── */
@@ -540,19 +804,10 @@
    the outset default `--ring` would have its upper half clipped by that overflow boundary the
    moment the panel has scrolled, so this reads as an inset ring instead. */
 .th-sort:focus-visible {
-  outline: none;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   box-shadow: var(--ring-inset);
   border-radius: var(--radius-xs);
-}
-
-/* ── Sort select ─────────────────────────────────────────────────────────── */
-
-/* Modifier for a `Select` standing in for column-sort controls on a narrow layout where a
-   `SortableHeaderCell` row is not available (a stacked table has no header row to click). Shares
-   the field/select box model above; this only trims the width so it doesn't stretch full-width
-   beside the rest of a `.control-row`. */
-.sort-select {
-  max-width: 16rem;
 }
 
 /* ── Split view ──────────────────────────────────────────────────────────── */
@@ -586,9 +841,9 @@
 
 /* `.card` used as a clickable queue row in a master-detail pane. It carries only the button reset
    `.card` doesn't have as a plain `<div>` — border, background, padding and margin all come from
-   `.card` unchanged, so `.queue-item` is always written alongside it, never on its own. The
-   `--signal-line`/`--signal-soft` pairing on `.is-active` is the one
-   `.value-compare-item--recommended` uses, so "selected" reads the same across both panes. */
+   `.card` unchanged, so `.queue-item` is always written alongside it, never on its own. Its
+   selected state lives in `features.css` as `.queue-item[aria-current='true']`, sharing the
+   `--signal-line`/`--signal-soft` pairing `.value-compare-item--recommended` uses. */
 .queue-item {
   display: block;
   width: 100%;
@@ -600,10 +855,6 @@
 .queue-item:hover {
   background: var(--surface-2);
 }
-.queue-item.is-active {
-  border-color: var(--signal-line);
-  background: var(--signal-soft);
-}
 
 /* ── Field / Select ──────────────────────────────────────────────────────── */
 
@@ -613,6 +864,7 @@
   gap: var(--space-2);
 }
 .field-label {
+  display: block;
   font-size: var(--text-sm);
   font-weight: 600;
   color: var(--ink-dim);
@@ -623,21 +875,38 @@
   font-weight: 400;
   color: var(--muted);
 }
-/* The resting border stays on `--hairline-strong`: it is the whole visual boundary of the control,
-   so it is the one carrying the non-text contrast requirement. `--hairline` is the divider tone,
-   drawn between things that are already separated by layout, and is too light to stand as a
-   control's own edge. Hover moves toward the signal tone instead of borrowing this one. */
+/* `Field`'s `width` prop as a minimum on the wrapper, never a fixed control width: the control
+   stretches to the wrapper, so a select widens to its longest option instead of clipping it. */
+.field--sm {
+  min-width: var(--control-w-sm);
+}
+.field--md {
+  min-width: var(--control-w-md);
+}
+.field--lg {
+  min-width: var(--control-w-lg);
+}
+/* A search or free-text field in a flex row: it grows into spare row width from a medium basis and
+   stops at the large width. */
+.field--grow {
+  flex: 1 1 var(--control-w-md);
+  max-width: var(--control-w-lg);
+}
+/* The resting border stays on `--control-line`: it is the whole visual boundary of the control, so
+   it is the one carrying the non-text contrast requirement — `--hairline`/`--hairline-strong` are
+   divider tones, drawn between things already separated by layout, too light to stand as a
+   control's own edge. Hover and focus move toward the signal tone instead of borrowing this one. */
 .field input,
 .field textarea,
 .select {
   background: var(--surface);
   color: var(--ink);
-  border: 1px solid var(--hairline-strong);
+  border: 1px solid var(--control-line);
   border-radius: var(--radius-sm);
   font-family: inherit;
   font-size: var(--text-base);
 }
-/* Shares --control-h with .btn, so a field and a button standing on the same .control-row render
+/* Shares --control-h with .btn, so a field and a button standing in the same filter row render
    at the same height. Scoped off the two controls below, whose content is not a line of text. */
 .field input:not([type='file']),
 .select {
@@ -696,7 +965,7 @@
   font-weight: 400;
   color: var(--muted);
   font-size: var(--text-xs);
-  margin: 0;
+  margin-top: var(--space-1);
 }
 .field-error {
   display: flex;
@@ -721,27 +990,97 @@
   margin: 0;
 }
 .radio-group-legend {
+  display: block;
+  margin-bottom: var(--space-2);
   padding: 0;
   font-size: var(--text-sm);
   font-weight: 600;
   color: var(--ink-dim);
 }
-/* Two classes so this beats `.form label` (0,1,1) at (0,2,0) regardless of source order — every
-   radio option is a `<label>` nested inside a `.form`, and without this it would inherit that
-   selector's flex-column/uppercase-weight styling meant for a labelled-control wrapper. */
-.radio-group > .radio-group-option {
+/* Per option: the control row (a label beside its radio) stacked over the option's own hint. */
+.radio-group-option {
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.radio-group-option-label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
   gap: var(--space-2);
   font-size: var(--text-base);
   font-weight: 400;
   color: var(--ink);
   cursor: pointer;
 }
+/* Indents to the label text's left edge — past the radio input and the gap beside it. */
+.radio-group-option > .field-hint {
+  margin: 0 0 0 calc(1rem + var(--space-2));
+}
 .radio-group-option-text {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+}
+
+/* ── Checkbox ─────────────────────────────────────────────────────────────── */
+
+/* A standalone boolean control, label beside it rather than `.field`'s stacked shape. The native
+   input sits transparent and absolutely positioned over its own skin (`.checkbox-mark`), so it
+   stays the thing that actually receives focus, keyboard input and the click, while the skin
+   beside it carries the checked/focus-visible states via the `~` sibling combinator. */
+.checkbox {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.checkbox input[type='checkbox'] {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--space-5);
+  height: var(--space-5);
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.checkbox-mark {
+  flex: none;
+  width: var(--space-5);
+  height: var(--space-5);
+  border: 1px solid var(--control-line);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+}
+.checkbox input:checked ~ .checkbox-mark {
+  background: var(--signal);
+  border-color: var(--signal);
+}
+.checkbox input:checked ~ .checkbox-mark::after {
+  content: '';
+  display: block;
+  width: 60%;
+  height: 35%;
+  margin: 12% auto 0;
+  border: 2px solid var(--signal-ink);
+  border-top: none;
+  border-right: none;
+  transform: rotate(-45deg);
+}
+.checkbox input:focus-visible ~ .checkbox-mark {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: var(--ring);
+}
+.checkbox input:disabled ~ .checkbox-mark {
+  background: var(--surface-2);
+  border-color: var(--hairline);
+}
+.checkbox label {
+  font-size: var(--text-sm);
+  color: var(--ink);
+  cursor: pointer;
 }
 
 /* ── Password input ──────────────────────────────────────────────────────── */
@@ -752,13 +1091,24 @@
 .password-input {
   position: relative;
 }
+/* A plain `<input>` is a replaced inline element, not a block box, so it never inherits the
+   parent's full width the way `.password-input` itself does as a `.field` flex item — `width: 100%`
+   is the only thing that makes it fill the wrapper instead of sizing to its own intrinsic width. */
 .password-input input {
+  width: 100%;
   padding-right: calc(var(--target-min) + var(--space-2));
 }
+/* Holds the WCAG 2.2 (2.5.8) minimum target on its own; it carries no `.btn`, so `.btn.btn--icon`
+   never applies to it. */
 .password-input-toggle {
   position: absolute;
   top: 50%;
   right: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--target-min);
+  min-height: var(--target-min);
   transform: translateY(-50%);
   background: transparent;
   border: none;
@@ -771,9 +1121,99 @@
   color: var(--ink);
 }
 .password-input-toggle:focus-visible {
-  outline: none;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   box-shadow: var(--ring-inset);
   border-radius: var(--radius-xs);
+}
+
+/* ── Search input ────────────────────────────────────────────────────────── */
+
+/* Same inline-toggle shape as `.password-input`: the clear control sits inside the input's own
+   padding box rather than beside it, so the field never changes width when a value appears. */
+.search-input {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+/* `.search-input` is a flex row, so its `<input>` keeps its browser-intrinsic width unless told
+   otherwise — `flex: 1` grows it to the row's full width (matching a bare `Input`, which stretches
+   automatically as a direct `.field` child) and `min-width: 0` lets it shrink below that intrinsic
+   width instead of forcing the row wider than the field. */
+.search-input input {
+  flex: 1;
+  min-width: 0;
+  padding-right: calc(var(--target-min) + var(--space-2));
+}
+/* Chrome and Safari draw their own cancel button inside a `type="search"` input; hiding it leaves
+   `.search-input-clear` as the only clear control. */
+.search-input input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+.search-input-clear {
+  position: absolute;
+  top: 50%;
+  right: var(--space-2);
+  transform: translateY(-50%);
+}
+
+/* ── File input ──────────────────────────────────────────────────────────── */
+
+/* The drop zone is the file input's own `<label>` — a real `<input type="file">` sits inside it,
+   visually hidden by `.sr-only` rather than styled, so Enter/Space and the native picker both keep
+   working exactly as they would on a bare file input. */
+.file-input {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-6) var(--space-4);
+  border: 1px dashed var(--control-line);
+  border-radius: var(--radius-sm);
+  text-align: center;
+  color: var(--ink-dim);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.file-input:hover {
+  border-color: var(--signal-line);
+}
+.file-input:focus-within {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: var(--ring);
+}
+.file-input--dragging {
+  border-color: var(--signal-line);
+  background: var(--signal-soft);
+}
+.file-input-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.file-input-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+.file-input-row > span:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.file-input-row-size {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
 }
 
 /* ── Error summary ───────────────────────────────────────────────────────── */
@@ -792,7 +1232,8 @@
   margin: var(--space-3) 0;
 }
 .error-summary:focus-visible {
-  outline: none;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   box-shadow: var(--ring-inset);
 }
 .error-summary-title {
@@ -819,10 +1260,12 @@
   text-decoration: underline;
 }
 .error-summary-list a:hover {
-  color: var(--status-reject-line);
+  color: var(--status-reject-ink);
+  text-decoration-thickness: 2px;
 }
 .error-summary-list a:focus-visible {
-  outline: none;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   box-shadow: var(--ring);
   border-radius: var(--radius-xs);
 }
@@ -832,8 +1275,8 @@
 /* A matched search term inside a `<mark>`. Shared by the search results list and the evidence
    reader's own in-passage highlighting. */
 .search-highlight {
-  background: var(--signal-soft);
-  color: inherit;
+  background: var(--highlight);
+  color: var(--ink);
   border-radius: var(--radius-sm);
   padding: 0 var(--space-1);
 }
@@ -881,6 +1324,58 @@
    reading measure than stretched across the full container. */
 .error--page {
   max-width: var(--measure-reading);
+}
+
+/* ── Alert ───────────────────────────────────────────────────────────────── */
+
+/* Page- or form-level callout, never a `useFormSubmit` field error: those announce by moving focus
+   to the summary or the control, not through a live role. Shares `.notice`/`.error`'s tinted-card shape; `rejected` adds
+   the same left accent `.error` uses since it is the tone that replaces `.error--page`. */
+.alert {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  margin: var(--space-3) 0;
+}
+.alert-title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.alert-body {
+  font-size: var(--text-sm);
+}
+.alert-action {
+  margin-top: var(--space-2);
+}
+.alert--verified {
+  background: var(--status-verified-bg);
+  border-color: var(--status-verified-line);
+  color: var(--status-verified-ink);
+}
+.alert--caution {
+  background: var(--status-caution-bg);
+  border-color: var(--status-caution-line);
+  color: var(--status-caution-ink);
+}
+.alert--rejected {
+  background: var(--status-reject-bg);
+  border-color: var(--status-reject-line);
+  border-left: 3px solid var(--status-reject-ink);
+  color: var(--status-reject-ink);
+}
+.alert--info {
+  background: var(--status-info-bg);
+  border-color: var(--status-info-line);
+  color: var(--status-info-ink);
+}
+.alert--neutral {
+  background: var(--status-neutral-bg);
+  border-color: var(--status-neutral-line);
+  color: var(--status-neutral-ink);
 }
 
 /* ── Skeleton ────────────────────────────────────────────────────────────── */
@@ -1057,6 +1552,192 @@
   font-size: var(--text-lg);
   font-weight: 600;
 }
+/* ── Drawer ──────────────────────────────────────────────────────────────── */
+
+/* Sheet variant of `.dialog`, pinned to a viewport edge instead of centred, on the same native
+   `<dialog>` element and `@starting-style` enter transition. `top`/`bottom` span the full
+   viewport height regardless of `side`, so only the inline edge (`left`/`right`) and the entry
+   `translateX` direction differ between the two modifiers. */
+.drawer {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  margin: 0;
+  max-width: 100%;
+  height: 100%;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-6);
+  background: var(--surface);
+  color: var(--ink);
+  border: none;
+  box-shadow: var(--shadow-pop);
+  opacity: 0;
+}
+.drawer--sm {
+  width: var(--drawer-w-sm);
+}
+.drawer--md {
+  width: var(--drawer-w-md);
+}
+.drawer--lg {
+  width: var(--drawer-w-lg);
+}
+.drawer--start {
+  left: 0;
+  transform: translateX(-100%);
+}
+.drawer--end {
+  right: 0;
+  transform: translateX(100%);
+}
+.drawer[open] {
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    opacity var(--motion-overlay-enter) var(--ease-out),
+    transform var(--motion-overlay-enter) var(--ease-out);
+}
+@starting-style {
+  .drawer--start[open] {
+    opacity: 0;
+    transform: translateX(-100%);
+  }
+  .drawer--end[open] {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+}
+.drawer::backdrop {
+  background: var(--dialog-backdrop);
+  opacity: 0;
+}
+.drawer[open]::backdrop {
+  opacity: 1;
+  transition: opacity var(--motion-overlay-enter) var(--ease-out);
+}
+@starting-style {
+  .drawer[open]::backdrop {
+    opacity: 0;
+  }
+}
+/* Title row shared by `Dialog` and `Drawer`'s header: the title on the start edge, the close
+   control on the end. */
+.dialog-head,
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* ── Tooltip ─────────────────────────────────────────────────────────────── */
+
+/* The surface renders in a portal on the body, so it takes its place from the `top`/`left`
+   `Tooltip.tsx` measures off the anchor — the anchor's own top edge for a top-placed surface, its
+   bottom edge for a bottom-placed one — and this pair of transforms turns that single point into
+   the finished offset: centred horizontally, and cleared of the anchor by `--space-2` on the
+   placement side. `inset: auto` overrides the UA sheet's `inset: 0` on a `[popover]` element,
+   which would otherwise fight the measured coordinates. */
+.tooltip-anchor {
+  display: inline-block;
+}
+.tooltip-surface {
+  position: fixed;
+  inset: auto;
+  z-index: var(--z-popover);
+  max-width: var(--tooltip-w-max);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-pop);
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+}
+.tooltip-surface[popover] {
+  margin: 0;
+  display: none;
+}
+.tooltip-surface[popover]:popover-open {
+  display: block;
+}
+.tooltip-surface--top {
+  transform: translate(-50%, calc(-100% - var(--space-2)));
+}
+.tooltip-surface--bottom {
+  transform: translate(-50%, var(--space-2));
+}
+
+/* ── Popover ─────────────────────────────────────────────────────────────── */
+
+/* Top-layer overlay host for `Menu`'s surface. Positioning forks on the `popover` attribute, which
+   `Popover.tsx` sets only where CSS anchor positioning is supported. With it, the surface sits in
+   the top layer, anchored to the trigger through the inline `anchor-name` / `position-anchor`
+   styles `Popover.tsx` sets, and `position-try-fallbacks` swaps a clipped edge for its opposite —
+   `flip-block` first, since a surface running off the bottom of the viewport is the more common
+   case, then `flip-inline`, then both together for a trigger clipped on both axes at once. This is
+   the mechanism an end-column trigger's menu, or one with no room below it, relies on to stay
+   inside the viewport with no per-caller placement prop. `inset: auto` clears the UA `[popover]`
+   inset so each placement's single horizontal anchor edge applies. Without anchor positioning
+   support, `Popover.tsx` instead measures the trigger and the surface itself and renders a
+   `position: fixed` box at computed coordinates, flipped end or upward the same way a `.panel`
+   scroll box would otherwise clip it, and re-measured on scroll or resize while it stays open. */
+/* A plain wrapper `Popover.tsx` refs directly to measure the trigger for the no-anchor fallback
+   above — `inline-block` so its box matches the trigger's own, the same shape `.tooltip-anchor`
+   wraps `Tooltip.tsx`'s anchor in. */
+.popover-anchor {
+  display: inline-block;
+}
+.popover-surface {
+  z-index: var(--z-popover);
+  min-width: 12rem;
+  flex-direction: column;
+  padding: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+}
+.popover-surface:not([popover]) {
+  position: fixed;
+  display: flex;
+}
+.popover-surface--open-down:not([popover]) {
+  margin-top: var(--space-2);
+}
+.popover-surface--open-up:not([popover]) {
+  margin-top: calc(-1 * var(--space-2));
+}
+.popover-surface[popover] {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  display: none;
+  position-try-fallbacks:
+    flip-block,
+    flip-inline,
+    flip-block flip-inline;
+}
+.popover-surface[popover]:popover-open {
+  display: flex;
+}
+.popover-surface--bottom-start[popover]:popover-open {
+  top: anchor(bottom);
+  left: anchor(start);
+}
+.popover-surface--bottom-end[popover]:popover-open {
+  top: anchor(bottom);
+  right: anchor(end);
+}
 
 /* ── Menu ────────────────────────────────────────────────────────────────── */
 
@@ -1084,19 +1765,15 @@
 .menu-trigger:active:not(:disabled) {
   transform: translateY(1px);
 }
+/* Layout for the `role="menu"` content only; the surface chrome is `.popover-surface`'s. */
 .menu-surface {
-  position: absolute;
-  right: 0;
-  top: calc(100% + var(--space-2));
-  z-index: var(--z-popover);
-  min-width: 12rem;
   display: flex;
   flex-direction: column;
-  padding: var(--space-2);
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-pop);
+}
+.menu-info {
+  padding: var(--space-2) var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-sm);
 }
 .menu-item {
   display: block;
@@ -1112,11 +1789,11 @@
   cursor: pointer;
   transition: background var(--motion-row-hover) ease;
 }
-.menu-item:hover,
-.menu-item:focus-visible {
+.menu-item:not([aria-disabled='true']):hover,
+.menu-item:not([aria-disabled='true']):focus-visible {
   background: var(--surface-2);
 }
-.menu-item:active:not(:disabled) {
+.menu-item:active:not(:disabled):not([aria-disabled='true']) {
   transform: translateY(1px);
 }
 .menu-item[aria-disabled='true'] {
@@ -1137,6 +1814,7 @@
   position: fixed;
   right: var(--space-6);
   bottom: var(--space-6);
+  padding-bottom: env(safe-area-inset-bottom);
   z-index: var(--z-overlay);
   display: flex;
   flex-direction: column;
@@ -1215,8 +1893,9 @@
    large value and an optional hint; the value pairs with `.mono` for its tabular rendering, kept
    separate for the same reason `.fault-eyebrow` is. */
 .stat-row {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(var(--control-w-sm), max-content));
+  align-items: start;
   gap: var(--space-6);
 }
 .stat-row-item {
@@ -1228,6 +1907,12 @@
   font-size: var(--text-xl);
   font-weight: 600;
   color: var(--ink);
+}
+/* `Stat`'s `kind="text"` register: a prose value reads at the body size and a lighter weight
+   rather than the large tabular figure `.mono` pairs with above. */
+.stat-row-value--text {
+  font-size: var(--text-base);
+  font-weight: 500;
 }
 .stat-row-hint {
   font-size: var(--text-xs);
@@ -1255,7 +1940,8 @@ a.stat-row-item:hover .stat-row-value {
   text-decoration: underline;
 }
 a.stat-row-item:focus-visible {
-  outline: none;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
   box-shadow: var(--ring);
   border-radius: var(--radius-sm);
 }
@@ -1306,6 +1992,92 @@ a.stat-row-item:focus-visible {
   font-size: var(--text-xs);
   overflow-wrap: anywhere;
   margin: 0;
+}
+
+/* ── Combobox ────────────────────────────────────────────────────────────── */
+
+.combobox {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.combobox-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.combobox-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  color: var(--ink);
+  border: 1px solid var(--hairline-strong);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.combobox-chip:hover {
+  background: var(--surface-3);
+}
+.combobox-chip:focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: var(--ring);
+}
+/* Positioned against `.combobox`'s own box, which spans the chips and the input together — the
+   list drops below both rather than under the input alone. */
+.combobox-listbox {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: var(--z-popover);
+  margin: var(--space-1) 0 0;
+  padding: var(--space-2);
+  list-style: none;
+  max-height: 16rem;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+}
+.combobox-option {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.combobox-option--active {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+/* ── Date range ──────────────────────────────────────────────────────────── */
+
+/* `DateRange`'s group: the range select and, for a custom range, the From/To pair, inline in the
+   filter row with every control on the row's bottom edge. */
+.date-range {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3) var(--space-4);
+}
+.date-range-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3) var(--space-4);
+}
+/* Neither the range `Select` nor the From/To `Field`s carry a width modifier, so this gives each
+   the `--control-w-sm` width `.field--sm` uses, as a flex basis rather than a minimum, so the row
+   decides how far they grow. */
+.date-range > *,
+.date-range-row > .field {
+  flex: 1 1 var(--control-w-sm);
 }
 
 /* ── Responsive ──────────────────────────────────────────────────────────── */
