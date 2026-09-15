@@ -247,8 +247,7 @@ duplicate selectors that source order was resolving.
 
 `checks:web` (`lint:check`, `typecheck`, `test`, `build`) is 0: 136 files, 1,833 tests. `checks:ci`
 is 0: 221 API unit suites, 5,126 tests at 100% service coverage, plus 22 e2e suites, 497 tests.
-`test:integration` last ran before the API's final fix round (unit tests went from 5,119 to 5,126
-after it); at that point it passed its 4 suites, 11 of 11 tests, against a live
+`test:integration` passes against the committed tree: 4 suites, 11 of 11 tests, against a live
 `mongodb-atlas-local` container.
 
 The 18 signed-in routes (Home; Sources and source detail; the data room, document detail and
