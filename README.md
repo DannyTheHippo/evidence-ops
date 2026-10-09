@@ -1,6 +1,6 @@
 # Evidence Ops
 
-The estate has no warehouse. Evidence lives as fragmented Office documents plus system classes
+The documents estate has no warehouse. Evidence lives as fragmented Office documents plus system classes
 reachable only as recurring spreadsheet exports. Evidence Ops is an attestation layer over those
 fragments in place: connect the locations they already live, ask a question, and get back
 **claims with citations re-checked against the retrieved bytes by deterministic code**, not by the
